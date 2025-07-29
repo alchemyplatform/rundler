@@ -14,7 +14,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libxml2-utils
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 24
 
       - name: Checkout Rundler
         uses: actions/checkout@v4
