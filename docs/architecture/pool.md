@@ -4,7 +4,7 @@ The `Pool` task is responsible for receiving, validating, sorting, and storing u
 
 ## Simulation
 
-Upon each `add_operation` call the `Pool` will preforms a series of checks.
+Upon each `add_operation` call the `Pool` will performs a series of checks.
 
 1. Run a series of [prechecks](https://eips.ethereum.org/EIPS/eip-4337#client-behavior-upon-receiving-a-useroperation) to catch any reasons why the UO may not be mined.
 
