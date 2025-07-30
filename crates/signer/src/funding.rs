@@ -342,7 +342,7 @@ async fn estimate_da_gas<P: EvmProvider>(
 struct FunderMetrics {
     #[metric(describe = "the number of funding attempts")]
     funding_attempts: Counter,
-    #[metric(describe = "tne mumber of funding errors")]
+    #[metric(describe = "tne number of funding errors")]
     funding_errors: Counter,
     #[metric(describe = "the number of funding reattempts")]
     funding_reattempts: Counter,
