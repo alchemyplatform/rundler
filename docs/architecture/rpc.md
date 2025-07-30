@@ -560,7 +560,7 @@ More information on gas estimation can be found [here](https://www.alchemy.com/b
 
 The `eth_estimateUserOperationGas` accepts an optional state override set as the 3rd positional RPC parameter. It accepts the same format as Geth's `eth_call` [state overrides](https://geth.ethereum.org/docs/interacting-with-geth/rpc/ns-eth#eth-call).
 
-This parameter can be used to modify the state of the chain before preforming gas estimation.
+This parameter can be used to modify the state of the chain before performing gas estimation.
 
 A typical use case for this could be to spoof some funds into a user's account while using an ERC-20 paymaster. Callers can override the balance (ETH, ERC20, or any arbitrary payment method) such that the fee-payer can pay the `verification_estimation_gas_fee`.
 
