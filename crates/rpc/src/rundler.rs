@@ -137,7 +137,7 @@ where
 
     #[instrument(
         skip_all,
-        fields(rpc_method = "rundler_getPendingUserOperationForSenderNonce")
+        fields(rpc_method = "rundler_getPendingUserOperationBySenderNonce")
     )]
     async fn get_pending_user_operation_by_sender_nonce(
         &self,
