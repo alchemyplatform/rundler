@@ -56,8 +56,6 @@ pub struct Args {
     pub remote_address: Option<SocketAddr>,
     /// Channel capacity for the chain update channel.
     pub chain_update_channel_capacity: usize,
-    /// Whether to support flashblocks
-    pub flashblocks: bool,
 }
 
 /// Mempool task.
@@ -110,7 +108,7 @@ where
                 .iter()
                 .map(|config| (config.entry_point, config.entry_point_version))
                 .collect(),
-            flashblocks: false,
+            flashblocks: self.args.chain_spec.flashblocks_enabled,
         };
 
         let chain = Chain::new(self.providers.evm().clone(), chain_settings);

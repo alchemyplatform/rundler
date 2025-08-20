@@ -40,6 +40,8 @@ pub struct ChainSpec {
     pub entry_point_address_v0_7: Address,
     /// address of the multicall3 contract
     pub multicall3_address: Address,
+    /// flashblocks enabled
+    pub flashblocks_enabled: bool,
 
     /// Overhead when preforming gas estimation to account for the deposit storage
     /// and transfer overhead.
@@ -172,6 +174,7 @@ impl Default for ChainSpec {
             entry_point_address_v0_6: Address::from_str(ENTRY_POINT_ADDRESS_V0_6).unwrap(),
             entry_point_address_v0_7: Address::from_str(ENTRY_POINT_ADDRESS_V0_7).unwrap(),
             multicall3_address: Address::from_str(MULTICALL3_ADDRESS).unwrap(),
+            flashblocks_enabled: false,
             deposit_transfer_overhead: 30_000,
             transaction_intrinsic_gas: 21_000,
             per_user_op_v0_6_gas: 18_300,

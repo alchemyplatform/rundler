@@ -179,8 +179,6 @@ pub struct PoolConfig {
     pub max_time_in_pool: Option<Duration>,
     /// The maximum number of storage slots that can be expected to be used by a user operation during validation
     pub max_expected_storage_slots: usize,
-    /// Boolean field used to toggle the operation of the flashblocks
-    pub flashblocks: bool,
 }
 
 /// Origin of an operation.
