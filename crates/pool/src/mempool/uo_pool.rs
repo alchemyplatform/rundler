@@ -42,10 +42,9 @@ use super::{
     MempoolResult, OperationOrigin, PoolConfig,
 };
 use crate::{
-    chain::ChainUpdate,
+    chain::{ChainUpdate, UpdateType},
     emit::{EntityReputation, EntityStatus, EntitySummary, OpPoolEvent, OpRemovalReason},
 };
-
 /// User Operation Mempool
 ///
 /// Wrapper around a pool object that implements thread-safety
@@ -241,6 +240,23 @@ where
     #[instrument(skip_all)]
     async fn on_chain_update(&self, update: &ChainUpdate) {
         let _timer = CustomTimerGuard::new(self.metrics.update_process_time_ms.clone());
+
+        let pre_confirmed_uos = update.preconfirmed_ops.iter().filter_map(|op| {
+            if op.entry_point == self.config.entry_point {
+                Some(op.hash)
+            } else {
+                None
+            }
+        });
+
+        if update.update_type == UpdateType::Partial {
+            self.state
+                .write()
+                .pool
+                .set_pre_confirmed_uos(pre_confirmed_uos);
+            return;
+        }
+
         let deduped_ops = update.deduped_ops();
         let mined_ops = deduped_ops
             .mined_ops
@@ -436,6 +452,8 @@ where
             state
                 .pool
                 .forget_mined_operations_before_block(update.earliest_remembered_block_number);
+
+            state.pool.set_pre_confirmed_uos(pre_confirmed_uos);
 
             // Remove throttled ops that are too old
             let mut to_remove = HashSet::new();
@@ -1165,6 +1183,7 @@ mod tests {
             }],
             address_updates: vec![],
             reorg_larger_than_history: false,
+            update_type: UpdateType::Full,
         })
         .await;
 
@@ -1266,6 +1285,7 @@ mod tests {
             }],
             address_updates: vec![],
             reorg_larger_than_history: false,
+            update_type: UpdateType::Full,
         })
         .await;
 
@@ -1302,6 +1322,7 @@ mod tests {
             preconfirmed_ops: vec![],
             address_updates: vec![],
             reorg_larger_than_history: false,
+            update_type: UpdateType::Full,
         })
         .await;
 
@@ -1341,6 +1362,7 @@ mod tests {
             unmined_entity_balance_updates: vec![],
             address_updates: vec![],
             reorg_larger_than_history: false,
+            update_type: UpdateType::Full,
         })
         .await;
 
@@ -1385,6 +1407,7 @@ mod tests {
             unmined_entity_balance_updates: vec![],
             address_updates: vec![],
             reorg_larger_than_history: false,
+            update_type: UpdateType::Full,
         })
         .await;
 
@@ -1463,6 +1486,7 @@ mod tests {
             unmined_ops: vec![],
             address_updates: vec![],
             reorg_larger_than_history: false,
+            update_type: UpdateType::Full,
         })
         .await;
 
@@ -1478,6 +1502,114 @@ mod tests {
                 uos[3].clone(),
                 uos[4].clone(),
             ],
+        );
+    }
+
+    #[tokio::test]
+    async fn test_chain_partial_update() {
+        let paymaster = Address::random();
+        let paymaster_and_data = paymaster.to_vec().into();
+
+        let base_required = UserOperationRequiredFields {
+            max_fee_per_gas: 1,
+            call_gas_limit: 10,
+            verification_gas_limit: 10,
+            pre_verification_gas: 10,
+            paymaster_and_data,
+            ..Default::default()
+        };
+
+        let ops = vec![
+            create_op_from_required(UserOperationRequiredFields {
+                sender: Address::random(),
+                nonce: U256::from(3),
+                ..base_required.clone()
+            }),
+            create_op_from_required(UserOperationRequiredFields {
+                sender: Address::random(),
+                nonce: U256::from(2),
+                ..base_required.clone()
+            }),
+            create_op_from_required(UserOperationRequiredFields {
+                sender: Address::random(),
+                nonce: U256::from(1),
+                ..base_required.clone()
+            }),
+        ];
+
+        let mut entrypoint = MockEntryPointV0_6::new();
+        // initial balance
+        entrypoint
+            .expect_balance_of()
+            .returning(|_, _| Ok(U256::from(1000)));
+
+        let (pool, uos) = create_pool_with_entrypoint_insert_ops(ops, entrypoint).await;
+
+        pool.on_chain_update(&ChainUpdate {
+            latest_block_number: 0,
+            latest_block_hash: B256::random(),
+            latest_block_timestamp: 0.into(),
+            earliest_remembered_block_number: 0,
+            reorg_depth: 0,
+            mined_ops: vec![],
+            unmined_ops: vec![],
+            preconfirmed_ops: vec![MinedOp {
+                entry_point: pool.config.entry_point,
+                hash: uos[0].hash(),
+                sender: uos[0].sender(),
+                nonce: uos[0].nonce(),
+                actual_gas_cost: U256::from(10),
+                paymaster: Some(paymaster),
+            }],
+            entity_balance_updates: vec![],
+            unmined_entity_balance_updates: vec![],
+            address_updates: vec![],
+            reorg_larger_than_history: false,
+            update_type: UpdateType::Partial,
+        })
+        .await;
+        check_pre_confirm_ops(
+            pool.state.read().pool.pre_confirmed_uos().collect(),
+            vec![uos[0].clone()],
+        );
+
+        // mine the first op with actual gas cost of 10
+        pool.on_chain_update(&ChainUpdate {
+            latest_block_number: 0,
+            latest_block_hash: B256::random(),
+            latest_block_timestamp: 0.into(),
+            earliest_remembered_block_number: 0,
+            reorg_depth: 0,
+            mined_ops: vec![],
+            unmined_ops: vec![],
+            preconfirmed_ops: vec![
+                MinedOp {
+                    entry_point: pool.config.entry_point,
+                    hash: uos[0].hash(),
+                    sender: uos[0].sender(),
+                    nonce: uos[0].nonce(),
+                    actual_gas_cost: U256::from(10),
+                    paymaster: Some(paymaster),
+                },
+                MinedOp {
+                    entry_point: pool.config.entry_point,
+                    hash: uos[1].hash(),
+                    sender: uos[1].sender(),
+                    nonce: uos[1].nonce(),
+                    actual_gas_cost: U256::from(10),
+                    paymaster: Some(paymaster),
+                },
+            ],
+            entity_balance_updates: vec![],
+            unmined_entity_balance_updates: vec![],
+            address_updates: vec![],
+            reorg_larger_than_history: false,
+            update_type: UpdateType::Partial,
+        })
+        .await;
+        check_pre_confirm_ops(
+            pool.state.read().pool.pre_confirmed_uos().collect(),
+            uos[0..2].to_vec(),
         );
     }
 
@@ -2618,6 +2750,17 @@ mod tests {
         assert_eq!(ops.len(), expected.len());
         for (actual, expected) in ops.into_iter().zip(expected) {
             assert_eq!(actual.uo, expected);
+        }
+    }
+
+    fn check_pre_confirm_ops(ops: Vec<B256>, expected: Vec<UserOperationVariant>) {
+        assert_eq!(ops.len(), expected.len());
+        for expected_op in expected {
+            assert!(
+                ops.contains(&expected_op.hash()),
+                "expected op {} not found",
+                expected_op.hash()
+            );
         }
     }
 
