@@ -29,14 +29,9 @@ pub async fn wait_for_new_block(
     provider: &impl EvmProvider,
     last_block_hash: B256,
     poll_interval: Duration,
-    flashblocks: bool,
+    block_id: BlockId,
 ) -> (B256, Block) {
     loop {
-        let block_id = if flashblocks {
-            BlockId::pending()
-        } else {
-            BlockId::latest()
-        };
         let block = retry::with_unlimited_retries(
             "watch latest block",
             || provider.get_full_block(block_id),
