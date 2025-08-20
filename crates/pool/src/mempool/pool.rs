@@ -48,6 +48,8 @@ pub(crate) struct PoolInnerConfig {
     da_gas_tracking_enabled: bool,
     max_time_in_pool: Option<Duration>,
     verification_gas_limit_efficiency_reject_threshold: f64,
+    #[allow(dead_code)]
+    flashblocks: bool,
 }
 
 impl From<PoolConfig> for PoolInnerConfig {
@@ -63,6 +65,7 @@ impl From<PoolConfig> for PoolInnerConfig {
             max_time_in_pool: config.max_time_in_pool,
             verification_gas_limit_efficiency_reject_threshold: config
                 .verification_gas_limit_efficiency_reject_threshold,
+            flashblocks: config.flashblocks,
         }
     }
 }
@@ -1640,6 +1643,7 @@ mod tests {
             da_gas_tracking_enabled: false,
             max_time_in_pool: None,
             verification_gas_limit_efficiency_reject_threshold: 0.5,
+            flashblocks: false,
         }
     }
 

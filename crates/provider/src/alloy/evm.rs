@@ -171,6 +171,14 @@ where
     }
 
     #[instrument(skip_all)]
+    async fn get_pending_block_hash_and_number(&self) -> ProviderResult<(B256, u64)> {
+        let pending_block = EvmProvider::get_block(self, BlockId::pending())
+            .await?
+            .context("pending block should exist")?;
+        Ok((pending_block.header.hash, pending_block.header.number))
+    }
+
+    #[instrument(skip_all)]
     async fn get_pending_base_fee(&self) -> ProviderResult<u128> {
         let fee_history = self.fee_history(1, BlockNumberOrTag::Latest, &[]).await?;
         Ok(fee_history

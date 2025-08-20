@@ -1150,6 +1150,7 @@ mod tests {
                 paymaster: None,
             }],
             unmined_ops: vec![],
+            preconfirmed_ops: vec![],
             entity_balance_updates: vec![BalanceUpdate {
                 address: paymaster,
                 amount: U256::from(100),
@@ -1249,6 +1250,8 @@ mod tests {
                 paymaster: Some(paymaster),
             }],
             unmined_ops: vec![],
+
+            preconfirmed_ops: vec![],
             entity_balance_updates: vec![BalanceUpdate {
                 address: paymaster,
                 amount: U256::from(100),
@@ -1296,6 +1299,7 @@ mod tests {
                 entrypoint: pool.config.entry_point,
                 is_addition: true,
             }],
+            preconfirmed_ops: vec![],
             address_updates: vec![],
             reorg_larger_than_history: false,
         })
@@ -1332,6 +1336,7 @@ mod tests {
                 paymaster: None,
             }],
             unmined_ops: vec![],
+            preconfirmed_ops: vec![],
             entity_balance_updates: vec![],
             unmined_entity_balance_updates: vec![],
             address_updates: vec![],
@@ -1375,6 +1380,7 @@ mod tests {
                 paymaster: None,
             }],
             unmined_ops: vec![],
+            preconfirmed_ops: vec![],
             entity_balance_updates: vec![],
             unmined_entity_balance_updates: vec![],
             address_updates: vec![],
@@ -1452,6 +1458,7 @@ mod tests {
                 paymaster: None,
             }],
             entity_balance_updates: vec![],
+            preconfirmed_ops: vec![],
             unmined_entity_balance_updates: vec![],
             unmined_ops: vec![],
             address_updates: vec![],
@@ -2319,6 +2326,7 @@ mod tests {
             verification_gas_limit_efficiency_reject_threshold: 0.0,
             max_time_in_pool: None,
             max_expected_storage_slots: usize::MAX,
+            flashblocks: false,
         }
     }
 
