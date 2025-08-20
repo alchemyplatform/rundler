@@ -241,19 +241,10 @@ where
     async fn on_chain_update(&self, update: &ChainUpdate) {
         let _timer = CustomTimerGuard::new(self.metrics.update_process_time_ms.clone());
 
-        let pre_confirmed_uos = update.preconfirmed_ops.iter().filter_map(|op| {
-            if op.entry_point == self.config.entry_point {
-                Some(op.hash)
-            } else {
-                None
-            }
-        });
+        let preconfirmed_txns = update.preconfirmed_txns.clone();
 
         if update.update_type == UpdateType::Partial {
-            self.state
-                .write()
-                .pool
-                .set_pre_confirmed_uos(pre_confirmed_uos);
+            self.state.write().pool.preconfirmed_txns(preconfirmed_txns);
             return;
         }
 
@@ -453,7 +444,7 @@ where
                 .pool
                 .forget_mined_operations_before_block(update.earliest_remembered_block_number);
 
-            state.pool.set_pre_confirmed_uos(pre_confirmed_uos);
+            state.pool.preconfirmed_txns(preconfirmed_txns);
 
             // Remove throttled ops that are too old
             let mut to_remove = HashSet::new();
@@ -1168,7 +1159,7 @@ mod tests {
                 paymaster: None,
             }],
             unmined_ops: vec![],
-            preconfirmed_ops: vec![],
+            preconfirmed_txns: vec![],
             entity_balance_updates: vec![BalanceUpdate {
                 address: paymaster,
                 amount: U256::from(100),
@@ -1270,7 +1261,7 @@ mod tests {
             }],
             unmined_ops: vec![],
 
-            preconfirmed_ops: vec![],
+            preconfirmed_txns: vec![],
             entity_balance_updates: vec![BalanceUpdate {
                 address: paymaster,
                 amount: U256::from(100),
@@ -1319,7 +1310,7 @@ mod tests {
                 entrypoint: pool.config.entry_point,
                 is_addition: true,
             }],
-            preconfirmed_ops: vec![],
+            preconfirmed_txns: vec![],
             address_updates: vec![],
             reorg_larger_than_history: false,
             update_type: UpdateType::Full,
@@ -1357,7 +1348,7 @@ mod tests {
                 paymaster: None,
             }],
             unmined_ops: vec![],
-            preconfirmed_ops: vec![],
+            preconfirmed_txns: vec![],
             entity_balance_updates: vec![],
             unmined_entity_balance_updates: vec![],
             address_updates: vec![],
@@ -1402,7 +1393,7 @@ mod tests {
                 paymaster: None,
             }],
             unmined_ops: vec![],
-            preconfirmed_ops: vec![],
+            preconfirmed_txns: vec![],
             entity_balance_updates: vec![],
             unmined_entity_balance_updates: vec![],
             address_updates: vec![],
@@ -1481,7 +1472,7 @@ mod tests {
                 paymaster: None,
             }],
             entity_balance_updates: vec![],
-            preconfirmed_ops: vec![],
+            preconfirmed_txns: vec![],
             unmined_entity_balance_updates: vec![],
             unmined_ops: vec![],
             address_updates: vec![],
@@ -1519,7 +1510,7 @@ mod tests {
             ..Default::default()
         };
 
-        let ops = vec![
+        let ops_1 = vec![
             create_op_from_required(UserOperationRequiredFields {
                 sender: Address::random(),
                 nonce: U256::from(3),
@@ -1530,20 +1521,41 @@ mod tests {
                 nonce: U256::from(2),
                 ..base_required.clone()
             }),
-            create_op_from_required(UserOperationRequiredFields {
-                sender: Address::random(),
-                nonce: U256::from(1),
-                ..base_required.clone()
-            }),
         ];
 
+        let ops_2 = vec![create_op_from_required(UserOperationRequiredFields {
+            sender: Address::random(),
+            nonce: U256::from(1),
+            ..base_required.clone()
+        })];
+
+        let ops_3 = vec![create_op_from_required(UserOperationRequiredFields {
+            sender: Address::random(),
+            nonce: U256::from(0),
+            ..base_required.clone()
+        })];
         let mut entrypoint = MockEntryPointV0_6::new();
         // initial balance
         entrypoint
             .expect_balance_of()
             .returning(|_, _| Ok(U256::from(1000)));
 
-        let (pool, uos) = create_pool_with_entrypoint_insert_ops(ops, entrypoint).await;
+        let (pool, _) = create_pool_with_entrypoint_insert_ops(vec![], entrypoint).await;
+
+        let preconfirmed_txns = vec![B256::random(), B256::random(), B256::random()];
+
+        pool.state.write().pool.mark_uo_pending(
+            ops_1.iter().map(|op| op.op.hash()).collect(),
+            preconfirmed_txns[0],
+        );
+        pool.state.write().pool.mark_uo_pending(
+            ops_2.iter().map(|op| op.op.hash()).collect(),
+            preconfirmed_txns[1],
+        );
+        pool.state.write().pool.mark_uo_pending(
+            ops_3.iter().map(|op| op.op.hash()).collect(),
+            preconfirmed_txns[2],
+        );
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 0,
@@ -1553,14 +1565,7 @@ mod tests {
             reorg_depth: 0,
             mined_ops: vec![],
             unmined_ops: vec![],
-            preconfirmed_ops: vec![MinedOp {
-                entry_point: pool.config.entry_point,
-                hash: uos[0].hash(),
-                sender: uos[0].sender(),
-                nonce: uos[0].nonce(),
-                actual_gas_cost: U256::from(10),
-                paymaster: Some(paymaster),
-            }],
+            preconfirmed_txns: vec![preconfirmed_txns[0]],
             entity_balance_updates: vec![],
             unmined_entity_balance_updates: vec![],
             address_updates: vec![],
@@ -1569,8 +1574,8 @@ mod tests {
         })
         .await;
         check_pre_confirm_ops(
-            pool.state.read().pool.pre_confirmed_uos().collect(),
-            vec![uos[0].clone()],
+            pool.state.read().pool.preconfirmed_uos().collect(),
+            ops_1.iter().map(|op| op.op.clone()).collect(),
         );
 
         // mine the first op with actual gas cost of 10
@@ -1582,24 +1587,7 @@ mod tests {
             reorg_depth: 0,
             mined_ops: vec![],
             unmined_ops: vec![],
-            preconfirmed_ops: vec![
-                MinedOp {
-                    entry_point: pool.config.entry_point,
-                    hash: uos[0].hash(),
-                    sender: uos[0].sender(),
-                    nonce: uos[0].nonce(),
-                    actual_gas_cost: U256::from(10),
-                    paymaster: Some(paymaster),
-                },
-                MinedOp {
-                    entry_point: pool.config.entry_point,
-                    hash: uos[1].hash(),
-                    sender: uos[1].sender(),
-                    nonce: uos[1].nonce(),
-                    actual_gas_cost: U256::from(10),
-                    paymaster: Some(paymaster),
-                },
-            ],
+            preconfirmed_txns,
             entity_balance_updates: vec![],
             unmined_entity_balance_updates: vec![],
             address_updates: vec![],
@@ -1607,9 +1595,15 @@ mod tests {
             update_type: UpdateType::Partial,
         })
         .await;
+
         check_pre_confirm_ops(
-            pool.state.read().pool.pre_confirmed_uos().collect(),
-            uos[0..2].to_vec(),
+            pool.state.read().pool.preconfirmed_uos().collect(),
+            ops_1
+                .iter()
+                .chain(ops_2.iter())
+                .chain(ops_3.iter())
+                .map(|op| op.op.clone())
+                .collect(),
         );
     }
 
@@ -2458,7 +2452,6 @@ mod tests {
             verification_gas_limit_efficiency_reject_threshold: 0.0,
             max_time_in_pool: None,
             max_expected_storage_slots: usize::MAX,
-            flashblocks: false,
         }
     }
 

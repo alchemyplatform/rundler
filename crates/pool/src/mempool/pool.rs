@@ -48,8 +48,6 @@ pub(crate) struct PoolInnerConfig {
     da_gas_tracking_enabled: bool,
     max_time_in_pool: Option<Duration>,
     verification_gas_limit_efficiency_reject_threshold: f64,
-    #[allow(dead_code)]
-    flashblocks: bool,
 }
 
 impl From<PoolConfig> for PoolInnerConfig {
@@ -65,7 +63,6 @@ impl From<PoolConfig> for PoolInnerConfig {
             max_time_in_pool: config.max_time_in_pool,
             verification_gas_limit_efficiency_reject_threshold: config
                 .verification_gas_limit_efficiency_reject_threshold,
-            flashblocks: config.flashblocks,
         }
     }
 }
@@ -97,8 +94,9 @@ pub(crate) struct PoolInner<D> {
     #[allow(dead_code)]
     unmined_uos_bundle_mapping: HashMap<B256, B256>,
     /// Preconfimed UO to preconfirmed bundle.
-    pre_confirmed_uos: BTreeSet<B256>,
-
+    preconfirmed_uos: BTreeSet<B256>,
+    /// Unmined bundle to UO mapping.
+    unmined_bundle_to_uos: HashMap<B256, BTreeSet<B256>>,
     /// Count of operations by entity address
     count_by_address: HashMap<Address, EntityCounter>,
     /// Submission ID counter
@@ -135,7 +133,8 @@ where
             mined_at_block_number_by_hash: HashMap::new(),
             mined_hashes_with_block_numbers: BTreeSet::new(),
             unmined_uos_bundle_mapping: HashMap::new(),
-            pre_confirmed_uos: BTreeSet::new(),
+            preconfirmed_uos: BTreeSet::new(),
+            unmined_bundle_to_uos: HashMap::new(),
             count_by_address: HashMap::new(),
             submission_id: 0,
             pool_size: SizeTracker::default(),
@@ -232,15 +231,29 @@ where
     }
 
     #[allow(dead_code)]
-    pub(crate) fn pre_confirmed_uos(&self) -> impl Iterator<Item = B256> + '_ {
-        self.pre_confirmed_uos.iter().cloned()
+    pub(crate) fn mark_uo_pending(&mut self, uos: Vec<B256>, bundle_txn: B256) {
+        self.unmined_bundle_to_uos
+            .insert(bundle_txn, uos.clone().into_iter().collect());
+        for uo in uos {
+            self.unmined_uos_bundle_mapping.insert(uo, bundle_txn);
+        }
     }
 
-    pub(crate) fn set_pre_confirmed_uos(
-        &mut self,
-        pre_confirmed_uos: impl IntoIterator<Item = B256>,
-    ) {
-        self.pre_confirmed_uos = pre_confirmed_uos.into_iter().collect();
+    #[allow(dead_code)]
+    pub(crate) fn preconfirmed_uos(&self) -> impl Iterator<Item = B256> + '_ {
+        self.preconfirmed_uos.iter().cloned()
+    }
+
+    pub(crate) fn preconfirmed_txns(&mut self, preconfirmed_txns: impl IntoIterator<Item = B256>) {
+        self.preconfirmed_uos.clear();
+        for txn in preconfirmed_txns {
+            if let Some(uos) = self.unmined_bundle_to_uos.get(&txn) {
+                for uo in uos {
+                    self.preconfirmed_uos.insert(*uo);
+                    self.unmined_uos_bundle_mapping.insert(*uo, txn);
+                }
+            }
+        }
     }
 
     /// Does maintenance on the pool.
@@ -685,6 +698,11 @@ where
         for e in op.po.entities() {
             self.decrement_address_count(e.address, &e.kind);
         }
+
+        if let Some(txn) = self.unmined_uos_bundle_mapping.get(&hash) {
+            self.unmined_bundle_to_uos.remove(txn);
+        }
+        self.unmined_uos_bundle_mapping.remove(&hash);
 
         self.pool_size -= op.mem_size();
         self.update_metrics();
@@ -1664,7 +1682,6 @@ mod tests {
             da_gas_tracking_enabled: false,
             max_time_in_pool: None,
             verification_gas_limit_efficiency_reject_threshold: 0.5,
-            flashblocks: false,
         }
     }
 
