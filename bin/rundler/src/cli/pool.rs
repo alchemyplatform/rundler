@@ -229,6 +229,7 @@ impl PoolArgs {
                 .verification_gas_limit_efficiency_reject_threshold,
             max_time_in_pool: self.max_time_in_pool_secs.map(Duration::from_secs),
             max_expected_storage_slots: common.max_expected_storage_slots.unwrap_or(usize::MAX),
+            flashblocks: false,
         };
 
         let mut pool_configs = vec![];
@@ -261,6 +262,7 @@ impl PoolArgs {
             pool_configs,
             remote_address,
             chain_update_channel_capacity: self.chain_update_channel_capacity.unwrap_or(1024),
+            flashblocks: false,
         })
     }
 }
