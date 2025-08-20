@@ -92,6 +92,13 @@ pub(crate) struct PoolInner<D> {
     /// Removed operation hashes sorted by block number, so we can forget them
     /// when enough new blocks have passed.
     mined_hashes_with_block_numbers: BTreeSet<(u64, B256)>,
+
+    /// Unmined UO to bundle transaction mapping.
+    #[allow(dead_code)]
+    unmined_uos_bundle_mapping: HashMap<B256, B256>,
+    /// Preconfimed UO to preconfirmed bundle.
+    pre_confirmed_uos: BTreeSet<B256>,
+
     /// Count of operations by entity address
     count_by_address: HashMap<Address, EntityCounter>,
     /// Submission ID counter
@@ -127,6 +134,8 @@ where
             time_to_mine: HashMap::new(),
             mined_at_block_number_by_hash: HashMap::new(),
             mined_hashes_with_block_numbers: BTreeSet::new(),
+            unmined_uos_bundle_mapping: HashMap::new(),
+            pre_confirmed_uos: BTreeSet::new(),
             count_by_address: HashMap::new(),
             submission_id: 0,
             pool_size: SizeTracker::default(),
@@ -220,6 +229,18 @@ where
 
     pub(crate) fn all_operations(&self) -> impl Iterator<Item = Arc<PoolOperation>> + '_ {
         self.by_hash.values().map(|o| o.po.clone())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn pre_confirmed_uos(&self) -> impl Iterator<Item = B256> + '_ {
+        self.pre_confirmed_uos.iter().cloned()
+    }
+
+    pub(crate) fn set_pre_confirmed_uos(
+        &mut self,
+        pre_confirmed_uos: impl IntoIterator<Item = B256>,
+    ) {
+        self.pre_confirmed_uos = pre_confirmed_uos.into_iter().collect();
     }
 
     /// Does maintenance on the pool.

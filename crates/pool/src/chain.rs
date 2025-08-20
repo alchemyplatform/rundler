@@ -81,6 +81,16 @@ pub(crate) struct ChainSubscriber {
     pub(crate) sender: Arc<broadcast::Sender<Arc<ChainUpdate>>>,
     pub(crate) to_track: Arc<RwLock<HashSet<Address>>>,
 }
+
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UpdateType {
+    // Include at least one full block
+    #[default]
+    Full,
+    // only include pending block
+    Partial,
+}
+
 #[derive(Default, Debug, Eq, PartialEq)]
 pub(crate) struct ChainUpdate {
     pub latest_block_number: u64,
@@ -102,6 +112,7 @@ pub(crate) struct ChainUpdate {
     /// Boolean to state if the most recent chain update had a reorg
     /// that was larger than the existing history that has been tracked
     pub reorg_larger_than_history: bool,
+    pub update_type: UpdateType,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -355,6 +366,7 @@ impl<P: EvmProvider> Chain<P> {
             vec![],
             vec![],
             false,
+            UpdateType::Partial,
         )
     }
 
@@ -426,6 +438,7 @@ impl<P: EvmProvider> Chain<P> {
             vec![],
             vec![],
             false,
+            UpdateType::Full,
         ))
     }
 
@@ -517,6 +530,7 @@ impl<P: EvmProvider> Chain<P> {
             unmined_entity_balance_updates,
             address_updates,
             is_reorg_larger_than_history,
+            UpdateType::Full,
         )
     }
 
@@ -893,6 +907,7 @@ impl<P: EvmProvider> Chain<P> {
         unmined_entity_balance_updates: Vec<BalanceUpdate>,
         address_updates: Vec<AddressUpdate>,
         reorg_larger_than_history: bool,
+        update_type: UpdateType,
     ) -> ChainUpdate {
         let latest_block = self
             .blocks
@@ -911,6 +926,7 @@ impl<P: EvmProvider> Chain<P> {
             unmined_entity_balance_updates,
             address_updates,
             reorg_larger_than_history,
+            update_type,
         }
     }
 }
@@ -1260,6 +1276,7 @@ mod tests {
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
+                update_type: UpdateType::Full,
             }
         );
     }
@@ -1313,6 +1330,8 @@ mod tests {
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
+
+                update_type: UpdateType::Full,
             }
         );
     }
@@ -1394,6 +1413,7 @@ mod tests {
                 ],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
+                update_type: UpdateType::Full,
             }
         );
     }
@@ -1472,6 +1492,7 @@ mod tests {
                 ],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
+                update_type: UpdateType::Full,
             }
         );
     }
@@ -1536,6 +1557,7 @@ mod tests {
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
+                update_type: UpdateType::Full,
             }
         );
     }
@@ -1621,6 +1643,7 @@ mod tests {
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: true,
+                update_type: UpdateType::Full,
             }
         );
     }
@@ -1680,6 +1703,7 @@ mod tests {
                 preconfirmed_ops: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
+                update_type: UpdateType::Full,
             }
         );
     }
@@ -1723,6 +1747,7 @@ mod tests {
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
+                update_type: UpdateType::Full,
             }
         );
     }
@@ -1773,6 +1798,7 @@ mod tests {
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
+                update_type: UpdateType::Full,
             }
         );
     }
@@ -1820,6 +1846,7 @@ mod tests {
                     mined_tx_hashes: tx_hashes,
                 }],
                 reorg_larger_than_history: false,
+                update_type: UpdateType::Full,
             }
         )
     }
@@ -1893,10 +1920,10 @@ mod tests {
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
+                update_type: UpdateType::Partial,
             }
         );
 
-        println!("{}, {}: set_pending_block", file!(), line!());
         controller.set_pending_block(pending_block_2);
         let update = chain.wait_for_update().await;
         assert_eq!(
@@ -1920,6 +1947,7 @@ mod tests {
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
+                update_type: UpdateType::Partial,
             }
         );
     }
@@ -1970,6 +1998,7 @@ mod tests {
                     mined_tx_hashes: tx_hashes,
                 }],
                 reorg_larger_than_history: false,
+                update_type: UpdateType::Full,
             }
         )
     }
