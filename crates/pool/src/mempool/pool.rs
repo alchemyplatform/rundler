@@ -231,11 +231,11 @@ where
     }
 
     #[allow(dead_code)]
-    pub(crate) fn mark_uo_pending(&mut self, uos: Vec<B256>, bundle_txn: B256) {
+    pub(crate) fn mark_uo_pending(&mut self, bundle_hash: B256, hashes: Vec<B256>) {
         self.unmined_bundle_to_uos
-            .insert(bundle_txn, uos.clone().into_iter().collect());
-        for uo in uos {
-            self.unmined_uos_bundle_mapping.insert(uo, bundle_txn);
+            .insert(bundle_hash, hashes.clone().into_iter().collect());
+        for hash in hashes {
+            self.unmined_uos_bundle_mapping.insert(hash, bundle_hash);
         }
     }
 
