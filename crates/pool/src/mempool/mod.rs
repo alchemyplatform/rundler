@@ -125,6 +125,9 @@ pub(crate) trait Mempool: Send + Sync {
 
     /// Turns on and off tracking errors
     fn set_tracking(&self, paymaster: bool, reputation: bool);
+
+    /// Marks a set of user operations as pending
+    fn mark_uo_pending(&self, bundle_hash: B256, hashes: Vec<B256>);
 }
 
 /// Config for the mempool

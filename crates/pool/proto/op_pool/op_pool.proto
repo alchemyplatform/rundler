@@ -258,6 +258,9 @@ service OpPool {
   // Remove a UserOperation by its id
   rpc RemoveOpById(RemoveOpByIdRequest) returns (RemoveOpByIdResponse);
 
+  // Mark a set of UOs in "pending" state
+  rpc MarkUoPending(MarkUoPendingRequest) returns (MarkUoPendingResponse);
+
   // Handles a list of updates to be performed on entities
   rpc UpdateEntities(UpdateEntitiesRequest) returns (UpdateEntitiesResponse);
 
@@ -289,8 +292,7 @@ service OpPool {
   rpc SubscribeNewHeads(SubscribeNewHeadsRequest) returns (stream SubscribeNewHeadsResponse);
 
   // Clears the bundler mempool and reputation data of paymasters/accounts/factories/aggregators
-  rpc AdminSetTracking(AdminSetTrackingRequest) returns (AdminSetTrackingResponse);
-}
+  rpc AdminSetTracking(AdminSetTrackingRequest) returns (AdminSetTrackingResponse);}
 
 message GetSupportedEntryPointsRequest {}
 message GetSupportedEntryPointsResponse {
@@ -468,6 +470,21 @@ message RemoveOpByIdResponse {
 message RemoveOpByIdSuccess {
   bytes hash = 1;
 }
+
+message MarkUoPendingRequest{
+  bytes entry_point = 1;
+  bytes bundle_hash = 2;
+  repeated bytes hashes = 3;
+}
+
+message MarkUoPendingResponse {
+  oneof result {
+    MarkUoPendingSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+
+message MarkUoPendingSuccess {}
 
 message UpdateEntitiesRequest {
   // The serilaized entry point address

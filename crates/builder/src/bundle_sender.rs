@@ -122,7 +122,7 @@ pub enum SendBundleResult {
 #[derive(Debug)]
 enum SendBundleAttemptResult {
     // The bundle was successfully sent with the given (sender, op_hash) pairs
-    Success(Arc<Vec<(Address, B256)>>),
+    Success((B256, Arc<Vec<(Address, B256)>>)),
     // There are no operations available to bundle
     NoOperationsInitially,
     // There were no operations after the fee was increased
@@ -275,7 +275,15 @@ where
 
         // handle result
         match result {
-            Ok(SendBundleAttemptResult::Success(_)) => {
+            Ok(SendBundleAttemptResult::Success((bundle_hash, ops))) => {
+                let _ = self
+                    .pool
+                    .mark_uo_pending(
+                        self.ep_address,
+                        bundle_hash,
+                        ops.iter().map(|op| op.1).collect(),
+                    )
+                    .await;
                 // sent the bundle
                 info!("Bundle sent successfully");
                 state.update(InnerState::Pending(inner.to_pending(
@@ -614,7 +622,7 @@ where
         let result = self.send_bundle_inner(state, ops, fee_increase_count).await;
 
         match &result {
-            Ok(SendBundleAttemptResult::Success(ops)) => {
+            Ok(SendBundleAttemptResult::Success((_, ops))) => {
                 self.assigner
                     .confirm_senders_drop_unused(self.sender_eoa, ops.iter().map(|op| &op.0));
             }
@@ -723,7 +731,7 @@ where
                     required_fees,
                 ));
 
-                Ok(SendBundleAttemptResult::Success(ops))
+                Ok(SendBundleAttemptResult::Success((tx_hash, (ops))))
             }
             Err(TransactionTrackerError::NonceTooLow) => {
                 self.metrics.bundle_txn_nonce_too_low.increment(1);

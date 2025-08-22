@@ -43,6 +43,7 @@ use super::protos::{
     debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
     get_op_by_id_response, get_ops_by_hashes_response, get_ops_response,
     get_ops_summaries_response, get_reputation_status_response, get_stake_status_response,
+    mark_uo_pending_response,
     op_pool_server::{OpPool, OpPoolServer},
     remove_op_by_id_response, remove_ops_response, update_entities_response, AddOpRequest,
     AddOpResponse, AddOpSuccess, AdminSetTrackingRequest, AdminSetTrackingResponse,
@@ -57,11 +58,12 @@ use super::protos::{
     GetOpsSummariesRequest, GetOpsSummariesResponse, GetOpsSummariesSuccess,
     GetReputationStatusRequest, GetReputationStatusResponse, GetReputationStatusSuccess,
     GetStakeStatusRequest, GetStakeStatusResponse, GetStakeStatusSuccess,
-    GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, MempoolOp,
-    PoolOperationSummary, RemoveOpByIdRequest, RemoveOpByIdResponse, RemoveOpByIdSuccess,
-    RemoveOpsRequest, RemoveOpsResponse, RemoveOpsSuccess, ReputationStatus,
-    SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, TryUoFromProto, UpdateEntitiesRequest,
-    UpdateEntitiesResponse, UpdateEntitiesSuccess, OP_POOL_FILE_DESCRIPTOR_SET,
+    GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, MarkUoPendingRequest,
+    MarkUoPendingResponse, MarkUoPendingSuccess, MempoolOp, PoolOperationSummary,
+    RemoveOpByIdRequest, RemoveOpByIdResponse, RemoveOpByIdSuccess, RemoveOpsRequest,
+    RemoveOpsResponse, RemoveOpsSuccess, ReputationStatus, SubscribeNewHeadsRequest,
+    SubscribeNewHeadsResponse, TryUoFromProto, UpdateEntitiesRequest, UpdateEntitiesResponse,
+    UpdateEntitiesSuccess, OP_POOL_FILE_DESCRIPTOR_SET,
 };
 use crate::server::local::LocalPoolHandle;
 
@@ -391,6 +393,46 @@ impl OpPool for OpPoolImpl {
             },
             Err(error) => RemoveOpByIdResponse {
                 result: Some(remove_op_by_id_response::Result::Failure(error.into())),
+            },
+        };
+
+        Ok(Response::new(resp))
+    }
+
+    async fn mark_uo_pending(
+        &self,
+        request: Request<MarkUoPendingRequest>,
+    ) -> Result<Response<MarkUoPendingResponse>> {
+        let req = request.into_inner();
+        let ep = self.get_entry_point(&req.entry_point)?;
+
+        let bundle_hash = from_bytes(&req.bundle_hash).map_err(|e| {
+            Status::invalid_argument(format!("Invalid bundle_hash in MarkUoPendingRequest: {e}"))
+        })?;
+
+        let hashes: Vec<B256> = req
+            .hashes
+            .into_iter()
+            .map(|h| {
+                if h.len() != 32 {
+                    return Err(Status::invalid_argument("Hash must be 32 bytes long"));
+                }
+                Ok(B256::from_slice(&h))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let resp = match self
+            .local_pool
+            .mark_uo_pending(ep, bundle_hash, hashes)
+            .await
+        {
+            Ok(_) => MarkUoPendingResponse {
+                result: Some(mark_uo_pending_response::Result::Success(
+                    MarkUoPendingSuccess {},
+                )),
+            },
+            Err(error) => MarkUoPendingResponse {
+                result: Some(mark_uo_pending_response::Result::Failure(error.into())),
             },
         };
 

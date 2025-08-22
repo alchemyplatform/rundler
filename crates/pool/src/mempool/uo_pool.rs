@@ -884,6 +884,10 @@ where
         self.state.read().pool.get_operation_by_hash(hash)
     }
 
+    fn mark_uo_pending(&self, bundle_hash: B256, hashes: Vec<B256>) {
+        self.state.write().pool.mark_uo_pending(bundle_hash, hashes);
+    }
+
     // DEBUG METHODS
 
     fn clear_state(&self, clear_mempool: bool, clear_paymaster: bool, clear_reputation: bool) {
@@ -1545,16 +1549,17 @@ mod tests {
         let preconfirmed_txns = vec![B256::random(), B256::random(), B256::random()];
 
         pool.state.write().pool.mark_uo_pending(
-            ops_1.iter().map(|op| op.op.hash()).collect(),
             preconfirmed_txns[0],
+            ops_1.iter().map(|op| op.op.hash()).collect(),
         );
+
         pool.state.write().pool.mark_uo_pending(
-            ops_2.iter().map(|op| op.op.hash()).collect(),
             preconfirmed_txns[1],
+            ops_2.iter().map(|op| op.op.hash()).collect(),
         );
         pool.state.write().pool.mark_uo_pending(
-            ops_3.iter().map(|op| op.op.hash()).collect(),
             preconfirmed_txns[2],
+            ops_3.iter().map(|op| op.op.hash()).collect(),
         );
 
         pool.on_chain_update(&ChainUpdate {

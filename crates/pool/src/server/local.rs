@@ -271,6 +271,24 @@ impl Pool for LocalPoolHandle {
         }
     }
 
+    async fn mark_uo_pending(
+        &self,
+        entry_point: Address,
+        bundle_hash: B256,
+        hashes: Vec<B256>,
+    ) -> PoolResult<()> {
+        let req = ServerRequestKind::MarkUoPending {
+            entry_point,
+            bundle_hash,
+            hashes,
+        };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::MarkUoPending => Ok(()),
+            _ => Err(PoolError::UnexpectedResponse),
+        }
+    }
+
     async fn update_entities(
         &self,
         entry_point: Address,
@@ -649,6 +667,17 @@ impl LocalPoolServerRunner {
         }
     }
 
+    fn mark_uo_pending(
+        &self,
+        entry_point: Address,
+        bundle_hash: B256,
+        hashes: Vec<B256>,
+    ) -> PoolResult<()> {
+        let mempool = self.get_pool(entry_point)?;
+        mempool.mark_uo_pending(bundle_hash, hashes);
+        Ok(())
+    }
+
     async fn run(mut self, shutdown: GracefulShutdown) {
         let mut chain_updates = self.chain_subscriber.subscribe();
 
@@ -833,6 +862,12 @@ impl LocalPoolServerRunner {
                             self.chain_subscriber.track_addresses(to_track);
                             Ok(ServerResponse::SubscribeNewHeads { new_heads: self.block_sender.subscribe() } )
                         }
+                        ServerRequestKind::MarkUoPending { entry_point, bundle_hash, hashes} => {
+                            match self.mark_uo_pending(entry_point, bundle_hash, hashes) {
+                                Ok(_) => Ok(ServerResponse::MarkUoPending),
+                                Err(e) => Err(e),
+                            }
+                        }
                     };
                     if let Err(e) = req.response.send(resp) {
                         tracing::error!("Failed to send response: {:?}", e);
@@ -925,6 +960,11 @@ enum ServerRequestKind {
     SubscribeNewHeads {
         to_track: Vec<Address>,
     },
+    MarkUoPending {
+        entry_point: Address,
+        bundle_hash: B256,
+        hashes: Vec<B256>,
+    },
 }
 
 #[derive(Debug)]
@@ -955,6 +995,7 @@ enum ServerResponse {
     RemoveOpById {
         hash: Option<B256>,
     },
+    MarkUoPending,
     UpdateEntities,
     DebugClearState,
     AdminSetTracking,
