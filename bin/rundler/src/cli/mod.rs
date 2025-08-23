@@ -243,6 +243,15 @@ pub struct CommonArgs {
     )]
     target_bundle_block_gas_limit_ratio: f64,
 
+    /// Absolute target bundle gas limit. If set, overrides target_bundle_block_gas_limit_ratio.
+    #[arg(
+        long = "target_bundle_block_gas_limit",
+        name = "target_bundle_block_gas_limit",
+        env = "TARGET_BUNDLE_BLOCK_GAS_LIMIT",
+        global = true
+    )]
+    target_bundle_block_gas_limit: Option<u64>,
+
     #[arg(
         long = "max_bundle_block_gas_limit_ratio",
         name = "max_bundle_block_gas_limit_ratio",
@@ -252,6 +261,15 @@ pub struct CommonArgs {
         global = true
     )]
     max_bundle_block_gas_limit_ratio: f64,
+
+    /// Absolute max bundle gas limit. If set, overrides max_bundle_block_gas_limit_ratio.
+    #[arg(
+        long = "max_bundle_block_gas_limit",
+        name = "max_bundle_block_gas_limit",
+        env = "MAX_BUNDLE_BLOCK_GAS_LIMIT",
+        global = true
+    )]
+    max_bundle_block_gas_limit: Option<u64>,
 
     #[arg(
         long = "min_stake_value",
@@ -551,14 +569,31 @@ fn verify_f64_less_than_one(v: &str) -> Result<f64, String> {
     }
 }
 
+/// Resolve the target bundle gas from args and chain spec, applying absolute override if set
+fn resolve_target_bundle_gas(args: &CommonArgs, chain_spec: &ChainSpec) -> u128 {
+    if let Some(abs) = args.target_bundle_block_gas_limit {
+        abs as u128
+    } else {
+        chain_spec.block_gas_limit_mult(args.target_bundle_block_gas_limit_ratio)
+    }
+}
+
+/// Resolve the max bundle execution gas from args and chain spec, applying absolute override if set
+fn resolve_max_bundle_execution_gas(args: &CommonArgs, chain_spec: &ChainSpec) -> u128 {
+    if let Some(abs) = args.max_bundle_block_gas_limit {
+        abs as u128
+    } else {
+        chain_spec.block_gas_limit_mult(args.max_bundle_block_gas_limit_ratio)
+    }
+}
+
 const SIMULATION_GAS_OVERHEAD: u128 = 100_000;
 
 impl TryFromWithSpec<&CommonArgs> for EstimationSettings {
     type Error = anyhow::Error;
 
     fn try_from_with_spec(value: &CommonArgs, chain_spec: &ChainSpec) -> Result<Self, Self::Error> {
-        let max_bundle_execution_gas =
-            chain_spec.block_gas_limit_mult(value.max_bundle_block_gas_limit_ratio);
+        let max_bundle_execution_gas = resolve_max_bundle_execution_gas(value, chain_spec);
 
         if value.max_verification_gas
             > max_bundle_execution_gas.saturating_sub(SIMULATION_GAS_OVERHEAD) as u64
@@ -601,8 +636,7 @@ impl TryFromWithSpec<&CommonArgs> for PrecheckSettings {
     fn try_from_with_spec(value: &CommonArgs, chain_spec: &ChainSpec) -> Result<Self, Self::Error> {
         Ok(Self {
             max_verification_gas: value.max_verification_gas as u128,
-            max_bundle_execution_gas: chain_spec
-                .block_gas_limit_mult(value.max_bundle_block_gas_limit_ratio),
+            max_bundle_execution_gas: resolve_max_bundle_execution_gas(value, chain_spec),
             max_uo_cost: value.max_uo_cost.unwrap_or(U256::MAX),
             bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
             priority_fee_mode: PriorityFeeMode::try_from(
@@ -818,8 +852,7 @@ pub fn construct_providers(
     )?);
     let (da_gas_oracle, da_gas_oracle_sync) =
         rundler_provider::new_alloy_da_gas_oracle(chain_spec, provider.clone());
-    let max_bundle_execution_gas = chain_spec
-        .block_gas_limit_mult(args.max_bundle_block_gas_limit_ratio)
+    let max_bundle_execution_gas: u64 = resolve_max_bundle_execution_gas(args, chain_spec)
         .try_into()
         .expect("max_bundle_execution_gas is too large for u64");
 

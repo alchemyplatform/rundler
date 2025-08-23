@@ -259,13 +259,14 @@ impl BuilderArgs {
 
         let provider_client_timeout_seconds = common.provider_client_timeout_seconds;
 
+        let target_bundle_gas = super::resolve_target_bundle_gas(common, &chain_spec);
+        let max_bundle_gas = super::resolve_max_bundle_execution_gas(common, &chain_spec);
+
         tracing::info!(
             "Builder bundle limits: Chain block gas limit: {}. Target bundle gas: {}. Max bundle gas: {}",
             chain_spec.block_gas_limit,
-            chain_spec
-                .block_gas_limit_mult(common.target_bundle_block_gas_limit_ratio),
-            chain_spec
-                .block_gas_limit_mult(common.max_bundle_block_gas_limit_ratio)
+            target_bundle_gas,
+            max_bundle_gas
         );
 
         Ok(BuilderTaskArgs {
@@ -275,10 +276,8 @@ impl BuilderArgs {
             unsafe_mode: common.unsafe_mode,
             rpc_url,
             max_bundle_size: self.max_bundle_size,
-            target_bundle_gas: chain_spec
-                .block_gas_limit_mult(common.target_bundle_block_gas_limit_ratio),
-            max_bundle_gas: chain_spec
-                .block_gas_limit_mult(common.max_bundle_block_gas_limit_ratio),
+            target_bundle_gas,
+            max_bundle_gas,
             sender_args,
             sim_settings: common.try_into()?,
             max_blocks_to_wait_for_mine: self.max_blocks_to_wait_for_mine,
