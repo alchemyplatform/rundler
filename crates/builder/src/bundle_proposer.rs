@@ -45,7 +45,10 @@ use rundler_types::{
     UserOperationVariant, UserOpsPerAggregator, ValidTimeRange, ValidationRevert,
     BUNDLE_BYTE_OVERHEAD, TIME_RANGE_BUFFER,
 };
-use rundler_utils::{emit::WithEntryPoint, guard_timer::CustomTimerGuard, math};
+use rundler_utils::{
+    emit::WithEntryPoint, eth::calculate_bundle_transaction_size, guard_timer::CustomTimerGuard,
+    math,
+};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
@@ -1647,11 +1650,13 @@ impl<UO: UserOperation> ProposalContext<UO> {
     }
 
     fn get_bundle_transaction_size(&self, chain_spec: &ChainSpec) -> u128 {
-        self.bundle_overhead_bytes(chain_spec)
+        let bundle_data_size = (self.bundle_overhead_bytes(chain_spec)
             + self
                 .iter_ops_with_simulations()
                 .map(|sim_op| sim_op.op.abi_encoded_size() as u128)
-                .sum::<u128>()
+                .sum::<u128>()) as usize;
+
+        calculate_bundle_transaction_size(bundle_data_size) as u128
     }
 
     // Get the computation gas limit in the bundle

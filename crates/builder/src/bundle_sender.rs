@@ -35,7 +35,7 @@ use rundler_types::{
     proxy::SubmissionProxy,
     EntityUpdate, ExpectedStorage, UserOperation,
 };
-use rundler_utils::emit::WithEntryPoint;
+use rundler_utils::{emit::WithEntryPoint, eth::calculate_bundle_transaction_size};
 use tokio::{
     join,
     sync::{
@@ -699,7 +699,8 @@ where
             .await;
         self.metrics.bundle_txns_sent.increment(1);
 
-        let tx_size = self.calculate_transaction_size(&tx);
+        let bundle_data_size = tx.input.input().map_or(0, |data| data.len());
+        let tx_size = calculate_bundle_transaction_size(bundle_data_size);
         self.metrics.bundle_txn_size_bytes.record(tx_size as f64);
 
         match send_result {
@@ -927,31 +928,6 @@ where
         };
 
         self.remove_ops_from_pool_by_hash(to_remove).await
-    }
-
-    fn calculate_transaction_size(&self, tx: &TransactionRequest) -> usize {
-        let mut size = 0;
-
-        size += 8; // nonce
-        size += 20; // address
-        size += 32; // value
-        size += 8; // gas limit
-        size += 32; // max_fee_per_gas
-        size += 32; // max_priority_fee_per_gas
-
-        size += tx.input.input().map_or(0, |data| data.len());
-
-        if let Some(access_list) = &tx.access_list {
-            for item in access_list.iter() {
-                size += 20; // address
-                size += item.storage_keys.len() * 32; // storage keys
-            }
-        }
-
-        size += 65; // signature (r, s, v)
-        size += 50; // RLP encoding overhead (headers, lengths, etc.)
-
-        size
     }
 
     fn emit(&self, event: BuilderEvent) {
