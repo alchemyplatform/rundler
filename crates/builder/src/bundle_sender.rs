@@ -18,7 +18,7 @@ use anyhow::{bail, Context};
 use async_trait::async_trait;
 use futures::Stream;
 use futures_util::StreamExt;
-use metrics::Counter;
+use metrics::{Counter, Histogram};
 use metrics_derive::Metrics;
 #[cfg(test)]
 use mockall::automock;
@@ -699,6 +699,9 @@ where
             .await;
         self.metrics.bundle_txns_sent.increment(1);
 
+        let tx_size = self.calculate_transaction_size(&tx);
+        self.metrics.bundle_txn_size_bytes.record(tx_size as f64);
+
         match send_result {
             Ok(tx_hash) => {
                 let ops = Arc::new(ops);
@@ -924,6 +927,31 @@ where
         };
 
         self.remove_ops_from_pool_by_hash(to_remove).await
+    }
+
+    fn calculate_transaction_size(&self, tx: &TransactionRequest) -> usize {
+        let mut size = 0;
+
+        size += 8; // nonce
+        size += 20; // address
+        size += 32; // value
+        size += 8; // gas limit
+        size += 32; // max_fee_per_gas
+        size += 32; // max_priority_fee_per_gas
+
+        size += tx.input.input().map_or(0, |data| data.len());
+
+        if let Some(access_list) = &tx.access_list {
+            for item in access_list.iter() {
+                size += 20; // address
+                size += item.storage_keys.len() * 32; // storage keys
+            }
+        }
+
+        size += 65; // signature (r, s, v)
+        size += 50; // RLP encoding overhead (headers, lengths, etc.)
+
+        size
     }
 
     fn emit(&self, event: BuilderEvent) {
@@ -1472,6 +1500,8 @@ struct BuilderMetric {
     cancellation_txns_failed: Counter,
     #[metric(describe = "the count of state machine errors.")]
     state_machine_errors: Counter,
+    #[metric(describe = "the distribution of bundle transaction sizes in bytes.")]
+    bundle_txn_size_bytes: Histogram,
 }
 
 impl BuilderMetric {
