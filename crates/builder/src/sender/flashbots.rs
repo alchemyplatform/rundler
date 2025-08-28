@@ -266,11 +266,12 @@ impl FlashbotsClient {
     }
 
     async fn sign_send_request(&self, body: Value) -> anyhow::Result<Response> {
-        let to_sign = format!("0x{:x}", utils::keccak256(body.to_string()));
+        let body_string = body.to_string();
+        let body_hash = utils::keccak256(body_string.as_bytes());
 
         let signature = self
             .signer
-            .sign_message_sync(to_sign.as_bytes())
+            .sign_message_sync(body_hash.as_slice())
             .expect("Signature failed");
         let header_val = HeaderValue::from_str(&format!(
             "{:?}:0x{}",
@@ -288,7 +289,7 @@ impl FlashbotsClient {
             .http_client
             .post(&self.relay_url)
             .headers(headers)
-            .body(body.to_string())
+            .body(body_string)
             .send()
             .await
             .map_err(|e| anyhow!("failed to send request to Flashbots: {:?}", e))?;
