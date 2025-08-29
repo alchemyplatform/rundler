@@ -14,7 +14,7 @@
 use futures_util::{future::BoxFuture, FutureExt};
 use http::{Request as httpRequest, Response as httpResponse};
 use jsonrpsee::{
-    server::middleware::rpc::RpcServiceT,
+    server::{middleware::rpc::RpcServiceT, ConnectionGuard},
     types::{ErrorCode, Request},
     MethodResponse,
 };
@@ -67,6 +67,12 @@ where
         let svc = self.service.clone();
 
         async move {
+            if let Some(connection_guard) = req.extensions().get::<ConnectionGuard>() {
+                method_logger.record_active_connections(
+                    (connection_guard.max_connections() - connection_guard.available_connections())
+                        as f64,
+                );
+            }
             let rp = svc.call(req).await;
             method_logger.done();
 

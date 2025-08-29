@@ -24,6 +24,7 @@ pub struct MethodSessionLogger {
     method_name: String,
     protocol: String,
     method_metric: MethodMetrics,
+    json_rpsee_metric: JsonRpseeMetrics,
 }
 
 #[derive(Metrics)]
@@ -49,6 +50,15 @@ pub(crate) struct MethodStatusMetrics {
     rpc_response_status: Counter,
 }
 
+#[derive(Metrics)]
+#[metrics(scope = "jsonrpsee_stats")]
+pub(crate) struct JsonRpseeMetrics {
+    #[metric(
+        describe = "The count of the active connections for jsonrpsee server connection guard."
+    )]
+    active_connections: Gauge,
+}
+
 impl MethodSessionLogger {
     /// create a session logger.
     pub fn new(service_name: String, method_name: String, protocol: String) -> Self {
@@ -57,6 +67,10 @@ impl MethodSessionLogger {
             method_name: method_name.clone(),
             service_name: service_name.clone(),
             protocol: protocol.clone(),
+            json_rpsee_metric: JsonRpseeMetrics::new_with_labels(&[(
+                "service_name",
+                service_name.clone(),
+            )]),
             method_metric: MethodMetrics::new_with_labels(&[
                 ("method_name", method_name),
                 ("service_name", service_name),
@@ -103,5 +117,13 @@ impl MethodSessionLogger {
         self.method_metric
             .request_latency
             .record(self.start_time.elapsed().as_millis() as f64);
+    }
+
+    /// Record current active connections being used within
+    /// the jsonrpsee server by reading the ConnectionGuard extension.
+    pub fn record_active_connections(&self, available_connections: f64) {
+        self.json_rpsee_metric
+            .active_connections
+            .set(available_connections);
     }
 }
