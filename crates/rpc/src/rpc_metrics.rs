@@ -152,15 +152,11 @@ where
         );
         let mut svc = self.service.clone();
         async move {
-            let available_connections = req
-                .extensions()
-                .get::<ConnectionGuard>()
-                .unwrap()
-                .available_connections() as f64;
-
+            if let Some(connection_guard) = req.extensions().get::<ConnectionGuard>() {
+                method_logger
+                    .record_available_connections(connection_guard.available_connections() as f64);
+            }
             let rp = svc.call(req).await;
-
-            method_logger.record_available_connections(available_connections);
             let http_status = rp.as_ref().ok().map(|rp| rp.status());
             if let Some(status_code) = http_status {
                 method_logger.record_http(get_http_status_from_code(status_code.as_u16()));
