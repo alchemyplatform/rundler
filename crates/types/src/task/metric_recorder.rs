@@ -53,8 +53,10 @@ pub(crate) struct MethodStatusMetrics {
 #[derive(Metrics)]
 #[metrics(scope = "jsonrpsee_stats")]
 pub(crate) struct JsonRpseeMetrics {
-    #[metric(describe = "The count of the current available connections for jsonrpsee server.")]
-    available_connections: Gauge,
+    #[metric(
+        describe = "The count of the active connections for jsonrpsee server connection guard."
+    )]
+    active_connections: Gauge,
 }
 
 impl MethodSessionLogger {
@@ -117,11 +119,11 @@ impl MethodSessionLogger {
             .record(self.start_time.elapsed().as_millis() as f64);
     }
 
-    /// Record current available connections in the pool that can be used
-    /// within the jsonrpsee server by reading the ConnectionGuard extension.
-    pub fn record_available_connections(&self, available_connections: f64) {
+    /// Record current active connections being used within
+    /// the jsonrpsee server by reading the ConnectionGuard extension.
+    pub fn record_active_connections(&self, available_connections: f64) {
         self.json_rpsee_metric
-            .available_connections
+            .active_connections
             .set(available_connections);
     }
 }

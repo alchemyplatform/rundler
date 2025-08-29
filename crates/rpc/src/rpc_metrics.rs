@@ -67,6 +67,12 @@ where
         let svc = self.service.clone();
 
         async move {
+            if let Some(connection_guard) = req.extensions().get::<ConnectionGuard>() {
+                method_logger.record_active_connections(
+                    (connection_guard.max_connections() - connection_guard.available_connections())
+                        as f64,
+                );
+            }
             let rp = svc.call(req).await;
             method_logger.done();
 
@@ -152,10 +158,6 @@ where
         );
         let mut svc = self.service.clone();
         async move {
-            if let Some(connection_guard) = req.extensions().get::<ConnectionGuard>() {
-                method_logger
-                    .record_available_connections(connection_guard.available_connections() as f64);
-            }
             let rp = svc.call(req).await;
             let http_status = rp.as_ref().ok().map(|rp| rp.status());
             if let Some(status_code) = http_status {
