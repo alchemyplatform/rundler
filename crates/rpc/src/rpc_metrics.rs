@@ -14,7 +14,7 @@
 use futures_util::{future::BoxFuture, FutureExt};
 use http::{Request as httpRequest, Response as httpResponse};
 use jsonrpsee::{
-    server::middleware::rpc::RpcServiceT,
+    server::{middleware::rpc::RpcServiceT, ConnectionGuard},
     types::{ErrorCode, Request},
     MethodResponse,
 };
@@ -152,7 +152,15 @@ where
         );
         let mut svc = self.service.clone();
         async move {
+            let available_connections = req
+                .extensions()
+                .get::<ConnectionGuard>()
+                .unwrap()
+                .available_connections() as f64;
+
             let rp = svc.call(req).await;
+
+            method_logger.record_available_connections(available_connections);
             let http_status = rp.as_ref().ok().map(|rp| rp.status());
             if let Some(status_code) = http_status {
                 method_logger.record_http(get_http_status_from_code(status_code.as_u16()));
