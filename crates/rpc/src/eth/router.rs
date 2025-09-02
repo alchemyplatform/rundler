@@ -157,9 +157,10 @@ impl EntryPointRouter {
         &self,
         entry_point: &Address,
         hash: B256,
+        bundle_transaction: Option<B256>,
     ) -> EthResult<Option<RpcUserOperationReceipt>> {
         self.get_route(entry_point)?
-            .get_receipt(hash)
+            .get_receipt(hash, bundle_transaction)
             .await
             .map_err(Into::into)
     }
@@ -278,7 +279,11 @@ pub(crate) trait EntryPointRoute: Send + Sync {
         tx_receipt: TransactionReceipt,
     ) -> anyhow::Result<Option<RpcUserOperationByHash>>;
 
-    async fn get_receipt(&self, hash: B256) -> anyhow::Result<Option<RpcUserOperationReceipt>>;
+    async fn get_receipt(
+        &self,
+        hash: B256,
+        bundle_transaction: Option<B256>,
+    ) -> anyhow::Result<Option<RpcUserOperationReceipt>>;
 
     async fn get_receipt_from_tx_receipt(
         &self,
@@ -337,8 +342,14 @@ where
             .await
     }
 
-    async fn get_receipt(&self, hash: B256) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
-        self.event_provider.get_receipt(hash).await
+    async fn get_receipt(
+        &self,
+        hash: B256,
+        bundle_transaction: Option<B256>,
+    ) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
+        self.event_provider
+            .get_receipt(hash, bundle_transaction)
+            .await
     }
 
     async fn get_receipt_from_tx_receipt(

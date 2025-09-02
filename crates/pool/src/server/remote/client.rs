@@ -46,14 +46,14 @@ use super::protos::{
     debug_dump_mempool_response, debug_dump_paymaster_balances_response,
     debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
     get_op_by_id_response, get_ops_by_hashes_response, get_ops_response,
-    get_ops_summaries_response, get_reputation_status_response, get_stake_status_response,
-    mark_uo_pending_response, op_pool_client::OpPoolClient, remove_op_by_id_response,
-    remove_ops_response, update_entities_response, AddOpRequest, AdminSetTrackingRequest,
-    DebugClearStateRequest, DebugDumpMempoolRequest, DebugDumpPaymasterBalancesRequest,
-    DebugDumpReputationRequest, DebugSetReputationRequest, GetOpByIdRequest, GetOpsRequest,
-    GetReputationStatusRequest, GetStakeStatusRequest, RemoveOpsRequest,
-    ReputationStatus as ProtoReputationStatus, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse,
-    TryUoFromProto, UpdateEntitiesRequest,
+    get_ops_summaries_response, get_pre_confirmed_uo_response, get_reputation_status_response,
+    get_stake_status_response, mark_uo_pending_response, op_pool_client::OpPoolClient,
+    remove_op_by_id_response, remove_ops_response, update_entities_response, AddOpRequest,
+    AdminSetTrackingRequest, DebugClearStateRequest, DebugDumpMempoolRequest,
+    DebugDumpPaymasterBalancesRequest, DebugDumpReputationRequest, DebugSetReputationRequest,
+    GetOpByIdRequest, GetOpsRequest, GetReputationStatusRequest, GetStakeStatusRequest,
+    RemoveOpsRequest, ReputationStatus as ProtoReputationStatus, SubscribeNewHeadsRequest,
+    SubscribeNewHeadsResponse, TryUoFromProto, UpdateEntitiesRequest,
 };
 
 /// Remote pool client
@@ -436,6 +436,38 @@ impl Pool for RemotePoolClient {
         match res {
             Some(mark_uo_pending_response::Result::Success(_)) => Ok(()),
             Some(mark_uo_pending_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(PoolError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
+    async fn get_pre_confirmed_uo(
+        &self,
+        entry_point: Address,
+        hash: B256,
+    ) -> PoolResult<Option<B256>> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .get_pre_confirmed_uo(protos::GetPreConfirmedUoRequest {
+                entry_point: entry_point.to_vec(),
+                hash: hash.to_proto_bytes(),
+            })
+            .await
+            .map_err(anyhow::Error::from)?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(get_pre_confirmed_uo_response::Result::Success(s)) => {
+                if s.bundle_hash.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(B256::from_slice(&s.bundle_hash)))
+                }
+            }
+            Some(get_pre_confirmed_uo_response::Result::Failure(f)) => Err(f.try_into()?),
             None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,

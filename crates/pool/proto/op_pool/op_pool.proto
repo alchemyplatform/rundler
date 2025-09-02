@@ -261,6 +261,9 @@ service OpPool {
   // Mark a set of UOs in "pending" state
   rpc MarkUoPending(MarkUoPendingRequest) returns (MarkUoPendingResponse);
 
+  // Get the bundle hash of the preconfirmed UO by UO hash
+  rpc GetPreConfirmedUo(GetPreConfirmedUoRequest) returns (GetPreConfirmedUoResponse);
+
   // Handles a list of updates to be performed on entities
   rpc UpdateEntities(UpdateEntitiesRequest) returns (UpdateEntitiesResponse);
 
@@ -292,7 +295,8 @@ service OpPool {
   rpc SubscribeNewHeads(SubscribeNewHeadsRequest) returns (stream SubscribeNewHeadsResponse);
 
   // Clears the bundler mempool and reputation data of paymasters/accounts/factories/aggregators
-  rpc AdminSetTracking(AdminSetTrackingRequest) returns (AdminSetTrackingResponse);}
+  rpc AdminSetTracking(AdminSetTrackingRequest) returns (AdminSetTrackingResponse);
+}
 
 message GetSupportedEntryPointsRequest {}
 message GetSupportedEntryPointsResponse {
@@ -485,6 +489,22 @@ message MarkUoPendingResponse {
 }
 
 message MarkUoPendingSuccess {}
+
+message GetPreConfirmedUoRequest {
+  bytes entry_point = 1;
+  bytes hash = 2;
+}
+
+message GetPreConfirmedUoResponse {
+  oneof result {
+    GetPreConfirmedUoSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+
+message GetPreConfirmedUoSuccess {
+  bytes bundle_hash = 1;
+}
 
 message UpdateEntitiesRequest {
   // The serilaized entry point address

@@ -153,6 +153,7 @@ where
     pub(crate) async fn get_user_operation_receipt(
         &self,
         hash: B256,
+        preconfirmation: bool,
     ) -> EthResult<Option<RpcUserOperationReceipt>> {
         if hash == B256::ZERO {
             return Err(EthRpcError::InvalidParams(
@@ -160,11 +161,27 @@ where
             ));
         }
 
+        let bundle_transaction: Option<B256> = if preconfirmation {
+            if !self.chain_spec.flashblocks_enabled {
+                return Err(EthRpcError::InvalidParams(
+                    "Unsupported feature: preconfirmation".to_string(),
+                ));
+            }
+            let txn_hash_futs = self
+                .router
+                .entry_points()
+                .map(|ep| self.pool.get_pre_confirmed_uo(*ep, hash));
+
+            let txn_hash = future::try_join_all(txn_hash_futs).await?;
+            txn_hash.into_iter().find_map(|x| x)
+        } else {
+            None
+        };
+
         let futs = self
             .router
             .entry_points()
-            .map(|ep| self.router.get_receipt(ep, hash));
-
+            .map(|ep| self.router.get_receipt(ep, hash, bundle_transaction));
         let results = future::try_join_all(futs).await?;
         Ok(results.into_iter().find_map(|x| x))
     }

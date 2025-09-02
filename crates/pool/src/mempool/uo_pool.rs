@@ -888,6 +888,10 @@ where
         self.state.write().pool.mark_uo_pending(bundle_hash, hashes);
     }
 
+    fn get_pre_confirmed_uo(&self, uo_hash: B256) -> Option<B256> {
+        self.state.read().pool.get_pre_confirmed_uo(uo_hash)
+    }
+
     // DEBUG METHODS
 
     fn clear_state(&self, clear_mempool: bool, clear_paymaster: bool, clear_reputation: bool) {
