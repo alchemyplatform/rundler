@@ -153,13 +153,14 @@ where
     pub(crate) async fn get_user_operation_receipt(
         &self,
         hash: B256,
-        preconfirmation: bool,
+        preconfirmation: Option<bool>,
     ) -> EthResult<Option<RpcUserOperationReceipt>> {
         if hash == B256::ZERO {
             return Err(EthRpcError::InvalidParams(
                 "Missing/invalid userOpHash".to_string(),
             ));
         }
+        let preconfirmation = preconfirmation.unwrap_or(false);
 
         let bundle_transaction: Option<B256> = if preconfirmation {
             if !self.chain_spec.flashblocks_enabled {

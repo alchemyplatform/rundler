@@ -20,7 +20,7 @@ use rundler_provider::{Log, TransactionReceipt};
 use rundler_types::{chain::ChainSpec, v0_6::UserOperation};
 
 use super::common::{EntryPointEvents, UserOperationEventProviderImpl};
-use crate::types::RpcUserOperationReceipt;
+use crate::types::{RpcUserOperationReceipt, UOStatusEnum};
 
 pub(crate) type UserOperationEventProviderV0_6<P> =
     UserOperationEventProviderImpl<P, EntryPointFiltersV0_6>;
@@ -69,6 +69,7 @@ impl EntryPointEvents for EntryPointFiltersV0_6 {
             logs,
             receipt: tx_receipt,
             reason,
+            status: UOStatusEnum::Mined,
         }
     }
 
