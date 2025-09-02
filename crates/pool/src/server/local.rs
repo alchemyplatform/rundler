@@ -289,6 +289,19 @@ impl Pool for LocalPoolHandle {
         }
     }
 
+    async fn get_pre_confirmed_uo(
+        &self,
+        entry_point: Address,
+        hash: B256,
+    ) -> PoolResult<Option<B256>> {
+        let req = ServerRequestKind::GetPreConfirmedUo { entry_point, hash };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::GetPreConfirmedUo { bundle_hash } => Ok(bundle_hash),
+            _ => Err(PoolError::UnexpectedResponse),
+        }
+    }
+
     async fn update_entities(
         &self,
         entry_point: Address,
@@ -678,6 +691,11 @@ impl LocalPoolServerRunner {
         Ok(())
     }
 
+    fn get_pre_confirmed_uo(&self, entry_point: Address, hash: B256) -> PoolResult<Option<B256>> {
+        let mempool = self.get_pool(entry_point)?;
+        Ok(mempool.get_pre_confirmed_uo(hash))
+    }
+
     async fn run(mut self, shutdown: GracefulShutdown) {
         let mut chain_updates = self.chain_subscriber.subscribe();
 
@@ -868,6 +886,12 @@ impl LocalPoolServerRunner {
                                 Err(e) => Err(e),
                             }
                         }
+                        ServerRequestKind::GetPreConfirmedUo { entry_point, hash } => {
+                            match self.get_pre_confirmed_uo(entry_point, hash) {
+                                Ok(bundle_hash) => Ok(ServerResponse::GetPreConfirmedUo { bundle_hash }),
+                                Err(e) => Err(e),
+                            }
+                        }
                     };
                     if let Err(e) = req.response.send(resp) {
                         tracing::error!("Failed to send response: {:?}", e);
@@ -965,6 +989,10 @@ enum ServerRequestKind {
         bundle_hash: B256,
         hashes: Vec<B256>,
     },
+    GetPreConfirmedUo {
+        entry_point: Address,
+        hash: B256,
+    },
 }
 
 #[derive(Debug)]
@@ -1017,6 +1045,9 @@ enum ServerResponse {
     },
     SubscribeNewHeads {
         new_heads: broadcast::Receiver<NewHead>,
+    },
+    GetPreConfirmedUo {
+        bundle_hash: Option<B256>,
     },
 }
 

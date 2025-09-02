@@ -102,7 +102,21 @@ where
     }
 
     #[instrument(skip_all)]
-    async fn get_receipt(&self, hash: B256) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
+    async fn get_receipt(
+        &self,
+        hash: B256,
+        bundle_transaction: Option<B256>,
+    ) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
+        if let Some(bundle_transaction) = bundle_transaction {
+            let txn_receipt = self
+                .provider
+                .get_transaction_receipt(bundle_transaction)
+                .await
+                .context("should have fetched tx receipt")?
+                .context("Failed to fetch tx receipt")?;
+
+            return self.get_receipt_from_tx_receipt(hash, txn_receipt).await;
+        }
         let event = self
             .get_event_by_hash(hash)
             .await

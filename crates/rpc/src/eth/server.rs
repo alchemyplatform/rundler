@@ -93,10 +93,11 @@ where
     async fn get_user_operation_receipt(
         &self,
         hash: B256,
+        preconfirmation: bool,
     ) -> RpcResult<Option<RpcUserOperationReceipt>> {
         utils::safe_call_rpc_handler(
             "eth_getUserOperationReceipt",
-            EthApi::get_user_operation_receipt(self, hash),
+            EthApi::get_user_operation_receipt(self, hash, preconfirmation),
         )
         .await
     }

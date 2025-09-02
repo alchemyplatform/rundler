@@ -256,6 +256,16 @@ where
         }
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn get_pre_confirmed_uo(&self, uo_hash: B256) -> Option<B256> {
+        if self.preconfirmed_uos.contains(&uo_hash) {
+            if let Some(bundle_hash) = self.unmined_uos_bundle_mapping.get(&uo_hash) {
+                return Some(*bundle_hash);
+            }
+        }
+        None
+    }
+
     /// Does maintenance on the pool.
     ///
     /// 1) Removes all operations using the given entity, returning the hashes of the removed operations.

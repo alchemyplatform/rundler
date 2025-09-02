@@ -128,6 +128,9 @@ pub(crate) trait Mempool: Send + Sync {
 
     /// Marks a set of user operations as pending
     fn mark_uo_pending(&self, bundle_hash: B256, hashes: Vec<B256>);
+
+    /// Gets the bundle hash of a preconfirmed user operation
+    fn get_pre_confirmed_uo(&self, uo_hash: B256) -> Option<B256>;
 }
 
 /// Config for the mempool
