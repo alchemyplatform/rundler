@@ -35,7 +35,7 @@ use rundler_types::{
     proxy::SubmissionProxy,
     EntityUpdate, ExpectedStorage, UserOperation,
 };
-use rundler_utils::{emit::WithEntryPoint, eth::calculate_bundle_transaction_size};
+use rundler_utils::{emit::WithEntryPoint, eth};
 use tokio::{
     join,
     sync::{
@@ -700,7 +700,12 @@ where
         self.metrics.bundle_txns_sent.increment(1);
 
         let bundle_data_size = tx.input.input().map_or(0, |data| data.len());
-        let tx_size = calculate_bundle_transaction_size(bundle_data_size);
+
+        let tx_size = eth::calculate_transaction_size(
+            bundle_data_size,
+            tx.authorization_list.as_ref().map_or(0, |list| list.len()),
+        );
+
         self.metrics.bundle_txn_size_bytes.record(tx_size as f64);
 
         match send_result {

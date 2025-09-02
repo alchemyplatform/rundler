@@ -20,10 +20,10 @@ pub fn format_address(address: Address) -> String {
     format!("{:#x}", address).to_string()
 }
 
-/// Calculate the size of a bundle transaction in bytes including transaction overhead
+/// Calculate the size of a transaction in bytes including transaction overhead
 /// This function estimates the complete transaction size for a bundle before it's fully constructed
 /// Note: Bundle transactions are sent via EOA, so EIP-7702 authorization lists are not included
-pub fn calculate_bundle_transaction_size(bundle_data_size: usize) -> usize {
+pub fn calculate_transaction_size(bundle_data_size: usize, auth_list_count: usize) -> usize {
     let mut size = 0;
 
     size += 8; // nonce (will be set when sending)
@@ -42,6 +42,12 @@ pub fn calculate_bundle_transaction_size(bundle_data_size: usize) -> usize {
 
     // RLP encoding overhead
     size += 50; // headers, lengths, etc.
+
+    if auth_list_count > 0 {
+        // chain_id + address + nonce + y_parity + r + s
+        let auth_item_size = 32 + 20 + 8 + 1 + 32 + 32;
+        size += auth_list_count * auth_item_size;
+    }
 
     size
 }
