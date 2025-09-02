@@ -22,7 +22,6 @@ pub fn format_address(address: Address) -> String {
 
 /// Calculate the size of a transaction in bytes including transaction overhead
 /// This function estimates the complete transaction size for a bundle before it's fully constructed
-/// Note: Bundle transactions are sent via EOA, so EIP-7702 authorization lists are not included
 pub fn calculate_transaction_size(bundle_data_size: usize, auth_list_count: usize) -> usize {
     let mut size = 0;
 
