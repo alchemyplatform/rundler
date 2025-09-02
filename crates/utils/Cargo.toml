@@ -19,3 +19,7 @@ rand.workspace = true
 schnellru = "0.2.1"
 tokio.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+alloy-consensus.workspace = true
+alloy-eips.workspace = true
