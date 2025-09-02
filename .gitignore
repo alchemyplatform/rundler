@@ -19,3 +19,4 @@
 
 # Release artifacts
 dist/
+.tool-versions

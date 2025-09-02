@@ -173,6 +173,12 @@ impl From<RpcGasEstimateV0_7> for RpcGasEstimate {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UOStatusEnum {
+    Mined,
+    Preconfirmed,
+}
 /// User operation receipt
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -199,6 +205,8 @@ pub struct RpcUserOperationReceipt {
     pub logs: Vec<Log>,
     /// The receipt of the transaction that included this operation
     pub receipt: TransactionReceipt,
+    /// The status of this operation
+    pub status: UOStatusEnum,
 }
 
 /// Reputation of an entity

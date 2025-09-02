@@ -27,7 +27,7 @@ use rundler_utils::log::LogOnError;
 use tracing::instrument;
 
 use super::UserOperationEventProvider;
-use crate::types::{RpcUserOperationByHash, RpcUserOperationReceipt};
+use crate::types::{RpcUserOperationByHash, RpcUserOperationReceipt, UOStatusEnum};
 
 #[derive(Debug)]
 pub(crate) struct UserOperationEventProviderImpl<P, F> {
@@ -115,7 +115,14 @@ where
                 .context("should have fetched tx receipt")?
                 .context("Failed to fetch tx receipt")?;
 
-            return self.get_receipt_from_tx_receipt(hash, txn_receipt).await;
+            let receipt = self.get_receipt_from_tx_receipt(hash, txn_receipt).await?;
+            if let Some(inner_receipt) = receipt {
+                return Ok(Some(RpcUserOperationReceipt {
+                    status: UOStatusEnum::Preconfirmed,
+                    ..inner_receipt
+                }));
+            }
+            return Ok(None);
         }
         let event = self
             .get_event_by_hash(hash)

@@ -67,7 +67,7 @@ pub trait RundlerApi {
     async fn get_user_operation_status(
         &self,
         uo_hash: B256,
-        preconfirmation: bool,
+        preconfirmation: Option<bool>,
     ) -> RpcResult<RpcUserOperationStatus>;
 
     /// Gets the required fees for a sender nonce
@@ -134,8 +134,9 @@ where
     async fn get_user_operation_status(
         &self,
         uo_hash: B256,
-        preconfirmation: bool,
+        preconfirmation: Option<bool>,
     ) -> RpcResult<RpcUserOperationStatus> {
+        let preconfirmation = preconfirmation.unwrap_or(false);
         utils::safe_call_rpc_handler(
             "rundler_getUserOperationStatus",
             RundlerApi::get_user_operation_status(self, uo_hash, preconfirmation),

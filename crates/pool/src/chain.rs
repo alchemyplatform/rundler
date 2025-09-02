@@ -250,7 +250,7 @@ impl<P: EvmProvider> Chain<P> {
 
     #[instrument(skip_all)]
     async fn wait_for_update(&mut self) -> ChainUpdate {
-        if self.settings.flashblocks {
+        if self.settings.flashblocks && !self.blocks.is_empty() {
             self.wait_for_update_flashblocks().await
         } else {
             self.wait_for_update_full_block().await
@@ -282,7 +282,7 @@ impl<P: EvmProvider> Chain<P> {
 
             let chain_update = self.process_pending_block(&summary).await;
             let header = &block.inner.header;
-
+            tracing::info!("summary: {:?}", summary);
             if let Some(pending_block) = &self.pending_block {
                 if pending_block.hash == header.hash {
                     continue; // same block
@@ -291,6 +291,7 @@ impl<P: EvmProvider> Chain<P> {
                     return chain_update; // same parent
                 }
             }
+
             self.pending_block = Some(summary);
             if header.parent_hash == full_block_hash {
                 return chain_update;
@@ -316,7 +317,7 @@ impl<P: EvmProvider> Chain<P> {
                     }
                 };
 
-                println!("{}, {}: result: {:?}", file!(), line!(), result);
+                tracing::info!("result: {:?}", result);
                 match result {
                     Ok(mut update) => {
                         self.metrics
@@ -374,7 +375,6 @@ impl<P: EvmProvider> Chain<P> {
                 let start = Instant::now();
                 let result = self.sync_to_block(block.clone()).await;
 
-                println!("{}, {}: result: {:?}", file!(), line!(), result);
                 match result {
                     Ok(update) => {
                         self.metrics

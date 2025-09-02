@@ -66,7 +66,7 @@ pub trait EthApi {
     async fn get_user_operation_receipt(
         &self,
         hash: B256,
-        preconfirmation: bool,
+        preconfirmation: Option<bool>,
     ) -> RpcResult<Option<RpcUserOperationReceipt>>;
 
     /// Returns the supported entry points addresses
