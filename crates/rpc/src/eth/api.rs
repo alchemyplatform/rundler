@@ -212,7 +212,7 @@ where
             .await
             .map_err(EthRpcError::from)?;
 
-        Ok(res.map(|op| RpcUserOperationByHash {
+        Ok(res.0.map(|op| RpcUserOperationByHash {
             user_operation: op.uo.into(),
             entry_point: op.entry_point.into(),
             block_number: None,
@@ -276,7 +276,7 @@ mod tests {
         pool.expect_get_op_by_hash()
             .with(eq(hash))
             .times(1)
-            .returning(move |_| Ok(Some(po.clone())));
+            .returning(move |_| Ok((Some(po.clone()), None)));
 
         let mut provider = MockEvmProvider::default();
         provider.expect_get_logs().returning(move |_| Ok(vec![]));
@@ -318,7 +318,7 @@ mod tests {
         let mut pool = MockPool::default();
         pool.expect_get_op_by_hash()
             .with(eq(hash))
-            .returning(move |_| Ok(None));
+            .returning(move |_| Ok((None, None)));
 
         let mut provider = MockEvmProvider::default();
         provider.expect_get_block_number().returning(|| Ok(1000));
@@ -401,7 +401,7 @@ mod tests {
         pool.expect_get_op_by_hash()
             .with(eq(hash))
             .times(1)
-            .returning(move |_| Ok(None));
+            .returning(move |_| Ok((None, None)));
 
         let mut provider = MockEvmProvider::default();
         provider.expect_get_logs().returning(move |_| Ok(vec![]));

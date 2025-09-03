@@ -60,8 +60,8 @@ use super::protos::{
     GetReputationStatusRequest, GetReputationStatusResponse, GetReputationStatusSuccess,
     GetStakeStatusRequest, GetStakeStatusResponse, GetStakeStatusSuccess,
     GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, MempoolOp,
-    PoolOperationSummary, RemoveOpByIdRequest, RemoveOpByIdResponse, RemoveOpByIdSuccess,
-    RemoveOpsRequest, RemoveOpsResponse, RemoveOpsSuccess, ReputationStatus,
+    PoolOperationSummary, PreconfInfo, RemoveOpByIdRequest, RemoveOpByIdResponse,
+    RemoveOpByIdSuccess, RemoveOpsRequest, RemoveOpsResponse, RemoveOpsSuccess, ReputationStatus,
     SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, TryUoFromProto, UpdateEntitiesRequest,
     UpdateEntitiesResponse, UpdateEntitiesSuccess, OP_POOL_FILE_DESCRIPTOR_SET,
 };
@@ -290,10 +290,12 @@ impl OpPool for OpPoolImpl {
         })?;
 
         let resp = match self.local_pool.get_op_by_hash(hash).await {
-            Ok(op) => GetOpByHashResponse {
+            Ok((op, preconf_info)) => GetOpByHashResponse {
                 result: Some(get_op_by_hash_response::Result::Success(
                     GetOpByHashSuccess {
                         op: op.map(|op| MempoolOp::from(&op)),
+                        preconf_info: preconf_info
+                            .map(|preconf_info| PreconfInfo::from(&preconf_info)),
                     },
                 )),
             },

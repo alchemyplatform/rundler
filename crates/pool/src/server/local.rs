@@ -33,7 +33,7 @@ use rundler_task::{
 use rundler_types::{
     pool::{
         MempoolError, NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation,
-        PoolOperationSummary, PoolResult, Reputation, ReputationStatus, StakeStatus,
+        PoolOperationSummary, PoolResult, PreconfInfo, Reputation, ReputationStatus, StakeStatus,
     },
     EntityUpdate, EntryPointVersion, UserOperation, UserOperationId, UserOperationPermissions,
     UserOperationVariant,
@@ -231,11 +231,14 @@ impl Pool for LocalPoolHandle {
         }
     }
 
-    async fn get_op_by_hash(&self, hash: B256) -> PoolResult<Option<PoolOperation>> {
+    async fn get_op_by_hash(
+        &self,
+        hash: B256,
+    ) -> PoolResult<(Option<PoolOperation>, Option<PreconfInfo>)> {
         let req = ServerRequestKind::GetOpByHash { hash };
         let resp = self.send(req).await?;
         match resp {
-            ServerResponse::GetOpByHash { op } => Ok(op),
+            ServerResponse::GetOpByHash { op, preconf_info } => Ok((op, preconf_info)),
             _ => Err(PoolError::UnexpectedResponse),
         }
     }
@@ -529,13 +532,23 @@ impl LocalPoolServerRunner {
             .collect())
     }
 
-    fn get_op_by_hash(&self, hash: B256) -> PoolResult<Option<PoolOperation>> {
-        for mempool in self.mempools.values() {
+    fn get_op_by_hash(
+        &self,
+        hash: B256,
+    ) -> PoolResult<(Option<PoolOperation>, Option<PreconfInfo>)> {
+        for (entry_point, mempool) in self.mempools.iter() {
             if let Some(op) = mempool.get_user_operation_by_hash(hash) {
-                return Ok(Some((*op).clone()));
+                let tx_hash = self.get_pre_confirmed_uo(*entry_point, hash);
+                let preconf_info = if let Ok(Some(hash)) = tx_hash {
+                    Some(PreconfInfo { tx_hash: hash })
+                } else {
+                    None
+                };
+
+                return Ok((Some((*op).clone()), preconf_info));
             }
         }
-        Ok(None)
+        Ok((None, None))
     }
 
     fn get_op_by_id(&self, id: &UserOperationId) -> PoolResult<Option<PoolOperation>> {
@@ -777,7 +790,7 @@ impl LocalPoolServerRunner {
                         },
                         ServerRequestKind::GetOpByHash { hash } => {
                             match self.get_op_by_hash(hash) {
-                                Ok(op) => Ok(ServerResponse::GetOpByHash { op }),
+                                Ok((op, preconf_info)) => Ok(ServerResponse::GetOpByHash { op, preconf_info }),
                                 Err(e) => Err(e),
                             }
                         }
@@ -975,6 +988,7 @@ enum ServerResponse {
     },
     GetOpByHash {
         op: Option<PoolOperation>,
+        preconf_info: Option<PreconfInfo>,
     },
     GetOpById {
         op: Option<PoolOperation>,

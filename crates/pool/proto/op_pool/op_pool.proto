@@ -385,6 +385,11 @@ message GetOpByHashResponse {
 }
 message GetOpByHashSuccess {
   MempoolOp op = 1;
+  optional PreconfInfo preconf_info = 2;
+}
+
+message PreconfInfo {
+  bytes tx_hash = 1;
 }
 
 message GetOpByIdRequest {

@@ -25,7 +25,7 @@ use rundler_types::{
     chain::ChainSpec,
     pool::{
         NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation, PoolOperationSummary,
-        PoolResult, Reputation, ReputationStatus, StakeStatus,
+        PoolResult, PreconfInfo, Reputation, ReputationStatus, StakeStatus,
     },
     EntityUpdate, UserOperationId, UserOperationPermissions, UserOperationVariant,
 };
@@ -64,7 +64,7 @@ pub struct RemotePoolClient {
     chain_spec: ChainSpec,
     op_pool_client: OpPoolClient<Channel>,
     op_pool_health: HealthClient<Channel>,
-    task_spawner: Box<dyn TaskSpawner>,
+    task_spawner: Box<dyn TaskSpawner + Send + Sync>,
 }
 
 impl RemotePoolClient {
@@ -72,7 +72,7 @@ impl RemotePoolClient {
     pub async fn connect(
         url: String,
         chain_spec: ChainSpec,
-        task_spawner: Box<dyn TaskSpawner>,
+        task_spawner: Box<dyn TaskSpawner + Send + Sync>,
     ) -> anyhow::Result<Self> {
         let op_pool_client = OpPoolClient::connect(url.clone()).await?;
         let op_pool_health =
@@ -293,7 +293,10 @@ impl Pool for RemotePoolClient {
         }
     }
 
-    async fn get_op_by_hash(&self, hash: B256) -> PoolResult<Option<PoolOperation>> {
+    async fn get_op_by_hash(
+        &self,
+        hash: B256,
+    ) -> PoolResult<(Option<PoolOperation>, Option<PreconfInfo>)> {
         let res = self
             .op_pool_client
             .clone()
@@ -306,13 +309,22 @@ impl Pool for RemotePoolClient {
             .result;
 
         match res {
-            Some(get_op_by_hash_response::Result::Success(s)) => Ok(s
-                .op
-                .map(|proto_uo| {
+            Some(get_op_by_hash_response::Result::Success(s)) => Ok((
+                s.op.map(|proto_uo| {
                     PoolOperation::try_uo_from_proto(proto_uo, &self.chain_spec)
                         .context("should convert proto uo to pool operation")
                 })
-                .transpose()?),
+                .transpose()
+                .map_err(PoolError::from)?,
+                s.preconf_info
+                    .map(|proto_info| {
+                        PreconfInfo::try_from(proto_info)
+                            .context("should convert proto info to preconf info")
+                    })
+                    .transpose()
+                    .map_err(PoolError::from)?,
+            )),
+
             Some(get_op_by_hash_response::Result::Failure(e)) => match e.error {
                 Some(_) => Err(e.try_into()?),
                 None => Err(PoolError::Other(anyhow::anyhow!(

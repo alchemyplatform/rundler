@@ -313,7 +313,7 @@ where
             });
         }
 
-        if pending.is_some() {
+        if pending.0.is_some() {
             return Ok(RpcUserOperationStatus {
                 status: UserOperationStatusEnum::Pending,
                 receipt: None,
