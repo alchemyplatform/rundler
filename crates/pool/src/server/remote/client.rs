@@ -47,13 +47,13 @@ use super::protos::{
     debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
     get_op_by_id_response, get_ops_by_hashes_response, get_ops_response,
     get_ops_summaries_response, get_pre_confirmed_uo_response, get_reputation_status_response,
-    get_stake_status_response, mark_uo_pending_response, op_pool_client::OpPoolClient,
-    remove_op_by_id_response, remove_ops_response, update_entities_response, AddOpRequest,
-    AdminSetTrackingRequest, DebugClearStateRequest, DebugDumpMempoolRequest,
-    DebugDumpPaymasterBalancesRequest, DebugDumpReputationRequest, DebugSetReputationRequest,
-    GetOpByIdRequest, GetOpsRequest, GetReputationStatusRequest, GetStakeStatusRequest,
-    RemoveOpsRequest, ReputationStatus as ProtoReputationStatus, SubscribeNewHeadsRequest,
-    SubscribeNewHeadsResponse, TryUoFromProto, UpdateEntitiesRequest,
+    get_stake_status_response, op_pool_client::OpPoolClient, remove_op_by_id_response,
+    remove_ops_response, update_entities_response, AddOpRequest, AdminSetTrackingRequest,
+    DebugClearStateRequest, DebugDumpMempoolRequest, DebugDumpPaymasterBalancesRequest,
+    DebugDumpReputationRequest, DebugSetReputationRequest, GetOpByIdRequest, GetOpsRequest,
+    GetReputationStatusRequest, GetStakeStatusRequest, RemoveOpsRequest,
+    ReputationStatus as ProtoReputationStatus, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse,
+    TryUoFromProto, UpdateEntitiesRequest,
 };
 
 /// Remote pool client
@@ -408,34 +408,6 @@ impl Pool for RemotePoolClient {
                 }
             }
             Some(remove_op_by_id_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolError::Other(anyhow::anyhow!(
-                "should have received result from op pool"
-            )))?,
-        }
-    }
-
-    async fn mark_uo_pending(
-        &self,
-        entry_point: Address,
-        bundle_hash: B256,
-        hashes: Vec<B256>,
-    ) -> PoolResult<()> {
-        let res = self
-            .op_pool_client
-            .clone()
-            .mark_uo_pending(protos::MarkUoPendingRequest {
-                entry_point: entry_point.to_vec(),
-                bundle_hash: bundle_hash.to_proto_bytes(),
-                hashes: hashes.into_iter().map(|h| h.to_proto_bytes()).collect(),
-            })
-            .await
-            .map_err(anyhow::Error::from)?
-            .into_inner()
-            .result;
-
-        match res {
-            Some(mark_uo_pending_response::Result::Success(_)) => Ok(()),
-            Some(mark_uo_pending_response::Result::Failure(f)) => Err(f.try_into()?),
             None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,

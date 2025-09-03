@@ -86,14 +86,6 @@ pub trait Pool: Send + Sync {
     /// Remove operations from the pool by hash
     async fn remove_ops(&self, entry_point: Address, ops: Vec<B256>) -> PoolResult<()>;
 
-    /// Mark a set of user operations as pending
-    async fn mark_uo_pending(
-        &self,
-        entry_point: Address,
-        bundle_hash: B256,
-        hashes: Vec<B256>,
-    ) -> PoolResult<()>;
-
     /// Get the bundle hash of the preconfirmed uo from the pool
     async fn get_pre_confirmed_uo(
         &self,
@@ -221,14 +213,6 @@ mockall::mock! {
             entry_point: Address,
             id: UserOperationId,
         ) -> PoolResult<Option<B256>>;
-
-        #[allow(dead_code)]
-        async fn mark_uo_pending(
-            &self,
-            entry_point: Address,
-            bundle_hash: B256,
-            hashes: Vec<B256>,
-        ) -> PoolResult<()>;
 
         #[allow(dead_code)]
         async fn get_pre_confirmed_uo(

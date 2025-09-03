@@ -231,27 +231,19 @@ where
     }
 
     #[allow(dead_code)]
-    pub(crate) fn mark_uo_pending(&mut self, bundle_hash: B256, hashes: Vec<B256>) {
-        self.unmined_bundle_to_uos
-            .insert(bundle_hash, hashes.clone().into_iter().collect());
-        for hash in hashes {
-            self.unmined_uos_bundle_mapping.insert(hash, bundle_hash);
-        }
-    }
-
-    #[allow(dead_code)]
     pub(crate) fn preconfirmed_uos(&self) -> impl Iterator<Item = B256> + '_ {
         self.preconfirmed_uos.iter().cloned()
     }
 
-    pub(crate) fn preconfirm_txns(&mut self, preconfirmed_txns: impl IntoIterator<Item = B256>) {
+    pub(crate) fn preconfirm_txns(&mut self, txn_to_uos: Vec<(B256, Vec<B256>)>) {
         // each call of this method should clear the preconfirmed uos before adding new ones.
         self.preconfirmed_uos.clear();
-        for txn in preconfirmed_txns {
-            if let Some(uos) = self.unmined_bundle_to_uos.get(&txn) {
-                for uo in uos {
-                    self.preconfirmed_uos.insert(*uo);
-                    self.unmined_uos_bundle_mapping.insert(*uo, txn);
+        self.unmined_uos_bundle_mapping.clear();
+        for (txn, uos) in txn_to_uos {
+            for uo in uos {
+                if self.get_operation_by_hash(uo).is_some() {
+                    self.preconfirmed_uos.insert(uo);
+                    self.unmined_uos_bundle_mapping.insert(uo, txn);
                 }
             }
         }

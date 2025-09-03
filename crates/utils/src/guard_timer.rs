@@ -20,10 +20,10 @@ use metrics::Histogram;
 /// A customized guard to measure duration and record to metric.
 ///
 /// exmaple usage:
-/// ```
+/// ```no_run
 /// fn bala() {
 ///   let _timer = CustomTimerGuard::new(metric);
-///   ...
+///   // business logic here...
 /// } // _timer will automatically dropped and record the duration.
 /// ```
 pub struct CustomTimerGuard {

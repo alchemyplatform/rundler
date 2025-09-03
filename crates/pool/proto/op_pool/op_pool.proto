@@ -258,9 +258,6 @@ service OpPool {
   // Remove a UserOperation by its id
   rpc RemoveOpById(RemoveOpByIdRequest) returns (RemoveOpByIdResponse);
 
-  // Mark a set of UOs in "pending" state
-  rpc MarkUoPending(MarkUoPendingRequest) returns (MarkUoPendingResponse);
-
   // Get the bundle hash of the preconfirmed UO by UO hash
   rpc GetPreConfirmedUo(GetPreConfirmedUoRequest) returns (GetPreConfirmedUoResponse);
 
@@ -474,21 +471,6 @@ message RemoveOpByIdResponse {
 message RemoveOpByIdSuccess {
   bytes hash = 1;
 }
-
-message MarkUoPendingRequest{
-  bytes entry_point = 1;
-  bytes bundle_hash = 2;
-  repeated bytes hashes = 3;
-}
-
-message MarkUoPendingResponse {
-  oneof result {
-    MarkUoPendingSuccess success = 1;
-    MempoolError failure = 2;
-  }
-}
-
-message MarkUoPendingSuccess {}
 
 message GetPreConfirmedUoRequest {
   bytes entry_point = 1;

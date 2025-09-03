@@ -122,7 +122,7 @@ pub enum SendBundleResult {
 #[derive(Debug)]
 enum SendBundleAttemptResult {
     // The bundle was successfully sent with the given (sender, op_hash) pairs
-    Success((B256, Arc<Vec<(Address, B256)>>)),
+    Success(Arc<Vec<(Address, B256)>>),
     // There are no operations available to bundle
     NoOperationsInitially,
     // There were no operations after the fee was increased
@@ -614,7 +614,7 @@ where
         let result = self.send_bundle_inner(state, ops, fee_increase_count).await;
 
         match &result {
-            Ok(SendBundleAttemptResult::Success((_, ops))) => {
+            Ok(SendBundleAttemptResult::Success(ops)) => {
                 self.assigner
                     .confirm_senders_drop_unused(self.sender_eoa, ops.iter().map(|op| &op.0));
             }
@@ -722,16 +722,7 @@ where
                     required_fees,
                 ));
 
-                let _ = self
-                    .pool
-                    .mark_uo_pending(
-                        self.ep_address,
-                        tx_hash,
-                        ops.iter().map(|op| op.1).collect(),
-                    )
-                    .await;
-
-                Ok(SendBundleAttemptResult::Success((tx_hash, (ops))))
+                Ok(SendBundleAttemptResult::Success(ops))
             }
             Err(TransactionTrackerError::NonceTooLow) => {
                 self.metrics.bundle_txn_nonce_too_low.increment(1);
@@ -1668,11 +1659,6 @@ mod tests {
         mock_tracker
             .expect_send_transaction()
             .returning(|_, _, _| Box::pin(async { Ok(B256::ZERO) }));
-
-        mock_pool
-            .expect_mark_uo_pending()
-            .withf(|_, _, _| true)
-            .returning(|_, _, _| Ok(()));
 
         let mut sender = new_sender(mock_proposer, mock_entry_point, mock_evm, mock_pool);
 

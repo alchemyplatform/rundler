@@ -14,15 +14,21 @@
 use std::{collections::HashSet, sync::Arc};
 
 use alloy_primitives::{utils::format_units, Address, Bytes, B256, U256};
+use alloy_sol_types::SolEvent;
 use anyhow::Context;
 use futures::TryFutureExt;
+use futures_util::future;
 use itertools::Itertools;
 use metrics::{Counter, Gauge, Histogram};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
+use rundler_contracts::{
+    v0_6::IEntryPoint::UserOperationEvent as UserOperationEventV06,
+    v0_7::IEntryPoint::UserOperationEvent as UserOperationEventV07,
+};
 use rundler_provider::{
-    DAGasOracleSync, EvmProvider, FeeEstimator, ProvidersWithEntryPointT, SimulationProvider,
-    StateOverride,
+    DAGasOracleSync, EntryPoint, EvmProvider, FeeEstimator, ProvidersWithEntryPointT,
+    SimulationProvider, StateOverride,
 };
 use rundler_sim::{MempoolConfig, Prechecker, Simulator};
 use rundler_types::{
@@ -229,6 +235,56 @@ where
 
         Ok(())
     }
+
+    /// TODO: consider reuse events to avoid duplicate calls to get_transaction_receipt and parse
+    /// logs.
+    async fn get_transaction_mapping(&self, txn_hash: B256) -> Option<(B256, Vec<B256>)> {
+        let receipt = self
+            .ep_providers
+            .evm()
+            .get_transaction_receipt(txn_hash)
+            .await;
+
+        let receipt = receipt.ok()??;
+
+        let signature = match self.ep_providers.entry_point().version() {
+            EntryPointVersion::V0_6 => UserOperationEventV06::SIGNATURE_HASH,
+            EntryPointVersion::V0_7 => UserOperationEventV07::SIGNATURE_HASH,
+            EntryPointVersion::Unspecified => return None,
+        };
+
+        let logs = receipt
+            .inner
+            .inner
+            .logs()
+            .iter()
+            .filter(|l| {
+                l.address() == *self.ep_providers.entry_point().address()
+                    && l.topics().len() >= 2
+                    && l.topics()[0] == signature
+            })
+            .map(|l| l.topics()[1])
+            .collect::<Vec<_>>();
+
+        Some((txn_hash, logs))
+    }
+    fn per_confirm_uos(&self, txn_to_uos: Vec<(B256, Vec<B256>)>) {
+        let mut state = self.state.write();
+        state.pool.preconfirm_txns(txn_to_uos);
+    }
+
+    async fn update_preconfirmed_uos(&self, preconfirmed_txns: Vec<B256>) {
+        let futures: Vec<_> = preconfirmed_txns
+            .iter()
+            .map(|txn| self.get_transaction_mapping(*txn))
+            .collect();
+
+        let results = future::join_all(futures).await;
+
+        let txn_to_uos: Vec<(B256, Vec<B256>)> = results.into_iter().flatten().collect();
+
+        self.per_confirm_uos(txn_to_uos);
+    }
 }
 
 #[async_trait]
@@ -243,8 +299,8 @@ where
 
         let preconfirmed_txns = update.preconfirmed_txns.clone();
 
-        if update.update_type == UpdateType::Partial {
-            self.state.write().pool.preconfirm_txns(preconfirmed_txns);
+        if update.update_type == UpdateType::Partial && !preconfirmed_txns.is_empty() {
+            self.update_preconfirmed_uos(preconfirmed_txns).await;
             return;
         }
 
@@ -437,14 +493,14 @@ where
         } else {
             None
         };
-
+        if !preconfirmed_txns.is_empty() {
+            self.update_preconfirmed_uos(preconfirmed_txns).await;
+        }
         {
             let mut state = self.state.write();
             state
                 .pool
                 .forget_mined_operations_before_block(update.earliest_remembered_block_number);
-
-            state.pool.preconfirm_txns(preconfirmed_txns);
 
             // Remove throttled ops that are too old
             let mut to_remove = HashSet::new();
@@ -884,10 +940,6 @@ where
         self.state.read().pool.get_operation_by_hash(hash)
     }
 
-    fn mark_uo_pending(&self, bundle_hash: B256, hashes: Vec<B256>) {
-        self.state.write().pool.mark_uo_pending(bundle_hash, hashes);
-    }
-
     fn get_pre_confirmed_uo(&self, uo_hash: B256) -> Option<B256> {
         self.state.read().pool.get_pre_confirmed_uo(uo_hash)
     }
@@ -1015,13 +1067,18 @@ struct UoPoolMetrics {
 mod tests {
     use std::{collections::HashMap, str::FromStr, vec};
 
-    use alloy_primitives::{address, bytes, uint, Bytes};
+    use alloy_primitives::{address, bytes, uint, Address, Bytes, Log as PrimitiveLog, LogData};
+    use alloy_rpc_types_eth::TransactionReceipt as AlloyTransactionReceipt;
+    use alloy_serde::WithOtherFields;
     use alloy_signer::SignerSync;
     use alloy_signer_local::PrivateKeySigner;
+    use alloy_sol_types::SolEvent;
     use mockall::Sequence;
+    use rundler_contracts::v0_6::IEntryPoint::UserOperationEvent as UserOperationEventV06;
     use rundler_provider::{
-        DepositInfo, ExecutionResult, MockDAGasOracleSync, MockEntryPointV0_6, MockEvmProvider,
-        MockFeeEstimator, ProvidersWithEntryPoint,
+        AnyReceiptEnvelope, DepositInfo, ExecutionResult, Log, MockDAGasOracleSync,
+        MockEntryPointV0_6, MockEvmProvider, MockFeeEstimator, ProvidersWithEntryPoint,
+        ReceiptWithBloom, TransactionReceipt,
     };
     use rundler_sim::{
         MockPrechecker, MockSimulator, PrecheckError, PrecheckReturn, PrecheckSettings,
@@ -1518,18 +1575,11 @@ mod tests {
             ..Default::default()
         };
 
-        let ops_1 = vec![
-            create_op_from_required(UserOperationRequiredFields {
-                sender: Address::random(),
-                nonce: U256::from(3),
-                ..base_required.clone()
-            }),
-            create_op_from_required(UserOperationRequiredFields {
-                sender: Address::random(),
-                nonce: U256::from(2),
-                ..base_required.clone()
-            }),
-        ];
+        let ops_1 = vec![create_op_from_required(UserOperationRequiredFields {
+            sender: Address::random(),
+            nonce: U256::from(3),
+            ..base_required.clone()
+        })];
 
         let ops_2 = vec![create_op_from_required(UserOperationRequiredFields {
             sender: Address::random(),
@@ -1548,23 +1598,13 @@ mod tests {
             .expect_balance_of()
             .returning(|_, _| Ok(U256::from(1000)));
 
-        let (pool, _) = create_pool_with_entrypoint_insert_ops(vec![], entrypoint).await;
+        let (pool, _) = create_pool_with_entrypoint_insert_ops(
+            vec![ops_1[0].clone(), ops_2[0].clone(), ops_3[0].clone()],
+            entrypoint,
+        )
+        .await;
 
-        let preconfirmed_txns = vec![B256::random(), B256::random(), B256::random()];
-
-        pool.state.write().pool.mark_uo_pending(
-            preconfirmed_txns[0],
-            ops_1.iter().map(|op| op.op.hash()).collect(),
-        );
-
-        pool.state.write().pool.mark_uo_pending(
-            preconfirmed_txns[1],
-            ops_2.iter().map(|op| op.op.hash()).collect(),
-        );
-        pool.state.write().pool.mark_uo_pending(
-            preconfirmed_txns[2],
-            ops_3.iter().map(|op| op.op.hash()).collect(),
-        );
+        let preconfirmed_txns = vec![ops_1[0].op.hash(), ops_2[0].op.hash(), ops_3[0].op.hash()];
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 0,
@@ -2501,10 +2541,16 @@ mod tests {
     fn create_pool_with_entry_point_config(
         args: PoolConfig,
         ops: Vec<OpWithErrors>,
-        entrypoint: MockEntryPointV0_6,
+        mut entrypoint: MockEntryPointV0_6,
         mempool_config: MempoolConfig,
     ) -> UoPool<impl UoPoolProvidersT, impl ProvidersWithEntryPointT> {
-        let entrypoint = Arc::new(entrypoint);
+        entrypoint
+            .expect_address()
+            .return_const(Address::from_str("0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789").unwrap());
+
+        entrypoint
+            .expect_version()
+            .return_const(EntryPointVersion::V0_6);
 
         let mut evm = MockEvmProvider::new();
         evm.expect_get_latest_block_hash_and_number()
@@ -2513,8 +2559,21 @@ mod tests {
         let mut simulator = MockSimulator::new();
         let mut prechecker = MockPrechecker::new();
         let mut fee_estimator = MockFeeEstimator::new();
-        let entry_point = Arc::new(entrypoint);
 
+        let entry_point = Arc::new(entrypoint);
+        let entrypoint_address = *entry_point.address();
+        evm.expect_get_transaction_receipt()
+            .returning(move |txn_hash| {
+                let random = B256::random();
+
+                Ok(Some(given_receipt(
+                    entrypoint_address,
+                    vec![
+                        given_user_op_log(entrypoint_address, txn_hash),
+                        given_user_op_log(entrypoint_address, random),
+                    ],
+                )))
+            });
         let paymaster = PaymasterTracker::new(
             entry_point.clone(),
             PaymasterConfig::new(
@@ -2774,5 +2833,45 @@ mod tests {
 
     fn default_perms() -> UserOperationPermissions {
         UserOperationPermissions::default()
+    }
+
+    fn given_user_op_log(entry_point: Address, uo_hash: B256) -> Log {
+        let mut log_data = LogData::default();
+        log_data.set_topics_unchecked(vec![UserOperationEventV06::SIGNATURE_HASH, uo_hash]);
+
+        Log {
+            inner: PrimitiveLog {
+                address: entry_point, // 使用入口点地址，不是 Address::ZERO
+                data: log_data,
+            },
+            ..Default::default()
+        }
+    }
+    fn given_receipt(entrypoint: Address, logs: Vec<Log>) -> TransactionReceipt {
+        let receipt = alloy_consensus::Receipt {
+            logs,
+            ..Default::default()
+        };
+
+        WithOtherFields::new(AlloyTransactionReceipt {
+            inner: AnyReceiptEnvelope {
+                inner: ReceiptWithBloom {
+                    receipt,
+                    ..Default::default()
+                },
+                r#type: 0,
+            },
+            transaction_hash: B256::ZERO,
+            transaction_index: None,
+            block_hash: None,
+            block_number: None,
+            gas_used: 0,
+            effective_gas_price: 0,
+            blob_gas_used: None,
+            blob_gas_price: None,
+            from: Address::ZERO,
+            to: Some(entrypoint),
+            contract_address: None,
+        })
     }
 }
