@@ -263,10 +263,6 @@ impl UserOperationTrait for UserOperation {
         self.verification_gas_limit
     }
 
-    fn paymaster_verification_gas_limit(&self) -> u128 {
-        self.paymaster_verification_gas_limit
-    }
-
     fn total_verification_gas_limit(&self) -> u128 {
         self.verification_gas_limit + self.paymaster_verification_gas_limit
     }

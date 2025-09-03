@@ -297,10 +297,6 @@ impl UserOperationTrait for UserOperation {
         self.verification_gas_limit
     }
 
-    fn paymaster_verification_gas_limit(&self) -> u128 {
-        0 // v0_6 doesn't have separate paymaster verification gas limit
-    }
-
     fn signature(&self) -> &Bytes {
         &self.signature
     }
