@@ -45,7 +45,7 @@ use rundler_types::{
     UserOperationVariant, UserOpsPerAggregator, ValidTimeRange, ValidationRevert,
     BUNDLE_BYTE_OVERHEAD, TIME_RANGE_BUFFER,
 };
-use rundler_utils::{emit::WithEntryPoint, guard_timer::CustomTimerGuard, math};
+use rundler_utils::{emit::WithEntryPoint, eth, guard_timer::CustomTimerGuard, math};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
@@ -1647,11 +1647,21 @@ impl<UO: UserOperation> ProposalContext<UO> {
     }
 
     fn get_bundle_transaction_size(&self, chain_spec: &ChainSpec) -> u128 {
-        self.bundle_overhead_bytes(chain_spec)
-            + self
-                .iter_ops_with_simulations()
-                .map(|sim_op| sim_op.op.abi_encoded_size() as u128)
-                .sum::<u128>()
+        let bundle_overhead = self.bundle_overhead_bytes(chain_spec);
+        let (ops_data_size, auth_list_count) = self
+            .iter_ops_with_simulations()
+            .map(|sim_op| {
+                (
+                    sim_op.op.abi_encoded_size() as u128,
+                    sim_op.op.authorization_tuple().map_or(0, |_| 1),
+                )
+            })
+            .fold((0u128, 0), |(acc_size, acc_count), (size, count)| {
+                (acc_size + size, acc_count + count)
+            });
+
+        let bundle_data_size = (bundle_overhead + ops_data_size) as usize;
+        eth::calculate_transaction_size(bundle_data_size, auth_list_count) as u128
     }
 
     // Get the computation gas limit in the bundle
@@ -2027,6 +2037,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_transaction_size_limit_enforcement() {
+        let large_call_data = vec![0u8; 200000];
+        let op = op_from_required(UserOperationRequiredFields {
+            call_data: large_call_data.into(),
+            pre_verification_gas: DEFAULT_PVG,
+            verification_gas_limit: 10000,
+            call_gas_limit: 100000,
+            ..Default::default()
+        });
+
+        let bundle = mock_make_bundle(
+            vec![MockOp {
+                op: op.clone(),
+                simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                perms: UserOperationPermissions::default(),
+            }],
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![],
+            None,
+            U256::MAX,
+            Some(1000), // Set max transaction size to 1000 bytes
+        )
+        .await;
+
+        // The operation should be skipped due to transaction size limit
+        assert!(bundle.ops_per_aggregator.is_empty());
+        assert!(bundle.rejected_ops.is_empty());
+    }
+
+    #[tokio::test]
     async fn test_rejects_on_violation() {
         let op = default_op();
         let bundle = simple_make_bundle(vec![MockOp {
@@ -2175,6 +2222,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
         assert_eq!(
@@ -2217,6 +2265,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
         assert_eq!(
@@ -2269,6 +2318,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
         assert_eq!(
@@ -2350,6 +2400,7 @@ mod tests {
             vec![agg_a, agg_b],
             None,
             U256::MAX,
+            None,
         )
         .await;
         // Ops should be grouped by aggregator. Further, the `signature` field
@@ -2452,6 +2503,7 @@ mod tests {
             vec![agg_a, agg_b],
             None,
             U256::MAX,
+            None,
         )
         .await;
 
@@ -2535,6 +2587,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
 
@@ -2603,6 +2656,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
 
@@ -2666,6 +2720,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
 
@@ -2769,6 +2824,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
 
@@ -2827,6 +2883,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
 
@@ -2891,6 +2948,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
 
@@ -3032,6 +3090,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
 
@@ -3072,6 +3131,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
 
@@ -3135,6 +3195,7 @@ mod tests {
             vec![agg_a],
             None,
             U256::MAX,
+            None,
         )
         .await;
 
@@ -3181,6 +3242,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
 
@@ -3224,6 +3286,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
 
@@ -3261,6 +3324,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
 
@@ -3312,6 +3376,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
 
@@ -3350,6 +3415,7 @@ mod tests {
             vec![],
             Some(proxy),
             U256::MAX,
+            None,
         )
         .await;
 
@@ -3394,6 +3460,7 @@ mod tests {
             vec![],
             Some(proxy),
             U256::MAX,
+            None,
         )
         .await;
 
@@ -3451,6 +3518,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
 
@@ -3488,6 +3556,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
 
@@ -3531,6 +3600,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
 
@@ -3577,6 +3647,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
 
@@ -3632,6 +3703,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
 
@@ -3672,6 +3744,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await;
 
@@ -3717,6 +3790,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await
         .expect_err("should fail to bundle");
@@ -3755,6 +3829,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await
         .expect_err("should fail to bundle");
@@ -3815,6 +3890,7 @@ mod tests {
             vec![],
             None,
             max_bundle_fee,
+            None,
         )
         .await;
 
@@ -3854,6 +3930,7 @@ mod tests {
             vec![],
             None,
             U256::MAX,
+            None,
         )
         .await
     }
@@ -3874,6 +3951,7 @@ mod tests {
         aggregators: Vec<MockSignatureAggregator>,
         proxy: Option<MockSubmissionProxy>,
         max_bundle_fee: U256,
+        max_transaction_size_bytes: Option<usize>,
     ) -> Bundle<UserOperation> {
         mock_make_bundle_allow_error(
             mock_ops,
@@ -3888,6 +3966,7 @@ mod tests {
             aggregators,
             proxy,
             max_bundle_fee,
+            max_transaction_size_bytes,
         )
         .await
         .expect("should make a bundle")
@@ -3907,9 +3986,11 @@ mod tests {
         aggregators: Vec<MockSignatureAggregator>,
         proxy: Option<MockSubmissionProxy>,
         max_bundle_fee: U256,
+        max_transaction_size_bytes: Option<usize>,
     ) -> BundleProposerResult<Bundle<UserOperation>> {
         let mut chain_spec = ChainSpec {
             da_pre_verification_gas: da_gas_tracking_enabled,
+            max_transaction_size_bytes: max_transaction_size_bytes.unwrap_or(usize::MAX),
             ..Default::default()
         };
         let sender_eoa = address(124);

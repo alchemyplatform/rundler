@@ -5405,6 +5405,8 @@ dependencies = [
 name = "rundler-utils"
 version = "0.9.0"
 dependencies = [
+ "alloy-consensus",
+ "alloy-eips",
  "alloy-primitives",
  "alloy-rpc-types-eth",
  "anyhow",

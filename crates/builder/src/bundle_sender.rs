@@ -18,7 +18,7 @@ use anyhow::{bail, Context};
 use async_trait::async_trait;
 use futures::Stream;
 use futures_util::StreamExt;
-use metrics::Counter;
+use metrics::{Counter, Histogram};
 use metrics_derive::Metrics;
 #[cfg(test)]
 use mockall::automock;
@@ -35,7 +35,7 @@ use rundler_types::{
     proxy::SubmissionProxy,
     EntityUpdate, ExpectedStorage, UserOperation,
 };
-use rundler_utils::emit::WithEntryPoint;
+use rundler_utils::{emit::WithEntryPoint, eth};
 use tokio::{
     join,
     sync::{
@@ -698,6 +698,15 @@ where
             .send_transaction(tx.clone(), &expected_storage, state.block_number())
             .await;
         self.metrics.bundle_txns_sent.increment(1);
+
+        let bundle_data_size = tx.input.input().map_or(0, |data| data.len());
+
+        let tx_size = eth::calculate_transaction_size(
+            bundle_data_size,
+            tx.authorization_list.as_ref().map_or(0, |list| list.len()),
+        );
+
+        self.metrics.bundle_txn_size_bytes.record(tx_size as f64);
 
         match send_result {
             Ok(tx_hash) => {
@@ -1472,6 +1481,8 @@ struct BuilderMetric {
     cancellation_txns_failed: Counter,
     #[metric(describe = "the count of state machine errors.")]
     state_machine_errors: Counter,
+    #[metric(describe = "the distribution of bundle transaction sizes in bytes.")]
+    bundle_txn_size_bytes: Histogram,
 }
 
 impl BuilderMetric {
