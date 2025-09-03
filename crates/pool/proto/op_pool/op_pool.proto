@@ -258,9 +258,6 @@ service OpPool {
   // Remove a UserOperation by its id
   rpc RemoveOpById(RemoveOpByIdRequest) returns (RemoveOpByIdResponse);
 
-  // Get the bundle hash of the preconfirmed UO by UO hash
-  rpc GetPreConfirmedUo(GetPreConfirmedUoRequest) returns (GetPreConfirmedUoResponse);
-
   // Handles a list of updates to be performed on entities
   rpc UpdateEntities(UpdateEntitiesRequest) returns (UpdateEntitiesResponse);
 
@@ -475,22 +472,6 @@ message RemoveOpByIdResponse {
 }
 message RemoveOpByIdSuccess {
   bytes hash = 1;
-}
-
-message GetPreConfirmedUoRequest {
-  bytes entry_point = 1;
-  bytes hash = 2;
-}
-
-message GetPreConfirmedUoResponse {
-  oneof result {
-    GetPreConfirmedUoSuccess success = 1;
-    MempoolError failure = 2;
-  }
-}
-
-message GetPreConfirmedUoSuccess {
-  bytes bundle_hash = 1;
 }
 
 message UpdateEntitiesRequest {

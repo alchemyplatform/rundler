@@ -168,13 +168,9 @@ where
                     "Unsupported feature: preconfirmation".to_string(),
                 ));
             }
-            let txn_hash_futs = self
-                .router
-                .entry_points()
-                .map(|ep| self.pool.get_pre_confirmed_uo(*ep, hash));
+            let txn_hash = self.pool.get_op_by_hash(hash).await;
 
-            let txn_hash = future::try_join_all(txn_hash_futs).await?;
-            txn_hash.into_iter().find_map(|x| x)
+            txn_hash.unwrap_or((None, None)).1.map(|x| x.tx_hash)
         } else {
             None
         };

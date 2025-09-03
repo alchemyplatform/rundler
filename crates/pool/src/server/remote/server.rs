@@ -42,8 +42,7 @@ use super::protos::{
     debug_dump_mempool_response, debug_dump_paymaster_balances_response,
     debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
     get_op_by_id_response, get_ops_by_hashes_response, get_ops_response,
-    get_ops_summaries_response, get_pre_confirmed_uo_response, get_reputation_status_response,
-    get_stake_status_response,
+    get_ops_summaries_response, get_reputation_status_response, get_stake_status_response,
     op_pool_server::{OpPool, OpPoolServer},
     remove_op_by_id_response, remove_ops_response, update_entities_response, AddOpRequest,
     AddOpResponse, AddOpSuccess, AdminSetTrackingRequest, AdminSetTrackingResponse,
@@ -56,7 +55,6 @@ use super::protos::{
     GetOpByIdRequest, GetOpByIdResponse, GetOpByIdSuccess, GetOpsByHashesRequest,
     GetOpsByHashesResponse, GetOpsByHashesSuccess, GetOpsRequest, GetOpsResponse, GetOpsSuccess,
     GetOpsSummariesRequest, GetOpsSummariesResponse, GetOpsSummariesSuccess,
-    GetPreConfirmedUoRequest, GetPreConfirmedUoResponse, GetPreConfirmedUoSuccess,
     GetReputationStatusRequest, GetReputationStatusResponse, GetReputationStatusSuccess,
     GetStakeStatusRequest, GetStakeStatusResponse, GetStakeStatusSuccess,
     GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, MempoolOp,
@@ -395,32 +393,6 @@ impl OpPool for OpPoolImpl {
             },
             Err(error) => RemoveOpByIdResponse {
                 result: Some(remove_op_by_id_response::Result::Failure(error.into())),
-            },
-        };
-
-        Ok(Response::new(resp))
-    }
-
-    async fn get_pre_confirmed_uo(
-        &self,
-        request: Request<GetPreConfirmedUoRequest>,
-    ) -> Result<Response<GetPreConfirmedUoResponse>> {
-        let req = request.into_inner();
-        let ep = self.get_entry_point(&req.entry_point)?;
-        let hash = from_bytes(&req.hash).map_err(|e| {
-            Status::invalid_argument(format!("Invalid UO hash in GetPreConfirmedUoRequest: {e}"))
-        })?;
-
-        let resp = match self.local_pool.get_pre_confirmed_uo(ep, hash).await {
-            Ok(hash) => GetPreConfirmedUoResponse {
-                result: Some(get_pre_confirmed_uo_response::Result::Success(
-                    GetPreConfirmedUoSuccess {
-                        bundle_hash: hash.map_or(vec![], |h| h.to_vec()),
-                    },
-                )),
-            },
-            Err(error) => GetPreConfirmedUoResponse {
-                result: Some(get_pre_confirmed_uo_response::Result::Failure(error.into())),
             },
         };
 

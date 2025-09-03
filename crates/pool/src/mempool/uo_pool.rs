@@ -33,7 +33,8 @@ use rundler_provider::{
 use rundler_sim::{MempoolConfig, Prechecker, Simulator};
 use rundler_types::{
     pool::{
-        MempoolError, PaymasterMetadata, PoolOperation, Reputation, ReputationStatus, StakeStatus,
+        MempoolError, PaymasterMetadata, PoolOperation, PreconfInfo, Reputation, ReputationStatus,
+        StakeStatus,
     },
     Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, GasFees, UserOperation,
     UserOperationId, UserOperationPermissions, UserOperationVariant,
@@ -936,12 +937,19 @@ where
         self.state.read().pool.all_operations().take(max).collect()
     }
 
-    fn get_user_operation_by_hash(&self, hash: B256) -> Option<Arc<PoolOperation>> {
-        self.state.read().pool.get_operation_by_hash(hash)
-    }
-
-    fn get_pre_confirmed_uo(&self, uo_hash: B256) -> Option<B256> {
-        self.state.read().pool.get_pre_confirmed_uo(uo_hash)
+    fn get_user_operation_by_hash(
+        &self,
+        hash: B256,
+    ) -> (Option<Arc<PoolOperation>>, Option<PreconfInfo>) {
+        let state = self.state.read();
+        let preconf_info = state
+            .pool
+            .get_pre_confirmed_uo(hash)
+            .map(|bundle_hash| PreconfInfo {
+                tx_hash: bundle_hash,
+            });
+        let op = state.pool.get_operation_by_hash(hash);
+        (op, preconf_info)
     }
 
     // DEBUG METHODS
@@ -1910,8 +1918,8 @@ mod tests {
             .await
             .unwrap();
 
-        let pool_op = pool.get_user_operation_by_hash(hash).unwrap();
-        assert_eq!(pool_op.uo, op.op);
+        let (pool_op, _) = pool.get_user_operation_by_hash(hash);
+        assert_eq!(pool_op.unwrap().uo, op.op);
     }
 
     #[tokio::test]
@@ -1982,7 +1990,7 @@ mod tests {
             .await
             .unwrap();
 
-        let pool_op = pool.get_user_operation_by_hash(B256::random());
+        let (pool_op, _) = pool.get_user_operation_by_hash(B256::random());
         assert_eq!(pool_op, None);
     }
 
@@ -2295,7 +2303,7 @@ mod tests {
             .await
             .unwrap();
 
-        let pool_op = pool.get_user_operation_by_hash(hash).unwrap();
+        let pool_op = pool.get_user_operation_by_hash(hash).0.unwrap();
 
         if let UserOperationVariant::V0_6(uo) = &pool_op.uo {
             assert_eq!(*uo.signature(), agg_sig);

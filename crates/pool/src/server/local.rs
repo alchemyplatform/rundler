@@ -274,19 +274,6 @@ impl Pool for LocalPoolHandle {
         }
     }
 
-    async fn get_pre_confirmed_uo(
-        &self,
-        entry_point: Address,
-        hash: B256,
-    ) -> PoolResult<Option<B256>> {
-        let req = ServerRequestKind::GetPreConfirmedUo { entry_point, hash };
-        let resp = self.send(req).await?;
-        match resp {
-            ServerResponse::GetPreConfirmedUo { bundle_hash } => Ok(bundle_hash),
-            _ => Err(PoolError::UnexpectedResponse),
-        }
-    }
-
     async fn update_entities(
         &self,
         entry_point: Address,
@@ -527,6 +514,7 @@ impl LocalPoolServerRunner {
             .filter_map(|hash| {
                 mempool
                     .get_user_operation_by_hash(*hash)
+                    .0
                     .map(|op| (*op).clone())
             })
             .collect())
@@ -536,15 +524,8 @@ impl LocalPoolServerRunner {
         &self,
         hash: B256,
     ) -> PoolResult<(Option<PoolOperation>, Option<PreconfInfo>)> {
-        for (entry_point, mempool) in self.mempools.iter() {
-            if let Some(op) = mempool.get_user_operation_by_hash(hash) {
-                let tx_hash = self.get_pre_confirmed_uo(*entry_point, hash);
-                let preconf_info = if let Ok(Some(hash)) = tx_hash {
-                    Some(PreconfInfo { tx_hash: hash })
-                } else {
-                    None
-                };
-
+        for mempool in self.mempools.values() {
+            if let (Some(op), preconf_info) = mempool.get_user_operation_by_hash(hash) {
                 return Ok((Some((*op).clone()), preconf_info));
             }
         }
@@ -673,11 +654,6 @@ impl LocalPoolServerRunner {
                 }
             }
         }
-    }
-
-    fn get_pre_confirmed_uo(&self, entry_point: Address, hash: B256) -> PoolResult<Option<B256>> {
-        let mempool = self.get_pool(entry_point)?;
-        Ok(mempool.get_pre_confirmed_uo(hash))
     }
 
     async fn run(mut self, shutdown: GracefulShutdown) {
@@ -864,12 +840,6 @@ impl LocalPoolServerRunner {
                             self.chain_subscriber.track_addresses(to_track);
                             Ok(ServerResponse::SubscribeNewHeads { new_heads: self.block_sender.subscribe() } )
                         }
-                        ServerRequestKind::GetPreConfirmedUo { entry_point, hash } => {
-                            match self.get_pre_confirmed_uo(entry_point, hash) {
-                                Ok(bundle_hash) => Ok(ServerResponse::GetPreConfirmedUo { bundle_hash }),
-                                Err(e) => Err(e),
-                            }
-                        }
                     };
                     if let Err(e) = req.response.send(resp) {
                         tracing::error!("Failed to send response: {:?}", e);
@@ -962,10 +932,6 @@ enum ServerRequestKind {
     SubscribeNewHeads {
         to_track: Vec<Address>,
     },
-    GetPreConfirmedUo {
-        entry_point: Address,
-        hash: B256,
-    },
 }
 
 #[derive(Debug)]
@@ -1018,9 +984,6 @@ enum ServerResponse {
     },
     SubscribeNewHeads {
         new_heads: broadcast::Receiver<NewHead>,
-    },
-    GetPreConfirmedUo {
-        bundle_hash: Option<B256>,
     },
 }
 

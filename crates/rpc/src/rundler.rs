@@ -284,12 +284,10 @@ where
                     "Unsupported feature: preconfirmation".to_string(),
                 ))?;
             }
-            let txn_hash_futs = self
-                .entry_point_router
-                .entry_points()
-                .map(|ep| self.pool_server.get_pre_confirmed_uo(*ep, uo_hash));
-            let txn_hashes = future::try_join_all(txn_hash_futs).await?;
-            txn_hashes.into_iter().find_map(|x| x)
+
+            let txn_hash = self.pool_server.get_op_by_hash(uo_hash).await;
+
+            txn_hash.unwrap_or((None, None)).1.map(|x| x.tx_hash)
         } else {
             None
         };

@@ -36,7 +36,8 @@ use rundler_sim::{MempoolConfig, PrecheckSettings, SimulationSettings};
 use rundler_types::{
     chain::ChainSpec,
     pool::{
-        MempoolError, PaymasterMetadata, PoolOperation, Reputation, ReputationStatus, StakeStatus,
+        MempoolError, PaymasterMetadata, PoolOperation, PreconfInfo, Reputation, ReputationStatus,
+        StakeStatus,
     },
     EntityUpdate, EntryPointVersion, UserOperationId, UserOperationPermissions,
     UserOperationVariant,
@@ -96,7 +97,10 @@ pub(crate) trait Mempool: Send + Sync {
     fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation>>;
 
     /// Looks up a user operation by hash, returns None if not found
-    fn get_user_operation_by_hash(&self, hash: B256) -> Option<Arc<PoolOperation>>;
+    fn get_user_operation_by_hash(
+        &self,
+        hash: B256,
+    ) -> (Option<Arc<PoolOperation>>, Option<PreconfInfo>);
 
     /// Looks up a user operation by id, returns None if not found
     fn get_op_by_id(&self, id: &UserOperationId) -> Option<Arc<PoolOperation>>;
@@ -125,9 +129,6 @@ pub(crate) trait Mempool: Send + Sync {
 
     /// Turns on and off tracking errors
     fn set_tracking(&self, paymaster: bool, reputation: bool);
-
-    /// Gets the bundle hash of a preconfirmed user operation
-    fn get_pre_confirmed_uo(&self, uo_hash: B256) -> Option<B256>;
 }
 
 /// Config for the mempool

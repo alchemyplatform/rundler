@@ -90,13 +90,6 @@ pub trait Pool: Send + Sync {
     /// Remove operations from the pool by hash
     async fn remove_ops(&self, entry_point: Address, ops: Vec<B256>) -> PoolResult<()>;
 
-    /// Get the bundle hash of the preconfirmed uo from the pool
-    async fn get_pre_confirmed_uo(
-        &self,
-        entry_point: Address,
-        uo_hash: B256,
-    ) -> PoolResult<Option<B256>>;
-
     /// Remove an operation from the pool by id
     async fn remove_op_by_id(
         &self,
@@ -217,14 +210,6 @@ mockall::mock! {
             entry_point: Address,
             id: UserOperationId,
         ) -> PoolResult<Option<B256>>;
-
-        #[allow(dead_code)]
-        async fn get_pre_confirmed_uo(
-            &self,
-            entry_point: Address,
-            hash: B256,
-        ) -> PoolResult<Option<B256>>;
-
         async fn update_entities(
             &self,
             entry_point: Address,
