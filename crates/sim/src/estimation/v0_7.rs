@@ -178,14 +178,11 @@ where
                     .paymaster_verification_gas_limit(paymaster_verification_gas_limit)
                     .call_gas_limit(call_gas_limit)
                     .build();
-                op_with_limits.required_pre_verification_gas_with_limits(
+                op_with_limits.required_pre_verification_gas(
                     &self.chain_spec,
                     bundle_size,
                     da_gas,
                     None,
-                    Some(verification_gas_limit),
-                    Some(paymaster_verification_gas_limit),
-                    Some(call_gas_limit),
                 )
             } else {
                 // Use original op baseline to match validation behavior

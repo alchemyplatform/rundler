@@ -107,6 +107,9 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// Returns the verification gas limit
     fn verification_gas_limit(&self) -> u128;
 
+    /// Returns the paymaster verification gas limit
+    fn paymaster_verification_gas_limit(&self) -> u128;
+
     /// Returns the max fee per gas
     fn max_fee_per_gas(&self) -> u128;
 
@@ -377,16 +380,13 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
         };
 
         if chain_spec.charge_gas_limit_via_pvg {
-            if let (Some(vgl), Some(pvgl), Some(cgl)) = (
-                verification_gas_limit,
-                paymaster_verification_gas_limit,
-                call_gas_limit,
-            ) {
-                let gas_limits = vgl + pvgl + self.required_pre_execution_buffer() + cgl;
-                base_pvg.saturating_add(gas_limits)
-            } else {
-                base_pvg
-            }
+            let vgl = verification_gas_limit.unwrap_or_else(|| self.verification_gas_limit());
+            let pvgl = paymaster_verification_gas_limit
+                .unwrap_or_else(|| self.paymaster_verification_gas_limit());
+            let cgl = call_gas_limit.unwrap_or_else(|| self.call_gas_limit());
+
+            let gas_limits = vgl + pvgl + self.required_pre_execution_buffer() + cgl;
+            base_pvg.saturating_add(gas_limits)
         } else {
             base_pvg
         }
@@ -640,6 +640,13 @@ impl UserOperation for UserOperationVariant {
         match self {
             UserOperationVariant::V0_6(op) => op.verification_gas_limit(),
             UserOperationVariant::V0_7(op) => op.verification_gas_limit(),
+        }
+    }
+
+    fn paymaster_verification_gas_limit(&self) -> u128 {
+        match self {
+            UserOperationVariant::V0_6(op) => op.paymaster_verification_gas_limit(),
+            UserOperationVariant::V0_7(op) => op.paymaster_verification_gas_limit(),
         }
     }
 
