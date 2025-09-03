@@ -329,10 +329,6 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     ///
     /// `bundle_size` is the size of the bundle
     /// `da_gas` is the DA gas cost for the user operation, calculated elsewhere
-    /// `verification_gas_limit` is the verification gas limit (if available from estimation)
-    /// `paymaster_verification_gas_limit` is the paymaster verification gas limit (if available from estimation)
-    /// `call_gas_limit` is the call gas limit (if available from estimation)
-    ///
     /// `verification_efficiency_accept_threshold` is the threshold for the verification efficiency
     /// If set - the PVG will be increased to account for the calldata floor gas, else calldata floor gas is ignored
     fn required_pre_verification_gas(
