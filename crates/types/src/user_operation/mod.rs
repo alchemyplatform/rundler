@@ -225,13 +225,8 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     ///
     /// `bundle_size` is the size of the bundle if applying shared gas to the gas limit, otherwise `None`.
     fn bundle_gas_limit(&self, chain_spec: &ChainSpec, bundle_size: Option<usize>) -> u128 {
-        if chain_spec.charge_gas_limit_via_pvg {
-            // When gas limits are charged via PVG, they're already included in PVG
-            self.pre_verification_bundle_gas_limit(chain_spec, bundle_size)
-        } else {
-            self.pre_verification_bundle_gas_limit(chain_spec, bundle_size)
-                + self.bundle_gas_limit_without_pvg()
-        }
+        self.pre_verification_bundle_gas_limit(chain_spec, bundle_size)
+            + self.bundle_gas_limit_without_pvg()
     }
 
     /// Returns the combined gas limit for a user operation.
@@ -256,13 +251,8 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
         chain_spec: &ChainSpec,
         bundle_size: Option<usize>,
     ) -> u128 {
-        if chain_spec.charge_gas_limit_via_pvg {
-            // When gas limits are charged via PVG, they're already included in PVG
-            self.pre_verification_execution_gas_limit(chain_spec, bundle_size)
-        } else {
-            self.pre_verification_execution_gas_limit(chain_spec, bundle_size)
-                + self.bundle_gas_limit_without_pvg()
-        }
+        self.pre_verification_execution_gas_limit(chain_spec, bundle_size)
+            + self.bundle_gas_limit_without_pvg()
     }
 
     /// Returns the portion of pre-verification gas the applies to the DA portion of a bundle's gas limit
