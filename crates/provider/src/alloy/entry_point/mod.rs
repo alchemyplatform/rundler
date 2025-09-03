@@ -16,10 +16,27 @@ use alloy_primitives::{address, Address, Bytes, Signature, U256};
 use alloy_provider::network::TransactionBuilder7702;
 use alloy_rlp::Encodable;
 use alloy_rpc_types_eth::TransactionRequest;
-use rundler_types::authorization::Eip7702Auth;
+use rundler_types::{authorization::Eip7702Auth, chain::ChainSpec};
 
 pub(crate) mod v0_6;
 pub(crate) mod v0_7;
+
+/// Calculates the DA gas for simulation calls, preventing double counting
+fn calculate_da_gas_for_simulation<UO: rundler_types::UserOperation>(
+    user_op: &UO,
+    chain_spec: &ChainSpec,
+    bundle_size: Option<usize>,
+) -> u64 {
+    if chain_spec.da_pre_verification_gas && chain_spec.include_da_gas_in_gas_limit {
+        user_op
+            .pre_verification_gas()
+            .saturating_sub(user_op.pre_verification_execution_gas_limit(chain_spec, bundle_size))
+            .try_into()
+            .unwrap_or(u64::MAX)
+    } else {
+        0
+    }
+}
 
 fn max_bundle_transaction_data(
     to_address: Address,

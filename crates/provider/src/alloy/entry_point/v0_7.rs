@@ -47,10 +47,10 @@ use rundler_utils::authorization_utils;
 use tracing::instrument;
 
 use crate::{
-    AggregatorOut, AggregatorSimOut, AlloyProvider, BlockHashOrNumber, BundleHandler, DAGasOracle,
-    DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait,
-    ExecutionResult, HandleOpsOut, ProviderResult, SignatureAggregator, SimulationProvider,
-    TransactionRequest,
+    alloy::entry_point, AggregatorOut, AggregatorSimOut, AlloyProvider, BlockHashOrNumber,
+    BundleHandler, DAGasOracle, DAGasProvider, DepositInfo, EntryPoint,
+    EntryPointProvider as EntryPointProviderTrait, ExecutionResult, HandleOpsOut, ProviderResult,
+    SignatureAggregator, SimulationProvider, TransactionRequest,
 };
 
 /// Entry point provider for v0.7
@@ -176,12 +176,10 @@ where
         let ops_len = ops.len();
         let da_gas: u64 = ops
             .iter()
-            .map(|op: &UserOperation| {
-                op.pre_verification_da_gas_limit(&self.chain_spec, Some(ops_len))
+            .map(|op| {
+                entry_point::calculate_da_gas_for_simulation(op, &self.chain_spec, Some(ops_len))
             })
-            .sum::<u128>()
-            .try_into()
-            .unwrap_or(u64::MAX);
+            .sum::<u64>();
 
         let packed_ops = ops.into_iter().map(|op| op.pack()).collect();
 
@@ -215,10 +213,8 @@ where
         user_op: Self::UO,
     ) -> ProviderResult<AggregatorOut> {
         let aggregator = IAggregator::new(aggregator_address, self.i_entry_point.provider());
-        let da_gas: u64 = user_op
-            .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
-            .try_into()
-            .unwrap_or(u64::MAX);
+        let da_gas =
+            entry_point::calculate_da_gas_for_simulation(&user_op, &self.chain_spec, Some(1));
 
         let result = aggregator
             .validateUserOpSignature(user_op.pack())
@@ -457,10 +453,8 @@ where
         user_op: Self::UO,
     ) -> ProviderResult<(TransactionRequest, StateOverride)> {
         let addr = *self.i_entry_point.address();
-        let da_gas: u64 = user_op
-            .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
-            .try_into()
-            .unwrap_or(u64::MAX);
+        let da_gas =
+            entry_point::calculate_da_gas_for_simulation(&user_op, &self.chain_spec, Some(1));
 
         let mut override_ep = StateOverride::default();
         add_simulations_override(&mut override_ep, addr);
@@ -734,10 +728,7 @@ async fn simulate_handle_op_inner<AP: AlloyProvider>(
     mut state_override: StateOverride,
     skip_post_op: bool,
 ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
-    let da_gas: u64 = op
-        .pre_verification_da_gas_limit(chain_spec, Some(1))
-        .try_into()
-        .unwrap_or(u64::MAX);
+    let da_gas = entry_point::calculate_da_gas_for_simulation(&op, chain_spec, Some(1));
 
     add_simulations_override(&mut state_override, *entry_point.address());
 

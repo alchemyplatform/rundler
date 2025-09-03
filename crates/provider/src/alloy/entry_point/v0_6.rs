@@ -40,10 +40,10 @@ use rundler_utils::authorization_utils;
 use tracing::instrument;
 
 use crate::{
-    AggregatorOut, AggregatorSimOut, AlloyProvider, BlockHashOrNumber, BundleHandler, DAGasOracle,
-    DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait,
-    ExecutionResult, HandleOpsOut, ProviderResult, SignatureAggregator, SimulationProvider,
-    TransactionRequest,
+    alloy::entry_point, AggregatorOut, AggregatorSimOut, AlloyProvider, BlockHashOrNumber,
+    BundleHandler, DAGasOracle, DAGasProvider, DepositInfo, EntryPoint,
+    EntryPointProvider as EntryPointProviderTrait, ExecutionResult, HandleOpsOut, ProviderResult,
+    SignatureAggregator, SimulationProvider, TransactionRequest,
 };
 
 /// Entry point provider for v0.6
@@ -167,12 +167,10 @@ where
         let ops_len = ops.len();
         let da_gas: u64 = ops
             .iter()
-            .map(|op: &UserOperation| {
-                op.pre_verification_da_gas_limit(&self.chain_spec, Some(ops_len))
+            .map(|op| {
+                entry_point::calculate_da_gas_for_simulation(op, &self.chain_spec, Some(ops_len))
             })
-            .sum::<u128>()
-            .try_into()
-            .unwrap_or(u64::MAX);
+            .sum::<u64>();
         let ops: Vec<ContractUserOperation> = ops.into_iter().map(Into::into).collect();
 
         let result = aggregator
@@ -204,10 +202,8 @@ where
         user_op: Self::UO,
     ) -> ProviderResult<AggregatorOut> {
         let aggregator = IAggregator::new(aggregator_address, self.i_entry_point.provider());
-        let da_gas: u64 = user_op
-            .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
-            .try_into()
-            .unwrap_or(u64::MAX);
+        let da_gas =
+            entry_point::calculate_da_gas_for_simulation(&user_op, &self.chain_spec, Some(1));
 
         let result = aggregator
             .validateUserOpSignature(user_op.into())
@@ -390,10 +386,8 @@ where
         &self,
         user_op: UserOperation,
     ) -> ProviderResult<(TransactionRequest, StateOverride)> {
-        let da_gas: u64 = user_op
-            .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
-            .try_into()
-            .unwrap_or(u64::MAX);
+        let da_gas =
+            entry_point::calculate_da_gas_for_simulation(&user_op, &self.chain_spec, Some(1));
         let call = self
             .i_entry_point
             .simulateValidation(user_op.into())
@@ -408,10 +402,9 @@ where
         user_op: UserOperation,
         block_id: Option<BlockId>,
     ) -> ProviderResult<Result<ValidationOutput, ValidationRevert>> {
-        let da_gas: u64 = user_op
-            .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
-            .try_into()
-            .unwrap_or(u64::MAX);
+        let da_gas =
+            entry_point::calculate_da_gas_for_simulation(&user_op, &self.chain_spec, Some(1));
+
         let blockless = self
             .i_entry_point
             .simulateValidation(user_op.into())
@@ -662,10 +655,7 @@ async fn simulate_handle_op_inner<S: SimulationProvider, AP: AlloyProvider>(
     block_id: BlockId,
     mut state_override: StateOverride,
 ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
-    let da_gas: u64 = op
-        .pre_verification_da_gas_limit(chain_spec, Some(1))
-        .try_into()
-        .unwrap_or(u64::MAX);
+    let da_gas = entry_point::calculate_da_gas_for_simulation(&op, chain_spec, Some(1));
 
     if let Some(authorization) = op.authorization_tuple() {
         authorization_utils::apply_7702_overrides(
