@@ -30,7 +30,7 @@ use tracing::instrument;
 ///
 /// Returns estimated da gas
 #[instrument(skip_all)]
-pub async fn estimate_da_gas_only<UO: UserOperation, E: DAGasProvider<UO = UO>>(
+async fn estimate_da_gas_only<UO: UserOperation, E: DAGasProvider<UO = UO>>(
     chain_spec: &ChainSpec,
     entry_point: &E,
     random_op: &UO,
