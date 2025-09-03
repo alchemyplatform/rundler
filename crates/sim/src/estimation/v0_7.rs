@@ -171,8 +171,14 @@ where
         } else {
             // TODO(bundle): assuming a bundle size of 1
             let bundle_size = 1;
+            let base_op = op.max_fill(&self.chain_spec);
             if self.chain_spec.charge_gas_limit_via_pvg {
-                full_op.required_pre_verification_gas_with_limits(
+                let op_with_limits = UserOperationBuilder::from_uo(base_op, &self.chain_spec)
+                    .verification_gas_limit(verification_gas_limit)
+                    .paymaster_verification_gas_limit(paymaster_verification_gas_limit)
+                    .call_gas_limit(call_gas_limit)
+                    .build();
+                op_with_limits.required_pre_verification_gas_with_limits(
                     &self.chain_spec,
                     bundle_size,
                     da_gas,
@@ -182,14 +188,8 @@ where
                     Some(call_gas_limit),
                 )
             } else {
-                // Use original op (not full_op) to match validation behavior
-                let original_op = op.max_fill(&self.chain_spec);
-                original_op.required_pre_verification_gas(
-                    &self.chain_spec,
-                    bundle_size,
-                    da_gas,
-                    None,
-                )
+                // Use original op baseline to match validation behavior
+                base_op.required_pre_verification_gas(&self.chain_spec, bundle_size, da_gas, None)
             }
         };
 
