@@ -279,18 +279,28 @@ impl<P: EvmProvider> Chain<P> {
                     continue;
                 }
             };
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            let block_timestamp_ms = (block.header.timestamp * 1000) as u128;
 
             let chain_update = self.process_pending_block(&summary).await;
             let header = &block.inner.header;
-            tracing::info!("summary: {:?}", summary);
             if let Some(pending_block) = &self.pending_block {
                 if pending_block.hash == header.hash {
                     continue; // same block
                 }
                 if pending_block.parent_hash == header.parent_hash {
+                    self.metrics
+                        .flashblock_discovery_delay_ms
+                        .record(now_ms.saturating_sub(block_timestamp_ms) as f64);
                     return chain_update; // same parent
                 }
             }
+            self.metrics
+                .flashblock_discovery_delay_ms
+                .record(now_ms.saturating_sub(block_timestamp_ms) as f64);
 
             self.pending_block = Some(summary);
             if header.parent_hash == full_block_hash {
@@ -317,7 +327,6 @@ impl<P: EvmProvider> Chain<P> {
                     }
                 };
 
-                tracing::info!("result: {:?}", result);
                 match result {
                     Ok(mut update) => {
                         self.metrics
@@ -1048,6 +1057,8 @@ struct ChainMetrics {
     sync_abandoned: Counter,
     #[metric(describe = "the delay in milliseconds between block discovery and its timestamp")]
     block_discovery_delay_ms: Histogram,
+    #[metric(describe = "the delay in milliseconds between flahblock discovery and its timestamp")]
+    flashblock_discovery_delay_ms: Histogram,
     #[metric(describe = "the time in milliseconds it takes to sync to a block")]
     block_sync_time_ms: Histogram,
 }

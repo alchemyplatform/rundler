@@ -275,15 +275,7 @@ where
 
         // handle result
         match result {
-            Ok(SendBundleAttemptResult::Success((bundle_hash, ops))) => {
-                let _ = self
-                    .pool
-                    .mark_uo_pending(
-                        self.ep_address,
-                        bundle_hash,
-                        ops.iter().map(|op| op.1).collect(),
-                    )
-                    .await;
+            Ok(SendBundleAttemptResult::Success(_)) => {
                 // sent the bundle
                 info!("Bundle sent successfully");
                 state.update(InnerState::Pending(inner.to_pending(
@@ -700,7 +692,6 @@ where
             expected_storage,
             ops,
         } = bundle_tx;
-
         let send_result = state
             .transaction_tracker
             .send_transaction(tx.clone(), &expected_storage, state.block_number())
@@ -730,6 +721,15 @@ where
                     fee_increase_count,
                     required_fees,
                 ));
+
+                let _ = self
+                    .pool
+                    .mark_uo_pending(
+                        self.ep_address,
+                        tx_hash,
+                        ops.iter().map(|op| op.1).collect(),
+                    )
+                    .await;
 
                 Ok(SendBundleAttemptResult::Success((tx_hash, (ops))))
             }
@@ -1668,6 +1668,11 @@ mod tests {
         mock_tracker
             .expect_send_transaction()
             .returning(|_, _, _| Box::pin(async { Ok(B256::ZERO) }));
+
+        mock_pool
+            .expect_mark_uo_pending()
+            .withf(|_, _, _| true)
+            .returning(|_, _, _| Ok(()));
 
         let mut sender = new_sender(mock_proposer, mock_entry_point, mock_evm, mock_pool);
 

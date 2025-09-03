@@ -244,7 +244,8 @@ where
         self.preconfirmed_uos.iter().cloned()
     }
 
-    pub(crate) fn preconfirmed_txns(&mut self, preconfirmed_txns: impl IntoIterator<Item = B256>) {
+    pub(crate) fn preconfirm_txns(&mut self, preconfirmed_txns: impl IntoIterator<Item = B256>) {
+        // each call of this method should clear the preconfirmed uos before adding new ones.
         self.preconfirmed_uos.clear();
         for txn in preconfirmed_txns {
             if let Some(uos) = self.unmined_bundle_to_uos.get(&txn) {
@@ -256,7 +257,6 @@ where
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn get_pre_confirmed_uo(&self, uo_hash: B256) -> Option<B256> {
         if self.preconfirmed_uos.contains(&uo_hash) {
             if let Some(bundle_hash) = self.unmined_uos_bundle_mapping.get(&uo_hash) {

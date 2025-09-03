@@ -244,7 +244,7 @@ where
         let preconfirmed_txns = update.preconfirmed_txns.clone();
 
         if update.update_type == UpdateType::Partial {
-            self.state.write().pool.preconfirmed_txns(preconfirmed_txns);
+            self.state.write().pool.preconfirm_txns(preconfirmed_txns);
             return;
         }
 
@@ -444,7 +444,7 @@ where
                 .pool
                 .forget_mined_operations_before_block(update.earliest_remembered_block_number);
 
-            state.pool.preconfirmed_txns(preconfirmed_txns);
+            state.pool.preconfirm_txns(preconfirmed_txns);
 
             // Remove throttled ops that are too old
             let mut to_remove = HashSet::new();
