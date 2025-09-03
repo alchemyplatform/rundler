@@ -76,7 +76,7 @@ pub async fn estimate_da_gas_with_fees<
 ) -> anyhow::Result<u128> {
     let _timer = CustomTimerGuard::new(pvg_timer);
     let gas_price = if !chain_spec.da_pre_verification_gas {
-        0
+        return Ok(0);
     } else {
         let block_hash = match block {
             BlockHashOrNumber::Hash(hash) => hash,

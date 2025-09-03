@@ -734,7 +734,10 @@ async fn simulate_handle_op_inner<AP: AlloyProvider>(
     mut state_override: StateOverride,
     skip_post_op: bool,
 ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
-    let da_gas = op.pre_verification_da_gas_limit(chain_spec, Some(1)) as u64;
+    let da_gas = op
+        .pre_verification_da_gas_limit(chain_spec, Some(1))
+        .try_into()
+        .unwrap_or(u64::MAX);
 
     add_simulations_override(&mut state_override, *entry_point.address());
 
