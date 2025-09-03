@@ -171,15 +171,26 @@ where
         } else {
             // TODO(bundle): assuming a bundle size of 1
             let bundle_size = 1;
-            full_op.required_pre_verification_gas_with_limits(
-                &self.chain_spec,
-                bundle_size,
-                da_gas,
-                None,
-                Some(verification_gas_limit),
-                Some(paymaster_verification_gas_limit),
-                Some(call_gas_limit),
-            )
+            if self.chain_spec.charge_gas_limit_via_pvg {
+                full_op.required_pre_verification_gas_with_limits(
+                    &self.chain_spec,
+                    bundle_size,
+                    da_gas,
+                    None,
+                    Some(verification_gas_limit),
+                    Some(paymaster_verification_gas_limit),
+                    Some(call_gas_limit),
+                )
+            } else {
+                // Use original op (not full_op) to match validation behavior
+                let original_op = op.max_fill(&self.chain_spec);
+                original_op.required_pre_verification_gas(
+                    &self.chain_spec,
+                    bundle_size,
+                    da_gas,
+                    None,
+                )
+            }
         };
 
         // check the total gas limit
