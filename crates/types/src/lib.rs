@@ -61,4 +61,4 @@ pub mod task;
 pub mod authorization;
 
 pub mod tag;
-pub use tag::Tag;
+pub use tag::BlockTag;

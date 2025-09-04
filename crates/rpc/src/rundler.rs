@@ -65,11 +65,7 @@ pub trait RundlerApi {
 
     /// Gets the status of a user operation by user operation hash
     #[method(name = "getUserOperationStatus")]
-    async fn get_user_operation_status(
-        &self,
-        uo_hash: B256,
-        preconfirmation: Option<bool>,
-    ) -> RpcResult<RpcUserOperationStatus>;
+    async fn get_user_operation_status(&self, uo_hash: B256) -> RpcResult<RpcUserOperationStatus>;
 
     /// Gets the required fees for a sender nonce
     #[method(name = "getPendingUserOperationBySenderNonce")]
@@ -132,15 +128,10 @@ where
     }
 
     #[instrument(skip_all, fields(rpc_method = "rundler_getUserOperationStatus"))]
-    async fn get_user_operation_status(
-        &self,
-        uo_hash: B256,
-        preconfirmation: Option<bool>,
-    ) -> RpcResult<RpcUserOperationStatus> {
-        let preconfirmation = preconfirmation.unwrap_or(false);
+    async fn get_user_operation_status(&self, uo_hash: B256) -> RpcResult<RpcUserOperationStatus> {
         utils::safe_call_rpc_handler(
             "rundler_getUserOperationStatus",
-            RundlerApi::get_user_operation_status(self, uo_hash, preconfirmation),
+            RundlerApi::get_user_operation_status(self, uo_hash),
         )
         .await
     }
@@ -274,24 +265,15 @@ where
         }
     }
 
-    async fn get_user_operation_status(
-        &self,
-        uo_hash: B256,
-        preconfirmation: bool,
-    ) -> EthResult<RpcUserOperationStatus> {
-        let bundle_transaction: Option<B256> = if preconfirmation {
-            if !self.chain_spec.flashblocks_enabled {
-                Err(EthRpcError::InvalidParams(
-                    "Unsupported feature: preconfirmation".to_string(),
-                ))?;
-            }
-
+    async fn get_user_operation_status(&self, uo_hash: B256) -> EthResult<RpcUserOperationStatus> {
+        let bundle_transaction: Option<B256> = if self.chain_spec.flashblocks_enabled {
             let txn_hash = self.pool_server.get_op_by_hash(uo_hash).await;
 
             txn_hash.unwrap_or((None, None)).1.map(|x| x.tx_hash)
         } else {
             None
         };
+
         let receipt_futs = self.entry_point_router.entry_points().map(|ep| {
             self.entry_point_router
                 .get_receipt(ep, uo_hash, bundle_transaction)

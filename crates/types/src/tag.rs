@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// Type of block states we serve info for
 #[derive(Clone, Copy, Debug, Deserialize, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum Tag {
+pub enum BlockTag {
     /// Latest state
     #[default]
     Latest,
