@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{cmp, ops::Add, time::Instant};
+use std::{ops::Add, time::Instant};
 
 use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_sol_types::{SolCall, SolInterface};
@@ -123,7 +123,17 @@ where
             );
         }
 
-        let pre_verification_gas_future = self.estimate_pre_verification_gas(&op, block_hash);
+        let random_op = op.random_fill(&self.chain_spec);
+        let da_gas_future = gas::estimate_da_gas_with_fees(
+            &self.chain_spec,
+            &self.entry_point,
+            &self.fee_estimator,
+            &random_op,
+            op.max_fee_per_gas,
+            op.max_priority_fee_per_gas,
+            block_hash.into(),
+            self.metrics.pvg_estimate_ms.clone(),
+        );
 
         let verification_gas_future =
             self.estimate_verification_gas(&op, &full_op, block_hash, state_override.clone());
@@ -139,21 +149,46 @@ where
 
         // Not try_join! because then the output is nondeterministic if multiple calls fail.
         let (
-            pvg_result,
+            da_gas_result,
             verification_gas_limit_result,
             paymaster_verification_gas_limit_result,
             call_gas_limit_result,
         ) = join!(
-            pre_verification_gas_future,
+            da_gas_future,
             verification_gas_future,
             paymaster_verification_gas_future,
             call_gas_future
         );
 
-        let (pre_verification_gas, da_gas) = pvg_result?;
+        let da_gas = da_gas_result.map_err(GasEstimationError::from)?;
         let verification_gas_limit = verification_gas_limit_result?;
         let paymaster_verification_gas_limit = paymaster_verification_gas_limit_result?;
         let call_gas_limit = call_gas_limit_result?;
+
+        // Calculate the final PVG now that we have all gas limits
+        let pre_verification_gas = if op.pre_verification_gas.is_some_and(|pvg| pvg != 0) {
+            op.pre_verification_gas.unwrap()
+        } else {
+            // TODO(bundle): assuming a bundle size of 1
+            let bundle_size = 1;
+            let base_op = op.max_fill(&self.chain_spec);
+            if self.chain_spec.charge_gas_limit_via_pvg {
+                let op_with_limits = UserOperationBuilder::from_uo(base_op, &self.chain_spec)
+                    .verification_gas_limit(verification_gas_limit)
+                    .paymaster_verification_gas_limit(paymaster_verification_gas_limit)
+                    .call_gas_limit(call_gas_limit)
+                    .paymaster_post_op_gas_limit(op.paymaster_post_op_gas_limit.unwrap_or(0))
+                    .build();
+                op_with_limits.required_pre_verification_gas(
+                    &self.chain_spec,
+                    bundle_size,
+                    da_gas,
+                    None,
+                )
+            } else {
+                base_op.required_pre_verification_gas(&self.chain_spec, bundle_size, da_gas, None)
+            }
+        };
 
         // check the total gas limit
         let op_with_gas = UserOperationBuilder::from_uo(full_op, &self.chain_spec)
@@ -399,50 +434,6 @@ where
         );
 
         Ok(paymaster_verification_gas_limit)
-    }
-
-    #[instrument(skip_all)]
-    async fn estimate_pre_verification_gas(
-        &self,
-        optional_op: &UserOperationOptionalGas,
-        block_hash: B256,
-    ) -> Result<(u128, u128), GasEstimationError> {
-        if let Some(pvg) = optional_op.pre_verification_gas {
-            if pvg != 0 {
-                return Ok((pvg, 0));
-            }
-        }
-
-        let _timer = CustomTimerGuard::new(self.metrics.pvg_estimate_ms.clone());
-
-        // If not using calldata pre-verification gas, return 0
-        let gas_price = if !self.chain_spec.da_pre_verification_gas {
-            0
-        } else {
-            // If the user provides fees, use them, otherwise use the current bundle fees
-            let (bundle_fees, base_fee) = self
-                .fee_estimator
-                .required_bundle_fees(block_hash, None)
-                .await?;
-            if let (Some(max_fee), Some(prio_fee)) = (
-                optional_op.max_fee_per_gas.filter(|fee| *fee != 0),
-                optional_op.max_priority_fee_per_gas.filter(|fee| *fee != 0),
-            ) {
-                cmp::min(max_fee, base_fee.saturating_add(prio_fee))
-            } else {
-                base_fee.saturating_add(bundle_fees.max_priority_fee_per_gas)
-            }
-        };
-
-        Ok(gas::estimate_pre_verification_gas(
-            &self.chain_spec,
-            &self.entry_point,
-            &optional_op.max_fill(&self.chain_spec),
-            &optional_op.random_fill(&self.chain_spec),
-            block_hash.into(),
-            gas_price,
-        )
-        .await?)
     }
 
     #[instrument(skip_all)]

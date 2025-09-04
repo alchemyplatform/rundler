@@ -108,6 +108,8 @@ pub struct ChainSpec {
     /// Some chains have artificially high block gas limits but
     /// actually cap block gas usage at a lower value.
     pub congestion_trigger_usage_ratio_threshold: f64,
+    /// A boolean value to set whether to add the total gas limit for an op to the PVG calculation
+    pub charge_gas_limit_via_pvg: bool,
 
     /*
      * Bundle building
@@ -191,6 +193,7 @@ impl Default for ChainSpec {
             min_max_priority_fee_per_gas: 0,
             max_max_priority_fee_per_gas: u64::MAX,
             congestion_trigger_usage_ratio_threshold: 0.75,
+            charge_gas_limit_via_pvg: false,
             max_transaction_size_bytes: 131072, // 128 KiB
             bundle_max_send_interval_millis: 1000,
             flashbots_enabled: false,

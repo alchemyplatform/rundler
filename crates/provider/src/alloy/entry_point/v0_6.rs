@@ -167,12 +167,12 @@ where
         let ops_len = ops.len();
         let da_gas: u64 = ops
             .iter()
-            .map(|op: &UserOperation| {
+            .map(|op| {
                 op.pre_verification_da_gas_limit(&self.chain_spec, Some(ops_len))
+                    .try_into()
+                    .unwrap_or(u64::MAX)
             })
-            .sum::<u128>()
-            .try_into()
-            .unwrap_or(u64::MAX);
+            .sum::<u64>();
         let ops: Vec<ContractUserOperation> = ops.into_iter().map(Into::into).collect();
 
         let result = aggregator
@@ -204,7 +204,7 @@ where
         user_op: Self::UO,
     ) -> ProviderResult<AggregatorOut> {
         let aggregator = IAggregator::new(aggregator_address, self.i_entry_point.provider());
-        let da_gas: u64 = user_op
+        let da_gas = user_op
             .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
             .try_into()
             .unwrap_or(u64::MAX);
@@ -390,7 +390,7 @@ where
         &self,
         user_op: UserOperation,
     ) -> ProviderResult<(TransactionRequest, StateOverride)> {
-        let da_gas: u64 = user_op
+        let da_gas = user_op
             .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
             .try_into()
             .unwrap_or(u64::MAX);
@@ -408,10 +408,11 @@ where
         user_op: UserOperation,
         block_id: Option<BlockId>,
     ) -> ProviderResult<Result<ValidationOutput, ValidationRevert>> {
-        let da_gas: u64 = user_op
+        let da_gas = user_op
             .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
             .try_into()
             .unwrap_or(u64::MAX);
+
         let blockless = self
             .i_entry_point
             .simulateValidation(user_op.into())
@@ -662,7 +663,7 @@ async fn simulate_handle_op_inner<S: SimulationProvider, AP: AlloyProvider>(
     block_id: BlockId,
     mut state_override: StateOverride,
 ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
-    let da_gas: u64 = op
+    let da_gas = op
         .pre_verification_da_gas_limit(chain_spec, Some(1))
         .try_into()
         .unwrap_or(u64::MAX);

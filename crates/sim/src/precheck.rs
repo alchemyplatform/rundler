@@ -303,6 +303,7 @@ where
 
             min_pre_verification_gas = math::percent_ceil(min_pre_verification_gas, accept_pct);
         }
+
         if op.pre_verification_gas() < min_pre_verification_gas {
             violations.push(PrecheckViolation::PreVerificationGasTooLow(
                 op.pre_verification_gas(),

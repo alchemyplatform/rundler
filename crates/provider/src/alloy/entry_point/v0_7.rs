@@ -176,12 +176,12 @@ where
         let ops_len = ops.len();
         let da_gas: u64 = ops
             .iter()
-            .map(|op: &UserOperation| {
+            .map(|op| {
                 op.pre_verification_da_gas_limit(&self.chain_spec, Some(ops_len))
+                    .try_into()
+                    .unwrap_or(u64::MAX)
             })
-            .sum::<u128>()
-            .try_into()
-            .unwrap_or(u64::MAX);
+            .sum::<u64>();
 
         let packed_ops = ops.into_iter().map(|op| op.pack()).collect();
 
@@ -215,7 +215,7 @@ where
         user_op: Self::UO,
     ) -> ProviderResult<AggregatorOut> {
         let aggregator = IAggregator::new(aggregator_address, self.i_entry_point.provider());
-        let da_gas: u64 = user_op
+        let da_gas = user_op
             .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
             .try_into()
             .unwrap_or(u64::MAX);
@@ -457,7 +457,7 @@ where
         user_op: Self::UO,
     ) -> ProviderResult<(TransactionRequest, StateOverride)> {
         let addr = *self.i_entry_point.address();
-        let da_gas: u64 = user_op
+        let da_gas = user_op
             .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
             .try_into()
             .unwrap_or(u64::MAX);
@@ -734,7 +734,7 @@ async fn simulate_handle_op_inner<AP: AlloyProvider>(
     mut state_override: StateOverride,
     skip_post_op: bool,
 ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
-    let da_gas: u64 = op
+    let da_gas = op
         .pre_verification_da_gas_limit(chain_spec, Some(1))
         .try_into()
         .unwrap_or(u64::MAX);

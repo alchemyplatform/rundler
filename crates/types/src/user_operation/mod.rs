@@ -226,7 +226,12 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// `bundle_size` is the size of the bundle if applying shared gas to the gas limit, otherwise `None`.
     fn bundle_gas_limit(&self, chain_spec: &ChainSpec, bundle_size: Option<usize>) -> u128 {
         self.pre_verification_bundle_gas_limit(chain_spec, bundle_size)
-            + self.total_verification_gas_limit()
+            + self.bundle_gas_limit_without_pvg()
+    }
+
+    /// Returns the combined gas limit for a user operation.
+    fn bundle_gas_limit_without_pvg(&self) -> u128 {
+        self.total_verification_gas_limit()
             + self.required_pre_execution_buffer()
             + self.call_gas_limit()
     }
@@ -247,9 +252,7 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
         bundle_size: Option<usize>,
     ) -> u128 {
         self.pre_verification_execution_gas_limit(chain_spec, bundle_size)
-            + self.total_verification_gas_limit()
-            + self.required_pre_execution_buffer()
-            + self.call_gas_limit()
+            + self.bundle_gas_limit_without_pvg()
     }
 
     /// Returns the portion of pre-verification gas the applies to the DA portion of a bundle's gas limit
@@ -316,7 +319,6 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     ///
     /// `bundle_size` is the size of the bundle
     /// `da_gas` is the DA gas cost for the user operation, calculated elsewhere
-    ///
     /// `verification_efficiency_accept_threshold` is the threshold for the verification efficiency
     /// If set - the PVG will be increased to account for the calldata floor gas, else calldata floor gas is ignored
     fn required_pre_verification_gas(
@@ -326,7 +328,7 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
         da_gas: u128,
         verification_gas_limit_efficiency_reject_threshold: Option<f64>,
     ) -> u128 {
-        if let Some(thresh) = verification_gas_limit_efficiency_reject_threshold {
+        let base_pvg = if let Some(thresh) = verification_gas_limit_efficiency_reject_threshold {
             increase_required_pvg_with_calldata_floor_gas(
                 self,
                 self.pre_verification_execution_gas_limit(chain_spec, Some(bundle_size)),
@@ -336,6 +338,16 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
             )
         } else {
             self.pre_verification_execution_gas_limit(chain_spec, Some(bundle_size)) + da_gas
+        };
+
+        if chain_spec.charge_gas_limit_via_pvg {
+            let total_vgl = self.total_verification_gas_limit();
+            let cgl = self.call_gas_limit();
+
+            let gas_limits = total_vgl + self.required_pre_execution_buffer() + cgl;
+            base_pvg.saturating_add(gas_limits)
+        } else {
+            base_pvg
         }
     }
 
