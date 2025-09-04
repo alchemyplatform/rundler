@@ -409,13 +409,13 @@ impl<P: EvmProvider> Chain<P> {
         pending_block
             .transactions
             .txns()
-            .filter(|tx| {
-                tx.inner.to().is_some()
-                    && self
-                        .settings
-                        .entry_point_addresses
-                        .keys()
-                        .contains(&tx.inner.to().unwrap())
+            .filter(|tx| match tx.inner.to() {
+                Some(tx_inner) => self
+                    .settings
+                    .entry_point_addresses
+                    .keys()
+                    .contains(&tx_inner),
+                None => false,
             })
             .map(|tx| tx.inner.tx_hash())
             .collect()
@@ -1115,6 +1115,7 @@ mod tests {
     use std::ops::DerefMut;
 
     use alloy_consensus::{transaction::Recovered, SignableTransaction, TypedTransaction};
+    use alloy_eips::BlockNumberOrTag;
     use alloy_network_primitives::BlockTransactions;
     use alloy_primitives::{address, Log as PrimitiveLog, LogData, Signature};
     use alloy_rpc_types_eth::{Block as AlloyBlock, Transaction as AlloyTransaction};
@@ -1219,64 +1220,65 @@ mod tests {
         }
 
         fn get_block(&self, id: BlockId) -> Option<Block> {
-            if id == BlockId::pending() {
-                let pending_block = self.pending_block.read();
-                if pending_block.is_none() {
-                    return None;
-                }
-                let pending_block_inner = self.pending_block.read().clone().unwrap();
-                let blocks = self.blocks.read();
-                let number = blocks.iter().len();
+            match id {
+                BlockId::Number(BlockNumberOrTag::Pending) => {
+                    let pending_block = self.pending_block.read();
+                    if pending_block.is_none() {
+                        return None;
+                    }
+                    let pending_block_inner = pending_block.clone().unwrap();
+                    let blocks = self.blocks.read();
+                    let number = blocks.iter().len();
 
-                let parent_hash = if number > 0 {
-                    blocks[number - 1].hash
-                } else {
-                    B256::ZERO
-                };
-                Some(Block::new(WithOtherFields::new(AlloyBlock {
-                    header: BlockHeader {
-                        hash: pending_block_inner.hash,
-                        inner: AnyHeader {
-                            parent_hash,
-                            number: number as u64,
+                    let parent_hash = if number > 0 {
+                        blocks[number - 1].hash
+                    } else {
+                        B256::ZERO
+                    };
+                    Some(Block::new(WithOtherFields::new(AlloyBlock {
+                        header: BlockHeader {
+                            hash: pending_block_inner.hash,
+                            inner: AnyHeader {
+                                parent_hash,
+                                number: number as u64,
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
+                        transactions: BlockTransactions::Full(
+                            pending_block_inner.transactions.clone(),
+                        ),
                         ..Default::default()
-                    },
-                    transactions: BlockTransactions::Full(pending_block_inner.transactions.clone()),
-                    ..Default::default()
-                })))
-            } else {
-                let BlockId::Hash(RpcBlockHash {
+                    })))
+                }
+                BlockId::Hash(RpcBlockHash {
                     block_hash: hash,
                     require_canonical: _,
-                }) = id
-                else {
-                    panic!("get_block only supports hash ids");
-                };
+                }) => {
+                    let blocks = self.blocks.read();
+                    let number = blocks.iter().position(|block| block.hash == hash)?;
+                    let block = &blocks[number];
+                    let parent_hash = if number > 0 {
+                        blocks[number - 1].hash
+                    } else {
+                        B256::ZERO
+                    };
 
-                let blocks = self.blocks.read();
-                let number = blocks.iter().position(|block| block.hash == hash)?;
-                let block = &blocks[number];
-                let parent_hash = if number > 0 {
-                    blocks[number - 1].hash
-                } else {
-                    B256::ZERO
-                };
-
-                Some(Block::new(WithOtherFields::new(AlloyBlock {
-                    header: BlockHeader {
-                        hash,
-                        inner: AnyHeader {
-                            parent_hash,
-                            number: number as u64,
+                    Some(Block::new(WithOtherFields::new(AlloyBlock {
+                        header: BlockHeader {
+                            hash,
+                            inner: AnyHeader {
+                                parent_hash,
+                                number: number as u64,
+                                ..Default::default()
+                            },
                             ..Default::default()
                         },
+                        transactions: BlockTransactions::Full(block.transactions.clone()),
                         ..Default::default()
-                    },
-                    transactions: BlockTransactions::Full(block.transactions.clone()),
-                    ..Default::default()
-                })))
+                    })))
+                }
+                _ => panic!("get_block only supports hash ids"),
             }
         }
 

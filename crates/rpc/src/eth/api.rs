@@ -162,17 +162,18 @@ where
         }
         let tag = tag.unwrap_or(BlockTag::Latest);
 
-        let bundle_transaction: Option<B256> = if tag == BlockTag::Pending {
-            if !self.chain_spec.flashblocks_enabled {
-                return Err(EthRpcError::InvalidParams(
-                    "Unsupported feature: preconfirmation".to_string(),
-                ));
-            }
-            let txn_hash = self.pool.get_op_by_hash(hash).await;
+        let bundle_transaction: Option<B256> = match tag {
+            BlockTag::Pending => {
+                if !self.chain_spec.flashblocks_enabled {
+                    return Err(EthRpcError::InvalidParams(
+                        "Unsupported feature: preconfirmation".to_string(),
+                    ));
+                }
+                let txn_hash = self.pool.get_op_by_hash(hash).await;
 
-            txn_hash.unwrap_or((None, None)).1.map(|x| x.tx_hash)
-        } else {
-            None
+                txn_hash.unwrap_or((None, None)).1.map(|x| x.tx_hash)
+            }
+            BlockTag::Latest => None,
         };
 
         let futs = self

@@ -308,7 +308,6 @@ pub(crate) enum UserOperationStatusEnum {
     Unknown,
     Pending,
     Mined,
-    Preconfirmed,
 }
 
 /// User operation status
