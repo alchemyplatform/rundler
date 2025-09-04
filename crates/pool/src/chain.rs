@@ -13,6 +13,7 @@
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    result::Result::Ok,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -22,6 +23,7 @@ use alloy_primitives::{Address, B256, U256};
 use alloy_sol_types::SolEvent;
 use anyhow::{bail, ensure, Context};
 use futures::future;
+use itertools::Itertools;
 use metrics::{Counter, Gauge, Histogram};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
@@ -35,7 +37,7 @@ use rundler_contracts::{
         Withdrawn as WithdrawnV07,
     },
 };
-use rundler_provider::{Block, EvmProvider, Filter, Log, TransactionTrait};
+use rundler_provider::{Block, BlockId, EvmProvider, Filter, Log, TransactionTrait};
 use rundler_task::{block_watcher, GracefulShutdown};
 use rundler_types::{pool::AddressUpdate, EntryPointVersion, Timestamp, UserOperationId};
 use tokio::{
@@ -60,6 +62,9 @@ pub(crate) struct Chain<P: EvmProvider> {
     /// Blocks are stored from earliest to latest, so the oldest block is at the
     /// front of this deque and the newest at the back.
     blocks: VecDeque<BlockSummary>,
+
+    /// Pending block summary, for preconfirmation blocks.
+    pending_block: Option<BlockSummary>,
     /// Semaphore to limit the number of concurrent `eth_getLogs` calls.
     load_ops_semaphore: Semaphore,
     sync_error_count: usize,
@@ -77,6 +82,16 @@ pub(crate) struct ChainSubscriber {
     pub(crate) sender: Arc<broadcast::Sender<Arc<ChainUpdate>>>,
     pub(crate) to_track: Arc<RwLock<HashSet<Address>>>,
 }
+
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UpdateType {
+    // Include at least one full block
+    #[default]
+    Confirmed,
+    // only include pending block
+    Preconfirmed,
+}
+
 #[derive(Default, Debug, Eq, PartialEq)]
 pub(crate) struct ChainUpdate {
     pub latest_block_number: u64,
@@ -88,6 +103,7 @@ pub(crate) struct ChainUpdate {
     pub reorg_depth: u64,
     pub mined_ops: Vec<MinedOp>,
     pub unmined_ops: Vec<MinedOp>,
+    pub preconfirmed_txns: Vec<(B256, Vec<B256>)>,
     /// List of on-chain entity balance updates made in the most recent block
     pub entity_balance_updates: Vec<BalanceUpdate>,
     /// List of entity balance updates that have been unmined due to a reorg
@@ -97,6 +113,7 @@ pub(crate) struct ChainUpdate {
     /// Boolean to state if the most recent chain update had a reorg
     /// that was larger than the existing history that has been tracked
     pub reorg_larger_than_history: bool,
+    pub update_type: UpdateType,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -133,6 +150,7 @@ pub(crate) struct Settings {
     pub(crate) entry_point_addresses: HashMap<Address, EntryPointVersion>,
     pub(crate) max_sync_retries: u64,
     pub(crate) channel_capacity: usize,
+    pub(crate) flashblocks: bool,
 }
 
 #[derive(Debug)]
@@ -141,8 +159,10 @@ struct BlockSummary {
     hash: B256,
     timestamp: Timestamp,
     ops: Vec<MinedOp>,
+    transactions: Vec<(B256, Vec<B256>)>,
     entity_balance_updates: Vec<BalanceUpdate>,
     address_updates: Vec<AddressUpdate>,
+    parent_hash: B256,
 }
 
 impl ChainSubscriber {
@@ -198,6 +218,7 @@ impl<P: EvmProvider> Chain<P> {
             provider,
             settings,
             blocks: VecDeque::new(),
+            pending_block: None,
             sync_error_count: 0,
             load_ops_semaphore: Semaphore::new(MAX_LOAD_OPS_CONCURRENCY),
             filter_template,
@@ -230,45 +251,87 @@ impl<P: EvmProvider> Chain<P> {
 
     #[instrument(skip_all)]
     async fn wait_for_update(&mut self) -> ChainUpdate {
-        let mut block_hash = self
-            .blocks
-            .back()
-            .map(|block| block.hash)
-            .unwrap_or_default();
+        if self.settings.flashblocks && !self.blocks.is_empty() {
+            self.wait_for_update_flashblocks().await
+        } else {
+            self.wait_for_update_full_block().await
+        }
+    }
+
+    #[instrument(skip_all)]
+    async fn wait_for_update_flashblocks(&mut self) -> ChainUpdate {
+        let full_block_hash = self.blocks.back().map(|m| m.hash).unwrap_or_default();
+        let mut latest_block_hash = full_block_hash;
+
         loop {
             let (hash, block) = block_watcher::wait_for_new_block(
                 &self.provider,
-                block_hash,
+                latest_block_hash,
                 self.settings.poll_interval,
+                BlockId::pending(),
             )
             .await;
-            block_hash = hash;
+            latest_block_hash = hash;
 
+            let summary = match self.load_flash_block_summary(&block).await {
+                Ok(summary) => summary,
+                Err(err) => {
+                    warn!("failed to load block summary: {err:?}");
+                    continue;
+                }
+            };
             let now_ms = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .unwrap_or(Duration::from_millis(0))
+                .unwrap_or_default()
                 .as_millis();
             let block_timestamp_ms = (block.header.timestamp * 1000) as u128;
-            self.metrics
-                .block_discovery_delay_ms
-                .record((now_ms.saturating_sub(block_timestamp_ms)) as f64);
 
-            for i in 0..=self.settings.max_sync_retries {
-                if i > 0 {
+            let chain_update = self.process_pending_block(&summary).await;
+            let header = &block.inner.header;
+            if let Some(pending_block) = &self.pending_block {
+                if pending_block.hash == header.hash {
+                    continue; // same block
+                }
+            }
+            self.metrics
+                .flashblock_discovery_delay_ms
+                .record(now_ms.saturating_sub(block_timestamp_ms) as f64);
+
+            self.pending_block = Some(summary);
+            if header.parent_hash == full_block_hash {
+                return chain_update;
+            }
+
+            let preconfirmed_txns = chain_update.preconfirmed_txns;
+
+            for attempt in 0..=self.settings.max_sync_retries {
+                if attempt > 0 {
                     self.metrics.sync_retries.increment(1);
                 }
 
                 let start = Instant::now();
-                let update = self.sync_to_block(block.clone()).await;
-                match update {
-                    Ok(update) => {
+
+                // flashblock: fill gap until parent_block.
+                let parent_hash = self.pending_block.as_ref().unwrap().parent_hash;
+                let result = match self.provider.get_full_block(parent_hash.into()).await {
+                    Ok(Some(parent_block)) => self.sync_to_block(parent_block).await,
+                    Ok(None) | Err(_) => {
+                        warn!("failed to get parent block, retry...");
+                        time::sleep(self.settings.poll_interval).await;
+                        continue;
+                    }
+                };
+
+                match result {
+                    Ok(mut update) => {
                         self.metrics
                             .block_sync_time_ms
                             .record(start.elapsed().as_millis() as f64);
+                        update.preconfirmed_txns = preconfirmed_txns;
                         return update;
                     }
                     Err(error) => {
-                        warn!("Failed to update chain at block {block_hash:?}: {error:?}");
+                        warn!("Failed to update chain at block {latest_block_hash:?}: {error:?}");
                     }
                 }
 
@@ -277,11 +340,127 @@ impl<P: EvmProvider> Chain<P> {
 
             warn!(
                 "Failed to update chain at block {:?} after {} retries. Abandoning sync and resetting history.",
-                block_hash, self.settings.max_sync_retries
+                latest_block_hash, self.settings.max_sync_retries
             );
             self.metrics.sync_abandoned.increment(1);
             self.blocks.clear();
         }
+    }
+
+    #[instrument(skip_all)]
+    async fn wait_for_update_full_block(&mut self) -> ChainUpdate {
+        let full_block_hash = self.blocks.back().map(|m| m.hash).unwrap_or_default();
+        let mut latest_block_hash = full_block_hash;
+
+        loop {
+            let (hash, block) = block_watcher::wait_for_new_block(
+                &self.provider,
+                latest_block_hash,
+                self.settings.poll_interval,
+                BlockId::latest(),
+            )
+            .await;
+            latest_block_hash = hash;
+
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            let block_timestamp_ms = (block.header.timestamp * 1000) as u128;
+            self.metrics
+                .block_discovery_delay_ms
+                .record(now_ms.saturating_sub(block_timestamp_ms) as f64);
+
+            for attempt in 0..=self.settings.max_sync_retries {
+                if attempt > 0 {
+                    self.metrics.sync_retries.increment(1);
+                }
+
+                let start = Instant::now();
+                let result = self.sync_to_block(block.clone()).await;
+
+                match result {
+                    Ok(update) => {
+                        self.metrics
+                            .block_sync_time_ms
+                            .record(start.elapsed().as_millis() as f64);
+                        return update;
+                    }
+                    Err(error) => {
+                        warn!("Failed to update chain at block {latest_block_hash:?}: {error:?}");
+                    }
+                }
+
+                time::sleep(self.settings.poll_interval).await;
+            }
+
+            warn!(
+                "Failed to update chain at block {:?} after {} retries. Abandoning sync and resetting history.",
+                latest_block_hash, self.settings.max_sync_retries
+            );
+            self.metrics.sync_abandoned.increment(1);
+            self.blocks.clear();
+        }
+    }
+
+    #[instrument(skip_all)]
+    // get all 4337 txns
+    async fn get_user_operations_from_pending_block(&self, pending_block: &Block) -> Vec<B256> {
+        pending_block
+            .transactions
+            .txns()
+            .filter(|tx| match tx.inner.to() {
+                Some(tx_inner) => self
+                    .settings
+                    .entry_point_addresses
+                    .keys()
+                    .contains(&tx_inner),
+                None => false,
+            })
+            .map(|tx| tx.inner.tx_hash())
+            .collect()
+    }
+
+    #[instrument(skip_all)]
+    async fn get_user_operation_hash_from_txn(&self, txn: B256) -> Option<(B256, Vec<B256>)> {
+        let receipt = self.provider.get_transaction_receipt(txn).await;
+        let receipt = receipt.ok()??;
+
+        let logs = receipt
+            .inner
+            .inner
+            .logs()
+            .iter()
+            .filter(|l| {
+                self.settings
+                    .entry_point_addresses
+                    .keys()
+                    .contains(&l.address())
+                    && l.topics().len() >= 2
+                    && (l.topics()[0] == UserOperationEventV06::SIGNATURE_HASH
+                        || l.topics()[0] == UserOperationEventV07::SIGNATURE_HASH)
+            })
+            .map(|l| l.topics()[1])
+            .collect::<Vec<_>>();
+
+        Some((txn, logs))
+    }
+    #[instrument(skip_all)]
+    pub(crate) async fn process_pending_block(
+        &mut self,
+        pending_block: &BlockSummary,
+    ) -> ChainUpdate {
+        self.new_update(
+            0,
+            vec![],
+            vec![],
+            pending_block.transactions.to_vec(),
+            vec![],
+            vec![],
+            vec![],
+            false,
+            UpdateType::Preconfirmed,
+        )
     }
 
     #[instrument(skip_all)]
@@ -347,10 +526,12 @@ impl<P: EvmProvider> Chain<P> {
             0,
             mined_ops,
             vec![],
+            vec![],
             entity_balance_updates,
             vec![],
             vec![],
             false,
+            UpdateType::Confirmed,
         ))
     }
 
@@ -437,10 +618,12 @@ impl<P: EvmProvider> Chain<P> {
             reorg_depth,
             mined_ops,
             unmined_ops,
+            vec![],
             entity_balance_updates,
             unmined_entity_balance_updates,
             address_updates,
             is_reorg_larger_than_history,
+            UpdateType::Confirmed,
         )
     }
 
@@ -572,6 +755,40 @@ impl<P: EvmProvider> Chain<P> {
     }
 
     #[instrument(skip_all)]
+    // flash block doesn't support eth_getLogs, so we need to load the block summary manually.
+    async fn load_flash_block_summary(&self, block: &Block) -> anyhow::Result<BlockSummary> {
+        let _permit = self
+            .load_ops_semaphore
+            .acquire()
+            .await
+            .expect("semaphore should not be closed");
+
+        let txn_to_uos_fut = self
+            .get_user_operations_from_pending_block(block)
+            .await
+            .iter()
+            .map(|txn| self.get_user_operation_hash_from_txn(*txn))
+            .collect::<Vec<_>>();
+
+        let txn_to_uos = future::join_all(txn_to_uos_fut)
+            .await
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+
+        Ok(BlockSummary {
+            number: block.header.number,
+            hash: block.header.hash,
+            timestamp: block.header.timestamp.into(),
+            ops: vec![],
+            transactions: txn_to_uos,
+            entity_balance_updates: vec![],
+            address_updates: vec![],
+            parent_hash: block.header.parent_hash,
+        })
+    }
+
+    #[instrument(skip_all)]
     async fn load_block_summary(&self, block: &Block) -> anyhow::Result<BlockSummary> {
         let _permit = self
             .load_ops_semaphore
@@ -590,8 +807,10 @@ impl<P: EvmProvider> Chain<P> {
             hash: block.header.hash,
             timestamp: block.header.timestamp.into(),
             ops,
+            transactions: vec![],
             entity_balance_updates,
             address_updates,
+            parent_hash: block.header.parent_hash,
         })
     }
 
@@ -811,10 +1030,12 @@ impl<P: EvmProvider> Chain<P> {
         reorg_depth: u64,
         mined_ops: Vec<MinedOp>,
         unmined_ops: Vec<MinedOp>,
+        preconfirmed_txns: Vec<(B256, Vec<B256>)>,
         entity_balance_updates: Vec<BalanceUpdate>,
         unmined_entity_balance_updates: Vec<BalanceUpdate>,
         address_updates: Vec<AddressUpdate>,
         reorg_larger_than_history: bool,
+        update_type: UpdateType,
     ) -> ChainUpdate {
         let latest_block = self
             .blocks
@@ -827,11 +1048,13 @@ impl<P: EvmProvider> Chain<P> {
             earliest_remembered_block_number: self.blocks[0].number,
             reorg_depth,
             mined_ops,
+            preconfirmed_txns,
             unmined_ops,
             entity_balance_updates,
             unmined_entity_balance_updates,
             address_updates,
             reorg_larger_than_history,
+            update_type,
         }
     }
 }
@@ -881,6 +1104,8 @@ struct ChainMetrics {
     sync_abandoned: Counter,
     #[metric(describe = "the delay in milliseconds between block discovery and its timestamp")]
     block_discovery_delay_ms: Histogram,
+    #[metric(describe = "the delay in milliseconds between flahblock discovery and its timestamp")]
+    flashblock_discovery_delay_ms: Histogram,
     #[metric(describe = "the time in milliseconds it takes to sync to a block")]
     block_sync_time_ms: Histogram,
 }
@@ -890,6 +1115,7 @@ mod tests {
     use std::ops::DerefMut;
 
     use alloy_consensus::{transaction::Recovered, SignableTransaction, TypedTransaction};
+    use alloy_eips::BlockNumberOrTag;
     use alloy_network_primitives::BlockTransactions;
     use alloy_primitives::{address, Log as PrimitiveLog, LogData, Signature};
     use alloy_rpc_types_eth::{Block as AlloyBlock, Transaction as AlloyTransaction};
@@ -955,6 +1181,7 @@ mod tests {
     #[derive(Clone, Debug)]
     struct ProviderController {
         blocks: Arc<RwLock<Vec<MockBlock>>>,
+        pending_block: Arc<RwLock<Option<MockBlock>>>,
         balances: Arc<RwLock<HashMap<Address, U256>>>,
     }
 
@@ -993,43 +1220,85 @@ mod tests {
         }
 
         fn get_block(&self, id: BlockId) -> Option<Block> {
-            let BlockId::Hash(RpcBlockHash {
-                block_hash: hash,
-                require_canonical: _,
-            }) = id
-            else {
-                panic!("get_block only supports hash ids");
-            };
+            match id {
+                BlockId::Number(BlockNumberOrTag::Pending) => {
+                    let pending_block = self.pending_block.read();
+                    if pending_block.is_none() {
+                        return None;
+                    }
+                    let pending_block_inner = pending_block.clone().unwrap();
+                    let blocks = self.blocks.read();
+                    let number = blocks.iter().len();
 
-            let blocks = self.blocks.read();
-            let number = blocks.iter().position(|block| block.hash == hash)?;
-            let block = &blocks[number];
-            let parent_hash = if number > 0 {
-                blocks[number - 1].hash
-            } else {
-                B256::ZERO
-            };
-
-            Some(Block::new(WithOtherFields::new(AlloyBlock {
-                header: BlockHeader {
-                    hash,
-                    inner: AnyHeader {
-                        parent_hash,
-                        number: number as u64,
+                    let parent_hash = if number > 0 {
+                        blocks[number - 1].hash
+                    } else {
+                        B256::ZERO
+                    };
+                    Some(Block::new(WithOtherFields::new(AlloyBlock {
+                        header: BlockHeader {
+                            hash: pending_block_inner.hash,
+                            inner: AnyHeader {
+                                parent_hash,
+                                number: number as u64,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                        transactions: BlockTransactions::Full(
+                            pending_block_inner.transactions.clone(),
+                        ),
                         ..Default::default()
-                    },
-                    ..Default::default()
-                },
-                transactions: BlockTransactions::Full(block.transactions.clone()),
-                ..Default::default()
-            })))
+                    })))
+                }
+                BlockId::Hash(RpcBlockHash {
+                    block_hash: hash,
+                    require_canonical: _,
+                }) => {
+                    let blocks = self.blocks.read();
+                    let number = blocks.iter().position(|block| block.hash == hash)?;
+                    let block = &blocks[number];
+                    let parent_hash = if number > 0 {
+                        blocks[number - 1].hash
+                    } else {
+                        B256::ZERO
+                    };
+
+                    Some(Block::new(WithOtherFields::new(AlloyBlock {
+                        header: BlockHeader {
+                            hash,
+                            inner: AnyHeader {
+                                parent_hash,
+                                number: number as u64,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                        transactions: BlockTransactions::Full(block.transactions.clone()),
+                        ..Default::default()
+                    })))
+                }
+                _ => panic!("get_block only supports hash ids"),
+            }
         }
 
         fn get_logs_by_block_hash(&self, filter: &Filter, block_hash: B256) -> Vec<Log> {
             let blocks = self.blocks.read();
-            let block = blocks.iter().find(|block| block.hash == block_hash);
-            let Some(block) = block else {
-                return vec![];
+            let pending_block = self.pending_block.read();
+            let block = if let Some(ref pending) = *pending_block {
+                if pending.hash == block_hash {
+                    pending
+                } else {
+                    match blocks.iter().find(|block| block.hash == block_hash) {
+                        Some(block) => block,
+                        None => return vec![],
+                    }
+                }
+            } else {
+                match blocks.iter().find(|block| block.hash == block_hash) {
+                    Some(block) => block,
+                    None => return vec![],
+                }
             };
 
             let mut joined_logs: Vec<Log> = Vec::new();
@@ -1130,10 +1399,12 @@ mod tests {
                     fake_mined_op(105, ENTRY_POINT_ADDRESS_V0_6),
                 ],
                 unmined_ops: vec![],
+                preconfirmed_txns: vec![],
                 entity_balance_updates: vec![],
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
+                update_type: UpdateType::Confirmed,
             }
         );
     }
@@ -1182,10 +1453,13 @@ mod tests {
                 reorg_depth: 0,
                 mined_ops: vec![fake_mined_op(106, ENTRY_POINT_ADDRESS_V0_6)],
                 unmined_ops: vec![],
+                preconfirmed_txns: vec![],
                 entity_balance_updates: vec![],
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
+
+                update_type: UpdateType::Confirmed,
             }
         );
     }
@@ -1254,6 +1528,7 @@ mod tests {
                     fake_mined_op(114, ENTRY_POINT_ADDRESS_V0_6)
                 ],
                 unmined_ops: vec![fake_mined_op(102, ENTRY_POINT_ADDRESS_V0_6)],
+                preconfirmed_txns: vec![],
                 entity_balance_updates: vec![fake_mined_balance_update(
                     addr(3),
                     0,
@@ -1266,6 +1541,7 @@ mod tests {
                 ],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
+                update_type: UpdateType::Confirmed,
             }
         );
     }
@@ -1337,12 +1613,14 @@ mod tests {
                     fake_mined_op(101, ENTRY_POINT_ADDRESS_V0_6),
                     fake_mined_op(102, ENTRY_POINT_ADDRESS_V0_6)
                 ],
+                preconfirmed_txns: vec![],
                 unmined_entity_balance_updates: vec![
                     fake_mined_balance_update(addr(1), 0, true, ENTRY_POINT_ADDRESS_V0_6),
                     fake_mined_balance_update(addr(9), 0, false, ENTRY_POINT_ADDRESS_V0_6),
                 ],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
+                update_type: UpdateType::Confirmed,
             }
         );
     }
@@ -1403,9 +1681,11 @@ mod tests {
                     fake_mined_op(101, ENTRY_POINT_ADDRESS_V0_6),
                     fake_mined_op(102, ENTRY_POINT_ADDRESS_V0_6)
                 ],
+                preconfirmed_txns: vec![],
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
+                update_type: UpdateType::Confirmed,
             }
         );
     }
@@ -1486,10 +1766,12 @@ mod tests {
                     fake_mined_op(102, ENTRY_POINT_ADDRESS_V0_6),
                     fake_mined_op(103, ENTRY_POINT_ADDRESS_V0_6)
                 ],
+                preconfirmed_txns: vec![],
                 entity_balance_updates: vec![],
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: true,
+                update_type: UpdateType::Confirmed,
             }
         );
     }
@@ -1546,8 +1828,10 @@ mod tests {
                     fake_mined_op(106, ENTRY_POINT_ADDRESS_V0_6)
                 ],
                 unmined_ops: vec![],
+                preconfirmed_txns: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
+                update_type: UpdateType::Confirmed,
             }
         );
     }
@@ -1586,10 +1870,12 @@ mod tests {
                     fake_mined_op(103, ENTRY_POINT_ADDRESS_V0_6),
                 ],
                 unmined_ops: vec![],
+                preconfirmed_txns: vec![],
                 entity_balance_updates: vec![],
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
+                update_type: UpdateType::Confirmed,
             }
         );
     }
@@ -1626,6 +1912,7 @@ mod tests {
                     fake_mined_op(202, ENTRY_POINT_ADDRESS_V0_7),
                 ],
                 unmined_ops: vec![],
+                preconfirmed_txns: vec![],
                 entity_balance_updates: vec![
                     fake_mined_balance_update(addr(1), 0, true, ENTRY_POINT_ADDRESS_V0_6),
                     fake_mined_balance_update(addr(2), 0, true, ENTRY_POINT_ADDRESS_V0_6),
@@ -1639,19 +1926,24 @@ mod tests {
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
+                update_type: UpdateType::Confirmed,
             }
         );
     }
 
     #[tokio::test]
     async fn test_address_update() {
+        let parent_hash = B256::random();
+
         let (mut chain, controller) = new_chain();
         chain.to_track.write().insert(addr(0));
         chain.blocks.push_back(BlockSummary {
             number: 0,
             hash: B256::ZERO,
+            parent_hash,
             timestamp: 0.into(),
             ops: vec![],
+            transactions: vec![],
             entity_balance_updates: vec![],
             address_updates: vec![],
         });
@@ -1673,6 +1965,7 @@ mod tests {
                 reorg_depth: 1,
                 mined_ops: vec![],
                 unmined_ops: vec![],
+                preconfirmed_txns: vec![],
                 entity_balance_updates: vec![],
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![AddressUpdate {
@@ -1682,19 +1975,23 @@ mod tests {
                     mined_tx_hashes: tx_hashes,
                 }],
                 reorg_larger_than_history: false,
+                update_type: UpdateType::Confirmed,
             }
         )
     }
 
     #[tokio::test]
     async fn test_address_update_multiple_blocks() {
+        let parent_hash = B256::random();
         let (mut chain, controller) = new_chain();
         chain.to_track.write().insert(addr(0));
         chain.blocks.push_back(BlockSummary {
             number: 0,
             hash: B256::ZERO,
+            parent_hash,
             timestamp: 0.into(),
             ops: vec![],
+            transactions: vec![],
             entity_balance_updates: vec![],
             address_updates: vec![],
         });
@@ -1720,6 +2017,7 @@ mod tests {
                 reorg_depth: 1,
                 mined_ops: vec![],
                 unmined_ops: vec![],
+                preconfirmed_txns: vec![],
                 entity_balance_updates: vec![],
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![AddressUpdate {
@@ -1729,11 +2027,16 @@ mod tests {
                     mined_tx_hashes: tx_hashes,
                 }],
                 reorg_larger_than_history: false,
+                update_type: UpdateType::Confirmed,
             }
         )
     }
 
     fn new_chain() -> (Chain<impl EvmProvider>, ProviderController) {
+        _new_chain(false)
+    }
+
+    fn _new_chain(flashblocks: bool) -> (Chain<impl EvmProvider>, ProviderController) {
         let (provider, controller) = new_mock_provider();
         let chain = Chain::new(
             Arc::new(provider),
@@ -1746,6 +2049,7 @@ mod tests {
                 ]),
                 max_sync_retries: 1,
                 channel_capacity: 100,
+                flashblocks,
             },
         );
         (chain, controller)
@@ -1755,6 +2059,7 @@ mod tests {
         let controller = ProviderController {
             blocks: Arc::new(RwLock::new(vec![])),
             balances: Arc::new(RwLock::new(HashMap::new())),
+            pending_block: Arc::new(RwLock::new(None)),
         };
         let mut provider = MockEvmProvider::new();
 

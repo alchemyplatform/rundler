@@ -21,7 +21,8 @@ use super::{
     types::{NewHead, PaymasterMetadata, PoolOperation, Reputation, ReputationStatus, StakeStatus},
 };
 use crate::{
-    EntityUpdate, UserOperation, UserOperationId, UserOperationPermissions, UserOperationVariant,
+    pool::PreconfInfo, EntityUpdate, UserOperation, UserOperationId, UserOperationPermissions,
+    UserOperationVariant,
 };
 
 /// Result type for pool server operations.
@@ -78,7 +79,10 @@ pub trait Pool: Send + Sync {
     /// Get an operation from the pool by hash
     /// Checks each entry point in order until the operation is found
     /// Returns None if the operation is not found
-    async fn get_op_by_hash(&self, hash: B256) -> PoolResult<Option<PoolOperation>>;
+    async fn get_op_by_hash(
+        &self,
+        hash: B256,
+    ) -> PoolResult<(Option<PoolOperation>, Option<PreconfInfo>)>;
 
     /// Get an operation from the pool by id
     async fn get_op_by_id(&self, id: UserOperationId) -> PoolResult<Option<PoolOperation>>;
@@ -198,7 +202,7 @@ mockall::mock! {
             entry_point: Address,
             hashes: Vec<B256>,
         ) -> PoolResult<Vec<PoolOperation>>;
-        async fn get_op_by_hash(&self, hash: B256) -> PoolResult<Option<PoolOperation>>;
+        async fn get_op_by_hash(&self, hash: B256) -> PoolResult<(Option<PoolOperation>, Option<PreconfInfo>)>;
         async fn get_op_by_id(&self, id: UserOperationId) -> PoolResult<Option<PoolOperation>>;
         async fn remove_ops(&self, entry_point: Address, ops: Vec<B256>) -> PoolResult<()>;
         async fn remove_op_by_id(

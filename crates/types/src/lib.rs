@@ -59,3 +59,6 @@ pub use validation_results::{
 pub mod task;
 
 pub mod authorization;
+
+pub mod tag;
+pub use tag::BlockTag;

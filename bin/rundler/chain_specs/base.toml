@@ -11,3 +11,4 @@ priority_fee_oracle_type = "USAGE_BASED"
 min_max_priority_fee_per_gas = 1000000
 block_gas_limit = 120000000
 eip7702_enabled = true
+flashblocks_enabled = true

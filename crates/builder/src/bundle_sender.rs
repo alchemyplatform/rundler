@@ -692,7 +692,6 @@ where
             expected_storage,
             ops,
         } = bundle_tx;
-
         let send_result = state
             .transaction_tracker
             .send_transaction(tx.clone(), &expected_storage, state.block_number())

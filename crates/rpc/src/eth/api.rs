@@ -17,7 +17,7 @@ use alloy_primitives::{Address, B256, U64};
 use futures_util::future;
 use rundler_provider::StateOverride;
 use rundler_types::{
-    chain::ChainSpec, pool::Pool, UserOperation, UserOperationOptionalGas,
+    chain::ChainSpec, pool::Pool, BlockTag, UserOperation, UserOperationOptionalGas,
     UserOperationPermissions, UserOperationVariant,
 };
 use rundler_utils::log::LogOnError;
@@ -153,18 +153,33 @@ where
     pub(crate) async fn get_user_operation_receipt(
         &self,
         hash: B256,
+        tag: Option<BlockTag>,
     ) -> EthResult<Option<RpcUserOperationReceipt>> {
         if hash == B256::ZERO {
             return Err(EthRpcError::InvalidParams(
                 "Missing/invalid userOpHash".to_string(),
             ));
         }
+        let tag = tag.unwrap_or(BlockTag::Latest);
+
+        let bundle_transaction: Option<B256> = match tag {
+            BlockTag::Pending => {
+                if !self.chain_spec.flashblocks_enabled {
+                    return Err(EthRpcError::InvalidParams(
+                        "Unsupported feature: preconfirmation".to_string(),
+                    ));
+                }
+                let txn_hash = self.pool.get_op_by_hash(hash).await;
+
+                txn_hash.unwrap_or((None, None)).1.map(|x| x.tx_hash)
+            }
+            BlockTag::Latest => None,
+        };
 
         let futs = self
             .router
             .entry_points()
-            .map(|ep| self.router.get_receipt(ep, hash));
-
+            .map(|ep| self.router.get_receipt(ep, hash, bundle_transaction));
         let results = future::try_join_all(futs).await?;
         Ok(results.into_iter().find_map(|x| x))
     }
@@ -194,7 +209,7 @@ where
             .await
             .map_err(EthRpcError::from)?;
 
-        Ok(res.map(|op| RpcUserOperationByHash {
+        Ok(res.0.map(|op| RpcUserOperationByHash {
             user_operation: op.uo.into(),
             entry_point: op.entry_point.into(),
             block_number: None,
@@ -258,7 +273,7 @@ mod tests {
         pool.expect_get_op_by_hash()
             .with(eq(hash))
             .times(1)
-            .returning(move |_| Ok(Some(po.clone())));
+            .returning(move |_| Ok((Some(po.clone()), None)));
 
         let mut provider = MockEvmProvider::default();
         provider.expect_get_logs().returning(move |_| Ok(vec![]));
@@ -300,7 +315,7 @@ mod tests {
         let mut pool = MockPool::default();
         pool.expect_get_op_by_hash()
             .with(eq(hash))
-            .returning(move |_| Ok(None));
+            .returning(move |_| Ok((None, None)));
 
         let mut provider = MockEvmProvider::default();
         provider.expect_get_block_number().returning(|| Ok(1000));
@@ -383,7 +398,7 @@ mod tests {
         pool.expect_get_op_by_hash()
             .with(eq(hash))
             .times(1)
-            .returning(move |_| Ok(None));
+            .returning(move |_| Ok((None, None)));
 
         let mut provider = MockEvmProvider::default();
         provider.expect_get_logs().returning(move |_| Ok(vec![]));

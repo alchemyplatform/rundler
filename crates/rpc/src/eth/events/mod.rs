@@ -38,6 +38,11 @@ pub(crate) trait UserOperationEventProvider: Send + Sync {
 
     async fn get_receipt(&self, hash: B256) -> anyhow::Result<Option<RpcUserOperationReceipt>>;
 
+    async fn get_receipt_from_tx_hash(
+        &self,
+        hash: B256,
+        bundle_transaction: B256,
+    ) -> anyhow::Result<Option<RpcUserOperationReceipt>>;
     async fn get_receipt_from_tx_receipt(
         &self,
         uo_hash: B256,

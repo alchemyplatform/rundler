@@ -108,6 +108,7 @@ where
                 .iter()
                 .map(|config| (config.entry_point, config.entry_point_version))
                 .collect(),
+            flashblocks: self.args.chain_spec.flashblocks_enabled,
         };
 
         let chain = Chain::new(self.providers.evm().clone(), chain_settings);

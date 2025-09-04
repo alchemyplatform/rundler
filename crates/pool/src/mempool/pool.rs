@@ -89,6 +89,9 @@ pub(crate) struct PoolInner<D> {
     /// Removed operation hashes sorted by block number, so we can forget them
     /// when enough new blocks have passed.
     mined_hashes_with_block_numbers: BTreeSet<(u64, B256)>,
+    /// Unmined UO to bundle transaction mapping.
+    #[allow(dead_code)]
+    preconfirmed_uos_bundle_mapping: HashMap<B256, B256>,
     /// Count of operations by entity address
     count_by_address: HashMap<Address, EntityCounter>,
     /// Submission ID counter
@@ -124,6 +127,7 @@ where
             time_to_mine: HashMap::new(),
             mined_at_block_number_by_hash: HashMap::new(),
             mined_hashes_with_block_numbers: BTreeSet::new(),
+            preconfirmed_uos_bundle_mapping: HashMap::new(),
             count_by_address: HashMap::new(),
             submission_id: 0,
             pool_size: SizeTracker::default(),
@@ -217,6 +221,30 @@ where
 
     pub(crate) fn all_operations(&self) -> impl Iterator<Item = Arc<PoolOperation>> + '_ {
         self.by_hash.values().map(|o| o.po.clone())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn preconfirmed_uos(&self) -> impl Iterator<Item = B256> + '_ {
+        self.preconfirmed_uos_bundle_mapping.keys().cloned()
+    }
+
+    pub(crate) fn preconfirm_txns(&mut self, txn_to_uos: Vec<(B256, Vec<B256>)>) {
+        // each call of this method should clear the preconfirmed uos before adding new ones.
+        self.preconfirmed_uos_bundle_mapping.clear();
+        for (txn, uos) in txn_to_uos {
+            for uo in uos {
+                if self.get_operation_by_hash(uo).is_some() {
+                    self.preconfirmed_uos_bundle_mapping.insert(uo, txn);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn get_pre_confirmed_uo(&self, uo_hash: B256) -> Option<B256> {
+        if let Some(bundle_hash) = self.preconfirmed_uos_bundle_mapping.get(&uo_hash) {
+            return Some(*bundle_hash);
+        }
+        None
     }
 
     /// Does maintenance on the pool.
@@ -661,6 +689,8 @@ where
         for e in op.po.entities() {
             self.decrement_address_count(e.address, &e.kind);
         }
+
+        self.preconfirmed_uos_bundle_mapping.remove(&hash);
 
         self.pool_size -= op.mem_size();
         self.update_metrics();

@@ -29,11 +29,12 @@ pub async fn wait_for_new_block(
     provider: &impl EvmProvider,
     last_block_hash: B256,
     poll_interval: Duration,
+    block_id: BlockId,
 ) -> (B256, Block) {
     loop {
         let block = retry::with_unlimited_retries(
             "watch latest block",
-            || provider.get_full_block(BlockId::latest()),
+            || provider.get_full_block(block_id),
             UnlimitedRetryOpts::default(),
         )
         .await;
@@ -43,29 +44,6 @@ pub async fn wait_for_new_block(
         };
         if last_block_hash != block.header.hash {
             return (block.header.hash, block);
-        }
-        time::sleep(poll_interval).await;
-    }
-}
-
-/// Wait for a new block number to be discovered and return it.
-///
-/// This function polls the provider for the latest block number until a new block number is discovered,
-/// with unlimited retries.
-pub async fn wait_for_new_block_number(
-    provider: &impl EvmProvider,
-    last_block_number: u64,
-    poll_interval: Duration,
-) -> u64 {
-    loop {
-        let block_number = retry::with_unlimited_retries(
-            "watch latest block number",
-            || provider.get_block_number(),
-            UnlimitedRetryOpts::default(),
-        )
-        .await;
-        if last_block_number < block_number {
-            return block_number;
         }
         time::sleep(poll_interval).await;
     }

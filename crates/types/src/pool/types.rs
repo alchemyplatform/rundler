@@ -143,6 +143,13 @@ pub struct PoolOperation {
     pub perms: UserOperationPermissions,
 }
 
+/// The preconfirmed information for an user operation
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PreconfInfo {
+    /// The hash of the preconfirmed transaction
+    pub tx_hash: B256,
+}
+
 impl PoolOperation {
     /// Returns true if the operation contains the given entity.
     pub fn contains_entity(&self, entity: &Entity) -> bool {

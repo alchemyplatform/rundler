@@ -24,8 +24,9 @@ use rundler_types::{
     pool::{
         AddressUpdate as PoolAddressUpdate, NewHead as PoolNewHead,
         PaymasterMetadata as PoolPaymasterMetadata, PoolOperation,
-        PoolOperationSummary as RundlerPoolOperationSummary, Reputation as PoolReputation,
-        ReputationStatus as PoolReputationStatus, StakeStatus as RundlerStakeStatus,
+        PoolOperationSummary as RundlerPoolOperationSummary, PreconfInfo as RundlerPreconfInfo,
+        Reputation as PoolReputation, ReputationStatus as PoolReputationStatus,
+        StakeStatus as RundlerStakeStatus,
     },
     v0_6, v0_7, BundlerSponsorship as RundlerBundlerSponsorship, Entity as RundlerEntity,
     EntityInfos, EntityType as RundlerEntityType, EntityUpdate as RundlerEntityUpdate,
@@ -441,6 +442,25 @@ impl From<&PoolOperation> for MempoolOp {
             filter_id: op.filter_id.clone().unwrap_or_default(),
             permissions: Some(op.perms.clone().into()),
         }
+    }
+}
+
+impl From<&RundlerPreconfInfo> for PreconfInfo {
+    fn from(info: &RundlerPreconfInfo) -> Self {
+        PreconfInfo {
+            tx_hash: info.tx_hash.to_proto_bytes(),
+        }
+    }
+}
+
+impl TryFrom<PreconfInfo> for RundlerPreconfInfo {
+    type Error = ConversionError;
+
+    fn try_from(info: PreconfInfo) -> Result<Self, Self::Error> {
+        let ret = RundlerPreconfInfo {
+            tx_hash: from_bytes(&info.tx_hash)?,
+        };
+        Ok(ret)
     }
 }
 

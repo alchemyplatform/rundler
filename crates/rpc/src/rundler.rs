@@ -265,10 +265,18 @@ where
     }
 
     async fn get_user_operation_status(&self, uo_hash: B256) -> EthResult<RpcUserOperationStatus> {
-        let receipt_futs = self
-            .entry_point_router
-            .entry_points()
-            .map(|ep| self.entry_point_router.get_receipt(ep, uo_hash));
+        let bundle_transaction: Option<B256> = if self.chain_spec.flashblocks_enabled {
+            let txn_hash = self.pool_server.get_op_by_hash(uo_hash).await;
+
+            txn_hash.unwrap_or((None, None)).1.map(|x| x.tx_hash)
+        } else {
+            None
+        };
+
+        let receipt_futs = self.entry_point_router.entry_points().map(|ep| {
+            self.entry_point_router
+                .get_receipt(ep, uo_hash, bundle_transaction)
+        });
 
         let pending_fut = self
             .pool_server
@@ -278,14 +286,14 @@ where
         let (receipts, pending) =
             future::try_join(future::try_join_all(receipt_futs), pending_fut).await?;
 
-        if let Some(receipt) = receipts.into_iter().find(|r| r.is_some()) {
+        if let Some(receipt) = receipts.into_iter().find_map(|r| r) {
             return Ok(RpcUserOperationStatus {
                 status: UserOperationStatusEnum::Mined,
-                receipt,
+                receipt: Some(receipt),
             });
         }
 
-        if pending.is_some() {
+        if pending.0.is_some() {
             return Ok(RpcUserOperationStatus {
                 status: UserOperationStatusEnum::Pending,
                 receipt: None,

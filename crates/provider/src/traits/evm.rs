@@ -123,6 +123,9 @@ pub trait EvmProvider: Send + Sync {
     /// Get the latest block hash and number
     async fn get_latest_block_hash_and_number(&self) -> ProviderResult<(B256, u64)>;
 
+    /// Get the pending block hash and number
+    async fn get_pending_block_hash_and_number(&self) -> ProviderResult<(B256, u64)>;
+
     /// Get the base fee per gas of the pending block
     async fn get_pending_base_fee(&self) -> ProviderResult<u128>;
 
