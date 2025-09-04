@@ -185,8 +185,17 @@ where
                     None,
                 )
             } else {
-                // Use original op baseline to match validation behavior
-                base_op.required_pre_verification_gas(&self.chain_spec, bundle_size, da_gas, None)
+                // Use original op baseline to match validation behavior, but override
+                // paymaster_post_op_gas_limit to avoid using max_fill's inflated value
+                let op_with_limits = UserOperationBuilder::from_uo(base_op, &self.chain_spec)
+                    .paymaster_post_op_gas_limit(op.paymaster_post_op_gas_limit.unwrap_or(0))
+                    .build();
+                op_with_limits.required_pre_verification_gas(
+                    &self.chain_spec,
+                    bundle_size,
+                    da_gas,
+                    None,
+                )
             }
         };
 
