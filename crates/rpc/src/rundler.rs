@@ -27,7 +27,8 @@ use tracing::instrument;
 use crate::{
     eth::{EntryPointRouter, EthResult, EthRpcError},
     types::{
-        RpcMinedUserOperation, RpcUserOperation, RpcUserOperationStatus, UserOperationStatusEnum,
+        RpcMinedUserOperation, RpcUserOperation, RpcUserOperationStatus, UOStatusEnum,
+        UserOperationStatusEnum,
     },
     utils,
 };
@@ -304,10 +305,14 @@ where
         let (receipts, pending) =
             future::try_join(future::try_join_all(receipt_futs), pending_fut).await?;
 
-        if let Some(receipt) = receipts.into_iter().find(|r| r.is_some()) {
+        if let Some(receipt) = receipts.into_iter().find_map(|r| r) {
+            let status = match receipt.status {
+                UOStatusEnum::Preconfirmed => UserOperationStatusEnum::Preconfirmed,
+                UOStatusEnum::Mined => UserOperationStatusEnum::Mined,
+            };
             return Ok(RpcUserOperationStatus {
-                status: UserOperationStatusEnum::Mined,
-                receipt,
+                status,
+                receipt: Some(receipt),
             });
         }
 

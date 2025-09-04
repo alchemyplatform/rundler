@@ -89,14 +89,9 @@ pub(crate) struct PoolInner<D> {
     /// Removed operation hashes sorted by block number, so we can forget them
     /// when enough new blocks have passed.
     mined_hashes_with_block_numbers: BTreeSet<(u64, B256)>,
-
     /// Unmined UO to bundle transaction mapping.
     #[allow(dead_code)]
-    unmined_uos_bundle_mapping: HashMap<B256, B256>,
-    /// Preconfimed UO to preconfirmed bundle.
-    preconfirmed_uos: BTreeSet<B256>,
-    /// Unmined bundle to UO mapping.
-    unmined_bundle_to_uos: HashMap<B256, BTreeSet<B256>>,
+    preconfirmed_uos_bundle_mapping: HashMap<B256, B256>,
     /// Count of operations by entity address
     count_by_address: HashMap<Address, EntityCounter>,
     /// Submission ID counter
@@ -132,9 +127,7 @@ where
             time_to_mine: HashMap::new(),
             mined_at_block_number_by_hash: HashMap::new(),
             mined_hashes_with_block_numbers: BTreeSet::new(),
-            unmined_uos_bundle_mapping: HashMap::new(),
-            preconfirmed_uos: BTreeSet::new(),
-            unmined_bundle_to_uos: HashMap::new(),
+            preconfirmed_uos_bundle_mapping: HashMap::new(),
             count_by_address: HashMap::new(),
             submission_id: 0,
             pool_size: SizeTracker::default(),
@@ -232,28 +225,24 @@ where
 
     #[allow(dead_code)]
     pub(crate) fn preconfirmed_uos(&self) -> impl Iterator<Item = B256> + '_ {
-        self.preconfirmed_uos.iter().cloned()
+        self.preconfirmed_uos_bundle_mapping.keys().cloned()
     }
 
     pub(crate) fn preconfirm_txns(&mut self, txn_to_uos: Vec<(B256, Vec<B256>)>) {
         // each call of this method should clear the preconfirmed uos before adding new ones.
-        self.preconfirmed_uos.clear();
-        self.unmined_uos_bundle_mapping.clear();
+        self.preconfirmed_uos_bundle_mapping.clear();
         for (txn, uos) in txn_to_uos {
             for uo in uos {
                 if self.get_operation_by_hash(uo).is_some() {
-                    self.preconfirmed_uos.insert(uo);
-                    self.unmined_uos_bundle_mapping.insert(uo, txn);
+                    self.preconfirmed_uos_bundle_mapping.insert(uo, txn);
                 }
             }
         }
     }
 
     pub(crate) fn get_pre_confirmed_uo(&self, uo_hash: B256) -> Option<B256> {
-        if self.preconfirmed_uos.contains(&uo_hash) {
-            if let Some(bundle_hash) = self.unmined_uos_bundle_mapping.get(&uo_hash) {
-                return Some(*bundle_hash);
-            }
+        if let Some(bundle_hash) = self.preconfirmed_uos_bundle_mapping.get(&uo_hash) {
+            return Some(*bundle_hash);
         }
         None
     }
@@ -701,10 +690,7 @@ where
             self.decrement_address_count(e.address, &e.kind);
         }
 
-        if let Some(txn) = self.unmined_uos_bundle_mapping.get(&hash) {
-            self.unmined_bundle_to_uos.remove(txn);
-        }
-        self.unmined_uos_bundle_mapping.remove(&hash);
+        self.preconfirmed_uos_bundle_mapping.remove(&hash);
 
         self.pool_size -= op.mem_size();
         self.update_metrics();
