@@ -14,7 +14,7 @@
 use alloy_primitives::{Address, B256, U64};
 use jsonrpsee::core::RpcResult;
 use rundler_provider::StateOverride;
-use rundler_types::{chain::IntoWithSpec, pool::Pool, UserOperationPermissions};
+use rundler_types::{chain::IntoWithSpec, pool::Pool, Tag, UserOperationPermissions};
 use tracing::instrument;
 
 use super::{api::EthApi, EthApiServer};
@@ -93,11 +93,11 @@ where
     async fn get_user_operation_receipt(
         &self,
         hash: B256,
-        preconfirmation: Option<bool>,
+        tag: Option<Tag>,
     ) -> RpcResult<Option<RpcUserOperationReceipt>> {
         utils::safe_call_rpc_handler(
             "eth_getUserOperationReceipt",
-            EthApi::get_user_operation_receipt(self, hash, preconfirmation),
+            EthApi::get_user_operation_receipt(self, hash, tag),
         )
         .await
     }

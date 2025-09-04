@@ -102,28 +102,7 @@ where
     }
 
     #[instrument(skip_all)]
-    async fn get_receipt(
-        &self,
-        hash: B256,
-        bundle_transaction: Option<B256>,
-    ) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
-        if let Some(bundle_transaction) = bundle_transaction {
-            let txn_receipt = self
-                .provider
-                .get_transaction_receipt(bundle_transaction)
-                .await
-                .context("should have fetched tx receipt")?
-                .context("Failed to fetch tx receipt")?;
-
-            let receipt = self.get_receipt_from_tx_receipt(hash, txn_receipt).await?;
-            if let Some(inner_receipt) = receipt {
-                return Ok(Some(RpcUserOperationReceipt {
-                    status: UOStatusEnum::Preconfirmed,
-                    ..inner_receipt
-                }));
-            }
-            return Ok(None);
-        }
+    async fn get_receipt(&self, hash: B256) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
         let event = self
             .get_event_by_hash(hash)
             .await
@@ -155,12 +134,32 @@ where
             return Ok(None);
         };
 
-        // ignore events from other entry points.
-        if event.address() != E::address(&self.chain_spec) {
-            return Ok(None);
-        }
-
         self.construct_receipt(event.clone(), tx_receipt).map(Some)
+    }
+
+    #[instrument(skip_all)]
+    async fn get_receipt_from_tx_hash(
+        &self,
+        uo_hash: B256,
+        bundle_transaction: B256,
+    ) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
+        let txn_receipt = self
+            .provider
+            .get_transaction_receipt(bundle_transaction)
+            .await
+            .context("should have fetched tx receipt")?
+            .context("Failed to fetch tx receipt")?;
+
+        let receipt = self
+            .get_receipt_from_tx_receipt(uo_hash, txn_receipt)
+            .await?;
+        if let Some(inner_receipt) = receipt {
+            return Ok(Some(RpcUserOperationReceipt {
+                status: UOStatusEnum::Preconfirmed,
+                ..inner_receipt
+            }));
+        }
+        return Ok(None);
     }
 }
 

@@ -17,7 +17,7 @@ use alloy_primitives::{Address, B256, U64};
 use futures_util::future;
 use rundler_provider::StateOverride;
 use rundler_types::{
-    chain::ChainSpec, pool::Pool, UserOperation, UserOperationOptionalGas,
+    chain::ChainSpec, pool::Pool, Tag, UserOperation, UserOperationOptionalGas,
     UserOperationPermissions, UserOperationVariant,
 };
 use rundler_utils::log::LogOnError;
@@ -153,16 +153,16 @@ where
     pub(crate) async fn get_user_operation_receipt(
         &self,
         hash: B256,
-        preconfirmation: Option<bool>,
+        tag: Option<Tag>,
     ) -> EthResult<Option<RpcUserOperationReceipt>> {
         if hash == B256::ZERO {
             return Err(EthRpcError::InvalidParams(
                 "Missing/invalid userOpHash".to_string(),
             ));
         }
-        let preconfirmation = preconfirmation.unwrap_or(false);
+        let tag = tag.unwrap_or(Tag::Latest);
 
-        let bundle_transaction: Option<B256> = if preconfirmation {
+        let bundle_transaction: Option<B256> = if tag == Tag::Pending {
             if !self.chain_spec.flashblocks_enabled {
                 return Err(EthRpcError::InvalidParams(
                     "Unsupported feature: preconfirmation".to_string(),

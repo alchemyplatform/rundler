@@ -347,9 +347,13 @@ where
         hash: B256,
         bundle_transaction: Option<B256>,
     ) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
-        self.event_provider
-            .get_receipt(hash, bundle_transaction)
-            .await
+        if let Some(bundle_transaction) = bundle_transaction {
+            self.event_provider
+                .get_receipt_from_tx_hash(hash, bundle_transaction)
+                .await
+        } else {
+            self.event_provider.get_receipt(hash).await
+        }
     }
 
     async fn get_receipt_from_tx_receipt(

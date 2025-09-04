@@ -87,9 +87,9 @@ pub(crate) struct ChainSubscriber {
 pub(crate) enum UpdateType {
     // Include at least one full block
     #[default]
-    Full,
+    Confirmed,
     // only include pending block
-    Partial,
+    Preconfirmed,
 }
 
 #[derive(Default, Debug, Eq, PartialEq)]
@@ -292,12 +292,6 @@ impl<P: EvmProvider> Chain<P> {
                 if pending_block.hash == header.hash {
                     continue; // same block
                 }
-                if pending_block.parent_hash == header.parent_hash {
-                    self.metrics
-                        .flashblock_discovery_delay_ms
-                        .record(now_ms.saturating_sub(block_timestamp_ms) as f64);
-                    return chain_update; // same parent
-                }
             }
             self.metrics
                 .flashblock_discovery_delay_ms
@@ -465,7 +459,7 @@ impl<P: EvmProvider> Chain<P> {
             vec![],
             vec![],
             false,
-            UpdateType::Partial,
+            UpdateType::Preconfirmed,
         )
     }
 
@@ -537,7 +531,7 @@ impl<P: EvmProvider> Chain<P> {
             vec![],
             vec![],
             false,
-            UpdateType::Full,
+            UpdateType::Confirmed,
         ))
     }
 
@@ -629,7 +623,7 @@ impl<P: EvmProvider> Chain<P> {
             unmined_entity_balance_updates,
             address_updates,
             is_reorg_larger_than_history,
-            UpdateType::Full,
+            UpdateType::Confirmed,
         )
     }
 
@@ -1408,7 +1402,7 @@ mod tests {
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
-                update_type: UpdateType::Full,
+                update_type: UpdateType::Confirmed,
             }
         );
     }
@@ -1463,7 +1457,7 @@ mod tests {
                 address_updates: vec![],
                 reorg_larger_than_history: false,
 
-                update_type: UpdateType::Full,
+                update_type: UpdateType::Confirmed,
             }
         );
     }
@@ -1545,7 +1539,7 @@ mod tests {
                 ],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
-                update_type: UpdateType::Full,
+                update_type: UpdateType::Confirmed,
             }
         );
     }
@@ -1624,7 +1618,7 @@ mod tests {
                 ],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
-                update_type: UpdateType::Full,
+                update_type: UpdateType::Confirmed,
             }
         );
     }
@@ -1689,7 +1683,7 @@ mod tests {
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
-                update_type: UpdateType::Full,
+                update_type: UpdateType::Confirmed,
             }
         );
     }
@@ -1775,7 +1769,7 @@ mod tests {
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: true,
-                update_type: UpdateType::Full,
+                update_type: UpdateType::Confirmed,
             }
         );
     }
@@ -1835,7 +1829,7 @@ mod tests {
                 preconfirmed_txns: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
-                update_type: UpdateType::Full,
+                update_type: UpdateType::Confirmed,
             }
         );
     }
@@ -1879,7 +1873,7 @@ mod tests {
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
-                update_type: UpdateType::Full,
+                update_type: UpdateType::Confirmed,
             }
         );
     }
@@ -1930,7 +1924,7 @@ mod tests {
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
-                update_type: UpdateType::Full,
+                update_type: UpdateType::Confirmed,
             }
         );
     }
@@ -1979,7 +1973,7 @@ mod tests {
                     mined_tx_hashes: tx_hashes,
                 }],
                 reorg_larger_than_history: false,
-                update_type: UpdateType::Full,
+                update_type: UpdateType::Confirmed,
             }
         )
     }
@@ -2031,7 +2025,7 @@ mod tests {
                     mined_tx_hashes: tx_hashes,
                 }],
                 reorg_larger_than_history: false,
-                update_type: UpdateType::Full,
+                update_type: UpdateType::Confirmed,
             }
         )
     }

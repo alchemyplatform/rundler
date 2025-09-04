@@ -232,9 +232,7 @@ where
     }
 
     fn update_preconfirmed_uos(&self, txn_to_uos: Vec<(B256, Vec<B256>)>) {
-        tracing::error!("update_preconfirmed_uos: {:?}", txn_to_uos);
-        let mut state = self.state.write();
-        state.pool.preconfirm_txns(txn_to_uos);
+        self.state.write().pool.preconfirm_txns(txn_to_uos);
     }
 }
 
@@ -250,7 +248,7 @@ where
 
         let preconfirmed_txns = update.preconfirmed_txns.clone();
 
-        if update.update_type == UpdateType::Partial && !preconfirmed_txns.is_empty() {
+        if update.update_type == UpdateType::Preconfirmed && !preconfirmed_txns.is_empty() {
             self.update_preconfirmed_uos(preconfirmed_txns);
             return;
         }
@@ -1197,7 +1195,7 @@ mod tests {
             }],
             address_updates: vec![],
             reorg_larger_than_history: false,
-            update_type: UpdateType::Full,
+            update_type: UpdateType::Confirmed,
         })
         .await;
 
@@ -1299,7 +1297,7 @@ mod tests {
             }],
             address_updates: vec![],
             reorg_larger_than_history: false,
-            update_type: UpdateType::Full,
+            update_type: UpdateType::Confirmed,
         })
         .await;
 
@@ -1336,7 +1334,7 @@ mod tests {
             preconfirmed_txns: vec![],
             address_updates: vec![],
             reorg_larger_than_history: false,
-            update_type: UpdateType::Full,
+            update_type: UpdateType::Confirmed,
         })
         .await;
 
@@ -1376,7 +1374,7 @@ mod tests {
             unmined_entity_balance_updates: vec![],
             address_updates: vec![],
             reorg_larger_than_history: false,
-            update_type: UpdateType::Full,
+            update_type: UpdateType::Confirmed,
         })
         .await;
 
@@ -1421,7 +1419,7 @@ mod tests {
             unmined_entity_balance_updates: vec![],
             address_updates: vec![],
             reorg_larger_than_history: false,
-            update_type: UpdateType::Full,
+            update_type: UpdateType::Confirmed,
         })
         .await;
 
@@ -1500,7 +1498,7 @@ mod tests {
             unmined_ops: vec![],
             address_updates: vec![],
             reorg_larger_than_history: false,
-            update_type: UpdateType::Full,
+            update_type: UpdateType::Confirmed,
         })
         .await;
 
@@ -1581,7 +1579,7 @@ mod tests {
             unmined_entity_balance_updates: vec![],
             address_updates: vec![],
             reorg_larger_than_history: false,
-            update_type: UpdateType::Partial,
+            update_type: UpdateType::Preconfirmed,
         })
         .await;
         check_pre_confirm_ops(
@@ -1603,7 +1601,7 @@ mod tests {
             unmined_entity_balance_updates: vec![],
             address_updates: vec![],
             reorg_larger_than_history: false,
-            update_type: UpdateType::Partial,
+            update_type: UpdateType::Preconfirmed,
         })
         .await;
 
