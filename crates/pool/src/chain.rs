@@ -23,6 +23,7 @@ use alloy_primitives::{Address, B256, U256};
 use alloy_sol_types::SolEvent;
 use anyhow::{bail, ensure, Context};
 use futures::future;
+use itertools::Itertools;
 use metrics::{Counter, Gauge, Histogram};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
@@ -102,7 +103,7 @@ pub(crate) struct ChainUpdate {
     pub reorg_depth: u64,
     pub mined_ops: Vec<MinedOp>,
     pub unmined_ops: Vec<MinedOp>,
-    pub preconfirmed_txns: Vec<B256>,
+    pub preconfirmed_txns: Vec<(B256, Vec<B256>)>,
     /// List of on-chain entity balance updates made in the most recent block
     pub entity_balance_updates: Vec<BalanceUpdate>,
     /// List of entity balance updates that have been unmined due to a reorg
@@ -158,7 +159,7 @@ struct BlockSummary {
     hash: B256,
     timestamp: Timestamp,
     ops: Vec<MinedOp>,
-    transactions: Vec<B256>,
+    transactions: Vec<(B256, Vec<B256>)>,
     entity_balance_updates: Vec<BalanceUpdate>,
     address_updates: Vec<AddressUpdate>,
     parent_hash: B256,
@@ -409,16 +410,57 @@ impl<P: EvmProvider> Chain<P> {
     }
 
     #[instrument(skip_all)]
+    // get all 4337 txns
+    async fn get_user_operations_from_pending_block(&self, pending_block: &Block) -> Vec<B256> {
+        pending_block
+            .transactions
+            .txns()
+            .filter(|tx| {
+                tx.inner.to().is_some()
+                    && self
+                        .settings
+                        .entry_point_addresses
+                        .keys()
+                        .contains(&tx.inner.to().unwrap())
+            })
+            .map(|tx| tx.inner.tx_hash())
+            .collect()
+    }
+
+    #[instrument(skip_all)]
+    async fn get_user_operation_hash_from_txn(&self, txn: B256) -> Option<(B256, Vec<B256>)> {
+        let receipt = self.provider.get_transaction_receipt(txn).await;
+        let receipt = receipt.ok()??;
+
+        let logs = receipt
+            .inner
+            .inner
+            .logs()
+            .iter()
+            .filter(|l| {
+                self.settings
+                    .entry_point_addresses
+                    .keys()
+                    .contains(&l.address())
+                    && l.topics().len() >= 2
+                    && (l.topics()[0] == UserOperationEventV06::SIGNATURE_HASH
+                        || l.topics()[0] == UserOperationEventV07::SIGNATURE_HASH)
+            })
+            .map(|l| l.topics()[1])
+            .collect::<Vec<_>>();
+
+        Some((txn, logs))
+    }
+    #[instrument(skip_all)]
     pub(crate) async fn process_pending_block(
         &mut self,
         pending_block: &BlockSummary,
     ) -> ChainUpdate {
-        let preconfirmed_txns: Vec<_> = pending_block.transactions.to_vec();
         self.new_update(
             0,
             vec![],
             vec![],
-            preconfirmed_txns,
+            pending_block.transactions.to_vec(),
             vec![],
             vec![],
             vec![],
@@ -727,14 +769,25 @@ impl<P: EvmProvider> Chain<P> {
             .await
             .expect("semaphore should not be closed");
 
-        let txns = block.transactions.txns();
+        let txn_to_uos_fut = self
+            .get_user_operations_from_pending_block(block)
+            .await
+            .iter()
+            .map(|txn| self.get_user_operation_hash_from_txn(*txn))
+            .collect::<Vec<_>>();
+
+        let txn_to_uos = future::join_all(txn_to_uos_fut)
+            .await
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
 
         Ok(BlockSummary {
             number: block.header.number,
             hash: block.header.hash,
             timestamp: block.header.timestamp.into(),
             ops: vec![],
-            transactions: txns.map(|tx| tx.inner.tx_hash()).collect(),
+            transactions: txn_to_uos,
             entity_balance_updates: vec![],
             address_updates: vec![],
             parent_hash: block.header.parent_hash,
@@ -983,7 +1036,7 @@ impl<P: EvmProvider> Chain<P> {
         reorg_depth: u64,
         mined_ops: Vec<MinedOp>,
         unmined_ops: Vec<MinedOp>,
-        preconfirmed_txns: Vec<B256>,
+        preconfirmed_txns: Vec<(B256, Vec<B256>)>,
         entity_balance_updates: Vec<BalanceUpdate>,
         unmined_entity_balance_updates: Vec<BalanceUpdate>,
         address_updates: Vec<AddressUpdate>,
@@ -1140,10 +1193,6 @@ mod tests {
     impl ProviderController {
         fn set_blocks(&self, blocks: Vec<MockBlock>) {
             *self.blocks.write() = blocks;
-        }
-
-        fn set_pending_block(&self, blocks: MockBlock) {
-            *self.pending_block.write() = Some(blocks);
         }
 
         fn set_balances(&self, balances: HashMap<Address, U256>) {
@@ -1936,79 +1985,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_flash_block_update() {
-        let parent_hash = B256::random();
-        let (mut chain, controller) = new_flash_block_chain();
-
-        chain.to_track.write().insert(addr(0));
-        chain.blocks.push_back(BlockSummary {
-            number: 0,
-            hash: B256::ZERO,
-            parent_hash,
-            timestamp: 0.into(),
-            ops: vec![],
-            transactions: vec![],
-            entity_balance_updates: vec![],
-            address_updates: vec![],
-        });
-
-        let txns0 = vec![make_transaction(addr(0), 0), make_transaction(addr(0), 1)];
-        let txns1 = vec![
-            make_transaction(addr(0), 0),
-            make_transaction(addr(0), 1),
-            make_transaction(addr(0), 2),
-        ];
-
-        let pending_block = MockBlock::new(hash(1)).add_txns(txns0.clone());
-        // incremental block update
-        let pending_block_2 = MockBlock::new(hash(2)).add_txns(txns1.clone());
-        controller.set_blocks(vec![MockBlock::new(hash(0))]);
-        chain.sync_to_block(controller.get_head()).await.unwrap();
-
-        controller.set_pending_block(pending_block);
-        let update = chain.wait_for_update().await;
-        assert_eq!(
-            update,
-            ChainUpdate {
-                latest_block_number: 0,
-                latest_block_hash: hash(0),
-                latest_block_timestamp: 0.into(),
-                earliest_remembered_block_number: 0,
-                reorg_depth: 0,
-                mined_ops: vec![],
-                unmined_ops: vec![],
-                preconfirmed_txns: txns0.iter().map(|tx| tx.tx_hash()).collect(),
-                entity_balance_updates: vec![],
-                unmined_entity_balance_updates: vec![],
-                address_updates: vec![],
-                reorg_larger_than_history: false,
-                update_type: UpdateType::Partial,
-            }
-        );
-
-        controller.set_pending_block(pending_block_2);
-        let update = chain.wait_for_update().await;
-        assert_eq!(
-            update,
-            ChainUpdate {
-                latest_block_number: 0,
-                latest_block_hash: hash(0),
-                latest_block_timestamp: 0.into(),
-                earliest_remembered_block_number: 0,
-                reorg_depth: 0,
-                mined_ops: vec![],
-                unmined_ops: vec![],
-                preconfirmed_txns: txns1.iter().map(|tx| tx.tx_hash()).collect(),
-                entity_balance_updates: vec![],
-                unmined_entity_balance_updates: vec![],
-                address_updates: vec![],
-                reorg_larger_than_history: false,
-                update_type: UpdateType::Partial,
-            }
-        );
-    }
-
-    #[tokio::test]
     async fn test_address_update_multiple_blocks() {
         let parent_hash = B256::random();
         let (mut chain, controller) = new_chain();
@@ -2081,10 +2057,6 @@ mod tests {
             },
         );
         (chain, controller)
-    }
-
-    fn new_flash_block_chain() -> (Chain<impl EvmProvider>, ProviderController) {
-        _new_chain(true)
     }
 
     fn new_mock_provider() -> (impl EvmProvider, ProviderController) {

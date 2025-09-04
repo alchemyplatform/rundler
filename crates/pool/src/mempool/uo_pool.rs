@@ -14,21 +14,15 @@
 use std::{collections::HashSet, sync::Arc};
 
 use alloy_primitives::{utils::format_units, Address, Bytes, B256, U256};
-use alloy_sol_types::SolEvent;
 use anyhow::Context;
 use futures::TryFutureExt;
-use futures_util::future;
 use itertools::Itertools;
 use metrics::{Counter, Gauge, Histogram};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
-use rundler_contracts::{
-    v0_6::IEntryPoint::UserOperationEvent as UserOperationEventV06,
-    v0_7::IEntryPoint::UserOperationEvent as UserOperationEventV07,
-};
 use rundler_provider::{
-    DAGasOracleSync, EntryPoint, EvmProvider, FeeEstimator, ProvidersWithEntryPointT,
-    SimulationProvider, StateOverride,
+    DAGasOracleSync, EvmProvider, FeeEstimator, ProvidersWithEntryPointT, SimulationProvider,
+    StateOverride,
 };
 use rundler_sim::{MempoolConfig, Prechecker, Simulator};
 use rundler_types::{
@@ -237,54 +231,10 @@ where
         Ok(())
     }
 
-    /// TODO: consider reuse events to avoid duplicate calls to get_transaction_receipt and parse
-    /// logs.
-    async fn get_transaction_mapping(&self, txn_hash: B256) -> Option<(B256, Vec<B256>)> {
-        let receipt = self
-            .ep_providers
-            .evm()
-            .get_transaction_receipt(txn_hash)
-            .await;
-
-        let receipt = receipt.ok()??;
-
-        let signature = match self.ep_providers.entry_point().version() {
-            EntryPointVersion::V0_6 => UserOperationEventV06::SIGNATURE_HASH,
-            EntryPointVersion::V0_7 => UserOperationEventV07::SIGNATURE_HASH,
-            EntryPointVersion::Unspecified => return None,
-        };
-
-        let logs = receipt
-            .inner
-            .inner
-            .logs()
-            .iter()
-            .filter(|l| {
-                l.address() == *self.ep_providers.entry_point().address()
-                    && l.topics().len() >= 2
-                    && l.topics()[0] == signature
-            })
-            .map(|l| l.topics()[1])
-            .collect::<Vec<_>>();
-
-        Some((txn_hash, logs))
-    }
-    fn per_confirm_uos(&self, txn_to_uos: Vec<(B256, Vec<B256>)>) {
+    fn update_preconfirmed_uos(&self, txn_to_uos: Vec<(B256, Vec<B256>)>) {
+        tracing::error!("update_preconfirmed_uos: {:?}", txn_to_uos);
         let mut state = self.state.write();
         state.pool.preconfirm_txns(txn_to_uos);
-    }
-
-    async fn update_preconfirmed_uos(&self, preconfirmed_txns: Vec<B256>) {
-        let futures: Vec<_> = preconfirmed_txns
-            .iter()
-            .map(|txn| self.get_transaction_mapping(*txn))
-            .collect();
-
-        let results = future::join_all(futures).await;
-
-        let txn_to_uos: Vec<(B256, Vec<B256>)> = results.into_iter().flatten().collect();
-
-        self.per_confirm_uos(txn_to_uos);
     }
 }
 
@@ -301,7 +251,7 @@ where
         let preconfirmed_txns = update.preconfirmed_txns.clone();
 
         if update.update_type == UpdateType::Partial && !preconfirmed_txns.is_empty() {
-            self.update_preconfirmed_uos(preconfirmed_txns).await;
+            self.update_preconfirmed_uos(preconfirmed_txns);
             return;
         }
 
@@ -495,7 +445,7 @@ where
             None
         };
         if !preconfirmed_txns.is_empty() {
-            self.update_preconfirmed_uos(preconfirmed_txns).await;
+            self.update_preconfirmed_uos(preconfirmed_txns);
         }
         {
             let mut state = self.state.write();
@@ -1084,7 +1034,7 @@ mod tests {
     use mockall::Sequence;
     use rundler_contracts::v0_6::IEntryPoint::UserOperationEvent as UserOperationEventV06;
     use rundler_provider::{
-        AnyReceiptEnvelope, DepositInfo, ExecutionResult, Log, MockDAGasOracleSync,
+        AnyReceiptEnvelope, DepositInfo, EntryPoint, ExecutionResult, Log, MockDAGasOracleSync,
         MockEntryPointV0_6, MockEvmProvider, MockFeeEstimator, ProvidersWithEntryPoint,
         ReceiptWithBloom, TransactionReceipt,
     };
@@ -1612,7 +1562,11 @@ mod tests {
         )
         .await;
 
-        let preconfirmed_txns = vec![ops_1[0].op.hash(), ops_2[0].op.hash(), ops_3[0].op.hash()];
+        let preconfirmed_txns = vec![
+            (ops_1[0].op.hash(), vec![ops_1[0].op.hash()]),
+            (ops_2[0].op.hash(), vec![ops_2[0].op.hash()]),
+            (ops_3[0].op.hash(), vec![ops_3[0].op.hash()]),
+        ];
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 0,
@@ -1622,7 +1576,7 @@ mod tests {
             reorg_depth: 0,
             mined_ops: vec![],
             unmined_ops: vec![],
-            preconfirmed_txns: vec![preconfirmed_txns[0]],
+            preconfirmed_txns: vec![preconfirmed_txns[0].clone()],
             entity_balance_updates: vec![],
             unmined_entity_balance_updates: vec![],
             address_updates: vec![],
