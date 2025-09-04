@@ -53,6 +53,8 @@ pub struct ChainSpec {
     pub max_transaction_size_bytes: usize,
     /// the block gas limit
     pub block_gas_limit: u64,
+    /// the transaction gas limit, 0 indicates no limit
+    pub transaction_gas_limit: u64,
     /// Intrinsic gas cost for a transaction
     pub transaction_intrinsic_gas: u64,
     /// Per user operation gas cost for v0.6
@@ -176,6 +178,7 @@ impl Default for ChainSpec {
             multicall3_address: Address::from_str(MULTICALL3_ADDRESS).unwrap(),
             flashblocks_enabled: false,
             deposit_transfer_overhead: 30_000,
+            transaction_gas_limit: 0,
             transaction_intrinsic_gas: 21_000,
             per_user_op_v0_6_gas: 18_300,
             per_user_op_v0_7_gas: 19_500,
@@ -218,6 +221,17 @@ impl ChainSpec {
     /// Get the transaction intrinsic gas
     pub fn transaction_intrinsic_gas(&self) -> u128 {
         self.transaction_intrinsic_gas as u128
+    }
+
+    /// Resolve the transaction gas limit
+    ///
+    /// If the transaction gas limit is 0, the block gas limit is returned.
+    pub fn transaction_gas_limit(&self) -> u128 {
+        if self.transaction_gas_limit > 0 {
+            self.transaction_gas_limit as u128
+        } else {
+            self.block_gas_limit as u128
+        }
     }
 
     /// Get the minimum max priority fee per gas
@@ -279,8 +293,8 @@ impl ChainSpec {
     }
 
     /// Calculate a multiple of the block limit
-    pub fn block_gas_limit_mult(&self, mult: f64) -> u128 {
-        (self.block_gas_limit as f64 * mult) as u128
+    pub fn transaction_gas_limit_mult(&self, mult: f64) -> u128 {
+        (self.transaction_gas_limit() as f64 * mult) as u128
     }
 
     /// Set signature aggregators

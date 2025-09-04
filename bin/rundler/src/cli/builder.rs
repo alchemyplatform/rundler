@@ -259,13 +259,13 @@ impl BuilderArgs {
 
         let provider_client_timeout_seconds = common.provider_client_timeout_seconds;
 
+        let bundle_limits = common.bundle_limits(&chain_spec);
+
         tracing::info!(
-            "Builder bundle limits: Chain block gas limit: {}. Target bundle gas: {}. Max bundle gas: {}",
-            chain_spec.block_gas_limit,
-            chain_spec
-                .block_gas_limit_mult(common.target_bundle_block_gas_limit_ratio),
-            chain_spec
-                .block_gas_limit_mult(common.max_bundle_block_gas_limit_ratio)
+            "Builder bundle limits: Chain transaction gas limit: {}. Target bundle gas: {}. Max bundle gas: {}",
+            chain_spec.transaction_gas_limit(),
+            bundle_limits.target_bundle_execution_gas_limit,
+            bundle_limits.max_bundle_execution_gas_limit
         );
 
         Ok(BuilderTaskArgs {
@@ -275,10 +275,8 @@ impl BuilderArgs {
             unsafe_mode: common.unsafe_mode,
             rpc_url,
             max_bundle_size: self.max_bundle_size,
-            target_bundle_gas: chain_spec
-                .block_gas_limit_mult(common.target_bundle_block_gas_limit_ratio),
-            max_bundle_gas: chain_spec
-                .block_gas_limit_mult(common.max_bundle_block_gas_limit_ratio),
+            target_bundle_gas: bundle_limits.target_bundle_execution_gas_limit,
+            max_bundle_gas: bundle_limits.max_bundle_execution_gas_limit,
             sender_args,
             sim_settings: common.try_into()?,
             max_blocks_to_wait_for_mine: self.max_blocks_to_wait_for_mine,
