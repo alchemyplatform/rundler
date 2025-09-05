@@ -134,6 +134,10 @@ where
             return Ok(None);
         };
 
+        if event.address() != E::address(&self.chain_spec) {
+            return Ok(None);
+        }
+
         self.construct_receipt(event.clone(), tx_receipt).map(Some)
     }
 

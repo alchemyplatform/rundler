@@ -247,9 +247,8 @@ where
         let _timer = CustomTimerGuard::new(self.metrics.update_process_time_ms.clone());
 
         let preconfirmed_txns = update.preconfirmed_txns.clone();
-
-        if update.update_type == UpdateType::Preconfirmed && !preconfirmed_txns.is_empty() {
-            self.update_preconfirmed_uos(preconfirmed_txns);
+        self.update_preconfirmed_uos(preconfirmed_txns);
+        if update.update_type == UpdateType::Preconfirmed {
             return;
         }
 
@@ -442,9 +441,6 @@ where
         } else {
             None
         };
-        if !preconfirmed_txns.is_empty() {
-            self.update_preconfirmed_uos(preconfirmed_txns);
-        }
         {
             let mut state = self.state.write();
             state
