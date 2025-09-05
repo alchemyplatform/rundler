@@ -90,7 +90,6 @@ pub(crate) struct PoolInner<D> {
     /// when enough new blocks have passed.
     mined_hashes_with_block_numbers: BTreeSet<(u64, B256)>,
     /// Unmined UO to bundle transaction mapping.
-    #[allow(dead_code)]
     preconfirmed_uos_bundle_mapping: HashMap<B256, B256>,
     /// Count of operations by entity address
     count_by_address: HashMap<Address, EntityCounter>,
@@ -229,8 +228,6 @@ where
     }
 
     pub(crate) fn preconfirm_txns(&mut self, txn_to_uos: Vec<(B256, Vec<B256>)>) {
-        // each call of this method should clear the preconfirmed uos before adding new ones.
-        self.preconfirmed_uos_bundle_mapping.clear();
         for (txn, uos) in txn_to_uos {
             for uo in uos {
                 if self.get_operation_by_hash(uo).is_some() {

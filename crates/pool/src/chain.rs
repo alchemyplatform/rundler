@@ -162,7 +162,6 @@ struct BlockSummary {
     transactions: Vec<(B256, Vec<B256>)>,
     entity_balance_updates: Vec<BalanceUpdate>,
     address_updates: Vec<AddressUpdate>,
-    parent_hash: B256,
 }
 
 impl ChainSubscriber {
@@ -261,19 +260,27 @@ impl<P: EvmProvider> Chain<P> {
     #[instrument(skip_all)]
     async fn wait_for_update_flashblocks(&mut self) -> ChainUpdate {
         let full_block_hash = self.blocks.back().map(|m| m.hash).unwrap_or_default();
-        let mut latest_block_hash = full_block_hash;
 
         loop {
-            let (hash, block) = block_watcher::wait_for_new_block(
+            let pending_block_fut = block_watcher::wait_for_new_block(
                 &self.provider,
-                latest_block_hash,
+                B256::ZERO,
                 self.settings.poll_interval,
                 BlockId::pending(),
-            )
-            .await;
-            latest_block_hash = hash;
+            );
+            let latest_block_fut = block_watcher::wait_for_new_block(
+                &self.provider,
+                // force it always get the latest block hash.
+                B256::ZERO,
+                self.settings.poll_interval,
+                BlockId::latest(),
+            );
+            let (pending_block_res, latest_block_res) =
+                future::join(pending_block_fut, latest_block_fut).await;
+            let (_, pending_block) = pending_block_res;
+            let (latest_block_hash, latest_block) = latest_block_res;
 
-            let summary = match self.load_flash_block_summary(&block).await {
+            let summary = match self.load_flash_block_summary(&pending_block).await {
                 Ok(summary) => summary,
                 Err(err) => {
                     warn!("failed to load block summary: {err:?}");
@@ -284,10 +291,10 @@ impl<P: EvmProvider> Chain<P> {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis();
-            let block_timestamp_ms = (block.header.timestamp * 1000) as u128;
+            let block_timestamp_ms = (pending_block.header.timestamp * 1000) as u128;
 
             let chain_update = self.process_pending_block(&summary).await;
-            let header = &block.inner.header;
+            let header = &pending_block.inner.header;
             if let Some(pending_block) = &self.pending_block {
                 if pending_block.hash == header.hash {
                     continue; // same block
@@ -298,7 +305,8 @@ impl<P: EvmProvider> Chain<P> {
                 .record(now_ms.saturating_sub(block_timestamp_ms) as f64);
 
             self.pending_block = Some(summary);
-            if header.parent_hash == full_block_hash {
+            // this means the latest block is the same as the full block, so we can return the chain update.
+            if latest_block_hash == full_block_hash {
                 return chain_update;
             }
 
@@ -311,16 +319,7 @@ impl<P: EvmProvider> Chain<P> {
 
                 let start = Instant::now();
 
-                // flashblock: fill gap until parent_block.
-                let parent_hash = self.pending_block.as_ref().unwrap().parent_hash;
-                let result = match self.provider.get_full_block(parent_hash.into()).await {
-                    Ok(Some(parent_block)) => self.sync_to_block(parent_block).await,
-                    Ok(None) | Err(_) => {
-                        warn!("failed to get parent block, retry...");
-                        time::sleep(self.settings.poll_interval).await;
-                        continue;
-                    }
-                };
+                let result = self.sync_to_block(latest_block.clone()).await;
 
                 match result {
                     Ok(mut update) => {
@@ -450,17 +449,7 @@ impl<P: EvmProvider> Chain<P> {
         &mut self,
         pending_block: &BlockSummary,
     ) -> ChainUpdate {
-        self.new_update(
-            0,
-            vec![],
-            vec![],
-            pending_block.transactions.to_vec(),
-            vec![],
-            vec![],
-            vec![],
-            false,
-            UpdateType::Preconfirmed,
-        )
+        self.new_pending_update(pending_block.transactions.to_vec())
     }
 
     #[instrument(skip_all)]
@@ -784,7 +773,6 @@ impl<P: EvmProvider> Chain<P> {
             transactions: txn_to_uos,
             entity_balance_updates: vec![],
             address_updates: vec![],
-            parent_hash: block.header.parent_hash,
         })
     }
 
@@ -810,7 +798,6 @@ impl<P: EvmProvider> Chain<P> {
             transactions: vec![],
             entity_balance_updates,
             address_updates,
-            parent_hash: block.header.parent_hash,
         })
     }
 
@@ -1022,6 +1009,14 @@ impl<P: EvmProvider> Chain<P> {
             return None;
         }
         self.blocks.get((number - earliest_number) as usize)
+    }
+
+    fn new_pending_update(&self, preconfirmed_txns: Vec<(B256, Vec<B256>)>) -> ChainUpdate {
+        ChainUpdate {
+            preconfirmed_txns,
+            update_type: UpdateType::Preconfirmed,
+            ..Default::default()
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1933,14 +1928,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_address_update() {
-        let parent_hash = B256::random();
-
         let (mut chain, controller) = new_chain();
         chain.to_track.write().insert(addr(0));
         chain.blocks.push_back(BlockSummary {
             number: 0,
             hash: B256::ZERO,
-            parent_hash,
             timestamp: 0.into(),
             ops: vec![],
             transactions: vec![],
@@ -1982,13 +1974,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_address_update_multiple_blocks() {
-        let parent_hash = B256::random();
         let (mut chain, controller) = new_chain();
         chain.to_track.write().insert(addr(0));
         chain.blocks.push_back(BlockSummary {
             number: 0,
             hash: B256::ZERO,
-            parent_hash,
             timestamp: 0.into(),
             ops: vec![],
             transactions: vec![],
