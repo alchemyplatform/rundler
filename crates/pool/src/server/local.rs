@@ -42,7 +42,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{error, info};
 
 use crate::{
-    chain::ChainSubscriber,
+    chain::{ChainSubscriber, UpdateType},
     mempool::{Mempool, OperationOrigin},
 };
 
@@ -666,6 +666,9 @@ impl LocalPoolServerRunner {
                 }
                 chain_update = chain_updates.recv() => {
                     if let Ok(chain_update) = chain_update {
+                        if chain_update.update_type == UpdateType::Preconfirmed {
+                            continue;
+                        }
                         // Update each mempool before notifying listeners of the chain update
                         // This allows the mempools to update their state before the listeners
                         // pull information from the mempool.
