@@ -234,24 +234,24 @@ pub struct CommonArgs {
     max_uo_cost: Option<U256>,
 
     #[arg(
-        long = "target_bundle_block_gas_limit_ratio",
-        name = "target_bundle_block_gas_limit_ratio",
+        long = "target_bundle_transaction_gas_limit_ratio",
+        name = "target_bundle_transaction_gas_limit_ratio",
         default_value = "0.5",
-        env = "TARGET_BUNDLE_BLOCK_GAS_LIMIT_RATIO",
+        env = "TARGET_BUNDLE_TRANSACTION_GAS_LIMIT_RATIO",
         value_parser = verify_f64_less_than_one,
         global = true
     )]
-    target_bundle_block_gas_limit_ratio: f64,
+    target_bundle_transaction_gas_limit_ratio: f64,
 
     #[arg(
-        long = "max_bundle_block_gas_limit_ratio",
-        name = "max_bundle_block_gas_limit_ratio",
+        long = "max_bundle_transaction_gas_limit_ratio",
+        name = "max_bundle_transaction_gas_limit_ratio",
         default_value = "0.9",
-        env = "MAX_BUNDLE_BLOCK_GAS_LIMIT_RATIO",
+        env = "MAX_BUNDLE_TRANSACTION_GAS_LIMIT_RATIO",
         value_parser = verify_f64_less_than_one,
         global = true
     )]
-    max_bundle_block_gas_limit_ratio: f64,
+    max_bundle_transaction_gas_limit_ratio: f64,
 
     #[arg(
         long = "min_stake_value",
@@ -528,6 +528,22 @@ pub struct CommonArgs {
     pub aggregator_options: Vec<(String, String)>,
 }
 
+impl CommonArgs {
+    pub fn bundle_limits(&self, chain_spec: &ChainSpec) -> BundleLimits {
+        BundleLimits {
+            target_bundle_execution_gas_limit: chain_spec
+                .transaction_gas_limit_mult(self.target_bundle_transaction_gas_limit_ratio),
+            max_bundle_execution_gas_limit: chain_spec
+                .transaction_gas_limit_mult(self.max_bundle_transaction_gas_limit_ratio),
+        }
+    }
+}
+
+pub struct BundleLimits {
+    pub target_bundle_execution_gas_limit: u128,
+    pub max_bundle_execution_gas_limit: u128,
+}
+
 /// Converts a &str into a SecretString
 pub(crate) fn parse_secret(s: &str) -> Result<SecretString, String> {
     Ok(s.into())
@@ -557,24 +573,25 @@ impl TryFromWithSpec<&CommonArgs> for EstimationSettings {
     type Error = anyhow::Error;
 
     fn try_from_with_spec(value: &CommonArgs, chain_spec: &ChainSpec) -> Result<Self, Self::Error> {
-        let max_bundle_execution_gas =
-            chain_spec.block_gas_limit_mult(value.max_bundle_block_gas_limit_ratio);
+        let bundle_limits = value.bundle_limits(chain_spec);
 
         if value.max_verification_gas
-            > max_bundle_execution_gas.saturating_sub(SIMULATION_GAS_OVERHEAD) as u64
+            > bundle_limits
+                .max_bundle_execution_gas_limit
+                .saturating_sub(SIMULATION_GAS_OVERHEAD) as u64
         {
             anyhow::bail!(
                 "max_verification_gas ({}) must be less than max_bundle_execution_gas ({}) by at least {}",
                 value.max_verification_gas,
-                max_bundle_execution_gas,
+                bundle_limits.max_bundle_execution_gas_limit,
                 SIMULATION_GAS_OVERHEAD
             );
         }
 
-        if max_bundle_execution_gas < MIN_CALL_GAS_LIMIT {
+        if bundle_limits.max_bundle_execution_gas_limit < MIN_CALL_GAS_LIMIT {
             anyhow::bail!(
                 "max_bundle_execution_gas ({}) must be greater than or equal to {}",
-                max_bundle_execution_gas,
+                bundle_limits.max_bundle_execution_gas_limit,
                 MIN_CALL_GAS_LIMIT
             );
         }
@@ -582,8 +599,8 @@ impl TryFromWithSpec<&CommonArgs> for EstimationSettings {
         Ok(Self {
             max_verification_gas: value.max_verification_gas as u128,
             max_paymaster_verification_gas: value.max_verification_gas as u128,
-            max_paymaster_post_op_gas: max_bundle_execution_gas,
-            max_bundle_execution_gas,
+            max_paymaster_post_op_gas: bundle_limits.max_bundle_execution_gas_limit,
+            max_bundle_execution_gas: bundle_limits.max_bundle_execution_gas_limit,
             max_gas_estimation_gas: value.max_gas_estimation_gas,
             verification_estimation_gas_fee: value.verification_estimation_gas_fee,
             verification_gas_limit_efficiency_reject_threshold: value
@@ -599,10 +616,11 @@ impl TryFromWithSpec<&CommonArgs> for PrecheckSettings {
     type Error = anyhow::Error;
 
     fn try_from_with_spec(value: &CommonArgs, chain_spec: &ChainSpec) -> Result<Self, Self::Error> {
+        let bundle_limits = value.bundle_limits(chain_spec);
+
         Ok(Self {
             max_verification_gas: value.max_verification_gas as u128,
-            max_bundle_execution_gas: chain_spec
-                .block_gas_limit_mult(value.max_bundle_block_gas_limit_ratio),
+            max_bundle_execution_gas: bundle_limits.max_bundle_execution_gas_limit,
             max_uo_cost: value.max_uo_cost.unwrap_or(U256::MAX),
             bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
             priority_fee_mode: PriorityFeeMode::try_from(
@@ -818,8 +836,9 @@ pub fn construct_providers(
     )?);
     let (da_gas_oracle, da_gas_oracle_sync) =
         rundler_provider::new_alloy_da_gas_oracle(chain_spec, provider.clone());
-    let max_bundle_execution_gas = chain_spec
-        .block_gas_limit_mult(args.max_bundle_block_gas_limit_ratio)
+    let bundle_limits = args.bundle_limits(chain_spec);
+    let max_bundle_execution_gas = bundle_limits
+        .max_bundle_execution_gas_limit
         .try_into()
         .expect("max_bundle_execution_gas is too large for u64");
 
