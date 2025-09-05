@@ -42,7 +42,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{error, info};
 
 use crate::{
-    chain::ChainSubscriber,
+    chain::{ChainSubscriber, UpdateType},
     mempool::{Mempool, OperationOrigin},
 };
 
@@ -680,11 +680,14 @@ impl LocalPoolServerRunner {
                         }).collect();
                         self.task_spawner.spawn(Box::pin(async move {
                             future::join_all(update_futures).await;
-                            let _ = block_sender.send(NewHead {
-                                block_hash: chain_update.latest_block_hash,
-                                block_number: chain_update.latest_block_number,
-                                address_updates: chain_update.address_updates.clone(),
-                            });
+
+                            if chain_update.update_type == UpdateType::Confirmed {
+                                let _ = block_sender.send(NewHead {
+                                    block_hash: chain_update.latest_block_hash,
+                                    block_number: chain_update.latest_block_number,
+                                    address_updates: chain_update.address_updates.clone(),
+                                });
+                            }
                         }));
                     }
                 }
