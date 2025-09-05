@@ -104,6 +104,7 @@ pub(crate) struct ChainUpdate {
     pub mined_ops: Vec<MinedOp>,
     pub unmined_ops: Vec<MinedOp>,
     pub preconfirmed_txns: Vec<(B256, Vec<B256>)>,
+    pub preconfirmed_block_number: Option<u64>,
     /// List of on-chain entity balance updates made in the most recent block
     pub entity_balance_updates: Vec<BalanceUpdate>,
     /// List of entity balance updates that have been unmined due to a reorg
@@ -162,7 +163,6 @@ struct BlockSummary {
     transactions: Vec<(B256, Vec<B256>)>,
     entity_balance_updates: Vec<BalanceUpdate>,
     address_updates: Vec<AddressUpdate>,
-    parent_hash: B256,
 }
 
 impl ChainSubscriber {
@@ -261,19 +261,28 @@ impl<P: EvmProvider> Chain<P> {
     #[instrument(skip_all)]
     async fn wait_for_update_flashblocks(&mut self) -> ChainUpdate {
         let full_block_hash = self.blocks.back().map(|m| m.hash).unwrap_or_default();
-        let mut latest_block_hash = full_block_hash;
 
         loop {
-            let (hash, block) = block_watcher::wait_for_new_block(
+            // TODO: parallelize the two block watcher calls. one for pending block and one for latest block.
+            let pending_block_fut = block_watcher::wait_for_new_block(
                 &self.provider,
-                latest_block_hash,
+                B256::ZERO,
                 self.settings.poll_interval,
                 BlockId::pending(),
-            )
-            .await;
-            latest_block_hash = hash;
+            );
+            let latest_block_fut = block_watcher::wait_for_new_block(
+                &self.provider,
+                // force it always get the latest block hash.
+                B256::ZERO,
+                self.settings.poll_interval,
+                BlockId::latest(),
+            );
+            let (pending_block_res, latest_block_res) =
+                future::join(pending_block_fut, latest_block_fut).await;
+            let (_, pending_block) = pending_block_res;
+            let (latest_block_hash, latest_block) = latest_block_res;
 
-            let summary = match self.load_flash_block_summary(&block).await {
+            let summary = match self.load_flash_block_summary(&pending_block).await {
                 Ok(summary) => summary,
                 Err(err) => {
                     warn!("failed to load block summary: {err:?}");
@@ -284,12 +293,14 @@ impl<P: EvmProvider> Chain<P> {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis();
-            let block_timestamp_ms = (block.header.timestamp * 1000) as u128;
+            let block_timestamp_ms = (pending_block.header.timestamp * 1000) as u128;
 
-            let chain_update = self.process_pending_block(&summary).await;
-            let header = &block.inner.header;
+            let chain_update = self
+                .process_pending_block(&summary, pending_block.header.number)
+                .await;
+            let header = &pending_block.inner.header;
             if let Some(pending_block) = &self.pending_block {
-                if pending_block.hash == header.hash {
+                if pending_block.hash == header.hash && latest_block_hash == full_block_hash {
                     continue; // same block
                 }
             }
@@ -298,11 +309,13 @@ impl<P: EvmProvider> Chain<P> {
                 .record(now_ms.saturating_sub(block_timestamp_ms) as f64);
 
             self.pending_block = Some(summary);
-            if header.parent_hash == full_block_hash {
+            // this means the latest block is the same as the full block, so we can return the chain update.
+            if latest_block_hash == full_block_hash {
                 return chain_update;
             }
 
             let preconfirmed_txns = chain_update.preconfirmed_txns;
+            let preconfirmed_block_number = chain_update.preconfirmed_block_number;
 
             for attempt in 0..=self.settings.max_sync_retries {
                 if attempt > 0 {
@@ -311,16 +324,7 @@ impl<P: EvmProvider> Chain<P> {
 
                 let start = Instant::now();
 
-                // flashblock: fill gap until parent_block.
-                let parent_hash = self.pending_block.as_ref().unwrap().parent_hash;
-                let result = match self.provider.get_full_block(parent_hash.into()).await {
-                    Ok(Some(parent_block)) => self.sync_to_block(parent_block).await,
-                    Ok(None) | Err(_) => {
-                        warn!("failed to get parent block, retry...");
-                        time::sleep(self.settings.poll_interval).await;
-                        continue;
-                    }
-                };
+                let result = self.sync_to_block(latest_block.clone()).await;
 
                 match result {
                     Ok(mut update) => {
@@ -328,6 +332,7 @@ impl<P: EvmProvider> Chain<P> {
                             .block_sync_time_ms
                             .record(start.elapsed().as_millis() as f64);
                         update.preconfirmed_txns = preconfirmed_txns;
+                        update.preconfirmed_block_number = preconfirmed_block_number;
                         return update;
                     }
                     Err(error) => {
@@ -449,17 +454,11 @@ impl<P: EvmProvider> Chain<P> {
     pub(crate) async fn process_pending_block(
         &mut self,
         pending_block: &BlockSummary,
+        preconfirmed_block_number: u64,
     ) -> ChainUpdate {
-        self.new_update(
-            0,
-            vec![],
-            vec![],
+        self.new_pending_update(
             pending_block.transactions.to_vec(),
-            vec![],
-            vec![],
-            vec![],
-            false,
-            UpdateType::Preconfirmed,
+            preconfirmed_block_number,
         )
     }
 
@@ -527,6 +526,7 @@ impl<P: EvmProvider> Chain<P> {
             mined_ops,
             vec![],
             vec![],
+            None,
             entity_balance_updates,
             vec![],
             vec![],
@@ -619,6 +619,7 @@ impl<P: EvmProvider> Chain<P> {
             mined_ops,
             unmined_ops,
             vec![],
+            None,
             entity_balance_updates,
             unmined_entity_balance_updates,
             address_updates,
@@ -784,7 +785,6 @@ impl<P: EvmProvider> Chain<P> {
             transactions: txn_to_uos,
             entity_balance_updates: vec![],
             address_updates: vec![],
-            parent_hash: block.header.parent_hash,
         })
     }
 
@@ -810,7 +810,6 @@ impl<P: EvmProvider> Chain<P> {
             transactions: vec![],
             entity_balance_updates,
             address_updates,
-            parent_hash: block.header.parent_hash,
         })
     }
 
@@ -1024,6 +1023,19 @@ impl<P: EvmProvider> Chain<P> {
         self.blocks.get((number - earliest_number) as usize)
     }
 
+    fn new_pending_update(
+        &self,
+        preconfirmed_txns: Vec<(B256, Vec<B256>)>,
+        preconfirmed_block_number: u64,
+    ) -> ChainUpdate {
+        ChainUpdate {
+            preconfirmed_txns,
+            update_type: UpdateType::Preconfirmed,
+            preconfirmed_block_number: Some(preconfirmed_block_number),
+            ..Default::default()
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn new_update(
         &self,
@@ -1031,6 +1043,7 @@ impl<P: EvmProvider> Chain<P> {
         mined_ops: Vec<MinedOp>,
         unmined_ops: Vec<MinedOp>,
         preconfirmed_txns: Vec<(B256, Vec<B256>)>,
+        preconfirmed_block_number: Option<u64>,
         entity_balance_updates: Vec<BalanceUpdate>,
         unmined_entity_balance_updates: Vec<BalanceUpdate>,
         address_updates: Vec<AddressUpdate>,
@@ -1049,6 +1062,7 @@ impl<P: EvmProvider> Chain<P> {
             reorg_depth,
             mined_ops,
             preconfirmed_txns,
+            preconfirmed_block_number,
             unmined_ops,
             entity_balance_updates,
             unmined_entity_balance_updates,
@@ -1400,6 +1414,7 @@ mod tests {
                 ],
                 unmined_ops: vec![],
                 preconfirmed_txns: vec![],
+                preconfirmed_block_number: None,
                 entity_balance_updates: vec![],
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
@@ -1458,7 +1473,7 @@ mod tests {
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
-
+                preconfirmed_block_number: None,
                 update_type: UpdateType::Confirmed,
             }
         );
@@ -1529,6 +1544,7 @@ mod tests {
                 ],
                 unmined_ops: vec![fake_mined_op(102, ENTRY_POINT_ADDRESS_V0_6)],
                 preconfirmed_txns: vec![],
+                preconfirmed_block_number: None,
                 entity_balance_updates: vec![fake_mined_balance_update(
                     addr(3),
                     0,
@@ -1614,6 +1630,7 @@ mod tests {
                     fake_mined_op(102, ENTRY_POINT_ADDRESS_V0_6)
                 ],
                 preconfirmed_txns: vec![],
+                preconfirmed_block_number: None,
                 unmined_entity_balance_updates: vec![
                     fake_mined_balance_update(addr(1), 0, true, ENTRY_POINT_ADDRESS_V0_6),
                     fake_mined_balance_update(addr(9), 0, false, ENTRY_POINT_ADDRESS_V0_6),
@@ -1682,6 +1699,7 @@ mod tests {
                     fake_mined_op(102, ENTRY_POINT_ADDRESS_V0_6)
                 ],
                 preconfirmed_txns: vec![],
+                preconfirmed_block_number: None,
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
@@ -1767,6 +1785,7 @@ mod tests {
                     fake_mined_op(103, ENTRY_POINT_ADDRESS_V0_6)
                 ],
                 preconfirmed_txns: vec![],
+                preconfirmed_block_number: None,
                 entity_balance_updates: vec![],
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
@@ -1829,6 +1848,7 @@ mod tests {
                 ],
                 unmined_ops: vec![],
                 preconfirmed_txns: vec![],
+                preconfirmed_block_number: None,
                 address_updates: vec![],
                 reorg_larger_than_history: false,
                 update_type: UpdateType::Confirmed,
@@ -1871,6 +1891,7 @@ mod tests {
                 ],
                 unmined_ops: vec![],
                 preconfirmed_txns: vec![],
+                preconfirmed_block_number: None,
                 entity_balance_updates: vec![],
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
@@ -1913,6 +1934,7 @@ mod tests {
                 ],
                 unmined_ops: vec![],
                 preconfirmed_txns: vec![],
+                preconfirmed_block_number: None,
                 entity_balance_updates: vec![
                     fake_mined_balance_update(addr(1), 0, true, ENTRY_POINT_ADDRESS_V0_6),
                     fake_mined_balance_update(addr(2), 0, true, ENTRY_POINT_ADDRESS_V0_6),
@@ -1933,14 +1955,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_address_update() {
-        let parent_hash = B256::random();
-
         let (mut chain, controller) = new_chain();
         chain.to_track.write().insert(addr(0));
         chain.blocks.push_back(BlockSummary {
             number: 0,
             hash: B256::ZERO,
-            parent_hash,
             timestamp: 0.into(),
             ops: vec![],
             transactions: vec![],
@@ -1966,6 +1985,7 @@ mod tests {
                 mined_ops: vec![],
                 unmined_ops: vec![],
                 preconfirmed_txns: vec![],
+                preconfirmed_block_number: None,
                 entity_balance_updates: vec![],
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![AddressUpdate {
@@ -1982,13 +2002,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_address_update_multiple_blocks() {
-        let parent_hash = B256::random();
         let (mut chain, controller) = new_chain();
         chain.to_track.write().insert(addr(0));
         chain.blocks.push_back(BlockSummary {
             number: 0,
             hash: B256::ZERO,
-            parent_hash,
             timestamp: 0.into(),
             ops: vec![],
             transactions: vec![],
@@ -2018,6 +2036,7 @@ mod tests {
                 mined_ops: vec![],
                 unmined_ops: vec![],
                 preconfirmed_txns: vec![],
+                preconfirmed_block_number: None,
                 entity_balance_updates: vec![],
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![AddressUpdate {
