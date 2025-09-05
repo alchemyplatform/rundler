@@ -89,8 +89,10 @@ pub(crate) struct PoolInner<D> {
     /// Removed operation hashes sorted by block number, so we can forget them
     /// when enough new blocks have passed.
     mined_hashes_with_block_numbers: BTreeSet<(u64, B256)>,
-    /// Unmined UO to bundle transaction mapping.
+    /// Preconfirmed UO to bundle transaction mapping.
     preconfirmed_uos_bundle_mapping: HashMap<B256, B256>,
+    /// Preconfirmed uos at block number
+    preconfiemed_uos_at_block_number: HashMap<u64, Vec<B256>>,
     /// Count of operations by entity address
     count_by_address: HashMap<Address, EntityCounter>,
     /// Submission ID counter
@@ -127,6 +129,7 @@ where
             mined_at_block_number_by_hash: HashMap::new(),
             mined_hashes_with_block_numbers: BTreeSet::new(),
             preconfirmed_uos_bundle_mapping: HashMap::new(),
+            preconfiemed_uos_at_block_number: HashMap::new(),
             count_by_address: HashMap::new(),
             submission_id: 0,
             pool_size: SizeTracker::default(),
@@ -227,14 +230,39 @@ where
         self.preconfirmed_uos_bundle_mapping.keys().cloned()
     }
 
-    pub(crate) fn preconfirm_txns(&mut self, txn_to_uos: Vec<(B256, Vec<B256>)>) {
+    pub(crate) fn preconfirm_txns(&mut self, txn_to_uos: &Vec<(B256, Vec<B256>)>) {
         for (txn, uos) in txn_to_uos {
             for uo in uos {
-                if self.get_operation_by_hash(uo).is_some() {
-                    self.preconfirmed_uos_bundle_mapping.insert(uo, txn);
+                if self.get_operation_by_hash(*uo).is_some() {
+                    self.preconfirmed_uos_bundle_mapping.insert(*uo, *txn);
                 }
             }
         }
+    }
+
+    pub(crate) fn preconfirm_txns_at_block_number(
+        &mut self,
+        txn_to_uos: &[(B256, Vec<B256>)],
+        block_number: u64,
+    ) {
+        self.preconfiemed_uos_at_block_number.insert(
+            block_number,
+            txn_to_uos.iter().flat_map(|(_, uos)| uos.clone()).collect(),
+        );
+    }
+
+    pub(crate) fn remove_out_of_date_preconfirmed_uos(&mut self, block_number: u64) {
+        self.preconfiemed_uos_at_block_number
+            .iter()
+            .for_each(|(bn, uos)| {
+                if *bn <= block_number {
+                    for uo in uos {
+                        self.preconfirmed_uos_bundle_mapping.remove(uo);
+                    }
+                }
+            });
+        self.preconfiemed_uos_at_block_number
+            .retain(|bn, _| *bn > block_number);
     }
 
     pub(crate) fn get_pre_confirmed_uo(&self, uo_hash: B256) -> Option<B256> {

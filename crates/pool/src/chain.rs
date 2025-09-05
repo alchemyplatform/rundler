@@ -104,6 +104,7 @@ pub(crate) struct ChainUpdate {
     pub mined_ops: Vec<MinedOp>,
     pub unmined_ops: Vec<MinedOp>,
     pub preconfirmed_txns: Vec<(B256, Vec<B256>)>,
+    pub preconfirmed_block_number: Option<u64>,
     /// List of on-chain entity balance updates made in the most recent block
     pub entity_balance_updates: Vec<BalanceUpdate>,
     /// List of entity balance updates that have been unmined due to a reorg
@@ -294,7 +295,9 @@ impl<P: EvmProvider> Chain<P> {
                 .as_millis();
             let block_timestamp_ms = (pending_block.header.timestamp * 1000) as u128;
 
-            let chain_update = self.process_pending_block(&summary).await;
+            let chain_update = self
+                .process_pending_block(&summary, pending_block.header.number)
+                .await;
             let header = &pending_block.inner.header;
             if let Some(pending_block) = &self.pending_block {
                 if pending_block.hash == header.hash && latest_block_hash == full_block_hash {
@@ -312,6 +315,7 @@ impl<P: EvmProvider> Chain<P> {
             }
 
             let preconfirmed_txns = chain_update.preconfirmed_txns;
+            let preconfirmed_block_number = chain_update.preconfirmed_block_number;
 
             for attempt in 0..=self.settings.max_sync_retries {
                 if attempt > 0 {
@@ -328,6 +332,7 @@ impl<P: EvmProvider> Chain<P> {
                             .block_sync_time_ms
                             .record(start.elapsed().as_millis() as f64);
                         update.preconfirmed_txns = preconfirmed_txns;
+                        update.preconfirmed_block_number = preconfirmed_block_number;
                         return update;
                     }
                     Err(error) => {
@@ -449,8 +454,12 @@ impl<P: EvmProvider> Chain<P> {
     pub(crate) async fn process_pending_block(
         &mut self,
         pending_block: &BlockSummary,
+        preconfirmed_block_number: u64,
     ) -> ChainUpdate {
-        self.new_pending_update(pending_block.transactions.to_vec())
+        self.new_pending_update(
+            pending_block.transactions.to_vec(),
+            preconfirmed_block_number,
+        )
     }
 
     #[instrument(skip_all)]
@@ -517,6 +526,7 @@ impl<P: EvmProvider> Chain<P> {
             mined_ops,
             vec![],
             vec![],
+            None,
             entity_balance_updates,
             vec![],
             vec![],
@@ -609,6 +619,7 @@ impl<P: EvmProvider> Chain<P> {
             mined_ops,
             unmined_ops,
             vec![],
+            None,
             entity_balance_updates,
             unmined_entity_balance_updates,
             address_updates,
@@ -1012,10 +1023,15 @@ impl<P: EvmProvider> Chain<P> {
         self.blocks.get((number - earliest_number) as usize)
     }
 
-    fn new_pending_update(&self, preconfirmed_txns: Vec<(B256, Vec<B256>)>) -> ChainUpdate {
+    fn new_pending_update(
+        &self,
+        preconfirmed_txns: Vec<(B256, Vec<B256>)>,
+        preconfirmed_block_number: u64,
+    ) -> ChainUpdate {
         ChainUpdate {
             preconfirmed_txns,
             update_type: UpdateType::Preconfirmed,
+            preconfirmed_block_number: Some(preconfirmed_block_number),
             ..Default::default()
         }
     }
@@ -1027,6 +1043,7 @@ impl<P: EvmProvider> Chain<P> {
         mined_ops: Vec<MinedOp>,
         unmined_ops: Vec<MinedOp>,
         preconfirmed_txns: Vec<(B256, Vec<B256>)>,
+        preconfirmed_block_number: Option<u64>,
         entity_balance_updates: Vec<BalanceUpdate>,
         unmined_entity_balance_updates: Vec<BalanceUpdate>,
         address_updates: Vec<AddressUpdate>,
@@ -1045,6 +1062,7 @@ impl<P: EvmProvider> Chain<P> {
             reorg_depth,
             mined_ops,
             preconfirmed_txns,
+            preconfirmed_block_number,
             unmined_ops,
             entity_balance_updates,
             unmined_entity_balance_updates,
@@ -1396,6 +1414,7 @@ mod tests {
                 ],
                 unmined_ops: vec![],
                 preconfirmed_txns: vec![],
+                preconfirmed_block_number: None,
                 entity_balance_updates: vec![],
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
@@ -1454,7 +1473,7 @@ mod tests {
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
-
+                preconfirmed_block_number: None,
                 update_type: UpdateType::Confirmed,
             }
         );
@@ -1525,6 +1544,7 @@ mod tests {
                 ],
                 unmined_ops: vec![fake_mined_op(102, ENTRY_POINT_ADDRESS_V0_6)],
                 preconfirmed_txns: vec![],
+                preconfirmed_block_number: None,
                 entity_balance_updates: vec![fake_mined_balance_update(
                     addr(3),
                     0,
@@ -1610,6 +1630,7 @@ mod tests {
                     fake_mined_op(102, ENTRY_POINT_ADDRESS_V0_6)
                 ],
                 preconfirmed_txns: vec![],
+                preconfirmed_block_number: None,
                 unmined_entity_balance_updates: vec![
                     fake_mined_balance_update(addr(1), 0, true, ENTRY_POINT_ADDRESS_V0_6),
                     fake_mined_balance_update(addr(9), 0, false, ENTRY_POINT_ADDRESS_V0_6),
@@ -1678,6 +1699,7 @@ mod tests {
                     fake_mined_op(102, ENTRY_POINT_ADDRESS_V0_6)
                 ],
                 preconfirmed_txns: vec![],
+                preconfirmed_block_number: None,
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
                 reorg_larger_than_history: false,
@@ -1763,6 +1785,7 @@ mod tests {
                     fake_mined_op(103, ENTRY_POINT_ADDRESS_V0_6)
                 ],
                 preconfirmed_txns: vec![],
+                preconfirmed_block_number: None,
                 entity_balance_updates: vec![],
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
@@ -1825,6 +1848,7 @@ mod tests {
                 ],
                 unmined_ops: vec![],
                 preconfirmed_txns: vec![],
+                preconfirmed_block_number: None,
                 address_updates: vec![],
                 reorg_larger_than_history: false,
                 update_type: UpdateType::Confirmed,
@@ -1867,6 +1891,7 @@ mod tests {
                 ],
                 unmined_ops: vec![],
                 preconfirmed_txns: vec![],
+                preconfirmed_block_number: None,
                 entity_balance_updates: vec![],
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![],
@@ -1909,6 +1934,7 @@ mod tests {
                 ],
                 unmined_ops: vec![],
                 preconfirmed_txns: vec![],
+                preconfirmed_block_number: None,
                 entity_balance_updates: vec![
                     fake_mined_balance_update(addr(1), 0, true, ENTRY_POINT_ADDRESS_V0_6),
                     fake_mined_balance_update(addr(2), 0, true, ENTRY_POINT_ADDRESS_V0_6),
@@ -1959,6 +1985,7 @@ mod tests {
                 mined_ops: vec![],
                 unmined_ops: vec![],
                 preconfirmed_txns: vec![],
+                preconfirmed_block_number: None,
                 entity_balance_updates: vec![],
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![AddressUpdate {
@@ -2009,6 +2036,7 @@ mod tests {
                 mined_ops: vec![],
                 unmined_ops: vec![],
                 preconfirmed_txns: vec![],
+                preconfirmed_block_number: None,
                 entity_balance_updates: vec![],
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![AddressUpdate {

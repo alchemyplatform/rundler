@@ -231,8 +231,24 @@ where
         Ok(())
     }
 
-    fn update_preconfirmed_uos(&self, txn_to_uos: Vec<(B256, Vec<B256>)>) {
-        self.state.write().pool.preconfirm_txns(txn_to_uos);
+    fn update_preconfirmed_uos(
+        &self,
+        txn_to_uos: Vec<(B256, Vec<B256>)>,
+        preconfirmed_block_number: Option<u64>,
+    ) {
+        if let Some(preconfirmed_block_number) = preconfirmed_block_number {
+            self.state.write().pool.preconfirm_txns(&txn_to_uos);
+            self.state
+                .write()
+                .pool
+                .preconfirm_txns_at_block_number(&txn_to_uos, preconfirmed_block_number);
+        }
+    }
+    fn remove_out_of_date_preconfirmed_uos(&self, block_number: u64) {
+        self.state
+            .write()
+            .pool
+            .remove_out_of_date_preconfirmed_uos(block_number);
     }
 }
 
@@ -247,11 +263,13 @@ where
         let _timer = CustomTimerGuard::new(self.metrics.update_process_time_ms.clone());
 
         let preconfirmed_txns = update.preconfirmed_txns.clone();
-        self.update_preconfirmed_uos(preconfirmed_txns);
+        self.update_preconfirmed_uos(preconfirmed_txns, update.preconfirmed_block_number);
         if update.update_type == UpdateType::Preconfirmed {
             return;
         }
 
+        let latest_block_number = update.latest_block_number;
+        self.remove_out_of_date_preconfirmed_uos(latest_block_number);
         let deduped_ops = update.deduped_ops();
         let mined_ops = deduped_ops
             .mined_ops
@@ -1177,6 +1195,7 @@ mod tests {
             }],
             unmined_ops: vec![],
             preconfirmed_txns: vec![],
+            preconfirmed_block_number: None,
             entity_balance_updates: vec![BalanceUpdate {
                 address: paymaster,
                 amount: U256::from(100),
@@ -1279,6 +1298,7 @@ mod tests {
             unmined_ops: vec![],
 
             preconfirmed_txns: vec![],
+            preconfirmed_block_number: None,
             entity_balance_updates: vec![BalanceUpdate {
                 address: paymaster,
                 amount: U256::from(100),
@@ -1328,6 +1348,7 @@ mod tests {
                 is_addition: true,
             }],
             preconfirmed_txns: vec![],
+            preconfirmed_block_number: None,
             address_updates: vec![],
             reorg_larger_than_history: false,
             update_type: UpdateType::Confirmed,
@@ -1366,6 +1387,7 @@ mod tests {
             }],
             unmined_ops: vec![],
             preconfirmed_txns: vec![],
+            preconfirmed_block_number: None,
             entity_balance_updates: vec![],
             unmined_entity_balance_updates: vec![],
             address_updates: vec![],
@@ -1411,6 +1433,7 @@ mod tests {
             }],
             unmined_ops: vec![],
             preconfirmed_txns: vec![],
+            preconfirmed_block_number: None,
             entity_balance_updates: vec![],
             unmined_entity_balance_updates: vec![],
             address_updates: vec![],
@@ -1490,6 +1513,7 @@ mod tests {
             }],
             entity_balance_updates: vec![],
             preconfirmed_txns: vec![],
+            preconfirmed_block_number: None,
             unmined_entity_balance_updates: vec![],
             unmined_ops: vec![],
             address_updates: vec![],
@@ -1571,6 +1595,7 @@ mod tests {
             mined_ops: vec![],
             unmined_ops: vec![],
             preconfirmed_txns: vec![preconfirmed_txns[0].clone()],
+            preconfirmed_block_number: Some(1),
             entity_balance_updates: vec![],
             unmined_entity_balance_updates: vec![],
             address_updates: vec![],
@@ -1593,6 +1618,7 @@ mod tests {
             mined_ops: vec![],
             unmined_ops: vec![],
             preconfirmed_txns,
+            preconfirmed_block_number: Some(2),
             entity_balance_updates: vec![],
             unmined_entity_balance_updates: vec![],
             address_updates: vec![],
