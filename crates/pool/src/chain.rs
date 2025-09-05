@@ -262,6 +262,7 @@ impl<P: EvmProvider> Chain<P> {
         let full_block_hash = self.blocks.back().map(|m| m.hash).unwrap_or_default();
 
         loop {
+            // TODO: parallelize the two block watcher calls. one for pending block and one for latest block.
             let pending_block_fut = block_watcher::wait_for_new_block(
                 &self.provider,
                 B256::ZERO,
@@ -296,7 +297,7 @@ impl<P: EvmProvider> Chain<P> {
             let chain_update = self.process_pending_block(&summary).await;
             let header = &pending_block.inner.header;
             if let Some(pending_block) = &self.pending_block {
-                if pending_block.hash == header.hash {
+                if pending_block.hash == header.hash && latest_block_hash == full_block_hash {
                     continue; // same block
                 }
             }
