@@ -385,7 +385,7 @@ where
             );
         }
         let ops_seen: f64 = (mined_op_count as isize - unmined_op_count as isize) as f64;
-        self.ep_specific_metrics.ops_seen.increment(ops_seen);
+        self.ep_specific_metrics.ops_seen.increment(ops_seen as u64);
         self.ep_specific_metrics
             .unmined_operations
             .increment(unmined_op_count);
@@ -1011,7 +1011,7 @@ where
 #[metrics(scope = "op_pool")]
 struct UoPoolMetricsEPSpecific {
     #[metric(describe = "the number of ops seen.")]
-    ops_seen: Gauge,
+    ops_seen: Counter,
     #[metric(describe = "the count of unmined ops.")]
     unmined_operations: Counter,
     #[metric(describe = "the count of removed ops.")]
