@@ -21,8 +21,10 @@ use serde::{Deserialize, Serialize};
 pub enum BlockTag {
     /// Latest state
     #[default]
+    #[serde(alias = "latest")]
     Latest,
 
     /// Pending state
+    #[serde(alias = "pending")]
     Pending,
 }
