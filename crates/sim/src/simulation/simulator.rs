@@ -405,9 +405,28 @@ where
             .map_err(|e| SimulationError::from(anyhow::anyhow!("should call get_code_hash {e:?}")))
             .await?;
 
+        tracing::info!(
+            "CHECK_CODE_HASH: uo hash: {:?}, block id: {:?}, accessed contracts: {:?}, code hash: {:?}",
+            context.op.hash(),
+            block_id,
+            tracer_out
+                .accessed_contracts
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            code_hash
+        );
+
         if let Some(expected_code_hash) = expected_code_hash {
             // [COD-010]
             if expected_code_hash != code_hash {
+                tracing::error!(
+                    "CHECK_CODE_HASH: uo hash: {:?}, expected code hash: {:?}, code hash: {:?}",
+                    context.op.hash(),
+                    expected_code_hash,
+                    code_hash
+                );
+
                 violations.push(SimulationViolation::CodeHashChanged)
             }
         }

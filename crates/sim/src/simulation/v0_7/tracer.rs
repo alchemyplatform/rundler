@@ -19,7 +19,7 @@ use rundler_provider::{
     BlockId, EvmProvider, GethDebugTracerType, GethDebugTracingCallOptions,
     GethDebugTracingOptions, GethTrace, SimulationProvider,
 };
-use rundler_types::{v0_7::UserOperation, ExpectedStorage, Opcode};
+use rundler_types::{v0_7::UserOperation, ExpectedStorage, Opcode, UserOperation as _};
 use serde::Deserialize;
 
 use crate::simulation::context::ContractInfo;
@@ -142,6 +142,8 @@ where
         op: UserOperation,
         block_id: BlockId,
     ) -> anyhow::Result<TracerOutput> {
+        let op_hash = op.hash();
+
         let (tx, state_override) = self
             .entry_point
             .get_tracer_simulate_validation_call(op)
@@ -165,6 +167,13 @@ where
                 },
             )
             .await?;
+
+        tracing::info!(
+            "TRACE_SIMULATE_VALIDATION: traced uo hash: {:?}, block id: {:?}, output: {:?}",
+            op_hash,
+            block_id,
+            out
+        );
 
         TracerOutput::try_from(out)
     }
