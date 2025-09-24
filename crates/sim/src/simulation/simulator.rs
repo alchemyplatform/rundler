@@ -407,7 +407,8 @@ where
 
         if let Some(expected_code_hash) = expected_code_hash {
             // [COD-010]
-            if expected_code_hash != code_hash {
+            // If the expected code hash is zero, skip the check.
+            if expected_code_hash != B256::ZERO && expected_code_hash != code_hash {
                 violations.push(SimulationViolation::CodeHashChanged)
             }
         }
@@ -1276,5 +1277,72 @@ mod tests {
                 context.entry_point_out.return_info.valid_after,
             )]
         );
+    }
+
+    #[tokio::test]
+    async fn test_code_hash_zero() {
+        // test that ensures we don't get a code hash changed violation if the expected code hash is zero
+        let (mut provider, mut ep, mut context_provider) = create_base_config();
+        ep.expect_address()
+            .return_const(address!("5ff137d4b0fdcd49dca30c7cf57e578a026d2789"));
+        context_provider
+            .expect_get_specific_violations()
+            .returning(|_| Ok(vec![]));
+        provider
+            .expect_get_code_hash()
+            .returning(|_, _| Ok(B256::random()));
+
+        let mut context = get_test_context();
+        context.tracer_out.accessed_contracts.insert(
+            address!("5ff137d4b0fdcd49dca30c7cf57e578a026d2789"),
+            ContractInfo {
+                header: "0xEFF000".to_string(),
+                opcode: Opcode::CALL,
+                length: 32,
+            },
+        );
+
+        let simulator = create_simulator(provider, ep, context_provider);
+        let res = simulator
+            .check_code_hash(&mut context, Some(B256::ZERO))
+            .await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_code_hash_changed() {
+        // test that ensures we get a code hash changed violation if the expected code hash is not zero
+        // and the code hash is different
+        let (mut provider, mut ep, mut context_provider) = create_base_config();
+        ep.expect_address()
+            .return_const(address!("5ff137d4b0fdcd49dca30c7cf57e578a026d2789"));
+        context_provider
+            .expect_get_specific_violations()
+            .returning(|_| Ok(vec![]));
+        provider
+            .expect_get_code_hash()
+            .returning(|_, _| Ok(B256::random()));
+
+        let mut context = get_test_context();
+        context.tracer_out.accessed_contracts.insert(
+            address!("5ff137d4b0fdcd49dca30c7cf57e578a026d2789"),
+            ContractInfo {
+                header: "0xEFF000".to_string(),
+                opcode: Opcode::CALL,
+                length: 32,
+            },
+        );
+        let simulator = create_simulator(provider, ep, context_provider);
+        let res = simulator
+            .check_code_hash(&mut context, Some(B256::random()))
+            .await;
+
+        let ViolationError::Violations(violations) = res.err().unwrap().violation_error else {
+            panic!("expected violations");
+        };
+        let Some(violation) = violations.first() else {
+            panic!("expected violation");
+        };
+        assert_eq!(*violation, SimulationViolation::CodeHashChanged);
     }
 }
