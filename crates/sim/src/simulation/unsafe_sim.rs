@@ -13,9 +13,11 @@
 
 use std::marker::PhantomData;
 
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{map::HashSet, Address, B256};
 use rundler_provider::{EntryPoint, SimulationProvider};
-use rundler_types::{pool::SimulationViolation, UserOperation, ValidTimeRange, TIME_RANGE_BUFFER};
+use rundler_types::{
+    pool::SimulationViolation, ExpectedStorage, UserOperation, ValidTimeRange, TIME_RANGE_BUFFER,
+};
 
 use super::Settings;
 use crate::{simulation::context, SimulationError, SimulationResult, Simulator, ViolationError};
@@ -138,6 +140,8 @@ where
                 entity_infos: Some(entity_infos),
             })?
         } else {
+            // NOTE: ensure that the fields that are not simulated are set to values
+            // that when compared to a SAFE 2nd simulation will not cause a violation.
             Ok(SimulationResult {
                 mempools: vec![B256::ZERO],
                 pre_op_gas,
@@ -148,7 +152,10 @@ where
                     validation_result.sender_info,
                     &self.settings,
                 ),
-                ..Default::default()
+                code_hash: B256::ZERO,
+                accessed_addresses: HashSet::new(),
+                associated_addresses: HashSet::new(),
+                expected_storage: ExpectedStorage::default(),
             })
         }
     }
