@@ -15,14 +15,15 @@ use alloy_contract::Error as ContractError;
 use alloy_eips::eip7702::SignedAuthorization;
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::network::{AnyNetwork, TransactionBuilder7702};
-use alloy_rpc_types_eth::{state::StateOverride, BlockId};
-use alloy_sol_types::{ContractError as SolContractError, SolError, SolInterface};
+use alloy_rpc_types_eth::{
+    state::{AccountOverride, StateOverride},
+    BlockId,
+};
+use alloy_sol_types::{ContractError as SolContractError, SolInterface};
 use alloy_transport::TransportError;
 use anyhow::Context;
 use rundler_contracts::v0_6::{
-    DepositInfo as DepositInfoV0_6,
-    GetBalances::{self, GetBalancesResult},
-    IAggregator,
+    DepositInfo as DepositInfoV0_6, GetEntryPointBalances, IAggregator,
     IEntryPoint::{
         ExecutionResult as ExecutionResultV0_6, FailedOp, IEntryPointCalls, IEntryPointErrors,
         IEntryPointInstance,
@@ -130,23 +131,29 @@ where
 
     #[instrument(skip_all)]
     async fn get_balances(&self, addresses: Vec<Address>) -> ProviderResult<Vec<U256>> {
-        let provider = self.i_entry_point.provider();
-        let call = GetBalances::deploy_builder(provider, *self.address(), addresses)
-            .into_transaction_request();
-        let out = provider
-            .call(call)
-            .await
-            .err()
-            .context("get balances call should revert")?;
-        let out = GetBalancesResult::abi_decode(
-            &out.as_error_resp()
-                .context("get balances call should revert")?
-                .as_revert_data()
-                .context("should get revert data from get balances call")?,
-        )
-        .context("should decode revert data from get balances call")?;
+        let helper_addr = Address::random();
+        let helper = GetEntryPointBalances::new(helper_addr, self.i_entry_point.provider());
+        let mut overrides = StateOverride::default();
+        let account = AccountOverride {
+            code: Some(GetEntryPointBalances::DEPLOYED_BYTECODE.clone()),
+            ..Default::default()
+        };
+        overrides.insert(helper_addr, account);
+        let ret = helper
+            .getBalances(*self.address(), addresses.clone())
+            .state(overrides)
+            .call()
+            .await?;
 
-        Ok(out.balances)
+        if ret.len() != addresses.len() {
+            return Err(anyhow::anyhow!(
+                "expected {} balances, got {}",
+                addresses.len(),
+                ret.len()
+            )
+            .into());
+        }
+        Ok(ret)
     }
 }
 

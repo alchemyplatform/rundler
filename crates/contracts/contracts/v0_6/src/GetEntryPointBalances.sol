@@ -3,14 +3,13 @@ pragma solidity ^0.8.12;
 
 import "@account-abstraction/interfaces/IStakeManager.sol";
 
-contract GetBalances {
-    error GetBalancesResult(uint256[] balances);
+contract GetEntryPointBalances {
 
-    constructor(address stakeManager, address[] memory addresses) {
-        revert GetBalancesResult(getBalancesHelper(stakeManager, addresses));
+    constructor() {
+        require(block.number < 100, "should not be deployed");
     }
 
-    function getBalancesHelper(
+    function getBalances(
         address stakeManager,
         address[] memory addresses
     ) public view returns (uint256[] memory) {

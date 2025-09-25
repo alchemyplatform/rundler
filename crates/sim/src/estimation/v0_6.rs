@@ -523,11 +523,7 @@ mod tests {
     use alloy_primitives::{hex, uint};
     use alloy_sol_types::{Revert, SolError, SolValue};
     use rundler_contracts::{
-        common::EstimationTypes::*,
-        v0_6::{
-            GetBalances::{GetBalancesErrors, GetBalancesResult},
-            UserOperation as ContractUserOperation,
-        },
+        common::EstimationTypes::*, v0_6::UserOperation as ContractUserOperation,
     };
     use rundler_provider::{
         ExecutionResult, GasUsedResult, MockEntryPointV0_6, MockEvmProvider, MockFeeEstimator,
@@ -917,26 +913,6 @@ mod tests {
         provider
             .expect_call()
             .returning(move |_a, _b, _c| Ok(Bytes::new()));
-
-        let (estimator, _) = create_estimator(entry, provider);
-        let optional_op = demo_user_op_optional_gas(Some(10000));
-        let user_op = demo_user_op();
-        let estimation = estimator
-            .estimate_verification_gas(&optional_op, &user_op, B256::ZERO, StateOverride::default())
-            .await;
-
-        assert!(estimation.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_binary_search_verification_gas_invalid_message() {
-        let (entry, mut provider) = create_base_config();
-
-        // unexpected revert value
-        add_verification_gas_result(
-            &mut provider,
-            GetBalancesErrors::GetBalancesResult(GetBalancesResult { balances: vec![] }),
-        );
 
         let (estimator, _) = create_estimator(entry, provider);
         let optional_op = demo_user_op_optional_gas(Some(10000));
