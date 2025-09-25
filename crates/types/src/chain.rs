@@ -24,6 +24,15 @@ const ENTRY_POINT_ADDRESS_V0_6: &str = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d27
 const ENTRY_POINT_ADDRESS_V0_7: &str = "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
 const MULTICALL3_ADDRESS: &str = "0xcA11bde05977b3631167028862bE2a173976CA11";
 
+/// Method for retrieving the balance of an account.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum BalanceRetrievalMethod {
+    /// Use the getDepositInfo method on the entry point contract
+    StakeManagerGetDepositInfo,
+    /// Use the getBalances method on the entry point contract
+    EntryPointGetBalances,
+}
+
 /// Chain specification for Rundler
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ChainSpec {
@@ -70,6 +79,8 @@ pub struct ChainSpec {
     pub calldata_zero_byte_gas: u64,
     /// Gas cost for a non-zero byte in calldata
     pub calldata_non_zero_byte_gas: u64,
+    /// Balance retireval method
+    pub balance_retrieval_method: BalanceRetrievalMethod,
 
     /*
      * Gas estimation
@@ -186,6 +197,7 @@ impl Default for ChainSpec {
             per_user_op_word_gas: 4,
             calldata_zero_byte_gas: 4,
             calldata_non_zero_byte_gas: 16,
+            balance_retrieval_method: BalanceRetrievalMethod::StakeManagerGetDepositInfo,
             eip1559_enabled: true,
             eip7702_enabled: false,
             eip7623_enabled: false,

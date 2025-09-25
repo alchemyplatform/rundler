@@ -22,6 +22,7 @@ use alloy_rpc_types_eth::{
 use alloy_sol_types::{ContractError as SolContractError, SolError, SolInterface, SolValue};
 use alloy_transport::TransportError;
 use anyhow::Context;
+use futures_util::future;
 use rundler_contracts::v0_7::{
     DepositInfo as DepositInfoV0_7,
     GetBalances::{self, GetBalancesResult},
@@ -37,7 +38,7 @@ use rundler_contracts::v0_7::{
 };
 use rundler_types::{
     authorization::Eip7702Auth,
-    chain::ChainSpec,
+    chain::{self, ChainSpec},
     da::{DAGasBlockData, DAGasData},
     v0_7::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
     EntryPointVersion, GasFees, UserOperation as _, UserOpsPerAggregator, ValidationOutput,
@@ -92,6 +93,52 @@ where
             chain_spec,
         }
     }
+    async fn get_balances_via_contract(
+        &self,
+        stake_manager: Address,
+        addresses: Vec<Address>,
+    ) -> ProviderResult<Vec<U256>> {
+        let provider = self.i_entry_point.provider();
+        let call = GetBalances::deploy_builder(provider, stake_manager, addresses)
+            .into_transaction_request();
+        let out = provider
+            .call(call)
+            .await
+            .err()
+            .context("get balances call should revert")?;
+
+        let out = GetBalancesResult::abi_decode(
+            &out.as_error_resp()
+                .context("get balances call should revert")?
+                .as_revert_data()
+                .context("should get revert data from get balances call")?,
+        )
+        .context("should decode revert data from get balances call")?;
+
+        Ok(out.balances)
+    }
+
+    async fn get_balance_via_entry_point(
+        &self,
+        provider: &AP,
+        address: Address,
+    ) -> ProviderResult<U256> {
+        provider
+            .get_balance(address)
+            .await
+            .map_err(crate::ProviderError::RPC)
+    }
+
+    async fn get_balances_via_entry_point(
+        &self,
+        addresses: Vec<Address>,
+    ) -> ProviderResult<Vec<U256>> {
+        let fut = addresses
+            .into_iter()
+            .map(move |addr| self.get_balance_via_entry_point(self.i_entry_point.provider(), addr));
+        let out = future::try_join_all(fut).await?;
+        Ok(out)
+    }
 }
 
 #[async_trait::async_trait]
@@ -136,24 +183,15 @@ where
 
     #[instrument(skip_all)]
     async fn get_balances(&self, addresses: Vec<Address>) -> ProviderResult<Vec<U256>> {
-        let provider = self.i_entry_point.provider();
-        let call = GetBalances::deploy_builder(provider, *self.address(), addresses)
-            .into_transaction_request();
-        let out = provider
-            .call(call)
-            .await
-            .err()
-            .context("get balances call should revert")?;
-
-        let out = GetBalancesResult::abi_decode(
-            &out.as_error_resp()
-                .context("get balances call should revert")?
-                .as_revert_data()
-                .context("should get revert data from get balances call")?,
-        )
-        .context("should decode revert data from get balances call")?;
-
-        Ok(out.balances)
+        match self.chain_spec.balance_retrieval_method {
+            chain::BalanceRetrievalMethod::EntryPointGetBalances => {
+                self.get_balances_via_entry_point(addresses).await
+            }
+            chain::BalanceRetrievalMethod::StakeManagerGetDepositInfo => {
+                self.get_balances_via_contract(*self.address(), addresses)
+                    .await
+            }
+        }
     }
 }
 
