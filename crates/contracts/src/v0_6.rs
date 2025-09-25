@@ -184,10 +184,9 @@ sol! {
 sol!(
     #[allow(missing_docs)]
     #[sol(rpc)]
-    GetBalances,
-    "contracts/out/v0_6/GetBalances.sol/GetBalances.json"
+    GetEntryPointBalances,
+    "contracts/out/v0_6/GetEntryPointBalances.sol/GetEntryPointBalances.json"
 );
-
 // https://etherscan.io/address/0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789#code
 static __ENTRY_POINT_V0_6_DEPLOYED_BYTECODE_HEX: &[u8] = include_bytes!(
     "../contracts/bytecode/entrypoint/0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789_deployed.txt"

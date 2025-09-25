@@ -19,13 +19,11 @@ use alloy_rpc_types_eth::{
     state::{AccountOverride, StateOverride},
     BlockId,
 };
-use alloy_sol_types::{ContractError as SolContractError, SolError, SolInterface, SolValue};
+use alloy_sol_types::{ContractError as SolContractError, SolInterface, SolValue};
 use alloy_transport::TransportError;
 use anyhow::Context;
 use rundler_contracts::v0_7::{
-    DepositInfo as DepositInfoV0_7,
-    GetBalances::{self, GetBalancesResult},
-    IAggregator,
+    DepositInfo as DepositInfoV0_7, GetEntryPointBalances, IAggregator,
     IEntryPoint::{
         FailedOp, FailedOpWithRevert, IEntryPointCalls, IEntryPointErrors, IEntryPointInstance,
     },
@@ -136,24 +134,29 @@ where
 
     #[instrument(skip_all)]
     async fn get_balances(&self, addresses: Vec<Address>) -> ProviderResult<Vec<U256>> {
-        let provider = self.i_entry_point.provider();
-        let call = GetBalances::deploy_builder(provider, *self.address(), addresses)
-            .into_transaction_request();
-        let out = provider
-            .call(call)
-            .await
-            .err()
-            .context("get balances call should revert")?;
+        let helper_addr = Address::random();
+        let helper = GetEntryPointBalances::new(helper_addr, self.i_entry_point.provider());
+        let mut overrides = StateOverride::default();
+        let account = AccountOverride {
+            code: Some(GetEntryPointBalances::DEPLOYED_BYTECODE.clone()),
+            ..Default::default()
+        };
+        overrides.insert(helper_addr, account);
+        let ret = helper
+            .getBalances(*self.address(), addresses.clone())
+            .state(overrides)
+            .call()
+            .await?;
 
-        let out = GetBalancesResult::abi_decode(
-            &out.as_error_resp()
-                .context("get balances call should revert")?
-                .as_revert_data()
-                .context("should get revert data from get balances call")?,
-        )
-        .context("should decode revert data from get balances call")?;
-
-        Ok(out.balances)
+        if ret.len() != addresses.len() {
+            return Err(anyhow::anyhow!(
+                "expected {} balances, got {}",
+                addresses.len(),
+                ret.len()
+            )
+            .into());
+        }
+        Ok(ret)
     }
 }
 

@@ -260,8 +260,8 @@ sol!(
 sol!(
     #[allow(missing_docs)]
     #[sol(rpc)]
-    GetBalances,
-    "contracts/out/v0_7/GetBalances.sol/GetBalances.json"
+    GetEntryPointBalances,
+    "contracts/out/v0_7/GetEntryPointBalances.sol/GetEntryPointBalances.json"
 );
 
 // EntryPointSimulations deployed bytecode
