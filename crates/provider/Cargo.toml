@@ -33,13 +33,16 @@ metrics.workspace = true
 metrics-derive.workspace = true
 mockall = { workspace = true, optional = true }
 moka = { version = "0.12.11", features = ["future"] }
+once_cell.workspace = true
 pin-project.workspace = true
 rand.workspace = true
 reth-tasks = { workspace = true, features = ["rayon"] }
+regex.workspace = true
 rundler-bindings-fastlz.workspace = true
 rundler-contracts.workspace = true
 rundler-types.workspace = true
 rundler-utils.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
