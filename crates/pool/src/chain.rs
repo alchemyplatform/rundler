@@ -264,12 +264,7 @@ impl<P: EvmProvider> Chain<P> {
 
         loop {
             // TODO: parallelize the two block watcher calls. one for pending block and one for latest block.
-            let pending_block_fut = block_watcher::wait_for_new_block(
-                &self.provider,
-                B256::ZERO,
-                self.settings.poll_interval,
-                BlockId::pending(),
-            );
+            let pending_block_fut = block_watcher::get_block(&self.provider, BlockId::pending());
             let latest_block_fut = block_watcher::wait_for_new_block(
                 &self.provider,
                 // force it always get the latest block hash.
@@ -279,36 +274,39 @@ impl<P: EvmProvider> Chain<P> {
             );
             let (pending_block_res, latest_block_res) =
                 future::join(pending_block_fut, latest_block_fut).await;
-            let (_, pending_block) = pending_block_res;
+
             let (latest_block_hash, latest_block) = latest_block_res;
 
-            let summary = match self.load_flash_block_summary(&pending_block).await {
-                Ok(summary) => summary,
-                Err(err) => {
-                    warn!("failed to load block summary: {err:?}");
-                    continue;
+            let mut chain_update = ChainUpdate::default();
+            if let Some((_, pending_block)) = pending_block_res {
+                let summary = match self.load_flash_block_summary(&pending_block).await {
+                    Ok(summary) => summary,
+                    Err(err) => {
+                        warn!("failed to load block summary: {err:?}");
+                        continue;
+                    }
+                };
+                let now_ms = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+                let block_timestamp_ms = (pending_block.header.timestamp * 1000) as u128;
+                chain_update = self
+                    .process_pending_block(&summary, pending_block.header.number)
+                    .await;
+                let header = &pending_block.inner.header;
+                if let Some(pending_block) = &self.pending_block {
+                    if pending_block.hash == header.hash && latest_block_hash == full_block_hash {
+                        continue; // same block
+                    }
                 }
-            };
-            let now_ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis();
-            let block_timestamp_ms = (pending_block.header.timestamp * 1000) as u128;
+                self.metrics
+                    .flashblock_discovery_delay_ms
+                    .record(now_ms.saturating_sub(block_timestamp_ms) as f64);
 
-            let chain_update = self
-                .process_pending_block(&summary, pending_block.header.number)
-                .await;
-            let header = &pending_block.inner.header;
-            if let Some(pending_block) = &self.pending_block {
-                if pending_block.hash == header.hash && latest_block_hash == full_block_hash {
-                    continue; // same block
-                }
+                self.pending_block = Some(summary);
             }
-            self.metrics
-                .flashblock_discovery_delay_ms
-                .record(now_ms.saturating_sub(block_timestamp_ms) as f64);
 
-            self.pending_block = Some(summary);
             // this means the latest block is the same as the full block, so we can return the chain update.
             if latest_block_hash == full_block_hash {
                 return chain_update;
