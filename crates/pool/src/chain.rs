@@ -263,7 +263,6 @@ impl<P: EvmProvider> Chain<P> {
         let full_block_hash = self.blocks.back().map(|m| m.hash).unwrap_or_default();
 
         loop {
-            // TODO: parallelize the two block watcher calls. one for pending block and one for latest block.
             let pending_block_fut = block_watcher::get_block(&self.provider, BlockId::pending());
             let latest_block_fut = block_watcher::wait_for_new_block(
                 &self.provider,
@@ -276,6 +275,11 @@ impl<P: EvmProvider> Chain<P> {
                 future::join(pending_block_fut, latest_block_fut).await;
 
             let (latest_block_hash, latest_block) = latest_block_res;
+
+            if latest_block_hash == full_block_hash && pending_block_res.is_none() {
+                time::sleep(self.settings.poll_interval).await;
+                continue;
+            }
 
             let mut chain_update = ChainUpdate::default();
             if let Some((_, pending_block)) = pending_block_res {
