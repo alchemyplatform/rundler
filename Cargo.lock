@@ -5255,7 +5255,6 @@ dependencies = [
  "rundler-contracts",
  "rundler-types",
  "rundler-utils",
- "serde",
  "serde_json",
  "thiserror 1.0.69",
  "tiny_http",
