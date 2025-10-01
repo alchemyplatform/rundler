@@ -28,7 +28,7 @@ pub use da::new_alloy_da_gas_oracle;
 pub(crate) mod entry_point;
 pub(crate) mod evm;
 pub(crate) mod metrics;
-mod provider_retry;
+mod provider_error_retry;
 mod provider_timeout;
 
 /// Create a new alloy evm provider from a given RPC URL
@@ -48,12 +48,15 @@ pub fn new_alloy_provider(
     let url = Url::parse(rpc_url).context("invalid rpc url")?;
     let metric_layer = AlloyMetricLayer::default();
     // TODO: make this configurable: use a large number for CUPS for now
-    let retry_layer = provider_retry::RetryBackoffLayer::new(10, 500, 1_000_000);
+    let rate_limit_retry_layer =
+        alloy_transport::layers::RetryBackoffLayer::new(10, 500, 1_000_000);
+    let provider_error_retry_layer = provider_error_retry::RetryBackoffLayer::new(5, 500, 5_000);
     // add a timeout layer here.
     let timeout_layer =
         ProviderTimeoutLayer::new(Duration::from_secs(provider_client_timeout_seconds));
     let client = ClientBuilder::default()
-        .layer(retry_layer)
+        .layer(rate_limit_retry_layer)
+        .layer(provider_error_retry_layer)
         .layer(metric_layer)
         .layer(timeout_layer)
         .http(url);
