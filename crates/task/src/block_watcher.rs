@@ -16,8 +16,8 @@
 use std::time::Duration;
 
 use alloy_primitives::B256;
-use rundler_provider::{Block, BlockId, EvmProvider};
-use rundler_utils::retry::{self, UnlimitedRetryOpts};
+use rundler_provider::{Block, BlockId, EvmProvider, ProviderResult};
+use rundler_utils::retry::{self, RetryOpts};
 use tokio::time;
 use tracing::error;
 
@@ -32,19 +32,38 @@ pub async fn wait_for_new_block(
     block_id: BlockId,
 ) -> (B256, Block) {
     loop {
-        let block = retry::with_unlimited_retries(
-            "watch latest block",
-            || provider.get_full_block(block_id),
-            UnlimitedRetryOpts::default(),
-        )
-        .await;
-        let Some(block) = block else {
+        let Some((hash, block)) = get_block(provider, block_id, u64::MAX).await.unwrap() else {
             error!("Latest block should be present when waiting for new block.");
             continue;
         };
-        if last_block_hash != block.header.hash {
-            return (block.header.hash, block);
+        if hash != last_block_hash {
+            return (hash, block);
         }
         time::sleep(poll_interval).await;
     }
+}
+
+/// get a block by tag.
+///
+/// This function polls the provider for the `block_id` block.
+pub async fn get_block(
+    provider: &impl EvmProvider,
+    block_id: BlockId,
+    max_attempts: u64,
+) -> ProviderResult<Option<(B256, Block)>> {
+    let retry_opts = RetryOpts {
+        max_attempts,
+        ..Default::default()
+    };
+    let block = retry::with_retries(
+        "watch latest block",
+        || provider.get_full_block(block_id),
+        retry_opts,
+    )
+    .await?;
+
+    if let Some(block) = block {
+        return Ok(Some((block.header.hash, block)));
+    }
+    Ok(None)
 }

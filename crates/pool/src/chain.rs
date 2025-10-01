@@ -260,96 +260,125 @@ impl<P: EvmProvider> Chain<P> {
 
     #[instrument(skip_all)]
     async fn wait_for_update_flashblocks(&mut self) -> ChainUpdate {
-        let full_block_hash = self.blocks.back().map(|m| m.hash).unwrap_or_default();
-
         loop {
-            // TODO: parallelize the two block watcher calls. one for pending block and one for latest block.
-            let pending_block_fut = block_watcher::wait_for_new_block(
-                &self.provider,
-                B256::ZERO,
-                self.settings.poll_interval,
-                BlockId::pending(),
-            );
-            let latest_block_fut = block_watcher::wait_for_new_block(
-                &self.provider,
-                // force it always get the latest block hash.
-                B256::ZERO,
-                self.settings.poll_interval,
-                BlockId::latest(),
-            );
+            let pending_block_fut = block_watcher::get_block(&self.provider, BlockId::pending(), 5);
+            let latest_block_fut = block_watcher::get_block(&self.provider, BlockId::latest(), 5);
+
             let (pending_block_res, latest_block_res) =
                 future::join(pending_block_fut, latest_block_fut).await;
-            let (_, pending_block) = pending_block_res;
-            let (latest_block_hash, latest_block) = latest_block_res;
 
-            let summary = match self.load_flash_block_summary(&pending_block).await {
-                Ok(summary) => summary,
-                Err(err) => {
-                    warn!("failed to load block summary: {err:?}");
-                    continue;
-                }
-            };
-            let now_ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis();
-            let block_timestamp_ms = (pending_block.header.timestamp * 1000) as u128;
-
-            let chain_update = self
-                .process_pending_block(&summary, pending_block.header.number)
-                .await;
-            let header = &pending_block.inner.header;
-            if let Some(pending_block) = &self.pending_block {
-                if pending_block.hash == header.hash && latest_block_hash == full_block_hash {
-                    continue; // same block
-                }
-            }
-            self.metrics
-                .flashblock_discovery_delay_ms
-                .record(now_ms.saturating_sub(block_timestamp_ms) as f64);
-
-            self.pending_block = Some(summary);
-            // this means the latest block is the same as the full block, so we can return the chain update.
-            if latest_block_hash == full_block_hash {
-                return chain_update;
-            }
-
-            let preconfirmed_txns = chain_update.preconfirmed_txns;
-            let preconfirmed_block_number = chain_update.preconfirmed_block_number;
-
-            for attempt in 0..=self.settings.max_sync_retries {
-                if attempt > 0 {
-                    self.metrics.sync_retries.increment(1);
-                }
-
-                let start = Instant::now();
-
-                let result = self.sync_to_block(latest_block.clone()).await;
-
-                match result {
-                    Ok(mut update) => {
-                        self.metrics
-                            .block_sync_time_ms
-                            .record(start.elapsed().as_millis() as f64);
-                        update.preconfirmed_txns = preconfirmed_txns;
-                        update.preconfirmed_block_number = preconfirmed_block_number;
-                        return update;
-                    }
-                    Err(error) => {
-                        warn!("Failed to update chain at block {latest_block_hash:?}: {error:?}");
-                    }
-                }
-
+            if latest_block_res.is_err() && pending_block_res.is_err() {
+                // if none of the call succeed, sleep and retry form the beginning.
                 time::sleep(self.settings.poll_interval).await;
+                continue;
+            }
+            let pending_update = if let Ok(Some((_, pending_block))) = pending_block_res {
+                self.handle_pending_block(pending_block).await
+            } else {
+                None
+            };
+
+            let latest_update =
+                if let Ok(Some((latest_block_hash, latest_block))) = latest_block_res {
+                    self.handle_latest_blocks(latest_block, latest_block_hash)
+                        .await
+                } else {
+                    None
+                };
+
+            let chain_update = self.merge_updates(pending_update, latest_update).await;
+            if let Some(chian_update) = chain_update {
+                return chian_update;
+            }
+            time::sleep(self.settings.poll_interval).await;
+        }
+    }
+
+    async fn merge_updates(
+        &mut self,
+        pending_update: Option<ChainUpdate>,
+        latest_update: Option<ChainUpdate>,
+    ) -> Option<ChainUpdate> {
+        if pending_update.is_none() && latest_update.is_none() {
+            return None;
+        }
+        if pending_update.is_none() {
+            return latest_update;
+        }
+        if latest_update.is_none() {
+            return pending_update;
+        }
+        let mut chain_update = latest_update.unwrap();
+        let pending_update = pending_update.unwrap();
+        chain_update.preconfirmed_txns = pending_update.preconfirmed_txns;
+        chain_update.preconfirmed_block_number = pending_update.preconfirmed_block_number;
+        Some(chain_update)
+    }
+
+    async fn handle_latest_blocks(
+        &mut self,
+        latest_block: Block,
+        latest_block_hash: B256,
+    ) -> Option<ChainUpdate> {
+        for attempt in 0..=self.settings.max_sync_retries {
+            if attempt > 0 {
+                self.metrics.sync_retries.increment(1);
             }
 
-            warn!(
-                "Failed to update chain at block {:?} after {} retries. Abandoning sync and resetting history.",
-                latest_block_hash, self.settings.max_sync_retries
-            );
-            self.metrics.sync_abandoned.increment(1);
-            self.blocks.clear();
+            let start = Instant::now();
+
+            let result = self.sync_to_block(latest_block.clone()).await;
+
+            match result {
+                Ok(update) => {
+                    self.metrics
+                        .block_sync_time_ms
+                        .record(start.elapsed().as_millis() as f64);
+                    return Some(update);
+                }
+                Err(error) => {
+                    warn!("Failed to update chain at block {latest_block_hash:?}: {error:?}");
+                }
+            }
+            time::sleep(self.settings.poll_interval).await;
         }
+        warn!(
+            "Failed to update chain at block {:?} after {} retries. Abandoning sync and resetting history.",
+            latest_block_hash, self.settings.max_sync_retries
+        );
+        self.metrics.sync_abandoned.increment(1);
+        self.blocks.clear();
+        None
+    }
+
+    async fn handle_pending_block(&mut self, pending_block: Block) -> Option<ChainUpdate> {
+        let summary = match self.load_flash_block_summary(&pending_block).await {
+            Ok(summary) => summary,
+            Err(err) => {
+                warn!("failed to load block summary: {err:?}");
+                return None;
+            }
+        };
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let block_timestamp_ms = (pending_block.header.timestamp * 1000) as u128;
+        let chain_update = self
+            .process_pending_block(&summary, pending_block.header.number)
+            .await;
+        let header = &pending_block.inner.header;
+        if let Some(pending_block) = &self.pending_block {
+            if pending_block.hash == header.hash {
+                return None;
+            }
+        }
+        self.metrics
+            .flashblock_discovery_delay_ms
+            .record(now_ms.saturating_sub(block_timestamp_ms) as f64);
+
+        self.pending_block = Some(summary);
+        Some(chain_update)
     }
 
     #[instrument(skip_all)]
@@ -375,36 +404,10 @@ impl<P: EvmProvider> Chain<P> {
             self.metrics
                 .block_discovery_delay_ms
                 .record(now_ms.saturating_sub(block_timestamp_ms) as f64);
-
-            for attempt in 0..=self.settings.max_sync_retries {
-                if attempt > 0 {
-                    self.metrics.sync_retries.increment(1);
-                }
-
-                let start = Instant::now();
-                let result = self.sync_to_block(block.clone()).await;
-
-                match result {
-                    Ok(update) => {
-                        self.metrics
-                            .block_sync_time_ms
-                            .record(start.elapsed().as_millis() as f64);
-                        return update;
-                    }
-                    Err(error) => {
-                        warn!("Failed to update chain at block {latest_block_hash:?}: {error:?}");
-                    }
-                }
-
-                time::sleep(self.settings.poll_interval).await;
+            let full_update = self.handle_latest_blocks(block, latest_block_hash).await;
+            if let Some(update) = full_update {
+                return update;
             }
-
-            warn!(
-                "Failed to update chain at block {:?} after {} retries. Abandoning sync and resetting history.",
-                latest_block_hash, self.settings.max_sync_retries
-            );
-            self.metrics.sync_abandoned.increment(1);
-            self.blocks.clear();
         }
     }
 
