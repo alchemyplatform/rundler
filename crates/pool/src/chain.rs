@@ -37,9 +37,7 @@ use rundler_contracts::{
         Withdrawn as WithdrawnV07,
     },
 };
-use rundler_provider::{
-    Block, BlockId, EvmProvider, Filter, Log, ProviderResult, TransactionTrait,
-};
+use rundler_provider::{Block, BlockId, EvmProvider, Filter, Log, TransactionTrait};
 use rundler_task::{block_watcher, GracefulShutdown};
 use rundler_types::{pool::AddressUpdate, EntryPointVersion, Timestamp, UserOperationId};
 use tokio::{
@@ -274,13 +272,19 @@ impl<P: EvmProvider> Chain<P> {
                 time::sleep(self.settings.poll_interval).await;
                 continue;
             }
-            let pending_update = self.handle_pending_block(pending_block_res).await;
-            let mut latest_update: Option<ChainUpdate> = None;
-            if let Ok(Some((latest_block_hash, latest_block))) = latest_block_res {
-                latest_update = self
-                    .handle_latest_blocks(latest_block, latest_block_hash)
-                    .await;
-            }
+            let pending_update = if let Ok(Some((_, pending_block))) = pending_block_res {
+                self.handle_pending_block(pending_block).await
+            } else {
+                None
+            };
+
+            let latest_update =
+                if let Ok(Some((latest_block_hash, latest_block))) = latest_block_res {
+                    self.handle_latest_blocks(latest_block, latest_block_hash)
+                        .await
+                } else {
+                    None
+                };
 
             let chain_update = self.merge_updates(pending_update, latest_update).await;
             if let Some(chian_update) = chain_update {
@@ -347,43 +351,34 @@ impl<P: EvmProvider> Chain<P> {
         None
     }
 
-    async fn handle_pending_block(
-        &mut self,
-        pending_block: ProviderResult<Option<(B256, Block)>>,
-    ) -> Option<ChainUpdate> {
-        if pending_block.is_err() {
-            return None;
-        }
-        if let Ok(Some((_, pending_block))) = pending_block {
-            let summary = match self.load_flash_block_summary(&pending_block).await {
-                Ok(summary) => summary,
-                Err(err) => {
-                    warn!("failed to load block summary: {err:?}");
-                    return None;
-                }
-            };
-            let now_ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis();
-            let block_timestamp_ms = (pending_block.header.timestamp * 1000) as u128;
-            let chain_update = self
-                .process_pending_block(&summary, pending_block.header.number)
-                .await;
-            let header = &pending_block.inner.header;
-            if let Some(pending_block) = &self.pending_block {
-                if pending_block.hash == header.hash {
-                    return None;
-                }
+    async fn handle_pending_block(&mut self, pending_block: Block) -> Option<ChainUpdate> {
+        let summary = match self.load_flash_block_summary(&pending_block).await {
+            Ok(summary) => summary,
+            Err(err) => {
+                warn!("failed to load block summary: {err:?}");
+                return None;
             }
-            self.metrics
-                .flashblock_discovery_delay_ms
-                .record(now_ms.saturating_sub(block_timestamp_ms) as f64);
-
-            self.pending_block = Some(summary);
-            return Some(chain_update);
+        };
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let block_timestamp_ms = (pending_block.header.timestamp * 1000) as u128;
+        let chain_update = self
+            .process_pending_block(&summary, pending_block.header.number)
+            .await;
+        let header = &pending_block.inner.header;
+        if let Some(pending_block) = &self.pending_block {
+            if pending_block.hash == header.hash {
+                return None;
+            }
         }
-        None
+        self.metrics
+            .flashblock_discovery_delay_ms
+            .record(now_ms.saturating_sub(block_timestamp_ms) as f64);
+
+        self.pending_block = Some(summary);
+        Some(chain_update)
     }
 
     #[instrument(skip_all)]
