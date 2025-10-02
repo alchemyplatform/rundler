@@ -1031,6 +1031,10 @@ impl<P: EvmProvider> Chain<P> {
         preconfirmed_txns: Vec<(B256, Vec<B256>)>,
         preconfirmed_block_number: u64,
     ) -> ChainUpdate {
+        info!(
+            "New preconfirmed txns: {:?} at block number {}",
+            preconfirmed_txns, preconfirmed_block_number
+        );
         ChainUpdate {
             preconfirmed_txns,
             update_type: UpdateType::Preconfirmed,
