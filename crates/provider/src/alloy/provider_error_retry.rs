@@ -4,7 +4,8 @@ use std::{
 };
 
 use alloy_json_rpc::{ErrorPayload, RequestPacket, ResponsePacket};
-use alloy_transport::{TransportError, TransportErrorKind, TransportFut};
+use alloy_transport::{BoxFuture, TransportError, TransportErrorKind, TransportFut};
+use futures_util::FutureExt;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use tokio::time::sleep;
@@ -55,7 +56,7 @@ impl<S> Layer<S> for RetryBackoffLayer {
 }
 
 /// A Tower Service used by the RetryBackoffLayer that is responsible for retrying requests based
-/// on the error type. See [TransportError] and [ProviderRetryPolicy].
+/// on the server error ErrorPayload message.
 #[derive(Debug, Clone)]
 pub(crate) struct RetryBackoffService<S> {
     /// The inner service
@@ -87,7 +88,7 @@ where
 {
     type Response = ResponsePacket;
     type Error = TransportError;
-    type Future = TransportFut<'static>;
+    type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         // Our middleware doesn't care about backpressure, so it's ready as long
@@ -99,12 +100,13 @@ where
         let inner = self.inner.clone();
         let this = self.clone();
         let mut inner = std::mem::replace(&mut self.inner, inner);
-        Box::pin(async move {
+        async move {
             let mut retry_number: u32 = 0;
             loop {
-                // Immediately return error if the transport itself fails.
+                // Immediately return error if the transport itself failed.
                 let resp = inner.call(request.clone()).await?;
 
+                // Immediately return if it is success response.
                 let err = match resp.as_error() {
                     Some(e) => e,
                     None => return Ok(resp),
@@ -118,6 +120,7 @@ where
                             "Max retries exceeded {err}"
                         )));
                     }
+
                     trace!(%err, "retrying request");
 
                     let next_backoff = this
@@ -135,7 +138,8 @@ where
                     return Err(TransportError::ErrorResp(err.clone()));
                 }
             }
-        })
+        }
+        .boxed()
     }
 }
 
