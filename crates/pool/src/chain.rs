@@ -1035,6 +1035,13 @@ impl<P: EvmProvider> Chain<P> {
             "New preconfirmed txns: {:?} at block number {}",
             preconfirmed_txns, preconfirmed_block_number
         );
+        self.metrics.flashblock_uos.increment(
+            preconfirmed_txns
+                .iter()
+                .map(|(_, logs)| logs.len())
+                .sum::<usize>() as u64,
+        );
+
         ChainUpdate {
             preconfirmed_txns,
             update_type: UpdateType::Preconfirmed,
@@ -1129,6 +1136,8 @@ struct ChainMetrics {
     flashblock_discovery_delay_ms: Histogram,
     #[metric(describe = "the time in milliseconds it takes to sync to a block")]
     block_sync_time_ms: Histogram,
+    #[metric(describe = "the count of flashblocks user operations processed.")]
+    flashblock_uos: Counter,
 }
 
 #[cfg(test)]
