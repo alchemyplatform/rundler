@@ -32,8 +32,10 @@ futures-util.workspace = true
 metrics.workspace = true
 metrics-derive.workspace = true
 mockall = { workspace = true, optional = true }
+once_cell.workspace = true
 pin-project.workspace = true
 rand.workspace = true
+regex.workspace = true
 reth-tasks = { workspace = true, features = ["rayon"] }
 rundler-bindings-fastlz.workspace = true
 rundler-contracts.workspace = true
