@@ -14,9 +14,8 @@
 use alloy_primitives::{Address, Bytes};
 use alloy_provider::network::AnyNetwork;
 use anyhow::Context;
+use moka::future::Cache;
 use rundler_types::da::{DAGasBlockData, DAGasData, NitroDAGasBlockData, NitroDAGasData};
-use rundler_utils::cache::LruMap;
-use tokio::sync::Mutex as TokioMutex;
 use tracing::instrument;
 
 use super::DAMetrics;
@@ -31,8 +30,7 @@ use crate::{
 /// 1 network call per block + 1 network call per distinct data
 pub(crate) struct CachedNitroDAGasOracle<AP> {
     node_interface: NodeInterfaceInstance<AP, AnyNetwork>,
-    // Use a tokio::Mutex here to ensure only one network call per block, other threads can async wait for the result
-    block_data_cache: TokioMutex<LruMap<BlockHashOrNumber, NitroDAGasBlockData>>,
+    block_data_cache: Cache<BlockHashOrNumber, NitroDAGasBlockData>,
     metrics: DAMetrics,
 }
 
@@ -43,7 +41,7 @@ where
     pub(crate) fn new(oracle_address: Address, provider: AP) -> Self {
         Self {
             node_interface: NodeInterfaceInstance::new(oracle_address, provider),
-            block_data_cache: TokioMutex::new(LruMap::new(100)),
+            block_data_cache: Cache::builder().max_capacity(100).build(),
             metrics: DAMetrics::default(),
         }
     }
@@ -65,37 +63,14 @@ where
         gas_price: u128,
         extra_bytes_len: usize,
     ) -> ProviderResult<(u128, DAGasData, DAGasBlockData)> {
-        let mut cache = self.block_data_cache.lock().await;
-        match cache.get(&block) {
-            Some(block_da_data) => {
-                // Found the block, drop the block cache
-                let block_da_data = block_da_data.clone();
-                drop(cache);
+        let block_da_data = self.get_map_data(block).await?;
 
-                let gas_data = self.get_gas_data(to, data, block).await?;
-                let gas_data = DAGasData::Nitro(gas_data);
-                let block_data = DAGasBlockData::Nitro(block_da_data);
-                let l1_gas_estimate =
-                    self.calc_da_gas_sync(&gas_data, &block_data, gas_price, extra_bytes_len);
-
-                Ok((l1_gas_estimate, gas_data, block_data))
-            }
-            None => {
-                // Block cache miss, make remote call to get the da fee
-                let (gas_estimate_for_l1, block_da_data) =
-                    self.call_oracle_contract(to, data, block).await?;
-                cache.insert(block, block_da_data.clone());
-                drop(cache);
-
-                let units = calculate_units(gas_estimate_for_l1, &block_da_data);
-
-                Ok((
-                    gas_estimate_for_l1,
-                    DAGasData::Nitro(NitroDAGasData { units }),
-                    DAGasBlockData::Nitro(block_da_data),
-                ))
-            }
-        }
+        let gas_data = self.get_gas_data(to, data, block).await?;
+        let gas_data = DAGasData::Nitro(gas_data);
+        let block_data = DAGasBlockData::Nitro(block_da_data);
+        let l1_gas_estimate =
+            self.calc_da_gas_sync(&gas_data, &block_data, gas_price, extra_bytes_len);
+        Ok((l1_gas_estimate, gas_data, block_data))
     }
 }
 
@@ -106,15 +81,9 @@ where
 {
     #[instrument(skip_all)]
     async fn da_block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData> {
-        let mut cache = self.block_data_cache.lock().await;
-        match cache.get(&block) {
-            Some(block_data) => Ok(DAGasBlockData::Nitro(block_data.clone())),
-            None => {
-                let block_data = self.get_block_data(block).await?;
-                cache.insert(block, block_data.clone());
-                Ok(DAGasBlockData::Nitro(block_data))
-            }
-        }
+        let block_data = self.get_map_data(block).await?;
+
+        Ok(DAGasBlockData::Nitro(block_data))
     }
 
     #[instrument(skip_all)]
@@ -154,6 +123,15 @@ impl<AP> CachedNitroDAGasOracle<AP>
 where
     AP: AlloyProvider,
 {
+    async fn get_map_data(&self, block: BlockHashOrNumber) -> ProviderResult<NitroDAGasBlockData> {
+        let data = self
+            .block_data_cache
+            .try_get_with(block, async { self.get_block_data(block).await })
+            .await
+            .context(format!("failed to get block data {:?}", block))?;
+
+        Ok(data)
+    }
     async fn get_block_data(
         &self,
         block: BlockHashOrNumber,
