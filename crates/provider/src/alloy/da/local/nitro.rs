@@ -63,7 +63,7 @@ where
         gas_price: u128,
         extra_bytes_len: usize,
     ) -> ProviderResult<(u128, DAGasData, DAGasBlockData)> {
-        let block_da_data = self.get_map_data(block).await?;
+        let block_da_data = self.get_cache_data(block).await?;
 
         let gas_data = self.get_gas_data(to, data, block).await?;
         let gas_data = DAGasData::Nitro(gas_data);
@@ -81,7 +81,7 @@ where
 {
     #[instrument(skip_all)]
     async fn da_block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData> {
-        let block_data = self.get_map_data(block).await?;
+        let block_data = self.get_cache_data(block).await?;
 
         Ok(DAGasBlockData::Nitro(block_data))
     }
@@ -123,7 +123,10 @@ impl<AP> CachedNitroDAGasOracle<AP>
 where
     AP: AlloyProvider,
 {
-    async fn get_map_data(&self, block: BlockHashOrNumber) -> ProviderResult<NitroDAGasBlockData> {
+    async fn get_cache_data(
+        &self,
+        block: BlockHashOrNumber,
+    ) -> ProviderResult<NitroDAGasBlockData> {
         let data = self
             .block_data_cache
             .try_get_with(block, async { self.get_block_data(block).await })
@@ -132,6 +135,7 @@ where
 
         Ok(data)
     }
+
     async fn get_block_data(
         &self,
         block: BlockHashOrNumber,
