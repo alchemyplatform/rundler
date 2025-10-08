@@ -353,6 +353,13 @@ where
 
         if let GethTrace::CallTracer(call_frame) = trace {
             frame_queue.push_back(call_frame);
+        } else {
+            tracing::warn!(
+                "should have found user operation {user_op_hash:?} in trace for tx {tx_hash:?}"
+            );
+            return Err(anyhow::anyhow!(
+                "should have found user operation {user_op_hash:?} in trace"
+            ));
         }
 
         while let Some(call_frame) = frame_queue.pop_front() {
