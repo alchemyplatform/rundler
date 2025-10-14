@@ -140,7 +140,7 @@ where
             .saturating_mul(block_da_data.l1_base_fee as u128)
             .saturating_add(
                 (block_da_data.blob_base_fee_scalar as u128)
-                    .saturating_mul(block_da_data.blob_base_fee as u128),
+                    .saturating_mul(block_da_data.blob_base_fee),
             );
 
         let units = gas_data.units + (extra_data_to_units(extra_data_len) as u128);
