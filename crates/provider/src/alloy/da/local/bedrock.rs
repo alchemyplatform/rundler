@@ -135,13 +135,17 @@ where
             _ => panic!("LocalBedrockDAGasOracle only supports Bedrock data"),
         };
 
-        let fee_scaled = (block_da_data.base_fee_scalar * 16 * block_da_data.l1_base_fee
-            + block_da_data.blob_base_fee_scalar * block_da_data.blob_base_fee)
-            as u128;
+        let fee_scaled = (block_da_data.base_fee_scalar as u128)
+            .saturating_mul(16_u128)
+            .saturating_mul(block_da_data.l1_base_fee as u128)
+            .saturating_add(
+                (block_da_data.blob_base_fee_scalar as u128)
+                    .saturating_mul(block_da_data.blob_base_fee as u128),
+            );
 
-        let units = gas_data.units + extra_data_to_units(extra_data_len);
+        let units = gas_data.units + (extra_data_to_units(extra_data_len) as u128);
 
-        let l1_fee = (units as u128 * fee_scaled) / DECIMAL_SCALAR;
+        let l1_fee = (units * fee_scaled) / DECIMAL_SCALAR;
         l1_fee.checked_div(gas_price).unwrap_or(u128::MAX)
     }
 }
@@ -210,7 +214,7 @@ where
             multicall3::decode_result::<blobBaseFeeScalarCall>(&result[2].returnData)? as u64;
         let blob_base_fee = multicall3::decode_result::<blobBaseFeeCall>(&result[3].returnData)?
             .try_into()
-            .context("blob_base_fee too large for u64")?;
+            .context("blob_base_fee too large for u128")?;
 
         self.metrics.l1_base_fee.set(l1_base_fee as f64);
         self.metrics.blob_base_fee.set(blob_base_fee as f64);
@@ -244,7 +248,7 @@ where
         let units = estimated_size.clamp(MIN_TRANSACTION_SIZE, u64::MAX as i128);
 
         Ok(BedrockDAGasData {
-            units: units as u64,
+            units: units.try_into().unwrap(),
         })
     }
 }
