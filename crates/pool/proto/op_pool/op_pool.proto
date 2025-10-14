@@ -224,7 +224,7 @@ message NitroDaGasData {
 
 // Data associated with a user operation for Bedrock DA gas calculations
 message BedrockDaGasData {
-  uint64 units = 1;
+  bytes units = 1;
 }
 
 // Defines the gRPC endpoints for a UserOperation mempool service

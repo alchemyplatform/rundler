@@ -477,7 +477,7 @@ impl From<&RundlerDAGasData> for DaGasData {
             },
             RundlerDAGasData::Bedrock(data) => DaGasData {
                 data: Some(da_gas_data::Data::Bedrock(BedrockDaGasData {
-                    units: data.units,
+                    units: data.units.to_proto_bytes(),
                 })),
             },
         }
@@ -496,7 +496,9 @@ impl TryFrom<DaGasData> for RundlerDAGasData {
                 })
             }
             Some(da_gas_data::Data::Bedrock(BedrockDaGasData { units })) => {
-                RundlerDAGasData::Bedrock(RundlerBedrockDAGasData { units })
+                RundlerDAGasData::Bedrock(RundlerBedrockDAGasData {
+                    units: from_bytes(&units)?,
+                })
             }
             None => RundlerDAGasData::Empty,
         };

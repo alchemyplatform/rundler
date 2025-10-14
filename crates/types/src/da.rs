@@ -46,7 +46,7 @@ pub struct BedrockDAGasData {
     /// The calculated units as they apply to DA gas. Only have meaning when used
     /// with the BedrockDAGasBlockData that was used to calculate them and combined with a
     /// BedrockDAGasBlockData.
-    pub units: u64,
+    pub units: u128,
 }
 
 /// Data associated with a transaction for DA gas calculations
@@ -92,5 +92,5 @@ pub struct BedrockDAGasBlockData {
     /// Blob base fee scalar retrieved from the bedrock gas oracle.
     pub blob_base_fee_scalar: u64,
     /// Blob base fee retrieved from the bedrock gas oracle.
-    pub blob_base_fee: u64,
+    pub blob_base_fee: u128,
 }
