@@ -189,6 +189,16 @@ pub struct BuilderArgs {
         default_value = "20"
     )]
     max_replacement_underpriced_blocks: u64,
+
+    /// The maximum number of blocks to wait in a replacement underpriced state before issuing
+    /// a cancellation transaction.
+    #[arg(
+        long = "builder.max_ops_per_request",
+        name = "builder.max_ops_per_request",
+        env = "BUILDER_MAX_OPS_PER_REQUEST",
+        default_value = "1024"
+    )]
+    max_ops_per_request: u64,
 }
 
 impl BuilderArgs {
@@ -290,6 +300,7 @@ impl BuilderArgs {
             verification_gas_limit_efficiency_reject_threshold: common
                 .verification_gas_limit_efficiency_reject_threshold,
             chain_spec,
+            max_ops_per_request: self.max_ops_per_request,
         })
     }
 
