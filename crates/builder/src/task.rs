@@ -87,8 +87,8 @@ pub struct Args {
     pub max_expected_storage_slots: usize,
     /// Rejects user operations with a verification gas limit efficiency below this threshold.
     pub verification_gas_limit_efficiency_reject_threshold: f64,
-    /// Maximum ops requested from memppol
-    pub max_ops_per_request: u64,
+    /// Maximum ops requested from mempool
+    pub assigner_max_ops_per_request: u64,
 }
 
 /// Builder settings
@@ -197,7 +197,7 @@ where
 
         let assigner = Arc::new(Assigner::new(
             Box::new(self.pool.clone()),
-            self.args.max_ops_per_request,
+            self.args.assigner_max_ops_per_request,
             self.args.max_bundle_size,
         ));
 
