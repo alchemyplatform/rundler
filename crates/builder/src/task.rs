@@ -44,8 +44,6 @@ use crate::{
     transaction_tracker::{self, TransactionTrackerImpl},
 };
 
-const MAX_POOL_OPS_PER_REQUEST: u64 = 1024;
-
 /// Builder task arguments
 #[derive(Debug)]
 pub struct Args {
@@ -89,6 +87,8 @@ pub struct Args {
     pub max_expected_storage_slots: usize,
     /// Rejects user operations with a verification gas limit efficiency below this threshold.
     pub verification_gas_limit_efficiency_reject_threshold: f64,
+    /// Maximum ops requested from mempool
+    pub assigner_max_ops_per_request: u64,
 }
 
 /// Builder settings
@@ -197,7 +197,7 @@ where
 
         let assigner = Arc::new(Assigner::new(
             Box::new(self.pool.clone()),
-            MAX_POOL_OPS_PER_REQUEST,
+            self.args.assigner_max_ops_per_request,
             self.args.max_bundle_size,
         ));
 
