@@ -266,7 +266,7 @@ pub struct CommonArgs {
         long = "min_unstake_delay",
         name = "min_unstake_delay",
         env = "MIN_UNSTAKE_DELAY",
-        default_value = "84600",
+        default_value = "86400",
         global = true
     )]
     min_unstake_delay: u32,
