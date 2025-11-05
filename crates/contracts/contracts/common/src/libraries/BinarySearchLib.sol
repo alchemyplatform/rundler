@@ -4,7 +4,7 @@ pragma solidity ^0.8.13;
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {console} from "forge-std/console.sol";
 
-import {EstimateGasContinuation} from "../interfaces/EstimationTypes.sol";
+import {EstimateGasContinuation} from "common/interfaces/EstimationTypes.sol";
 
 library BinarySearchLib {
     using Math for uint256;
