@@ -167,7 +167,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             // one day in seconds: defined in the ERC-4337 spec
-            min_unstake_delay: 84600,
+            min_unstake_delay: 86400,
             // 10^18 wei = 1 eth
             min_stake_value: uint!(1_000_000_000_000_000_000_U256),
             tracer_timeout: "10s".to_string(),

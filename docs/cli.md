@@ -36,7 +36,7 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - env: *MAX_UO_COST*
 - `--min_stake_value`: Minimum stake value. (default: `1000000000000000000`).
   - env: *MIN_STAKE_VALUE*
-- `--min_unstake_delay`: Minimum unstake delay. (default: `84600`).
+- `--min_unstake_delay`: Minimum unstake delay. (default: `86400`).
   - env: *MIN_UNSTAKE_DELAY*
 - `--tracer_timeout`: The timeout used for custom javascript tracers, the string must be in a valid parseable format that can be used in the `ParseDuration` function on an ethereum node. See Docs [Here](https://pkg.go.dev/time#ParseDuration). (default: `15s`)
   - env: *TRACER_TIMEOUT*
