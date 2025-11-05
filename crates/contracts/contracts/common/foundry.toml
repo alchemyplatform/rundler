@@ -13,5 +13,6 @@ allow_internal_expect_revert = true
 remappings = [
     'forge-std/=lib/forge-std/src',
     'ds-test/=lib/forge-std/lib/ds-test/src/',
-    '@openzeppelin=../v0_7/lib/openzeppelin-contracts/'
+    '@openzeppelin=../v0_7/lib/openzeppelin-contracts/',
+    'common=src/'
 ]

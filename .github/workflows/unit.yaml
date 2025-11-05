@@ -34,6 +34,8 @@ jobs:
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.4.4
 
       - name: Install latest nextest release
         uses: taiki-e/install-action@nextest

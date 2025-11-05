@@ -2153,6 +2153,8 @@ mod tests {
         }
         {
             config.chain_spec.eip7702_enabled = true;
+            config.entry_point_version = EntryPointVersion::V0_7;
+            config.entry_point = config.chain_spec.entry_point_address_v0_7;
             let pool = create_pool_with_config(config.clone(), vec![op.clone()]);
             assert!(pool
                 .add_operation(OperationOrigin::Local, op.clone().op, default_perms())
