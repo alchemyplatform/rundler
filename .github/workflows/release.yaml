@@ -63,6 +63,8 @@ jobs:
       - name: Foundry install
         if: contains( ${{ matrix.target }}, 'apple')
         uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.4.4
 
       - name: Install protobuf
         if: contains( ${{ matrix.target }}, 'apple')
