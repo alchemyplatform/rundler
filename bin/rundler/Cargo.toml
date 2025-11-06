@@ -1,14 +1,3 @@
-[package]
-name = "rundler"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-description = """
-ERC-4337 bundler implementation
-"""
-publish = false
 
 [dependencies]
 alloy-consensus.workspace = true
@@ -64,3 +53,14 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter", "fmt", "jso
 
 [dev-dependencies]
 cargo-husky.workspace = true
+[package]
+name = "rundler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = """
+ERC-4337 bundler implementation
+"""
+publish = false

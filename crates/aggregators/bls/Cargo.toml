@@ -1,3 +1,10 @@
+
+[dependencies]
+
+alloy-primitives.workspace = true
+async-trait.workspace = true
+rundler-provider.workspace = true
+rundler-types.workspace = true
 [package]
 name = "rundler-bls"
 version.workspace = true
@@ -6,10 +13,3 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
-
-[dependencies]
-
-alloy-primitives.workspace = true
-async-trait.workspace = true
-rundler-provider.workspace = true
-rundler-types.workspace = true

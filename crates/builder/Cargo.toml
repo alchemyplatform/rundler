@@ -1,11 +1,3 @@
-[package]
-name = "rundler-builder"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-publish = false
 
 [dependencies]
 
@@ -52,3 +44,11 @@ rundler-types = { workspace = true, features = ["test-utils"] }
 
 [build-dependencies]
 tonic-build.workspace = true
+[package]
+name = "rundler-builder"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
