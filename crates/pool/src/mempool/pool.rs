@@ -652,8 +652,15 @@ where
     ) -> MempoolResult<B256> {
         // Check if operation already known or replacing an existing operation
         // if replacing, remove the existing operation
-        if let Some(hash) = self.check_replacement(pool_op.uo())? {
-            self.remove_operation_by_hash(hash);
+        if let Some(old_hash) = self.check_replacement(pool_op.uo())? {
+            let new_hash = pool_op.uo().hash();
+            self.emit(PoolEvent::RemovedOp {
+                op_hash: old_hash,
+                reason: OpRemovalReason::Replaced {
+                    replaced_by: new_hash,
+                },
+            });
+            self.remove_operation_by_hash(old_hash);
         }
 
         // update counts

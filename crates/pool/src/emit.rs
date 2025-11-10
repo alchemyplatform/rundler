@@ -141,6 +141,11 @@ pub enum OpRemovalReason {
         valid_until: Timestamp,
     },
     PoolSizeExceeded,
+    /// Op was replaced by another operation with higher fees
+    Replaced {
+        /// Hash of the new operation that replaced this one
+        replaced_by: B256,
+    },
 }
 
 impl EntitySummary {
