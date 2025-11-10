@@ -190,15 +190,17 @@ impl Display for OpPoolEvent {
                 )
             }
             OpPoolEvent::RemovedOp { op_hash, reason } => {
-                write!(
-                    f,
-                    concat!(
-                        "Removed op from pool.",
-                        "    Op hash: {:?}",
-                        "    Reason: {:?}",
-                    ),
-                    op_hash, reason,
-                )
+                write!(f, "Removed op from pool.    Op hash: {:?}", op_hash)?;
+                match reason {
+                    OpRemovalReason::Replaced { replaced_by } => {
+                        write!(
+                            f,
+                            "    Reason: Replaced {{ replaced_by: {:?} }}",
+                            replaced_by
+                        )
+                    }
+                    _ => write!(f, "    Reason: {:?}", reason),
+                }
             }
             OpPoolEvent::RemovedEntity { entity } => {
                 write!(
