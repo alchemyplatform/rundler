@@ -141,6 +141,11 @@ pub enum OpRemovalReason {
         valid_until: Timestamp,
     },
     PoolSizeExceeded,
+    /// Op was replaced by another operation with higher fees
+    Replaced {
+        /// Hash of the new operation that replaced this one
+        replaced_by: B256,
+    },
 }
 
 impl EntitySummary {
@@ -185,15 +190,17 @@ impl Display for OpPoolEvent {
                 )
             }
             OpPoolEvent::RemovedOp { op_hash, reason } => {
-                write!(
-                    f,
-                    concat!(
-                        "Removed op from pool.",
-                        "    Op hash: {:?}",
-                        "    Reason: {:?}",
-                    ),
-                    op_hash, reason,
-                )
+                write!(f, "Removed op from pool.    Op hash: {:?}", op_hash)?;
+                match reason {
+                    OpRemovalReason::Replaced { replaced_by } => {
+                        write!(
+                            f,
+                            "    Reason: Replaced {{ replaced_by: {:?} }}",
+                            replaced_by
+                        )
+                    }
+                    _ => write!(f, "    Reason: {:?}", reason),
+                }
             }
             OpPoolEvent::RemovedEntity { entity } => {
                 write!(
