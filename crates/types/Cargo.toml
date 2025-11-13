@@ -1,3 +1,11 @@
+[package]
+name = "rundler-types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
 
 [dependencies]
 
@@ -25,14 +33,6 @@ thiserror.workspace = true
 [dev-dependencies]
 alloy-primitives = { workspace = true, features = ["rand"] }
 serde_json.workspace = true
-[package]
-name = "rundler-types"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-publish = false
 
 [features]
 test-utils = ["mockall"]

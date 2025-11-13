@@ -1,3 +1,11 @@
+[package]
+name = "rundler-signer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
 
 [dependencies]
 
@@ -31,11 +39,3 @@ alloy-rpc-types-eth.workspace = true
 alloy-sol-types.workspace = true
 mockall.workspace = true
 rundler-provider = { workspace = true, features = ["test-utils"] }
-[package]
-name = "rundler-signer"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-publish = false

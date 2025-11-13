@@ -1,3 +1,11 @@
+[package]
+name = "rundler-provider"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
 
 [dependencies]
 
@@ -44,14 +52,6 @@ url.workspace = true
 alloy-provider = { workspace = true, features = ["debug-api", "anvil-node"] }
 tiny_http.workspace = true
 tokio.workspace = true
-[package]
-name = "rundler-provider"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-publish = false
 
 [features]
 test-utils = ["mockall"]

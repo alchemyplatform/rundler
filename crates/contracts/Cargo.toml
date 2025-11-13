@@ -1,3 +1,11 @@
+[package]
+name = "rundler-contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
 
 [dependencies]
 alloy-contract.workspace = true
@@ -8,12 +16,4 @@ const-hex.workspace = true
 
 [build-dependencies]
 serde_json.workspace = true
-[package]
-name = "rundler-contracts"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-publish = false
 
