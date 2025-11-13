@@ -109,6 +109,12 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - env: *ENABLED_AGGREGATORS*
   - List of KEY=VALUE delimited by ',': i.e. `ENABLED_AGGREGATORS="KEY1=VALUE1,KEY2=VALUE2"`
   - Options: see [aggregator.rs](../bin/rundler/src/cli/aggregator.rs)
+- `--provider_client_timeout_seconds`: Timeout in seconds of external provider RPC requests (default: `10`)
+  - env: *PROVIDER_CLIENT_TIMEOUT_SECONDS*
+- `--provider_rate_limit_retry_enabled`: Enable retries on rate limit errors - with default backoff settings (default: `false`)
+  - env: *PROVIDER_RATE_LIMIT_RETRY_ENABLED*
+- `--provider_consistency_retry_enabled`: Enable retries on block consistency errors - with default backoff settings (default: `false`)
+  - env: *PROVIDER_CONSISTENCY_RETRY_ENABLED*
 
 ## Metrics Options
 
