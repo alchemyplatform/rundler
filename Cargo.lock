@@ -5115,6 +5115,7 @@ dependencies = [
  "tracing-log",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
@@ -5268,7 +5269,6 @@ dependencies = [
  "metrics-derive",
  "mockall",
  "moka",
- "once_cell",
  "pin-project",
  "rand 0.8.5",
  "regex",

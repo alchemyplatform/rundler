@@ -21,6 +21,7 @@ use clap::{
     builder::{PossibleValuesParser, ValueParser},
     Args, Parser, Subcommand,
 };
+use url::Url;
 
 mod admin;
 mod aggregator;
@@ -42,8 +43,8 @@ use pool::PoolCliArgs;
 use reth_tasks::TaskManager;
 use rpc::RpcCliArgs;
 use rundler_provider::{
-    AlloyEntryPointV0_6, AlloyEntryPointV0_7, AlloyEvmProvider, DAGasOracle, DAGasOracleSync,
-    EntryPointProvider, EvmProvider, FeeEstimator, Providers,
+    AlloyEntryPointV0_6, AlloyEntryPointV0_7, AlloyEvmProvider, AlloyNetworkConfig, DAGasOracle,
+    DAGasOracleSync, EntryPointProvider, EvmProvider, FeeEstimator, Providers,
 };
 use rundler_sim::{
     EstimationSettings, MempoolConfigs, PrecheckSettings, SimulationSettings, MIN_CALL_GAS_LIMIT,
@@ -502,6 +503,24 @@ pub struct CommonArgs {
     pub provider_client_timeout_seconds: u64,
 
     #[arg(
+        long = "provider_rate_limit_retry_enabled",
+        name = "provider_rate_limit_retry_enabled",
+        env = "PROVIDER_RATE_LIMIT_RETRY_ENABLED",
+        default_value = "false",
+        global = true
+    )]
+    pub provider_rate_limit_retry_enabled: bool,
+
+    #[arg(
+        long = "provider_consistency_retry_enabled",
+        name = "provider_consistency_retry_enabled",
+        env = "PROVIDER_CONSISTENCY_RETRY_ENABLED",
+        default_value = "false",
+        global = true
+    )]
+    pub provider_consistency_retry_enabled: bool,
+
+    #[arg(
         long = "max_expected_storage_slots",
         name = "max_expected_storage_slots",
         env = "MAX_EXPECTED_STORAGE_SLOTS",
@@ -648,6 +667,20 @@ impl TryFrom<&CommonArgs> for SimulationSettings {
             min_stake_value: U256::from(value.min_stake_value),
             tracer_timeout: value.tracer_timeout.clone(),
             enable_unsafe_fallback: value.enable_unsafe_fallback,
+        })
+    }
+}
+
+impl TryFrom<&CommonArgs> for AlloyNetworkConfig {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &CommonArgs) -> Result<Self, Self::Error> {
+        Ok(Self {
+            rpc_url: Url::parse(value.node_http.as_ref().context("must provide node_http")?)?,
+            client_timeout_seconds: value.provider_client_timeout_seconds,
+            rate_limit_retry_enabled: value.provider_rate_limit_retry_enabled,
+            consistency_retry_enabled: value.provider_consistency_retry_enabled,
+            ..Default::default()
         })
     }
 }
@@ -830,10 +863,9 @@ pub fn construct_providers(
     args: &CommonArgs,
     chain_spec: &ChainSpec,
 ) -> anyhow::Result<impl Providers + 'static> {
-    let provider = Arc::new(rundler_provider::new_alloy_provider(
-        args.node_http.as_ref().context("must provide node_http")?,
-        args.provider_client_timeout_seconds,
-    )?);
+    let alloy_network_config = AlloyNetworkConfig::try_from(args)?;
+    let provider = Arc::new(rundler_provider::new_alloy_provider(&alloy_network_config)?);
+
     let (da_gas_oracle, da_gas_oracle_sync) =
         rundler_provider::new_alloy_da_gas_oracle(chain_spec, provider.clone());
     let bundle_limits = args.bundle_limits(chain_spec);

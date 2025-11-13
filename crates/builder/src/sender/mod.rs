@@ -22,7 +22,7 @@ pub(crate) use flashbots::FlashbotsTransactionSender;
 #[cfg(test)]
 use mockall::automock;
 pub(crate) use raw::RawTransactionSender;
-use rundler_provider::{EvmProvider, ProviderError, TransactionRequest};
+use rundler_provider::{AlloyNetworkConfig, EvmProvider, ProviderError, TransactionRequest};
 use rundler_signer::SignerLease;
 use rundler_types::{ExpectedStorage, GasFees};
 use secrecy::SecretString;
@@ -150,17 +150,12 @@ pub struct FlashbotsSenderArgs {
 impl TransactionSenderArgs {
     pub(crate) fn into_sender(
         self,
-        rpc_url: &str,
-        provider_client_timeout_seconds: u64,
+        config: &AlloyNetworkConfig,
     ) -> std::result::Result<TransactionSenderEnum<impl EvmProvider>, SenderConstructorErrors> {
-        let provider =
-            rundler_provider::new_alloy_evm_provider(rpc_url, provider_client_timeout_seconds)?;
+        let provider = rundler_provider::new_alloy_evm_provider(config)?;
         let sender = match self {
             Self::Raw(args) => {
-                let submitter = rundler_provider::new_alloy_evm_provider(
-                    &args.submit_url,
-                    provider_client_timeout_seconds,
-                )?;
+                let submitter = rundler_provider::new_alloy_evm_provider(config)?;
 
                 TransactionSenderEnum::Raw(RawTransactionSender::new(
                     submitter,

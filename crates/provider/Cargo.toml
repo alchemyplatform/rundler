@@ -25,7 +25,6 @@ metrics.workspace = true
 metrics-derive.workspace = true
 mockall = { workspace = true, optional = true }
 moka = { version = "0.12.11", features = ["future"] }
-once_cell.workspace = true
 pin-project.workspace = true
 rand.workspace = true
 regex.workspace = true

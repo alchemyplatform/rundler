@@ -20,7 +20,9 @@ use std::{
 
 use alloy_primitives::{Address, B256};
 use anyhow::Context;
-use rundler_provider::{EntryPoint, Providers as ProvidersT, ProvidersWithEntryPointT};
+use rundler_provider::{
+    AlloyNetworkConfig, EntryPoint, Providers as ProvidersT, ProvidersWithEntryPointT,
+};
 use rundler_signer::{SignerManager, SigningScheme};
 use rundler_sim::{
     simulation::{self, UnsafeSimulator},
@@ -81,8 +83,8 @@ pub struct Args {
     pub entry_points: Vec<EntryPointBuilderSettings>,
     /// Enable DA tracking
     pub da_gas_tracking_enabled: bool,
-    /// Provider client timeout
-    pub provider_client_timeout_seconds: u64,
+    /// Alloy network config
+    pub alloy_network_config: AlloyNetworkConfig,
     /// Maximum number of expected storage slots in a bundle
     pub max_expected_storage_slots: usize,
     /// Rejects user operations with a verification gas limit efficiency below this threshold.
@@ -417,10 +419,11 @@ where
             submission_proxy: submission_proxy.cloned(),
         };
 
-        let transaction_sender = self.args.sender_args.clone().into_sender(
-            &self.args.rpc_url,
-            self.args.provider_client_timeout_seconds,
-        )?;
+        let transaction_sender = self
+            .args
+            .sender_args
+            .clone()
+            .into_sender(&self.args.alloy_network_config)?;
 
         let tracker_settings = transaction_tracker::Settings {
             replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,

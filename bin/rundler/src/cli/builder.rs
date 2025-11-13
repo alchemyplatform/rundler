@@ -23,7 +23,7 @@ use rundler_builder::{
 };
 use rundler_pbh::PbhSubmissionProxy;
 use rundler_pool::RemotePoolClient;
-use rundler_provider::Providers;
+use rundler_provider::{AlloyNetworkConfig, Providers};
 use rundler_sim::MempoolConfigs;
 use rundler_task::{
     server::{connect_with_retries_shutdown, format_socket_addr},
@@ -266,7 +266,7 @@ impl BuilderArgs {
         let da_gas_tracking_enabled =
             super::lint_da_gas_tracking(common.da_gas_tracking_enabled, &chain_spec);
 
-        let provider_client_timeout_seconds = common.provider_client_timeout_seconds;
+        let alloy_network_config = AlloyNetworkConfig::try_from(common)?;
 
         let bundle_limits = common.bundle_limits(&chain_spec);
 
@@ -294,7 +294,7 @@ impl BuilderArgs {
             max_replacement_underpriced_blocks: self.max_replacement_underpriced_blocks,
             remote_address,
             da_gas_tracking_enabled,
-            provider_client_timeout_seconds,
+            alloy_network_config,
             max_expected_storage_slots: common.max_expected_storage_slots.unwrap_or(usize::MAX),
             verification_gas_limit_efficiency_reject_threshold: common
                 .verification_gas_limit_efficiency_reject_threshold,
