@@ -16,6 +16,7 @@ mod flashbots;
 mod raw;
 
 use alloy_primitives::{Address, B256};
+use anyhow::Context;
 pub(crate) use bloxroute::PolygonBloxrouteTransactionSender;
 use enum_dispatch::enum_dispatch;
 pub(crate) use flashbots::FlashbotsTransactionSender;
@@ -155,7 +156,14 @@ impl TransactionSenderArgs {
         let provider = rundler_provider::new_alloy_evm_provider(config)?;
         let sender = match self {
             Self::Raw(args) => {
-                let submitter = rundler_provider::new_alloy_evm_provider(config)?;
+                let config = AlloyNetworkConfig {
+                    rpc_url: args
+                        .submit_url
+                        .parse()
+                        .context("invalid builder submit URL")?,
+                    ..config.clone()
+                };
+                let submitter = rundler_provider::new_alloy_evm_provider(&config)?;
 
                 TransactionSenderEnum::Raw(RawTransactionSender::new(
                     submitter,
