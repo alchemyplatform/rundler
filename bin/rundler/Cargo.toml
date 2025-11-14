@@ -61,6 +61,7 @@ tracing-appender = "0.2.3"
 tracing-log = "0.2.0"
 tracing-opentelemetry = "0.29.0"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "fmt", "json"] }
+url.workspace = true
 
 [dev-dependencies]
 cargo-husky.workspace = true

@@ -35,7 +35,7 @@ pub use alloy::{
         },
     },
     evm::AlloyEvmProvider,
-    new_alloy_da_gas_oracle, new_alloy_evm_provider, new_alloy_provider,
+    new_alloy_da_gas_oracle, new_alloy_evm_provider, new_alloy_provider, AlloyNetworkConfig,
 };
 mod fees;
 pub use alloy_network::{

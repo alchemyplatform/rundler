@@ -5115,6 +5115,7 @@ dependencies = [
  "tracing-log",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
@@ -5270,6 +5271,7 @@ dependencies = [
  "moka",
  "pin-project",
  "rand 0.8.5",
+ "regex",
  "reth-tasks",
  "rundler-bindings-fastlz",
  "rundler-contracts",
