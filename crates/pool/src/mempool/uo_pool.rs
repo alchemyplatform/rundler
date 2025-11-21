@@ -691,6 +691,7 @@ where
             da_gas_data: precheck_ret.da_gas_data,
             filter_id,
             perms,
+            sender_is_7702: precheck_ret.sender_is_7702,
         };
 
         // Check sender count in mempool. If sender has too many operations, must be staked
@@ -2592,6 +2593,7 @@ mod tests {
                     Ok(PrecheckReturn {
                         da_gas_data: DAGasData::Empty,
                         required_pre_verification_gas: 100_000,
+                        sender_is_7702: false,
                     })
                 }
             });

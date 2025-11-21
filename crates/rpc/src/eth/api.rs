@@ -80,9 +80,11 @@ where
                 ));
         }
 
-        if op.authorization_tuple().is_some() && !self.chain_spec.supports_eip7702(entry_point) {
+        if op.authorization_tuple().is_some()
+            && (!self.chain_spec.supports_eip7702(entry_point) || permissions.eip7702_disabled)
+        {
             return Err(EthRpcError::InvalidParams(format!(
-                "EIP-7702 is not supported on entry point {:?}",
+                "EIP-7702 is not supported on entry point {:?} or is disabled",
                 entry_point
             )));
         }
@@ -267,6 +269,7 @@ mod tests {
             da_gas_data: rundler_types::da::DAGasData::Empty,
             filter_id: None,
             perms: UserOperationPermissions::default(),
+            sender_is_7702: false,
         };
 
         let mut pool = MockPool::default();

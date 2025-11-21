@@ -122,6 +122,9 @@ pub enum PrecheckViolation {
     /// The sender is already deployed, and an init code is provided.
     #[display("sender {0:?} is an existing contract, but initCode is nonempty")]
     ExistingSenderWithInitCode(Address),
+    /// EIP-7702 is disabled
+    #[display("EIP-7702 is disabled")]
+    Eip7702Disabled,
     /// An init code contains a factory address that is not deployed.
     #[display("initCode indicates factory with no code: {0:?}")]
     FactoryIsNotContract(Address),

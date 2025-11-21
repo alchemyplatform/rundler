@@ -26,11 +26,11 @@ use super::protos::{
     AccessedUndeployedContract, AccessedUnsupportedContractType, AggregatorError,
     AggregatorMismatch, AssociatedStorageDuringDeploy, AssociatedStorageIsAlternateSender,
     CallGasLimitTooLow, CallHadValue, CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert,
-    DiscardedOnInsertError, Entity, EntityThrottledError, EntityType, EntryPointRevert,
-    ExecutionGasLimitEfficiencyTooLow, ExistingSenderWithInitCode, FactoryCalledCreate2Twice,
-    FactoryIsNotContract, FactoryMustBeEmpty, Invalid7702AuthSignature, InvalidAccountSignature,
-    InvalidPaymasterSignature, InvalidSignature, InvalidStorageAccess, InvalidTimeRange,
-    MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
+    DiscardedOnInsertError, Eip7702Disabled, Entity, EntityThrottledError, EntityType,
+    EntryPointRevert, ExecutionGasLimitEfficiencyTooLow, ExistingSenderWithInitCode,
+    FactoryCalledCreate2Twice, FactoryIsNotContract, FactoryMustBeEmpty, Invalid7702AuthSignature,
+    InvalidAccountSignature, InvalidPaymasterSignature, InvalidSignature, InvalidStorageAccess,
+    InvalidTimeRange, MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
     MempoolError as ProtoMempoolError, MultipleRolesViolation, NotStaked,
     OperationAlreadyKnownError, OperationDropTooSoon, OperationRevert, OutOfGas, OverMaxCost,
     PanicRevert, PaymasterBalanceTooLow, PaymasterDepositTooLow, PaymasterIsNotContract,
@@ -305,6 +305,11 @@ impl From<PrecheckViolation> for ProtoPrecheckViolationError {
                     ),
                 ),
             },
+            PrecheckViolation::Eip7702Disabled => ProtoPrecheckViolationError {
+                violation: Some(precheck_violation_error::Violation::Eip7702Disabled(
+                    Eip7702Disabled {},
+                )),
+            },
             PrecheckViolation::FactoryIsNotContract(addr) => ProtoPrecheckViolationError {
                 violation: Some(precheck_violation_error::Violation::FactoryIsNotContract(
                     FactoryIsNotContract {
@@ -424,6 +429,9 @@ impl TryFrom<ProtoPrecheckViolationError> for PrecheckViolation {
             }
             Some(precheck_violation_error::Violation::ExistingSenderWithInitCode(e)) => {
                 PrecheckViolation::ExistingSenderWithInitCode(from_bytes(&e.sender_address)?)
+            }
+            Some(precheck_violation_error::Violation::Eip7702Disabled(_)) => {
+                PrecheckViolation::Eip7702Disabled
             }
             Some(precheck_violation_error::Violation::FactoryIsNotContract(e)) => {
                 PrecheckViolation::FactoryIsNotContract(from_bytes(&e.factory_address)?)

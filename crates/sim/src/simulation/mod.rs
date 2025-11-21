@@ -13,7 +13,7 @@
 
 use std::collections::HashSet;
 
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 use alloy_primitives::uint;
 use alloy_primitives::{Address, B256, U256};
 #[cfg(feature = "test-utils")]

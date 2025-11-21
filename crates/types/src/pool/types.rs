@@ -141,6 +141,8 @@ pub struct PoolOperation {
     pub filter_id: Option<String>,
     /// Permissions for this operation
     pub perms: UserOperationPermissions,
+    /// Whether the sender is a 7702 delegation
+    pub sender_is_7702: bool,
 }
 
 /// The preconfirmed information for an user operation

@@ -26,6 +26,8 @@ pub struct UserOperationPermissions {
     pub underpriced_bundle_pct: Option<u32>,
     /// Bundler sponsorship settings
     pub bundler_sponsorship: Option<BundlerSponsorship>,
+    /// Disable EIP-7702
+    pub eip7702_disabled: bool,
 }
 
 /// Bundler sponsorship settings

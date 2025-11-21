@@ -13,7 +13,7 @@
 
 use std::{cmp, marker::PhantomData};
 
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, Bytes, B256, U256};
 use anyhow::Context;
 use arrayvec::ArrayVec;
 #[cfg(feature = "test-utils")]
@@ -39,6 +39,8 @@ pub struct PrecheckReturn {
     pub da_gas_data: DAGasData,
     /// The required pre-verification gas for the operation
     pub required_pre_verification_gas: u128,
+    /// If the sender is 7702
+    pub sender_is_7702: bool,
 }
 
 /// Trait for checking if a user operation is valid before simulation
@@ -133,7 +135,7 @@ impl Default for Settings {
 #[derive(Clone, Debug)]
 struct AsyncData {
     factory_exists: bool,
-    sender_exists: bool,
+    sender_bytecode: Bytes,
     paymaster_exists: bool,
     payer_funds: U256,
     base_fee: u128,
@@ -160,7 +162,7 @@ where
     ) -> Result<PrecheckReturn, PrecheckError> {
         let async_data = self.load_async_data(op, block_hash, perms).await?;
         let mut violations: Vec<PrecheckViolation> = vec![];
-        violations.extend(self.check_init_code(op, &async_data));
+        violations.extend(self.check_init_code(op, &async_data, perms));
         violations.extend(self.check_gas(op, &async_data, perms));
         violations.extend(self.check_payer(op, &async_data));
         if !violations.is_empty() {
@@ -169,6 +171,8 @@ where
         Ok(PrecheckReturn {
             da_gas_data: async_data.da_gas_data,
             required_pre_verification_gas: async_data.min_pre_verification_gas,
+            sender_is_7702: op.authorization_tuple().is_some()
+                || is_7702_bytecode(&async_data.sender_bytecode),
         })
     }
 }
@@ -198,35 +202,44 @@ where
         }
     }
 
-    fn check_init_code(&self, op: &UO, async_data: &AsyncData) -> ArrayVec<PrecheckViolation, 2> {
+    fn check_init_code(
+        &self,
+        op: &UO,
+        async_data: &AsyncData,
+        perms: &UserOperationPermissions,
+    ) -> ArrayVec<PrecheckViolation, 2> {
         let AsyncData {
             factory_exists,
-            sender_exists,
+            sender_bytecode,
             ..
         } = async_data;
         let mut violations = ArrayVec::new();
 
+        // 7702 delegation case
         if op.authorization_tuple().is_some() {
             if op.factory().is_some() {
                 violations.push(PrecheckViolation::FactoryMustBeEmpty(op.factory().unwrap()));
             }
-            return violations;
-        }
-        if op.factory().is_none() {
-            if !sender_exists {
-                violations.push(PrecheckViolation::SenderIsNotContractAndNoInitCode(
-                    op.sender(),
-                ));
+            if perms.eip7702_disabled {
+                violations.push(PrecheckViolation::Eip7702Disabled);
             }
-        } else {
+        // factory case
+        } else if op.factory().is_some() {
             if !factory_exists {
                 violations.push(PrecheckViolation::FactoryIsNotContract(
                     op.factory().unwrap(),
                 ))
             }
-            if *sender_exists {
+            if !sender_bytecode.is_empty() {
                 violations.push(PrecheckViolation::ExistingSenderWithInitCode(op.sender()));
             }
+        // sender already deployed case
+        } else if sender_bytecode.is_empty() {
+            violations.push(PrecheckViolation::SenderIsNotContractAndNoInitCode(
+                op.sender(),
+            ));
+        } else if perms.eip7702_disabled && is_7702_bytecode(sender_bytecode) {
+            violations.push(PrecheckViolation::Eip7702Disabled);
         }
         violations
     }
@@ -381,20 +394,20 @@ where
 
         let (
             factory_exists,
-            sender_exists,
+            sender_bytecode,
             paymaster_exists,
             payer_funds,
             (min_pre_verification_gas, da_gas_data),
         ) = tokio::try_join!(
             self.is_contract(op.factory()),
-            self.is_contract(Some(op.sender())),
+            self.get_bytecode(op.sender()),
             self.is_contract(op.paymaster()),
             self.get_payer_funds(op),
             self.get_required_pre_verification_gas(op.clone(), block_hash, base_fee, perms)
         )?;
         Ok(AsyncData {
             factory_exists,
-            sender_exists,
+            sender_bytecode,
             paymaster_exists,
             payer_funds,
             base_fee,
@@ -403,16 +416,19 @@ where
         })
     }
 
+    async fn get_bytecode(&self, address: Address) -> anyhow::Result<Bytes> {
+        self.provider
+            .get_code(address, None)
+            .await
+            .context("should load code to check if contract exists")
+    }
+
     #[instrument(skip_all)]
     async fn is_contract(&self, address: Option<Address>) -> anyhow::Result<bool> {
         let Some(address) = address else {
             return Ok(false);
         };
-        let bytecode = self
-            .provider
-            .get_code(address, None)
-            .await
-            .context("should load code to check if contract exists")?;
+        let bytecode = self.get_bytecode(address).await?;
         Ok(!bytecode.is_empty())
     }
 
@@ -481,6 +497,14 @@ where
     }
 }
 
+fn is_7702_bytecode(bytecode: &Bytes) -> bool {
+    if bytecode.len() < 23 {
+        return false;
+    }
+    let prefix = &bytecode[..3];
+    prefix == [0xef, 0x01, 0x00]
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -511,7 +535,7 @@ mod tests {
     fn get_test_async_data() -> AsyncData {
         AsyncData {
             factory_exists: true,
-            sender_exists: true,
+            sender_bytecode: bytes!("abcdef"),
             paymaster_exists: true,
             payer_funds: U256::from(5_000_000),
             base_fee: 4_000,
@@ -549,11 +573,59 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_init_code(&op, &get_test_async_data());
+        let res = prechecker.check_init_code(
+            &op,
+            &get_test_async_data(),
+            &UserOperationPermissions::default(),
+        );
         let mut expected = ArrayVec::new();
         expected.push(PrecheckViolation::ExistingSenderWithInitCode(address!(
             "3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d"
         )));
+        assert_eq!(res, expected);
+    }
+
+    #[tokio::test]
+    async fn test_check_init_code_7702_disabled() {
+        let (cs, provider, entry_point, fee_estimator) = create_base_config();
+        let provider = Arc::new(provider);
+        let prechecker = PrecheckerImpl::new(
+            cs.clone(),
+            provider,
+            entry_point,
+            fee_estimator,
+            Settings::default(),
+        );
+        let op = UserOperationBuilder::new(
+            &cs,
+            UserOperationRequiredFields {
+                sender: address!("3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d"),
+                nonce: U256::from(100),
+                init_code: Bytes::default(),
+                call_data: Bytes::default(),
+                call_gas_limit: 9_000, // large call gas limit high to trigger TotalGasLimitTooHigh
+                verification_gas_limit: 10_000_000,
+                pre_verification_gas: 0,
+                max_fee_per_gas: 5_000,
+                max_priority_fee_per_gas: 2_000,
+                paymaster_and_data: Bytes::default(),
+                signature: Bytes::default(),
+            },
+        )
+        .build();
+
+        let perms = UserOperationPermissions {
+            eip7702_disabled: true,
+            ..Default::default()
+        };
+
+        let mut async_data = get_test_async_data();
+        // 7702 indicator plus address
+        async_data.sender_bytecode = bytes!("ef01000000000000000000000000000000000000000000");
+
+        let res = prechecker.check_init_code(&op, &async_data, &perms);
+        let mut expected = ArrayVec::new();
+        expected.push(PrecheckViolation::Eip7702Disabled);
         assert_eq!(res, expected);
     }
 

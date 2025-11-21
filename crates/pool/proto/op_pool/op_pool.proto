@@ -30,6 +30,7 @@ message UserOperationPermissions {
   optional uint32 underpriced_accept_pct = 3;
   optional uint32 underpriced_bundle_pct = 4;
   BundlerSponsorship bundler_sponsorship = 5;
+  bool eip7702_disabled = 6;
 }
 
 message BundlerSponsorship {
@@ -195,6 +196,8 @@ message MempoolOp {
   string filter_id = 10;
   // The permissions for the UserOperation
   UserOperationPermissions permissions = 11;
+  // Whether the sender is a 7702 delegation
+  bool sender_is_7702 = 12;
 }
 
 message PoolOperationSummary {
@@ -735,6 +738,7 @@ message PrecheckViolationError {
     CallGasLimitTooLow call_gas_limit_too_low = 12;
     FactoryMustBeEmpty factory_must_be_empty = 13;
     OverMaxCost over_max_cost = 14;
+    Eip7702Disabled eip_7702_disabled = 15;
   }
 }
 
@@ -810,6 +814,8 @@ message OverMaxCost {
   bytes actual_cost = 1;
   bytes max_cost = 2;
 }
+
+message Eip7702Disabled {}
 
 // SIMULATION VIOLATIONS
 message SimulationViolationError {
