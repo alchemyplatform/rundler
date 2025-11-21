@@ -190,6 +190,7 @@ mockall::mock! {
             &self,
             op: v0_6::UserOperation,
             block_id: BlockId,
+            sender_eoa: Address,
         ) -> ProviderResult<Result<u128, HandleOpRevert>>;
         fn decode_simulate_handle_ops_revert(
             revert_data: &Bytes,
@@ -299,6 +300,7 @@ mockall::mock! {
             &self,
             op: v0_7::UserOperation,
             block_id: BlockId,
+            sender_eoa: Address,
         ) -> ProviderResult<Result<u128, HandleOpRevert>>;
         fn decode_simulate_handle_ops_revert(
             revert_data: &Bytes,

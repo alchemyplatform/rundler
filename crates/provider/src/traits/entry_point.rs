@@ -263,6 +263,7 @@ pub trait SimulationProvider: Send + Sync {
         &self,
         op: Self::UO,
         block_id: BlockId,
+        sender_eoa: Address,
     ) -> ProviderResult<Result<u128, HandleOpRevert>>;
 
     /// Decode the revert data from a call to `simulateHandleOps`

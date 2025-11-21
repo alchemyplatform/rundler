@@ -216,7 +216,7 @@ impl Default for ChainSpec {
             flashbots_relay_url: None,
             bloxroute_enabled: false,
             chain_history_size: 64,
-            rpc_eth_simulate_v1_enabled: true,
+            rpc_eth_simulate_v1_enabled: false,
             rpc_debug_trace_call_enabled: true,
             rpc_debug_trace_transaction_enabled: true,
             signature_aggregators: Arc::new(ContractRegistry::default()),
@@ -347,11 +347,6 @@ impl ChainSpec {
     /// Check if the chain supports EIP-7702
     pub fn supports_eip7702(&self, entry_point: Address) -> bool {
         self.eip7702_enabled && entry_point == self.entry_point_address_v0_7
-    }
-
-    /// Check if the chain supports revert checking
-    pub fn supports_revert_check(&self) -> bool {
-        self.rpc_eth_simulate_v1_enabled || self.rpc_debug_trace_call_enabled
     }
 }
 

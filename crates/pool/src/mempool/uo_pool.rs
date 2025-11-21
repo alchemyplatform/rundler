@@ -30,7 +30,7 @@ use rundler_types::{
         ReputationStatus, SimulationViolation, StakeStatus,
     },
     Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, GasFees, UserOperation,
-    UserOperationId, UserOperationPermissions, UserOperationVariant,
+    UserOperationId, UserOperationPermissions, UserOperationVariant, ValidationRevert,
 };
 use rundler_utils::{emit::WithEntryPoint, guard_timer::CustomTimerGuard};
 use tokio::sync::broadcast;
@@ -160,9 +160,6 @@ where
     async fn check_revert(&self, op: UserOperationVariant, block_hash: B256) -> MempoolResult<()> {
         if !self.config.revert_check_enabled {
             return Ok(());
-        } else if !self.config.chain_spec.supports_revert_check() {
-            tracing::warn!("revert check enabled but not supported for chain");
-            return Ok(());
         } else if op.aggregator().is_some() {
             tracing::warn!("revert check not supported for aggregators");
             return Ok(());
@@ -171,7 +168,8 @@ where
         let sim_result = self
             .ep_providers
             .entry_point()
-            .simulate_handle_op_revert_check(op.into(), block_hash.into())
+            // TODO(revert): get a sender eoa from chain tracking
+            .simulate_handle_op_revert_check(op.into(), block_hash.into(), Address::random())
             .await
             .context("Failed to simulate handle op with revert check")?;
 
@@ -182,6 +180,16 @@ where
             }
             Err(HandleOpRevert::PostOpRevert { data, reason }) => {
                 Err(MempoolError::PostOpRevert(InnerRevert { data, reason }))
+            }
+            Err(HandleOpRevert::ValidationRevert(ValidationRevert::Unknown(data))) => {
+                Err(MempoolError::ExecutionRevert(InnerRevert {
+                    data,
+                    // TODO(revert): add the specific reason if the chain is using reserve balance in chain config
+                    reason: Some(
+                        "unknown execution revert - on monad check reserve balance if using 7702"
+                            .to_string(),
+                    ),
+                }))
             }
             Err(HandleOpRevert::ValidationRevert(r)) => Err(MempoolError::SimulationViolation(
                 SimulationViolation::ValidationRevert(r),
@@ -999,9 +1007,7 @@ struct UoPoolMetrics {
 mod tests {
     use std::{collections::HashMap, str::FromStr, vec};
 
-    use alloy_primitives::{
-        address, bytes, uint, Address, Bytes, Log as PrimitiveLog, LogData, U256,
-    };
+    use alloy_primitives::{address, bytes, Address, Bytes, Log as PrimitiveLog, LogData, U256};
     use alloy_rpc_types_eth::TransactionReceipt as AlloyTransactionReceipt;
     use alloy_serde::WithOtherFields;
     use alloy_signer::SignerSync;
@@ -1010,9 +1016,9 @@ mod tests {
     use mockall::Sequence;
     use rundler_contracts::v0_6::IEntryPoint::UserOperationEvent as UserOperationEventV06;
     use rundler_provider::{
-        AnyReceiptEnvelope, DepositInfo, EntryPoint, ExecutionResult, Log, MockDAGasOracleSync,
-        MockEntryPointV0_6, MockEvmProvider, MockFeeEstimator, ProvidersWithEntryPoint,
-        ReceiptWithBloom, TransactionReceipt,
+        AnyReceiptEnvelope, DepositInfo, EntryPoint, Log, MockDAGasOracleSync, MockEntryPointV0_6,
+        MockEvmProvider, MockFeeEstimator, ProvidersWithEntryPoint, ReceiptWithBloom,
+        TransactionReceipt,
     };
     use rundler_sim::{
         MockPrechecker, MockSimulator, PrecheckError, PrecheckReturn, PrecheckSettings,

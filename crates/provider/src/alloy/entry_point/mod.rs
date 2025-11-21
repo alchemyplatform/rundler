@@ -12,6 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_consensus::{transaction::SignableTransaction, TxEnvelope, TypedTransaction};
+use alloy_json_rpc::{ErrorPayload, RpcError};
 use alloy_primitives::{address, Address, Bytes, Log, LogData, Signature, U256};
 use alloy_provider::{ext::DebugApi, network::TransactionBuilder7702};
 use alloy_rlp::Encodable;
@@ -102,10 +103,8 @@ async fn simulate_transaction<P: AlloyProvider>(
     } else if chain_spec.rpc_debug_trace_call_enabled {
         simulate_with_debug_trace_call(provider, tx, block_id).await
     } else {
-        Err(
-            anyhow::anyhow!("either eth_simulateV1 or debug_traceCall must be enabled to simulate")
-                .into(),
-        )
+        // TOD(revert): consider a fallback here to eth_call to just get the revert data
+        simulate_with_eth_call(provider, tx, block_id).await
     }
 }
 
@@ -167,7 +166,7 @@ async fn simulate_with_debug_trace_call<P: AlloyProvider>(
 
     Ok(SimulateResult {
         gas_used: call_frame.gas_used.try_into().unwrap_or(u128::MAX),
-        success: call_frame.revert_reason.is_none(),
+        success: call_frame.error.is_none(),
         data: call_frame.output.unwrap_or_default(),
         logs: call_frame
             .logs
@@ -181,4 +180,33 @@ async fn simulate_with_debug_trace_call<P: AlloyProvider>(
             })
             .collect(),
     })
+}
+
+async fn simulate_with_eth_call<P: AlloyProvider>(
+    provider: &P,
+    tx: TransactionRequest,
+    block_id: BlockId,
+) -> ProviderResult<SimulateResult> {
+    match provider.call(tx.into()).block(block_id).await {
+        Ok(data) => Ok(SimulateResult {
+            gas_used: 0,
+            success: false,
+            data,
+            logs: vec![],
+        }),
+        // TODO(revert): don't hardcode these
+        Err(RpcError::ErrorResp(ErrorPayload {
+            code: -32603,
+            message,
+            data,
+        })) if message == "execution reverted" => Ok(SimulateResult {
+            gas_used: 0,
+            success: false,
+            data: data
+                .and_then(|data| data.to_string().parse::<Bytes>().ok())
+                .unwrap_or_default(),
+            logs: vec![],
+        }),
+        Err(e) => Err(e.into()),
+    }
 }
