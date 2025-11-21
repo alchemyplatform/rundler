@@ -441,6 +441,7 @@ impl From<&PoolOperation> for MempoolOp {
             da_gas_data: Some(DaGasData::from(&op.da_gas_data)),
             filter_id: op.filter_id.clone().unwrap_or_default(),
             permissions: Some(op.perms.clone().into()),
+            sender_is_7702: op.sender_is_7702,
         }
     }
 }
@@ -552,6 +553,7 @@ impl TryUoFromProto<MempoolOp> for PoolOperation {
                 .permissions
                 .context("Permissions should be set")?
                 .try_into()?,
+            sender_is_7702: op.sender_is_7702,
         })
     }
 }
@@ -655,6 +657,7 @@ impl TryFrom<UserOperationPermissions> for RundlerUserOperationPermissions {
                 .bundler_sponsorship
                 .map(|s| s.try_into())
                 .transpose()?,
+            eip7702_disabled: permissions.eip7702_disabled,
         })
     }
 }
@@ -669,6 +672,7 @@ impl From<RundlerUserOperationPermissions> for UserOperationPermissions {
             underpriced_accept_pct: permissions.underpriced_accept_pct,
             underpriced_bundle_pct: permissions.underpriced_bundle_pct,
             bundler_sponsorship: permissions.bundler_sponsorship.map(|s| s.into()),
+            eip7702_disabled: permissions.eip7702_disabled,
         }
     }
 }

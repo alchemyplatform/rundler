@@ -541,6 +541,7 @@ mod tests {
             da_gas_data: rundler_types::da::DAGasData::Empty,
             filter_id: None,
             perms: UserOperationPermissions::default(),
+            sender_is_7702: false,
         }
     }
 

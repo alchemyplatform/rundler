@@ -1780,6 +1780,7 @@ mod tests {
             da_gas_data: Default::default(),
             filter_id: None,
             perms: UserOperationPermissions::default(),
+            sender_is_7702: false,
         }
     }
 

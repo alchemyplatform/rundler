@@ -17,31 +17,31 @@ It also supports a health check endpoint.
 
 Methods defined by the [ERC-7769 spec](https://eips.ethereum.org/EIPS/eip-7769#rpc-methods-eth-namespace).
 
-| Method | Supported |
-| ------ | :-----------: |
-| `eth_chainId` | ✅ |
-| `eth_supportedEntryPoints` | ✅ |
-| `eth_estimateUserOperationGas` | ✅ |
-| `eth_sendUserOperation` | ✅ |
-| `eth_getUserOperationByHash` | ✅ |
-| `eth_getUserOperationReceipt` | ✅ |
+| Method                         | Supported |
+| ------------------------------ | :-------: |
+| `eth_chainId`                  |    ✅     |
+| `eth_supportedEntryPoints`     |    ✅     |
+| `eth_estimateUserOperationGas` |    ✅     |
+| `eth_sendUserOperation`        |    ✅     |
+| `eth_getUserOperationByHash`   |    ✅     |
+| `eth_getUserOperationReceipt`  |    ✅     |
 
 ### `debug_` Namespace
 
 Method defined by the [ERC-7769 spec](https://eips.ethereum.org/EIPS/eip-7769#rpc-methods-debug-namespace). Used only for debugging/testing and should be disabled on production APIs.
 
-| Method | Supported | Non-Standard |
-| ------ | :-----------: | :--: |
-| `debug_bundler_clearState` | ✅ |
-| `debug_bundler_dumpMempool` | ✅ |
-| `debug_bundler_sendBundleNow` | ✅ |
-| `debug_bundler_setBundlingMode` | ✅ |
-| `debug_bundler_setReputation` | ✅ |
-| `debug_bundler_dumpReputation` | ✅ |
-| `debug_bundler_addUserOps` | 🚧 | |
-| [`debug_bundler_getStakeStatus`](#debug_bundler_getstakestatus) | ✅ | ✅ |
-| [`debug_bundler_clearMempool`](#debug_bundler_clearMempool) | ✅ | ✅
-| [`debug_bundler_dumpPaymasterBalances`](#debug_bundler_dumpPaymasterBalances) | ✅ | ✅
+| Method                                                                        | Supported | Non-Standard |
+| ----------------------------------------------------------------------------- | :-------: | :----------: |
+| `debug_bundler_clearState`                                                    |    ✅     |
+| `debug_bundler_dumpMempool`                                                   |    ✅     |
+| `debug_bundler_sendBundleNow`                                                 |    ✅     |
+| `debug_bundler_setBundlingMode`                                               |    ✅     |
+| `debug_bundler_setReputation`                                                 |    ✅     |
+| `debug_bundler_dumpReputation`                                                |    ✅     |
+| `debug_bundler_addUserOps`                                                    |    🚧     |              |
+| [`debug_bundler_getStakeStatus`](#debug_bundler_getstakestatus)               |    ✅     |      ✅      |
+| [`debug_bundler_clearMempool`](#debug_bundler_clearMempool)                   |    ✅     |      ✅      |
+| [`debug_bundler_dumpPaymasterBalances`](#debug_bundler_dumpPaymasterBalances) |    ✅     |      ✅      |
 
 Non standard API definitions:
 
@@ -51,7 +51,7 @@ This method is used by the ERC-4337 `bundler-spec-tests` but is not (yet) part o
 
 This method gets the stake status of a certain address with a particular entry point contract.
 
-##### Parameters 
+##### Parameters
 
 - Address to get stake status for
 - Entry point address
@@ -62,7 +62,7 @@ This method gets the stake status of a certain address with a particular entry p
   "jsonrpc": "2.0",
   "id": 1,
   "method": "debug_bundler_getStakeStatus",
-  "params": ["0x...", "0x..."] // address, entry point address 
+  "params": ["0x...", "0x..."] // address, entry point address
 }
 
 # Response
@@ -88,7 +88,7 @@ This method is used by the ERC-4337 `bundler-spec-tests` but is not (yet) part o
 
 This method triggers a the mempool to drop all pending user operations, but keeps the rest of its state. In contrast to `debug_bundler_clearState` which drops all state.
 
-##### Parameters 
+##### Parameters
 
 - Entry point address
 
@@ -98,7 +98,7 @@ This method triggers a the mempool to drop all pending user operations, but keep
   "jsonrpc": "2.0",
   "id": 1,
   "method": "debug_bundler_clearMempool",
-  "params": ["0x...."] // entry point address 
+  "params": ["0x...."] // entry point address
 }
 
 # Response
@@ -113,7 +113,7 @@ This method triggers a the mempool to drop all pending user operations, but keep
 
 Dump the paymaster balances from the paymaster tracker in the mempool for a given entry point.
 
-##### Parameters 
+##### Parameters
 
 - Entry point address
 
@@ -123,7 +123,7 @@ Dump the paymaster balances from the paymaster tracker in the mempool for a give
   "jsonrpc": "2.0",
   "id": 1,
   "method": "debug_bundler_dumpPaymasterBalances",
-  "params": ["0x...."] // entry point address 
+  "params": ["0x...."] // entry point address
 }
 
 # Response
@@ -145,19 +145,19 @@ Dump the paymaster balances from the paymaster tracker in the mempool for a give
 
 Rundler specific methods that are not specified by the ERC-4337 spec. This namespace may be opened publicly.
 
-| Method | Supported |
-| ------ | :-----------: |
-| [`rundler_maxPriorityFeePerGas`](#rundler_maxpriorityfeepergas) | ✅ |
-| [`rundler_dropLocalUserOperation`](#rundler_droplocaluseroperation) | ✅ |
-| [`rundler_getMinedUserOperation`](#rundler_getmineduseroperation) | ✅ |
-| [`rundler_getUserOperationStatus`](#rundler_getuseroperationstatus) | ✅ |
-| [`rundler_getPendingUserOperationBySenderNonce`](#rundler_getpendinguseroperationbysendernonce) | ✅ |
+| Method                                                                                          | Supported |
+| ----------------------------------------------------------------------------------------------- | :-------: |
+| [`rundler_maxPriorityFeePerGas`](#rundler_maxpriorityfeepergas)                                 |    ✅     |
+| [`rundler_dropLocalUserOperation`](#rundler_droplocaluseroperation)                             |    ✅     |
+| [`rundler_getMinedUserOperation`](#rundler_getmineduseroperation)                               |    ✅     |
+| [`rundler_getUserOperationStatus`](#rundler_getuseroperationstatus)                             |    ✅     |
+| [`rundler_getPendingUserOperationBySenderNonce`](#rundler_getpendinguseroperationbysendernonce) |    ✅     |
 
 #### `rundler_maxPriorityFeePerGas`
 
 This method returns the minimum `maxPriorityFeePerGas` that the bundler will accept at the current block height. This is based on the fees of the network as well as the priority fee mode configuration of the bundle builder.
 
-Users of this method should typically increase their priority fee values by a buffer value in order to handle price fluctuations. 
+Users of this method should typically increase their priority fee values by a buffer value in order to handle price fluctuations.
 
 ```
 # Request
@@ -266,6 +266,7 @@ NOTE: The returned user operation receipt is slightly different than the receipt
 Gets the status of a user operation by hash. Intended for use cases where the user wants a single RPC call to retrieve the status of a user operation, as well as its receipt if that user operation is mined.
 
 Possible statuses:
+
 - "unknown": the user operation is not mined or pending in the mempool. `receipt` is `null`.
 - "pending": the user operation is pending in the mempool and has not been mined. `receipt` is `null`.
 - "mined": the user operation is mined, the `receipt` field will be populated with the user operation receipt.
@@ -322,16 +323,16 @@ Gets a pending user operation for the given sender & nonce. If a user operation 
 
 Administration methods specific to Rundler. This namespace should not be open to the public.
 
-| Method |
-| ------ |
-| [`admin_clearState`](#admin_clearState) |
+| Method                                    |
+| ----------------------------------------- |
+| [`admin_clearState`](#admin_clearState)   |
 | [`admin_setTracking`](#admin_settracking) |
 
 #### `admin_clearState`
 
 Clears the state of various Rundler components associated with an entry point address.
 
-##### Parameters 
+##### Parameters
 
 - Entry point address
 - Admin clear state object
@@ -343,7 +344,7 @@ Clears the state of various Rundler components associated with an entry point ad
   "id": 1,
   "method": "admin_clearState",
   "params": [
-    "0x....", // entry point address 
+    "0x....", // entry point address
     {
       clearMempool: bool,   // optional, clears the UOs from the pool
       clearPaymaster: bool, // optional, clears the paymaster balances
@@ -364,7 +365,7 @@ Clears the state of various Rundler components associated with an entry point ad
 
 Turns various mempool features on/off.
 
-##### Parameters 
+##### Parameters
 
 - Entry point address
 - Admin set tracking object
@@ -376,7 +377,7 @@ Turns various mempool features on/off.
   "id": 1,
   "method": "admin_clearState",
   "params": [
-    "0x....", // entry point address 
+    "0x....", // entry point address
     {
       paymasterTracking: bool,  // required, enables paymaster balance tracking/enforcement
       reputationTracking: bool, // required, enables reputation tracking/enforcement
@@ -398,14 +399,14 @@ The health check endpoint can be used by infrastructure to ensure that Rundler i
 
 Currently, it simply queries each the `Pool` and the `Builder` servers to check if they are responding to requests. If yes, Rundler is healthy, else unhealthy.
 
-| Route | Supported |
-| ------ | :-----------: |
-| `/health` | ✅ |
+| Route     | Supported |
+| --------- | :-------: |
+| `/health` |    ✅     |
 
-| Status | Code | Message |
-| ------ | :-----------: | ---- |
-| Healthy | 200 | `ok` |
-| Unhealthy | 500 | JSON-RPC formatted error message | 
+| Status    | Code | Message                          |
+| --------- | :--: | -------------------------------- |
+| Healthy   | 200  | `ok`                             |
+| Unhealthy | 500  | JSON-RPC formatted error message |
 
 ## User Operation Permissions
 
@@ -424,8 +425,8 @@ When enabled, the `eth_sendUserOperation` request schema becomes:
   "params": [
     {
       ... // user operation fields
-    }
-    "0x....", // entry point address 
+    },
+    "0x....", // entry point address
     {
       trusted: bool,                      // optional, true if the UO should be trusted and simulation should be skipped.
       maxAllowedInPoolForSender: uint64,  // optional, the maximum number of UOs allowed in the mempool for this sender
@@ -435,6 +436,7 @@ When enabled, the `eth_sendUserOperation` request schema becomes:
         maxCost: uint256,                 // required if bundler sponsorship, sets the max cost for the sponsorship
         validUntil: uint64                // required if bundler sponsorship, sets the expiry time for the sponsorship in seconds
       }
+      eip7702Disabled: bool,              // optional, if true senders using EIP-7702 are disabled
     }
   ]
 }
@@ -467,12 +469,17 @@ The `bundlerSponsorship` permission tells the bundler to sponsor a user operatio
 The bundler will skip all fee checks and instead just check `maxCost` and `validUntil`. If the UO passes those checks, it will bundle the UO and sponsor all of the gas. The bundler will lose funds on this operation and an out of process mechanism must be used to refund the bundler's balance.
 
 To be eligible for `bundlerSponsorship` a user operation must have certain fields set to zero or empty. Those include:
-* `maxFeePerGas` = 0
-* `maxPriorityFeePerGas` = 0
-* `preVerificationGas` = 0
-* `paymaster` = empty
-* `paymasterData` = empty
-* `paymasterAndData` (v0.6) = empty
+
+- `maxFeePerGas` = 0
+- `maxPriorityFeePerGas` = 0
+- `preVerificationGas` = 0
+- `paymaster` = empty
+- `paymasterData` = empty
+- `paymasterAndData` (v0.6) = empty
+
+#### `eip7702Disabled`
+
+Optional boolean to disable senders using EIP-7702. Useful if only certain senders should have access to EIP-7702 bundling due to security concerns.
 
 ## Gas Estimation
 
@@ -506,7 +513,7 @@ NOTE: Since the dynamic portion of PVG can change, users on networks that contai
 To estimate `verificationGasLimit` Rundler uses binary search to find the minimum gas value where verification succeeds. The procedure follows:
 
 1. Run an initial attempt at max limit using the gas measurement helper contract. If verification fails here it will never succeed and the UO is rejected.
-2. Set the initial guess to the gas used in the initial attempt * 2 to account for the 63/64ths rule.
+2. Set the initial guess to the gas used in the initial attempt \* 2 to account for the 63/64ths rule.
 3. Run the binary search algorithm until the minimum successful gas value and the maximum failure gas value are within 10%.
 
 This approach allows for minimal `eth_call` requests while providing an accurate gas limit.
@@ -522,7 +529,7 @@ We split this into two cases for estimation: no paymaster, and paymaster.
 
 ##### No Paymaster Case
 
-When no paymaster is used, verification gas is always estimated using **zero fees**. The cost of a native transfer is added to the result of the binary search to account for the transfer of funds from the account to the entry point. 
+When no paymaster is used, verification gas is always estimated using **zero fees**. The cost of a native transfer is added to the result of the binary search to account for the transfer of funds from the account to the entry point.
 
 **Note:** This may overestimate the verification gas by the cost of a native transfer in the case where the account has enough deposited on the entry point to cover the full prefund cost. This will not impact the onchain cost of the operation.
 

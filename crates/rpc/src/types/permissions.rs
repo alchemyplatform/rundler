@@ -37,6 +37,9 @@ pub(crate) struct RpcUserOperationPermissions {
     /// Bundler sponsorship settings
     #[serde(default)]
     pub(crate) bundler_sponsorship: Option<RpcBundlerSponsorship>,
+    /// Disable EIP-7702
+    #[serde(default)]
+    pub(crate) eip7702_disabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -58,6 +61,7 @@ impl FromWithSpec<RpcUserOperationPermissions> for UserOperationPermissions {
             bundler_sponsorship: rpc
                 .bundler_sponsorship
                 .map(|c| c.into_with_spec(chain_spec)),
+            eip7702_disabled: rpc.eip7702_disabled.unwrap_or(false),
         }
     }
 }
