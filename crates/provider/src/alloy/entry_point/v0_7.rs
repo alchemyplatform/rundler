@@ -573,8 +573,9 @@ where
         &self,
         op: Self::UO,
         block_id: BlockId,
+        sender_eoa: Address,
     ) -> ProviderResult<Result<u128, HandleOpRevert>> {
-        // TODO: handle aggregators. Signatures & proxies are going to be a bit tricky.
+        // TODO(revert): handle aggregators. Signatures & proxies are going to be a bit tricky.
 
         let tx = get_handle_ops_call(
             &self.i_entry_point,
@@ -583,7 +584,7 @@ where
                 aggregator: Address::ZERO,
                 signature: Bytes::new(),
             }],
-            Address::random(),
+            sender_eoa,
             None,
             GasFees::default(),
             None,
