@@ -45,8 +45,8 @@ use tracing::instrument;
 use crate::{
     AggregatorOut, AggregatorSimOut, AlloyProvider, BlockHashOrNumber, BundleHandler, DAGasOracle,
     DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait,
-    ExecutionResult, HandleOpRevert, HandleOpsOut, ProviderResult, SignatureAggregator,
-    SimulationProvider, TransactionRequest,
+    ExecutionResult, HandleOpRevert, HandleOpsOut, ProviderResult, RevertCheckMode,
+    SignatureAggregator, SimulationProvider, TransactionRequest,
 };
 
 /// Entry point provider for v0.6
@@ -510,29 +510,36 @@ where
         &self,
         op: Self::UO,
         block_id: BlockId,
-        sender_eoa: Address,
+        revert_check_mode: RevertCheckMode,
     ) -> ProviderResult<Result<u128, HandleOpRevert>> {
-        // TODO(revert): handle aggregators. Signatures & proxies are going to be a bit tricky.
+        let mut state_override = StateOverride::default();
+        let da_gas = op
+            .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
+            .try_into()
+            .unwrap_or(u64::MAX);
 
-        let tx = get_handle_ops_call(
-            &self.i_entry_point,
-            vec![UserOpsPerAggregator {
-                user_ops: vec![op],
-                aggregator: Address::ZERO,
-                signature: Bytes::new(),
-            }],
-            sender_eoa,
-            None,
-            GasFees::default(),
-            None,
-            self.chain_spec.id,
-        );
+        if let Some(authorization) = op.authorization_tuple() {
+            authorization_utils::apply_7702_overrides(
+                &mut state_override,
+                op.sender(),
+                authorization.address,
+            );
+        }
+
+        let tx = self
+            .i_entry_point
+            .simulateHandleOp(op.into(), Address::ZERO, Bytes::new())
+            .block(block_id)
+            .gas(self.max_simulate_handle_op_gas.saturating_add(da_gas))
+            .state(state_override)
+            .into_transaction_request()
+            .inner;
 
         let sim_result = super::simulate_transaction(
             self.i_entry_point.provider(),
-            &self.chain_spec,
             tx,
             block_id,
+            revert_check_mode,
         )
         .await?;
 

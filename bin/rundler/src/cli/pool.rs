@@ -15,9 +15,9 @@ use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
 use alloy_primitives::Address;
 use anyhow::Context;
-use clap::Args;
+use clap::{builder::ValueParser, Args};
 use rundler_pool::{LocalPoolBuilder, PoolConfig, PoolTask, PoolTaskArgs};
-use rundler_provider::Providers;
+use rundler_provider::{Providers, RevertCheckMode};
 use rundler_sim::MempoolConfigs;
 use rundler_task::TaskSpawnerExt;
 use rundler_types::{
@@ -176,12 +176,21 @@ pub struct PoolArgs {
     pub max_time_in_pool_secs: Option<u64>,
 
     #[arg(
-        long = "pool.disable_revert_check",
-        name = "pool.disable_revert_check",
-        env = "POOL_DISABLE_REVERT_CHECK",
-        default_value = "false"
+        long = "pool.revert_check_mode",
+        name = "pool.revert_check_mode",
+        env = "POOL_REVERT_CHECK_MODE",
+        value_parser = ValueParser::new(parse_revert_check_mode)
     )]
-    pub disable_revert_check: bool,
+    pub revert_check_mode: Option<RevertCheckMode>,
+}
+
+fn parse_revert_check_mode(s: &str) -> Result<RevertCheckMode, anyhow::Error> {
+    match s {
+        "eth_call" => Ok(RevertCheckMode::EthCall),
+        "eth_simulate_v1" => Ok(RevertCheckMode::EthSimulateV1),
+        "debug_trace_call" => Ok(RevertCheckMode::DebugTraceCall),
+        _ => Err(anyhow::anyhow!("invalid revert check mode: {}, must be one of eth_call, eth_simulate_v1, debug_trace_call", s)),
+    }
 }
 
 impl PoolArgs {
@@ -235,7 +244,7 @@ impl PoolArgs {
                 .verification_gas_limit_efficiency_reject_threshold,
             max_time_in_pool: self.max_time_in_pool_secs.map(Duration::from_secs),
             max_expected_storage_slots: common.max_expected_storage_slots.unwrap_or(usize::MAX),
-            revert_check_enabled: !self.disable_revert_check,
+            revert_check_mode: self.revert_check_mode,
         };
 
         let mut pool_configs = vec![];
