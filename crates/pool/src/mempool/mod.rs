@@ -21,6 +21,7 @@ mod size;
 
 mod paymaster;
 pub(crate) use paymaster::{PaymasterConfig, PaymasterTracker};
+use rundler_provider::RevertCheckMode;
 
 mod uo_pool;
 use std::{
@@ -179,8 +180,8 @@ pub struct PoolConfig {
     pub max_time_in_pool: Option<Duration>,
     /// The maximum number of storage slots that can be expected to be used by a user operation during validation
     pub max_expected_storage_slots: usize,
-    /// Whether to enable the revert check
-    pub revert_check_enabled: bool,
+    /// Whether to enable the revert check and the mode to use
+    pub revert_check_mode: Option<RevertCheckMode>,
 }
 
 /// Origin of an operation.

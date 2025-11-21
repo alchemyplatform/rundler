@@ -23,9 +23,10 @@ use alloy_rpc_types_eth::{
 use alloy_rpc_types_trace::geth::{
     CallConfig, GethDebugBuiltInTracerType, GethDebugTracerType, GethDebugTracingOptions, GethTrace,
 };
-use rundler_types::{authorization::Eip7702Auth, chain::ChainSpec};
+use rundler_types::authorization::Eip7702Auth;
+use rundler_utils::json_rpc;
 
-use crate::{AlloyProvider, ProviderResult};
+use crate::{AlloyProvider, ProviderResult, RevertCheckMode};
 
 pub(crate) mod v0_6;
 pub(crate) mod v0_7;
@@ -94,17 +95,16 @@ struct SimulateResult {
 
 async fn simulate_transaction<P: AlloyProvider>(
     provider: &P,
-    chain_spec: &ChainSpec,
     tx: TransactionRequest,
     block_id: BlockId,
+    revert_check_mode: RevertCheckMode,
 ) -> ProviderResult<SimulateResult> {
-    if chain_spec.rpc_eth_simulate_v1_enabled {
-        simulate_with_simulate_v1(provider, tx, block_id).await
-    } else if chain_spec.rpc_debug_trace_call_enabled {
-        simulate_with_debug_trace_call(provider, tx, block_id).await
-    } else {
-        // TOD(revert): consider a fallback here to eth_call to just get the revert data
-        simulate_with_eth_call(provider, tx, block_id).await
+    match revert_check_mode {
+        RevertCheckMode::EthCall => simulate_with_eth_call(provider, tx, block_id).await,
+        RevertCheckMode::EthSimulateV1 => simulate_with_simulate_v1(provider, tx, block_id).await,
+        RevertCheckMode::DebugTraceCall => {
+            simulate_with_debug_trace_call(provider, tx, block_id).await
+        }
     }
 }
 
@@ -194,12 +194,11 @@ async fn simulate_with_eth_call<P: AlloyProvider>(
             data,
             logs: vec![],
         }),
-        // TODO(revert): don't hardcode these
         Err(RpcError::ErrorResp(ErrorPayload {
-            code: -32603,
+            code: json_rpc::INTERNAL_ERROR_CODE,
             message,
             data,
-        })) if message == "execution reverted" => Ok(SimulateResult {
+        })) if json_rpc::check_execution_reverted(&message) => Ok(SimulateResult {
             gas_used: 0,
             success: false,
             data: data

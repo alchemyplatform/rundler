@@ -11,23 +11,12 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-#![warn(missing_docs, unreachable_pub, unused_crate_dependencies)]
-#![deny(unused_must_use, rust_2018_idioms)]
-#![doc(test(
-    no_crate_inject,
-    attr(deny(warnings, rust_2018_idioms), allow(dead_code, unused_variables))
-))]
+//! JSON-RPC utilities
 
-//! Rundler utilities
+/// The error code for internal errors in JSON-RPC responses
+pub const INTERNAL_ERROR_CODE: i64 = -32603;
 
-pub mod authorization_utils;
-pub mod cache;
-pub mod emit;
-pub mod eth;
-pub mod guard_timer;
-pub mod json_rpc;
-pub mod log;
-pub mod math;
-pub mod random;
-pub mod retry;
-pub mod strs;
+/// Check if a JSON-RPC response indicates an execution revert
+pub fn check_execution_reverted(message: &str) -> bool {
+    message == "execution reverted"
+}

@@ -50,8 +50,8 @@ use tracing::instrument;
 use crate::{
     AggregatorOut, AggregatorSimOut, AlloyProvider, BlockHashOrNumber, BundleHandler, DAGasOracle,
     DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait,
-    ExecutionResult, HandleOpRevert, HandleOpsOut, ProviderResult, SignatureAggregator,
-    SimulationProvider, TransactionRequest,
+    ExecutionResult, HandleOpRevert, HandleOpsOut, ProviderResult, RevertCheckMode,
+    SignatureAggregator, SimulationProvider, TransactionRequest,
 };
 
 /// Entry point provider for v0.7
@@ -60,7 +60,7 @@ pub struct EntryPointProvider<AP, D> {
     i_entry_point: IEntryPointInstance<AP, AnyNetwork>,
     da_gas_oracle: D,
     max_verification_gas: u64,
-    max_simulate_handle_ops_gas: u64,
+    max_simulate_handle_op_gas: u64,
     max_gas_estimation_gas: u64,
     max_aggregation_gas: u64,
     chain_spec: ChainSpec,
@@ -74,7 +74,7 @@ where
     pub fn new(
         chain_spec: ChainSpec,
         max_verification_gas: u64,
-        max_simulate_handle_ops_gas: u64,
+        max_simulate_handle_op_gas: u64,
         max_gas_estimation_gas: u64,
         max_aggregation_gas: u64,
         provider: AP,
@@ -87,7 +87,7 @@ where
             ),
             da_gas_oracle,
             max_verification_gas,
-            max_simulate_handle_ops_gas,
+            max_simulate_handle_op_gas,
             max_gas_estimation_gas,
             max_aggregation_gas,
             chain_spec,
@@ -533,7 +533,7 @@ where
     ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
         simulate_handle_op_inner(
             &self.chain_spec,
-            self.max_simulate_handle_ops_gas,
+            self.max_simulate_handle_op_gas,
             &self.i_entry_point,
             op,
             target,
@@ -573,29 +573,35 @@ where
         &self,
         op: Self::UO,
         block_id: BlockId,
-        sender_eoa: Address,
+        revert_check_mode: RevertCheckMode,
     ) -> ProviderResult<Result<u128, HandleOpRevert>> {
-        // TODO(revert): handle aggregators. Signatures & proxies are going to be a bit tricky.
+        let da_gas = op
+            .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
+            .try_into()
+            .unwrap_or(u64::MAX);
+        let mut state_override = StateOverride::default();
 
-        let tx = get_handle_ops_call(
-            &self.i_entry_point,
-            vec![UserOpsPerAggregator {
-                user_ops: vec![op],
-                aggregator: Address::ZERO,
-                signature: Bytes::new(),
-            }],
-            sender_eoa,
-            None,
-            GasFees::default(),
-            None,
-            self.chain_spec.id,
+        add_simulations_override(&mut state_override, *self.i_entry_point.address());
+        add_authorization_tuple(op.sender(), op.authorization_tuple(), &mut state_override);
+
+        let ep_simulations = IEntryPointSimulations::new(
+            *self.i_entry_point.address(),
+            self.i_entry_point.provider(),
         );
+
+        let tx = ep_simulations
+            .simulateHandleOp(op.pack(), Address::ZERO, Bytes::new())
+            .block(block_id)
+            .gas(self.max_simulate_handle_op_gas.saturating_add(da_gas))
+            .state(state_override)
+            .into_transaction_request()
+            .inner;
 
         let sim_result = super::simulate_transaction(
             self.i_entry_point.provider(),
-            &self.chain_spec,
             tx,
             block_id,
+            revert_check_mode,
         )
         .await?;
 

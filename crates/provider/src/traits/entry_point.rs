@@ -217,6 +217,17 @@ pub trait DAGasProvider: Send + Sync {
     ) -> ProviderResult<(u128, DAGasData, DAGasBlockData)>;
 }
 
+/// Mode for checking for reverts during simulation
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum RevertCheckMode {
+    /// Use eth_call to check for reverts
+    EthCall,
+    /// Use eth_simulateV1 to check for reverts
+    EthSimulateV1,
+    /// Use debug_traceCall to check for reverts
+    DebugTraceCall,
+}
+
 /// Trait for simulating user operations on an entry point contract
 #[async_trait::async_trait]
 #[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
@@ -263,7 +274,7 @@ pub trait SimulationProvider: Send + Sync {
         &self,
         op: Self::UO,
         block_id: BlockId,
-        sender_eoa: Address,
+        revert_check_mode: RevertCheckMode,
     ) -> ProviderResult<Result<u128, HandleOpRevert>>;
 
     /// Decode the revert data from a call to `simulateHandleOps`

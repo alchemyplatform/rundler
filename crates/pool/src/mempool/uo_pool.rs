@@ -158,18 +158,14 @@ where
     }
 
     async fn check_revert(&self, op: UserOperationVariant, block_hash: B256) -> MempoolResult<()> {
-        if !self.config.revert_check_enabled {
+        let Some(revert_check_mode) = self.config.revert_check_mode else {
             return Ok(());
-        } else if op.aggregator().is_some() {
-            tracing::warn!("revert check not supported for aggregators");
-            return Ok(());
-        }
+        };
 
         let sim_result = self
             .ep_providers
             .entry_point()
-            // TODO(revert): get a sender eoa from chain tracking
-            .simulate_handle_op_revert_check(op.into(), block_hash.into(), Address::random())
+            .simulate_handle_op_revert_check(op.into(), block_hash.into(), revert_check_mode)
             .await
             .context("Failed to simulate handle op with revert check")?;
 
@@ -182,14 +178,21 @@ where
                 Err(MempoolError::PostOpRevert(InnerRevert { data, reason }))
             }
             Err(HandleOpRevert::ValidationRevert(ValidationRevert::Unknown(data))) => {
-                Err(MempoolError::ExecutionRevert(InnerRevert {
-                    data,
-                    // TODO(revert): add the specific reason if the chain is using reserve balance in chain config
-                    reason: Some(
-                        "unknown execution revert - on monad check reserve balance if using 7702"
-                            .to_string(),
-                    ),
-                }))
+                if let Some(monad_min_reserve_balance) =
+                    self.config.chain_spec.monad_min_reserve_balance
+                {
+                    Err(MempoolError::ExecutionRevert(InnerRevert {
+                        data,
+                        reason: Some(
+                            format!("Execution reverted, possibly due to min reserve balance below threshold of {}", monad_min_reserve_balance),
+                        ),
+                    }))
+                } else {
+                    Err(MempoolError::ExecutionRevert(InnerRevert {
+                        data,
+                        reason: Some("unknown revert during execution simulation".to_string()),
+                    }))
+                }
             }
             Err(HandleOpRevert::ValidationRevert(r)) => Err(MempoolError::SimulationViolation(
                 SimulationViolation::ValidationRevert(r),
@@ -2402,7 +2405,7 @@ mod tests {
             verification_gas_limit_efficiency_reject_threshold: 0.0,
             max_time_in_pool: None,
             max_expected_storage_slots: usize::MAX,
-            revert_check_enabled: false,
+            revert_check_mode: None,
         }
     }
 
