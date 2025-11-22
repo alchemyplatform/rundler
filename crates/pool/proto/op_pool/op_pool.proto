@@ -646,6 +646,8 @@ message MempoolError {
     UseUnsupportedEIP use_unsupported_eip = 20;
     AggregatorError aggregator = 21;
     Invalid7702AuthSignature invalid_7702_auth_signature = 22;
+    ExecutionRevert execution_revert = 23;
+    PostOpRevert post_op_revert = 24;
   }
 }
 
@@ -719,6 +721,16 @@ message TooManyExpectedStorageSlots {
 
 message UseUnsupportedEIP {
   string eip_name = 1;
+}
+
+message ExecutionRevert {
+  bytes data = 1;
+  string reason = 2;
+}
+
+message PostOpRevert {
+  bytes data = 1;
+  string reason = 2;
 }
 
 // PRECHECK VIOLATIONS
