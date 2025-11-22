@@ -240,6 +240,10 @@ fn parse_known_call_execution_failed(message: &str, code: i64) -> Option<TxSende
     if lowercase_message.contains("could not replace existing tx") {
         return Some(TxSenderError::ReplacementUnderpriced);
     }
+    // monad
+    if lowercase_message.contains("an existing transaction had higher priority") {
+        return Some(TxSenderError::ReplacementUnderpriced);
+    }
     // geth, erigon, reth
     if lowercase_message.contains("nonce too low") {
         return Some(TxSenderError::NonceTooLow);
