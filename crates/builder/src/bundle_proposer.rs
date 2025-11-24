@@ -37,7 +37,7 @@ use rundler_sim::{SimulationError, SimulationResult, Simulator, ViolationError};
 use rundler_types::{
     aggregator::SignatureAggregatorResult,
     chain::ChainSpec,
-    da::DAGasBlockData,
+    da::{DAGasBlockData, DAGasData},
     pool::{PoolOperation, SimulationViolation},
     proxy::SubmissionProxy,
     BundleExpectedStorage, Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate,
@@ -435,6 +435,7 @@ where
         let required_da_gas = if self.settings.da_gas_tracking_enabled
             && da_block_data.is_some()
             && self.ep_providers.da_gas_oracle_sync().is_some()
+            && op.da_gas_data != DAGasData::Empty
         {
             let da_gas_oracle = self.ep_providers.da_gas_oracle_sync().as_ref().unwrap();
             let da_block_data = da_block_data.unwrap();
@@ -4098,6 +4099,13 @@ mod tests {
         entry_point
             .expect_aggregate_signatures()
             .returning(move |address, _| Ok(signatures_by_aggregator[&address]().unwrap()));
+
+        // Mock calc_da_gas for when da_gas_data is Empty (used by bundler sponsorship tests)
+        entry_point
+            .expect_calc_da_gas()
+            .returning(move |_, _, _, _| {
+                Ok((DEFAULT_DA_PVG, DAGasData::Empty, DAGasBlockData::Empty))
+            });
 
         let (event_sender, _) = broadcast::channel(16);
 
