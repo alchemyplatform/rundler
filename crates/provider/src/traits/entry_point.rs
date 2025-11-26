@@ -106,6 +106,8 @@ pub enum HandleOpRevert {
         /// String reason for the revert, if available
         reason: Option<String>,
     },
+    /// The transaction revert for unknown reason
+    TransactionRevert(Bytes),
 }
 
 /// Trait for interacting with an entry point contract.
@@ -219,7 +221,7 @@ pub trait DAGasProvider: Send + Sync {
 
 /// Mode for checking for reverts during simulation
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum RevertCheckMode {
+pub enum RevertCheckCallType {
     /// Use eth_call to check for reverts
     EthCall,
     /// Use eth_simulateV1 to check for reverts
@@ -274,7 +276,7 @@ pub trait SimulationProvider: Send + Sync {
         &self,
         op: Self::UO,
         block_id: BlockId,
-        revert_check_mode: RevertCheckMode,
+        revert_check_call_type: RevertCheckCallType,
     ) -> ProviderResult<Result<u128, HandleOpRevert>>;
 
     /// Decode the revert data from a call to `simulateHandleOps`

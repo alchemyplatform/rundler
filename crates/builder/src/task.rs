@@ -22,6 +22,7 @@ use alloy_primitives::{Address, B256};
 use anyhow::Context;
 use rundler_provider::{
     AlloyNetworkConfig, EntryPoint, Providers as ProvidersT, ProvidersWithEntryPointT,
+    RevertCheckCallType,
 };
 use rundler_signer::{SignerManager, SigningScheme};
 use rundler_sim::{
@@ -91,6 +92,8 @@ pub struct Args {
     pub verification_gas_limit_efficiency_reject_threshold: f64,
     /// Maximum ops requested from mempool
     pub assigner_max_ops_per_request: u64,
+    /// Revert check call type
+    pub revert_check_call_type: Option<RevertCheckCallType>,
 }
 
 /// Builder settings
@@ -417,6 +420,7 @@ where
                 .args
                 .verification_gas_limit_efficiency_reject_threshold,
             submission_proxy: submission_proxy.cloned(),
+            revert_check_call_type: self.args.revert_check_call_type,
         };
 
         let transaction_sender = self

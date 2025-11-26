@@ -14,7 +14,7 @@
 use std::{fmt::Display, sync::Arc};
 
 use alloy_primitives::{Address, B256, U256};
-use rundler_provider::TransactionRequest;
+use rundler_provider::{HandleOpRevert, TransactionRequest};
 use rundler_sim::SimulationError;
 use rundler_types::{GasFees, ValidTimeRange};
 use rundler_utils::strs;
@@ -194,6 +194,8 @@ pub enum SkipReason {
 pub enum OpRejectionReason {
     /// Operation failed its 2nd validation simulation attempt
     FailedRevalidation { error: SimulationError },
+    /// Operation failed its revert check
+    FailedRevertCheck { error: HandleOpRevert },
     /// Operation reverted during bundle formation simulation with message
     FailedInBundle { message: Arc<String> },
     /// Operation's storage slot condition was not met

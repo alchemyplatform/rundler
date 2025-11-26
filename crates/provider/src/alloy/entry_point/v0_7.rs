@@ -50,7 +50,7 @@ use tracing::instrument;
 use crate::{
     AggregatorOut, AggregatorSimOut, AlloyProvider, BlockHashOrNumber, BundleHandler, DAGasOracle,
     DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait,
-    ExecutionResult, HandleOpRevert, HandleOpsOut, ProviderResult, RevertCheckMode,
+    ExecutionResult, HandleOpRevert, HandleOpsOut, ProviderResult, RevertCheckCallType,
     SignatureAggregator, SimulationProvider, TransactionRequest,
 };
 
@@ -573,7 +573,7 @@ where
         &self,
         op: Self::UO,
         block_id: BlockId,
-        revert_check_mode: RevertCheckMode,
+        revert_check_call_type: RevertCheckCallType,
     ) -> ProviderResult<Result<u128, HandleOpRevert>> {
         let da_gas = op
             .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
@@ -601,12 +601,15 @@ where
             self.i_entry_point.provider(),
             tx,
             block_id,
-            revert_check_mode,
+            revert_check_call_type,
         )
         .await?;
 
         if !sim_result.success {
             let revert = decode_validation_revert(&sim_result.data);
+            if let ValidationRevert::Unknown(data) = revert {
+                return Ok(Err(HandleOpRevert::TransactionRevert(data)));
+            }
             return Ok(Err(HandleOpRevert::ValidationRevert(revert)));
         }
 

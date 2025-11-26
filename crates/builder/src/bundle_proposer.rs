@@ -31,7 +31,8 @@ use metrics_derive::Metrics;
 use mockall::automock;
 use rundler_provider::{
     BundleHandler, DAGasOracleSync, DAGasProvider, EntryPoint, EvmProvider, FeeEstimator,
-    HandleOpsOut, ProvidersWithEntryPointT,
+    HandleOpRevert, HandleOpsOut, ProvidersWithEntryPointT, RevertCheckCallType,
+    SimulationProvider,
 };
 use rundler_sim::{SimulationError, SimulationResult, Simulator, ViolationError};
 use rundler_types::{
@@ -158,6 +159,12 @@ pub(crate) struct Settings {
     pub(crate) max_expected_storage_slots: usize,
     pub(crate) verification_gas_limit_efficiency_reject_threshold: f64,
     pub(crate) submission_proxy: Option<Arc<dyn SubmissionProxy>>,
+    pub(crate) revert_check_call_type: Option<RevertCheckCallType>,
+}
+
+enum SecondSimulationError {
+    SimulationError(SimulationError),
+    RevertCheckError(HandleOpRevert),
 }
 
 #[async_trait]
@@ -548,29 +555,58 @@ where
         block_hash: B256,
     ) -> Option<(
         PoolOperationWithSponsoredDAGas,
-        Result<SimulationResult, SimulationError>,
+        Result<SimulationResult, SecondSimulationError>,
     )> {
         let _timer_guard = CustomTimerGuard::new(self.metrics.op_simulation_ms.clone());
         let op_hash = op.op.uo.hash();
 
-        // Simulate
-        let result = self
-            .bundle_providers
-            .simulator()
-            .simulate_validation(
-                op.op.uo.clone().into(),
-                op.op.perms.trusted,
-                block_hash,
-                Some(op.op.expected_code_hash),
+        // Check if we need to run revert check
+        let should_revert_check = self.settings.revert_check_call_type.is_some()
+            && self.settings.chain_spec.monad_min_reserve_balance.is_some()
+            && op.op.sender_is_7702
+            // Don't run revert check if checking for post op and the revert check is eth call, as that won't ever revert
+            || (op.op.uo.paymaster_post_op_gas_limit() > 0 && self.settings.revert_check_call_type != Some(RevertCheckCallType::EthCall));
+
+        // Run both simulations in parallel
+        let (revert_check_result, validation_result) = if should_revert_check {
+            tokio::join!(
+                self.ep_providers
+                    .entry_point()
+                    .simulate_handle_op_revert_check(
+                        op.op.uo.clone().into(),
+                        block_hash.into(),
+                        self.settings.revert_check_call_type.unwrap(),
+                    ),
+                self.bundle_providers.simulator().simulate_validation(
+                    op.op.uo.clone().into(),
+                    op.op.perms.trusted,
+                    block_hash,
+                    Some(op.op.expected_code_hash),
+                )
             )
-            .await;
-        let result = match result {
+        } else {
+            // Only run validation if no revert check needed
+            let validation = self
+                .bundle_providers
+                .simulator()
+                .simulate_validation(
+                    op.op.uo.clone().into(),
+                    op.op.perms.trusted,
+                    block_hash,
+                    Some(op.op.expected_code_hash),
+                )
+                .await;
+            (Ok(Ok(0)), validation)
+        };
+
+        // Handle validation result
+        let result = match validation_result {
             Ok(success) => (op, Ok(success)),
             Err(error) => match error {
                 SimulationError {
                     violation_error: ViolationError::Violations(_),
                     entity_infos: _,
-                } => (op, Err(error)),
+                } => return Some((op, Err(SecondSimulationError::SimulationError(error)))),
                 SimulationError {
                     violation_error: ViolationError::Other(error),
                     entity_infos: _,
@@ -587,6 +623,30 @@ where
             },
         };
 
+        // Handle revert check result
+        if should_revert_check {
+            match revert_check_result {
+                Ok(Ok(_)) => {}
+                // allow execution reverts through
+                Ok(Err(HandleOpRevert::ExecutionRevert { data: _, reason: _ })) => {}
+                Ok(Err(e)) => {
+                    return Some((result.0, Err(SecondSimulationError::RevertCheckError(e))))
+                }
+                Err(e) => {
+                    self.emit(BuilderEvent::skipped_op(
+                        self.builder_tag.clone(),
+                        op_hash,
+                        SkipReason::Other {
+                            reason: Arc::new(format!(
+                                "Failed to run revert check: {e:?}, skipping"
+                            )),
+                        },
+                    ));
+                    return None;
+                }
+            }
+        }
+
         Some(result)
     }
 
@@ -596,7 +656,7 @@ where
         gas_price: u128,
         ops_with_simulations: Vec<(
             PoolOperationWithSponsoredDAGas,
-            Result<SimulationResult, SimulationError>,
+            Result<SimulationResult, SecondSimulationError>,
         )>,
         mut balances_by_paymaster: HashMap<Address, U256>,
     ) -> ProposalContext<<Self as BundleProposer>::UO> {
@@ -621,7 +681,7 @@ where
             let op = po.op.clone().uo;
             let simulation = match simulation {
                 Ok(simulation) => simulation,
-                Err(error) => {
+                Err(SecondSimulationError::SimulationError(error)) => {
                     self.emit(BuilderEvent::rejected_op(
                         self.builder_tag.clone(),
                         op.hash(),
@@ -638,6 +698,15 @@ where
                         let infos = entity_infos.map_or(po.op.entity_infos, |e| e);
                         context.process_simulation_violations(op.into(), violations, infos);
                     }
+                    continue;
+                }
+                Err(SecondSimulationError::RevertCheckError(e)) => {
+                    self.emit(BuilderEvent::rejected_op(
+                        self.builder_tag.clone(),
+                        op.hash(),
+                        OpRejectionReason::FailedRevertCheck { error: e },
+                    ));
+                    context.rejected_ops.push((op.into(), po.op.entity_infos));
                     continue;
                 }
             };
@@ -4154,6 +4223,7 @@ mod tests {
                 max_expected_storage_slots: MAX_EXPECTED_STORAGE_SLOTS,
                 verification_gas_limit_efficiency_reject_threshold: 0.5,
                 submission_proxy,
+                revert_check_call_type: None,
             },
             event_sender,
         );

@@ -26,7 +26,7 @@ use alloy_rpc_types_trace::geth::{
 use rundler_types::authorization::Eip7702Auth;
 use rundler_utils::json_rpc;
 
-use crate::{AlloyProvider, ProviderResult, RevertCheckMode};
+use crate::{AlloyProvider, ProviderResult, RevertCheckCallType};
 
 pub(crate) mod v0_6;
 pub(crate) mod v0_7;
@@ -97,12 +97,14 @@ async fn simulate_transaction<P: AlloyProvider>(
     provider: &P,
     tx: TransactionRequest,
     block_id: BlockId,
-    revert_check_mode: RevertCheckMode,
+    revert_check_call_type: RevertCheckCallType,
 ) -> ProviderResult<SimulateResult> {
-    match revert_check_mode {
-        RevertCheckMode::EthCall => simulate_with_eth_call(provider, tx, block_id).await,
-        RevertCheckMode::EthSimulateV1 => simulate_with_simulate_v1(provider, tx, block_id).await,
-        RevertCheckMode::DebugTraceCall => {
+    match revert_check_call_type {
+        RevertCheckCallType::EthCall => simulate_with_eth_call(provider, tx, block_id).await,
+        RevertCheckCallType::EthSimulateV1 => {
+            simulate_with_simulate_v1(provider, tx, block_id).await
+        }
+        RevertCheckCallType::DebugTraceCall => {
             simulate_with_debug_trace_call(provider, tx, block_id).await
         }
     }

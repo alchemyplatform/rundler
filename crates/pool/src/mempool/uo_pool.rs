@@ -30,7 +30,7 @@ use rundler_types::{
         ReputationStatus, SimulationViolation, StakeStatus,
     },
     Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, GasFees, UserOperation,
-    UserOperationId, UserOperationPermissions, UserOperationVariant, ValidationRevert,
+    UserOperationId, UserOperationPermissions, UserOperationVariant,
 };
 use rundler_utils::{emit::WithEntryPoint, guard_timer::CustomTimerGuard};
 use tokio::sync::broadcast;
@@ -158,14 +158,14 @@ where
     }
 
     async fn check_revert(&self, op: UserOperationVariant, block_hash: B256) -> MempoolResult<()> {
-        let Some(revert_check_mode) = self.config.revert_check_mode else {
+        let Some(revert_check_call_type) = self.config.revert_check_call_type else {
             return Ok(());
         };
 
         let sim_result = self
             .ep_providers
             .entry_point()
-            .simulate_handle_op_revert_check(op.into(), block_hash.into(), revert_check_mode)
+            .simulate_handle_op_revert_check(op.into(), block_hash.into(), revert_check_call_type)
             .await
             .context("Failed to simulate handle op with revert check")?;
 
@@ -177,7 +177,7 @@ where
             Err(HandleOpRevert::PostOpRevert { data, reason }) => {
                 Err(MempoolError::PostOpRevert(InnerRevert { data, reason }))
             }
-            Err(HandleOpRevert::ValidationRevert(ValidationRevert::Unknown(data))) => {
+            Err(HandleOpRevert::TransactionRevert(data)) => {
                 if let Some(monad_min_reserve_balance) =
                     self.config.chain_spec.monad_min_reserve_balance
                 {
@@ -2405,7 +2405,7 @@ mod tests {
             verification_gas_limit_efficiency_reject_threshold: 0.0,
             max_time_in_pool: None,
             max_expected_storage_slots: usize::MAX,
-            revert_check_mode: None,
+            revert_check_call_type: None,
         }
     }
 

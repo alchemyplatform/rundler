@@ -31,7 +31,7 @@ use crate::{
     AggregatorOut, Block, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasOracleSync,
     DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider, EvmCall,
     EvmProvider as EvmProviderTrait, ExecutionResult, FeeEstimator, HandleOpRevert, HandleOpsOut,
-    RevertCheckMode, RpcRecv, RpcSend, SignatureAggregator, SimulationProvider, Transaction,
+    RevertCheckCallType, RpcRecv, RpcSend, SignatureAggregator, SimulationProvider, Transaction,
     TransactionReceipt, TransactionRequest,
 };
 
@@ -190,7 +190,7 @@ mockall::mock! {
             &self,
             op: v0_6::UserOperation,
             block_id: BlockId,
-            revert_check_mode: RevertCheckMode,
+            revert_check_call_type: RevertCheckCallType,
         ) -> ProviderResult<Result<u128, HandleOpRevert>>;
         fn decode_simulate_handle_ops_revert(
             revert_data: &Bytes,
@@ -300,7 +300,7 @@ mockall::mock! {
             &self,
             op: v0_7::UserOperation,
             block_id: BlockId,
-            revert_check_mode: RevertCheckMode,
+            revert_check_call_type: RevertCheckCallType,
         ) -> ProviderResult<Result<u128, HandleOpRevert>>;
         fn decode_simulate_handle_ops_revert(
             revert_data: &Bytes,
