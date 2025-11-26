@@ -300,6 +300,7 @@ impl BuilderArgs {
                 .verification_gas_limit_efficiency_reject_threshold,
             chain_spec,
             assigner_max_ops_per_request: self.assigner_max_ops_per_request,
+            revert_check_call_type: common.revert_check_call_type,
         })
     }
 

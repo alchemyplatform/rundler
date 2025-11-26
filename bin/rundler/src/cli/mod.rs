@@ -44,7 +44,7 @@ use reth_tasks::TaskManager;
 use rpc::RpcCliArgs;
 use rundler_provider::{
     AlloyEntryPointV0_6, AlloyEntryPointV0_7, AlloyEvmProvider, AlloyNetworkConfig, DAGasOracle,
-    DAGasOracleSync, EntryPointProvider, EvmProvider, FeeEstimator, Providers,
+    DAGasOracleSync, EntryPointProvider, EvmProvider, FeeEstimator, Providers, RevertCheckCallType,
 };
 use rundler_sim::{
     EstimationSettings, MempoolConfigs, PrecheckSettings, SimulationSettings, MIN_CALL_GAS_LIMIT,
@@ -377,14 +377,6 @@ pub struct CommonArgs {
     pre_verification_gas_accept_percent: u32,
 
     #[arg(
-        long = "execution_gas_limit_efficiency_reject_threshold",
-        name = "execution_gas_limit_efficiency_reject_threshold",
-        env = "EXECUTION_GAS_LIMIT_EFFICIENCY_REJECT_THRESHOLD",
-        default_value = "0.0"
-    )]
-    pub execution_gas_limit_efficiency_reject_threshold: f64,
-
-    #[arg(
         long = "verification_gas_limit_efficiency_reject_threshold",
         name = "verification_gas_limit_efficiency_reject_threshold",
         env = "VERIFICATION_GAS_LIMIT_EFFICIENCY_REJECT_THRESHOLD",
@@ -545,6 +537,23 @@ pub struct CommonArgs {
         value_parser = ValueParser::new(parse_key_val)
     )]
     pub aggregator_options: Vec<(String, String)>,
+
+    #[arg(
+        long = "revert_check_call_type",
+        name = "revert_check_call_type",
+        env = "REVERT_CHECK_CALL_TYPE",
+        value_parser = ValueParser::new(parse_revert_check_call_type)
+    )]
+    pub revert_check_call_type: Option<RevertCheckCallType>,
+}
+
+fn parse_revert_check_call_type(s: &str) -> Result<RevertCheckCallType, anyhow::Error> {
+    match s {
+        "eth_call" => Ok(RevertCheckCallType::EthCall),
+        "eth_simulateV1" => Ok(RevertCheckCallType::EthSimulateV1),
+        "debug_trace_call" => Ok(RevertCheckCallType::DebugTraceCall),
+        _ => Err(anyhow::anyhow!("invalid revert check mode: {}, must be one of eth_call, eth_simulate_v1, debug_trace_call", s)),
+    }
 }
 
 impl CommonArgs {

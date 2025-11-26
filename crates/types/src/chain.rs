@@ -142,6 +142,18 @@ pub struct ChainSpec {
     pub chain_history_size: u64,
 
     /*
+     * Node RPC
+     */
+    /// True if the node RPC supports debug_traceTransaction
+    pub rpc_debug_trace_transaction_enabled: bool,
+
+    /*
+     * Network specific behavior
+     */
+    /// Monad minimum reserve balance for EIP-7702 delegated accounts in MON
+    pub monad_min_reserve_balance: Option<u64>,
+
+    /*
      * Contracts
      */
     /// Registry of signature aggregators
@@ -206,6 +218,8 @@ impl Default for ChainSpec {
             flashbots_relay_url: None,
             bloxroute_enabled: false,
             chain_history_size: 64,
+            rpc_debug_trace_transaction_enabled: true,
+            monad_min_reserve_balance: None,
             signature_aggregators: Arc::new(ContractRegistry::default()),
             submission_proxies: Arc::new(ContractRegistry::default()),
         }

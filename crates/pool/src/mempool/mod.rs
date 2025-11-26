@@ -21,6 +21,7 @@ mod size;
 
 mod paymaster;
 pub(crate) use paymaster::{PaymasterConfig, PaymasterTracker};
+use rundler_provider::RevertCheckCallType;
 
 mod uo_pool;
 use std::{
@@ -173,16 +174,14 @@ pub struct PoolConfig {
     pub drop_min_num_blocks: u64,
     /// Reject user operations with gas limit efficiency below this threshold.
     /// Gas limit efficiency is defined as the ratio of the gas limit to the gas used.
-    /// This applies to the execution gas limit.
-    pub execution_gas_limit_efficiency_reject_threshold: f64,
-    /// Reject user operations with gas limit efficiency below this threshold.
-    /// Gas limit efficiency is defined as the ratio of the gas limit to the gas used.
     /// This applies to the verification gas limit.
     pub verification_gas_limit_efficiency_reject_threshold: f64,
     /// Maximum time a UO is allowed in the pool before being dropped
     pub max_time_in_pool: Option<Duration>,
     /// The maximum number of storage slots that can be expected to be used by a user operation during validation
     pub max_expected_storage_slots: usize,
+    /// Whether to enable the revert check and the mode to use
+    pub revert_check_call_type: Option<RevertCheckCallType>,
 }
 
 /// Origin of an operation.
