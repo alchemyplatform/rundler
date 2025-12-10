@@ -20,7 +20,7 @@ resolver = "2"
 [workspace.package]
 version = "0.10.0"
 edition = "2021"
-rust-version = "1.87"
+rust-version = "1.88"
 license = "LGPL-3.0-only"
 repository = "https://github.com/alchemyplatform/rundler"
 
