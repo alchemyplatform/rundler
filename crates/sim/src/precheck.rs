@@ -114,6 +114,8 @@ pub struct Settings {
     /// Gas limit efficiency is defined as the ratio of the gas limit to the gas used.
     /// This applies to all the verification gas limits
     pub verification_gas_limit_efficiency_reject_threshold: f64,
+    /// Whether to check if the EIP-7702 authority has too many pending transactions
+    pub eip7702_authority_pending_check_enabled: bool,
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -128,6 +130,7 @@ impl Default for Settings {
             base_fee_accept_percent: 50,
             pre_verification_gas_accept_percent: 100,
             verification_gas_limit_efficiency_reject_threshold: 0.5,
+            eip7702_authority_pending_check_enabled: false,
         }
     }
 }
@@ -141,6 +144,7 @@ struct AsyncData {
     base_fee: u128,
     min_pre_verification_gas: u128,
     da_gas_data: DAGasData,
+    eip7702_authority_pending_transaction_count: Option<u64>,
 }
 
 #[async_trait::async_trait]
@@ -211,6 +215,7 @@ where
         let AsyncData {
             factory_exists,
             sender_bytecode,
+            eip7702_authority_pending_transaction_count,
             ..
         } = async_data;
         let mut violations = ArrayVec::new();
@@ -219,6 +224,15 @@ where
         if op.authorization_tuple().is_some() {
             if op.factory().is_some() {
                 violations.push(PrecheckViolation::FactoryMustBeEmpty(op.factory().unwrap()));
+            }
+            if eip7702_authority_pending_transaction_count.is_some()
+                && eip7702_authority_pending_transaction_count.unwrap() > 1
+            {
+                violations.push(
+                    PrecheckViolation::Eip7702SenderPendingTransactionCountTooHigh(
+                        eip7702_authority_pending_transaction_count.unwrap(),
+                    ),
+                );
             }
             if perms.eip7702_disabled {
                 violations.push(PrecheckViolation::Eip7702Disabled);
@@ -398,12 +412,14 @@ where
             paymaster_exists,
             payer_funds,
             (min_pre_verification_gas, da_gas_data),
+            eip7702_authority_pending_transaction_count,
         ) = tokio::try_join!(
             self.is_contract(op.factory()),
             self.get_bytecode(op.sender()),
             self.is_contract(op.paymaster()),
             self.get_payer_funds(op),
-            self.get_required_pre_verification_gas(op.clone(), block_hash, base_fee, perms)
+            self.get_required_pre_verification_gas(op.clone(), block_hash, base_fee, perms),
+            self.get_eip7702_authority_pending_transaction_count(op)
         )?;
         Ok(AsyncData {
             factory_exists,
@@ -413,6 +429,7 @@ where
             base_fee,
             min_pre_verification_gas,
             da_gas_data,
+            eip7702_authority_pending_transaction_count,
         })
     }
 
@@ -495,6 +512,28 @@ where
         )
         .await
     }
+
+    async fn get_eip7702_authority_pending_transaction_count(
+        &self,
+        op: &UO,
+    ) -> anyhow::Result<Option<u64>> {
+        if op.authorization_tuple().is_none()
+            || !self.settings.eip7702_authority_pending_check_enabled
+        {
+            return Ok(None);
+        }
+        let sender = op.sender();
+        let (pending_count, transaction_count) = tokio::try_join!(
+            self.provider.get_pending_transaction_count(sender),
+            self.provider.get_transaction_count(sender),
+        )?;
+        tracing::info!(
+            "pending_count: {}, transaction_count: {}",
+            pending_count,
+            transaction_count
+        );
+        Ok(Some(pending_count - transaction_count))
+    }
 }
 
 fn is_7702_bytecode(bytecode: &Bytes) -> bool {
@@ -541,6 +580,7 @@ mod tests {
             base_fee: 4_000,
             min_pre_verification_gas: 1_000,
             da_gas_data: DAGasData::Empty,
+            eip7702_authority_pending_transaction_count: None,
         }
     }
 
@@ -640,6 +680,7 @@ mod tests {
             base_fee_accept_percent: 100,
             pre_verification_gas_accept_percent: 100,
             verification_gas_limit_efficiency_reject_threshold: 0.5,
+            eip7702_authority_pending_check_enabled: false,
         };
 
         let (cs, provider, entry_point, fee_estimator) = create_base_config();
