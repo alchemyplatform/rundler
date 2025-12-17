@@ -527,11 +527,6 @@ where
             self.provider.get_pending_transaction_count(sender),
             self.provider.get_transaction_count(sender),
         )?;
-        tracing::info!(
-            "pending_count: {}, transaction_count: {}",
-            pending_count,
-            transaction_count
-        );
         Ok(Some(pending_count - transaction_count))
     }
 }
