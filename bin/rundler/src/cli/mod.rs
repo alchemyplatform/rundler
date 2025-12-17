@@ -545,6 +545,15 @@ pub struct CommonArgs {
         value_parser = ValueParser::new(parse_key_val)
     )]
     pub aggregator_options: Vec<(String, String)>,
+
+    #[arg(
+        long = "eip7702_authority_pending_check_enabled",
+        name = "eip7702_authority_pending_check_enabled",
+        env = "EIP7702_AUTHORITY_PENDING_CHECK_ENABLED",
+        default_value = "false",
+        global = true
+    )]
+    pub eip7702_authority_pending_check_enabled: bool,
 }
 
 impl CommonArgs {
@@ -650,6 +659,7 @@ impl TryFromWithSpec<&CommonArgs> for PrecheckSettings {
             pre_verification_gas_accept_percent: value.pre_verification_gas_accept_percent,
             verification_gas_limit_efficiency_reject_threshold: value
                 .verification_gas_limit_efficiency_reject_threshold,
+            eip7702_authority_pending_check_enabled: value.eip7702_authority_pending_check_enabled,
         })
     }
 }

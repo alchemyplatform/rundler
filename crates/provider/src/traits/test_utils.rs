@@ -106,6 +106,8 @@ mockall::mock! {
 
         async fn get_transaction_count(&self, address: Address) -> ProviderResult<u64>;
 
+        async fn get_pending_transaction_count(&self, address: Address) -> ProviderResult<u64>;
+
         async fn get_logs(&self, filter: &Filter) -> ProviderResult<Vec<Log>>;
 
         async fn get_gas_used(&self, call: EvmCall) -> ProviderResult<GasUsedResult>;

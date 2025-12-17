@@ -26,11 +26,12 @@ use super::protos::{
     AccessedUndeployedContract, AccessedUnsupportedContractType, AggregatorError,
     AggregatorMismatch, AssociatedStorageDuringDeploy, AssociatedStorageIsAlternateSender,
     CallGasLimitTooLow, CallHadValue, CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert,
-    DiscardedOnInsertError, Eip7702Disabled, Entity, EntityThrottledError, EntityType,
-    EntryPointRevert, ExecutionGasLimitEfficiencyTooLow, ExistingSenderWithInitCode,
-    FactoryCalledCreate2Twice, FactoryIsNotContract, FactoryMustBeEmpty, Invalid7702AuthSignature,
-    InvalidAccountSignature, InvalidPaymasterSignature, InvalidSignature, InvalidStorageAccess,
-    InvalidTimeRange, MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
+    DiscardedOnInsertError, Eip7702Disabled, Eip7702SenderPendingTransactionCountTooHigh, Entity,
+    EntityThrottledError, EntityType, EntryPointRevert, ExecutionGasLimitEfficiencyTooLow,
+    ExistingSenderWithInitCode, FactoryCalledCreate2Twice, FactoryIsNotContract,
+    FactoryMustBeEmpty, Invalid7702AuthSignature, InvalidAccountSignature,
+    InvalidPaymasterSignature, InvalidSignature, InvalidStorageAccess, InvalidTimeRange,
+    MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
     MempoolError as ProtoMempoolError, MultipleRolesViolation, NotStaked,
     OperationAlreadyKnownError, OperationDropTooSoon, OperationRevert, OutOfGas, OverMaxCost,
     PanicRevert, PaymasterBalanceTooLow, PaymasterDepositTooLow, PaymasterIsNotContract,
@@ -415,6 +416,13 @@ impl From<PrecheckViolation> for ProtoPrecheckViolationError {
                     },
                 )),
             },
+            PrecheckViolation::Eip7702SenderPendingTransactionCountTooHigh(count) => ProtoPrecheckViolationError {
+                violation: Some(precheck_violation_error::Violation::Eip7702SenderPendingTransactionCountTooHigh(
+                    Eip7702SenderPendingTransactionCountTooHigh {
+                        pending_transaction_count: count,
+                    },
+                )),
+            },
         }
     }
 }
@@ -496,6 +504,11 @@ impl TryFrom<ProtoPrecheckViolationError> for PrecheckViolation {
                     from_bytes(&e.max_cost)?,
                 )
             }
+            Some(
+                precheck_violation_error::Violation::Eip7702SenderPendingTransactionCountTooHigh(e),
+            ) => PrecheckViolation::Eip7702SenderPendingTransactionCountTooHigh(
+                e.pending_transaction_count,
+            ),
             None => {
                 bail!("unknown proto mempool precheck violation")
             }

@@ -138,6 +138,9 @@ pub trait EvmProvider: Send + Sync {
     /// Get the nonce/transaction count of an address
     async fn get_transaction_count(&self, address: Address) -> ProviderResult<u64>;
 
+    /// Get the pending transaction count for an address
+    async fn get_pending_transaction_count(&self, address: Address) -> ProviderResult<u64>;
+
     /// Get the logs matching a filter
     async fn get_logs(&self, filter: &Filter) -> ProviderResult<Vec<Log>>;
 

@@ -802,12 +802,6 @@ where
             }
             return Ok(None);
         }
-        info!(
-            "Selected bundle with {} op(s), with {} rejected op(s) and {} updated entities",
-            bundle.len(),
-            bundle.rejected_ops.len(),
-            bundle.entity_updates.len()
-        );
         let ops: Vec<_> = bundle
             .iter_ops()
             .map(|op| (op.sender(), op.hash()))
@@ -820,8 +814,16 @@ where
             bundle.gas_fees,
             self.submission_proxy.as_ref().map(|p| p.address()),
         );
-
         tx = tx.nonce(nonce);
+
+        info!(
+            "Selected bundle: nonce: {:?}. Ops: {:?}. Num rejected ops: {:?}. Num updated entities: {:?}",
+            nonce,
+            ops,
+            bundle.rejected_ops.len(),
+            bundle.entity_updates.len()
+        );
+
         Ok(Some(BundleTx {
             tx,
             expected_storage: bundle.expected_storage,

@@ -15,8 +15,8 @@ use tower::{Layer, Service};
 use tracing::{trace, warn};
 
 static BLOCK_NOT_FOUND_RE: LazyLock<Regex> = LazyLock::new(|| {
-    // case-insensitive; matches "block 0x<hash> not found" or "Unknown block" anywhere in the error message
-    Regex::new(r"(?i)(block 0x[0-9a-f]{64} not found|unknown block)").unwrap()
+    // case-insensitive; matches "block 0x<hash> not found", "Unknown block", "block not found", "header not found", or "is not currently canonical" anywhere in the error message
+    Regex::new(r"(?i)(block 0x[0-9a-f]{64} not found|unknown block|block not found|header not found|is not currently canonical)").unwrap()
 });
 
 /// A Transport Layer that is responsible for retrying requests based on the

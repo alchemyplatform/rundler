@@ -78,13 +78,6 @@ impl<UO: UserOperation> Default for Bundle<UO> {
 }
 
 impl<UO: UserOperation> Bundle<UO> {
-    pub(crate) fn len(&self) -> usize {
-        self.ops_per_aggregator
-            .iter()
-            .map(|ops| ops.user_ops.len())
-            .sum()
-    }
-
     pub(crate) fn is_empty(&self) -> bool {
         self.ops_per_aggregator.is_empty()
     }
