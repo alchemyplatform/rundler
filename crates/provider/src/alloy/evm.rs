@@ -207,6 +207,15 @@ where
     }
 
     #[instrument(skip_all)]
+    async fn get_pending_transaction_count(&self, address: Address) -> ProviderResult<u64> {
+        Ok(self
+            .inner
+            .client()
+            .request("eth_getTransactionCount", (address, "pending"))
+            .await?)
+    }
+
+    #[instrument(skip_all)]
     async fn get_logs(&self, filter: &Filter) -> ProviderResult<Vec<Log>> {
         Ok(self.inner.get_logs(filter).await?)
     }

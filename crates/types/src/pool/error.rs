@@ -163,6 +163,9 @@ pub enum PrecheckViolation {
     /// The UO's maximum cost is above the max bundle fee
     #[display("UO's maximum cost is {0} but must be at most {1}")]
     OverMaxCost(U256, U256),
+    /// The EIP-7702 sender has too many pending transactions
+    #[display("EIP-7702 auth sender has too many pending transactions: {0}. Max allowed: 1")]
+    Eip7702SenderPendingTransactionCountTooHigh(u64),
 }
 
 /// All possible simulation violations

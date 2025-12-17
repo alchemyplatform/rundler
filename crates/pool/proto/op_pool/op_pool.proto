@@ -739,6 +739,7 @@ message PrecheckViolationError {
     FactoryMustBeEmpty factory_must_be_empty = 13;
     OverMaxCost over_max_cost = 14;
     Eip7702Disabled eip_7702_disabled = 15;
+    Eip7702SenderPendingTransactionCountTooHigh eip_7702_sender_pending_transaction_count_too_high = 16;
   }
 }
 
@@ -816,6 +817,10 @@ message OverMaxCost {
 }
 
 message Eip7702Disabled {}
+
+message Eip7702SenderPendingTransactionCountTooHigh {
+  uint64 pending_transaction_count = 1;
+}
 
 // SIMULATION VIOLATIONS
 message SimulationViolationError {
