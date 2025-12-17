@@ -115,6 +115,9 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - env: *PROVIDER_RATE_LIMIT_RETRY_ENABLED*
 - `--provider_consistency_retry_enabled`: Enable retries on block consistency errors - with default backoff settings (default: `false`)
   - env: *PROVIDER_CONSISTENCY_RETRY_ENABLED*
+- `--eip7702_authority_pending_check_enabled`: Enable checking for EIP-7702 authority pending transaction errors (default: `false`)
+  - env: *EIP7702_AUTHORITY_PENDING_CHECK_ENABLED*
+  - NOTE: This uses the `NODE_RPC` and thus is only viable on networks with P2P mempools. L2s with centralized sequencers will not work.
 
 ## Metrics Options
 
