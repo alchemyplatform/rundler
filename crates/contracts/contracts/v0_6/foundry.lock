@@ -1,0 +1,38 @@
+{
+  "../../../../test/spec-tests/v0_6/bundler-spec-tests": {
+    "rev": "85798ced74044f271b68d95009a3e75569b8aff5"
+  },
+  "../../../../test/spec-tests/v0_7/bundler-spec-tests": {
+    "rev": "e641dcfd33ffd965ef90397a44f71eda4d90c6a7"
+  },
+  "../../../bindings/fastlz/fastlz": {
+    "rev": "344eb4025f9ae866ebf7a2ec48850f7113a97a42"
+  },
+  "../common/lib/forge-std": {
+    "rev": "77041d2ce690e692d6e03cc812b57d1ddaa4d505"
+  },
+  "../v0_7/lib/account-abstraction": {
+    "rev": "7af70c8993a6f42973f520ae0752386a5032abe7"
+  },
+  "../v0_7/lib/openzeppelin-contracts": {
+    "rev": "69c8def5f222ff96f2b5beff05dfba996368aa79"
+  },
+  "../v0_8/lib/account-abstraction": {
+    "rev": "4cbc06072cdc19fd60f285c5997f4f7f57a588de"
+  },
+  "../v0_9/lib/account-abstraction": {
+    "rev": "4cbc06072cdc19fd60f285c5997f4f7f57a588de"
+  },
+  "lib/account-abstraction": {
+    "branch": {
+      "name": "releases/v0.6",
+      "rev": "fa61290d37d079e928d92d53a122efcc63822214"
+    }
+  },
+  "lib/openzeppelin-contracts": {
+    "branch": {
+      "name": "release-v4.9",
+      "rev": "dc44c9f1a4c3b10af99492eed84f83ed244203f6"
+    }
+  }
+}

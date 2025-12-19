@@ -4,17 +4,14 @@ out = 'out'
 libs = ['lib']
 test = 'test'
 cache_path = 'cache'
-solc_version = '0.8.26'
+solc_version = '0.8.28'
 optimizer = true
 optimizer_runs = 200
-evm_version = 'paris'
-allow_internal_expect_revert = true
+evm_version = 'cancun'
 
 remappings = [
-    'forge-std/=lib/forge-std/src',
-    'ds-test/=lib/forge-std/lib/ds-test/src/',
+    '@account-abstraction=lib/account-abstraction/contracts/',
     '@openzeppelin=../v0_7/lib/openzeppelin-contracts/',
-    'common=src/'
 ]
 
 allow_paths = ["../v0_7/lib"]

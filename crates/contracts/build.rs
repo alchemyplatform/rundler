@@ -54,6 +54,8 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     println!("cargo:rerun-if-changed=contracts");
     generate_v0_6_bindings()?;
     generate_v0_7_bindings()?;
+    generate_v0_8_bindings()?;
+    generate_v0_9_bindings()?;
     generate_utils_bindings()?;
     Ok(())
 }
@@ -82,6 +84,30 @@ fn generate_v0_7_bindings() -> Result<(), Box<dyn error::Error>> {
     write_deployed_bytecode!("v0_7", EntryPointSimulations);
     write_deployed_bytecode!("v0_7", VerificationGasEstimationHelper);
     write_deployed_bytecode!("v0_7", EntryPointSimulations);
+
+    Ok(())
+}
+
+fn generate_v0_8_bindings() -> Result<(), Box<dyn error::Error>> {
+    run_command(
+        &mut forge_build("v0_8", "src", "v0_8"),
+        "https://getfoundry.sh/",
+        "generate ABIs",
+    )?;
+
+    write_deployed_bytecode!("v0_8", EntryPointSimulations);
+
+    Ok(())
+}
+
+fn generate_v0_9_bindings() -> Result<(), Box<dyn error::Error>> {
+    run_command(
+        &mut forge_build("v0_9", "src", "v0_9"),
+        "https://getfoundry.sh/",
+        "generate ABIs",
+    )?;
+
+    write_deployed_bytecode!("v0_9", EntryPointSimulations);
 
     Ok(())
 }

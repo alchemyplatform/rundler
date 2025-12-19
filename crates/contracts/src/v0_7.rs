@@ -284,7 +284,7 @@ static __CALL_GAS_ESTIMATION_PROXY_V0_7_DEPLOYED_BYTECODE_HEX: &[u8] = include_b
     "../contracts/out/v0_7/CallGasEstimationProxy.sol/CallGasEstimationProxy_deployedBytecode.txt"
 );
 
-static __CALL_GAS_ESTIMATION_PROXY_V0_7_DEPLOYED_BYTECODE: [u8; 5050] = {
+static __CALL_GAS_ESTIMATION_PROXY_V0_7_DEPLOYED_BYTECODE: [u8; 5041] = {
     match const_hex::const_decode_to_array(__CALL_GAS_ESTIMATION_PROXY_V0_7_DEPLOYED_BYTECODE_HEX) {
         Ok(a) => a,
         Err(_) => panic!("Failed to decode call gas estimation proxy hex"),
@@ -299,7 +299,7 @@ static __VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE_HEX: &[u8] = 
     "../contracts/out/v0_7/VerificationGasEstimationHelper.sol/VerificationGasEstimationHelper_deployedBytecode.txt"
 );
 
-static __VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE: [u8; 5261] = {
+static __VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE: [u8; 5252] = {
     match const_hex::const_decode_to_array(
         __VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE_HEX,
     ) {

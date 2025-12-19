@@ -4,7 +4,6 @@ on:
       - main
   pull_request:
 
-
 env:
   CARGO_TERM_COLOR: always
 
@@ -35,7 +34,7 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: v1.4.4
+          version: v1.5.0
 
       - name: Install latest nextest release
         uses: taiki-e/install-action@nextest
@@ -54,4 +53,3 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
           flags: unit-tests
-
