@@ -44,14 +44,16 @@ pub const BUNDLE_BYTE_OVERHEAD: usize = 4 + 32 + 32 + 32;
 pub const USER_OP_OFFSET_WORD_SIZE: usize = 32;
 
 /// ERC-4337 Entry point version
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd)]
 pub enum EntryPointVersion {
-    /// Unspecified version
-    Unspecified,
     /// Version 0.6
     V0_6,
     /// Version 0.7
     V0_7,
+    /// Version 0.8
+    V0_8,
+    /// Version 0.9
+    V0_9,
 }
 
 /// Unique identifier for a user operation from a given sender
@@ -70,8 +72,8 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// Associated type for the version of a user operation that has optional gas and fee fields
     type OptionalGas;
 
-    /// Get the entry point version for this UO
-    fn entry_point_version() -> EntryPointVersion;
+    /// Get the entry point version
+    fn entry_point_version(&self) -> EntryPointVersion;
 
     /// Get the entry point address
     fn entry_point(&self) -> Address;
@@ -493,8 +495,11 @@ pub enum UserOperationVariant {
 impl UserOperation for UserOperationVariant {
     type OptionalGas = UserOperationOptionalGas;
 
-    fn entry_point_version() -> EntryPointVersion {
-        EntryPointVersion::Unspecified
+    fn entry_point_version(&self) -> EntryPointVersion {
+        match self {
+            UserOperationVariant::V0_6(_) => EntryPointVersion::V0_6,
+            UserOperationVariant::V0_7(op) => op.entry_point_version(),
+        }
     }
 
     fn entry_point(&self) -> Address {

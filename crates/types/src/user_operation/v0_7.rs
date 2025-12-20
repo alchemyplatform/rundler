@@ -11,9 +11,9 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{ruint::FromUintError, Address, Bytes, FixedBytes, B256, U256};
-use alloy_sol_types::{sol, SolValue};
-use rundler_contracts::v0_7::PackedUserOperation;
+use alloy_primitives::{b256, ruint::FromUintError, Address, Bytes, FixedBytes, B256, U256};
+use alloy_sol_types::{eip712_domain, sol, SolStruct, SolValue};
+use rundler_contracts::v0_7::{PackedUserOperation, PackedUserOperationNoSig};
 use rundler_utils::random::{random_bytes, random_bytes_array};
 
 use super::{UserOperation as UserOperationTrait, UserOperationId, UserOperationVariant};
@@ -38,6 +38,19 @@ pub const ENTRY_POINT_INNER_GAS_OVERHEAD: u128 = 10_000;
 ///
 /// 13 * 32 = 416
 const ABI_ENCODED_USER_OPERATION_FIXED_LEN: usize = 416;
+
+// keccak("PaymasterSignature")[:8]
+const PAYMASTER_SIG_MAGIC: [u8; 8] = [0x22, 0xe3, 0x25, 0xa2, 0x97, 0x43, 0x96, 0x56];
+// Minimum length of paymaster data that can contain a paymaster signature
+const MIN_PAYMASTER_DATA_WITH_SUFFIX_LEN: usize = 62;
+// EIP-7702 initCode marker
+const INITCODE_EIP7702_MARKER: [u8; 20] = [
+    0x77, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+];
+// Placeholder for user operations that have invalid hashes due to structural issues
+const INVALID_HASH: B256 =
+    b256!("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
 
 /// User Operation for Entry Point v0.7
 ///
@@ -85,10 +98,14 @@ pub struct UserOperation {
     paymaster_data: Bytes,
     /// eip 7702 - tuple of authority.
     authorization_tuple: Option<Eip7702Auth>,
+    /// Paymaster signature - only entry point v0.9+
+    paymaster_signature: Option<Bytes>,
 
     /*
      * Cached fields, not part of the UO
      */
+    /// Entry point version
+    entry_point_version: EntryPointVersion,
     /// Entry point address
     entry_point: Address,
     /// Chain id
@@ -155,13 +172,15 @@ pub struct UnstructuredUserOperation {
     pub authorization_tuple: Option<Eip7702Auth>,
     /// Signature aggregator address
     pub aggregator: Option<Address>,
+    /// Paymaster signature - only entry point v0.9+
+    pub paymaster_signature: Option<Bytes>,
 }
 
 impl UserOperationTrait for UserOperation {
     type OptionalGas = UserOperationOptionalGas;
 
-    fn entry_point_version() -> EntryPointVersion {
-        EntryPointVersion::V0_7
+    fn entry_point_version(&self) -> EntryPointVersion {
+        self.entry_point_version
     }
 
     fn entry_point(&self) -> Address {
@@ -402,6 +421,7 @@ impl UserOperation {
             paymaster_data: self.paymaster_data,
             authorization_tuple: self.authorization_tuple,
             aggregator: self.aggregator,
+            paymaster_signature: self.paymaster_signature,
         }
     }
 
@@ -424,6 +444,11 @@ impl UserOperation {
     pub fn paymaster_post_op_gas_limit(&self) -> u128 {
         self.paymaster_post_op_gas_limit
     }
+
+    /// Get the entry point version
+    pub fn entry_point_version(&self) -> EntryPointVersion {
+        self.entry_point_version
+    }
 }
 
 #[cfg(feature = "test-utils")]
@@ -431,6 +456,7 @@ impl Default for UserOperation {
     fn default() -> Self {
         UserOperationBuilder::new(
             &ChainSpec::default(),
+            EntryPointVersion::V0_7,
             UserOperationRequiredFields {
                 sender: Address::ZERO,
                 nonce: U256::ZERO,
@@ -505,6 +531,8 @@ pub struct UserOperationOptionalGas {
     pub call_data: Bytes,
     /// Signature, typically a dummy value for optional gas
     pub signature: Bytes,
+    /// Entry point version
+    pub entry_point_version: EntryPointVersion,
     /*
      * Optional fields
      */
@@ -534,6 +562,8 @@ pub struct UserOperationOptionalGas {
     pub eip7702_auth_address: Option<Address>,
     /// Signature aggregator address
     pub aggregator: Option<Address>,
+    /// Paymaster signature - only entry point v0.9+
+    pub paymaster_signature: Option<Bytes>,
 }
 
 impl UserOperationOptionalGas {
@@ -547,6 +577,7 @@ impl UserOperationOptionalGas {
 
         let mut builder = UserOperationBuilder::new(
             chain_spec,
+            self.entry_point_version,
             UserOperationRequiredFields {
                 sender: self.sender,
                 nonce: self.nonce,
@@ -583,6 +614,9 @@ impl UserOperationOptionalGas {
         if let Some(aggregator) = self.aggregator {
             builder = builder.aggregator(aggregator);
         }
+        if let Some(paymaster_signature) = &self.paymaster_signature {
+            builder = builder.paymaster_signature(paymaster_signature.clone());
+        }
 
         let uo = builder.build();
 
@@ -607,6 +641,7 @@ impl UserOperationOptionalGas {
     pub fn random_fill(&self, chain_spec: &ChainSpec) -> UserOperation {
         let mut builder = UserOperationBuilder::new(
             chain_spec,
+            self.entry_point_version,
             UserOperationRequiredFields {
                 sender: self.sender,
                 nonce: self.nonce,
@@ -642,6 +677,9 @@ impl UserOperationOptionalGas {
         if let Some(aggregator) = self.aggregator {
             builder = builder.aggregator(aggregator);
         }
+        if let Some(paymaster_signature) = &self.paymaster_signature {
+            builder = builder.paymaster_signature(paymaster_signature.clone());
+        }
 
         let uo = builder.build();
 
@@ -675,6 +713,7 @@ impl UserOperationOptionalGas {
 
         let mut builder = UserOperationBuilder::new(
             chain_spec,
+            self.entry_point_version,
             UserOperationRequiredFields {
                 sender: self.sender,
                 nonce: self.nonce,
@@ -746,6 +785,8 @@ impl From<super::UserOperationOptionalGas> for UserOperationOptionalGas {
 pub struct UserOperationBuilder<'a> {
     // chain spec
     chain_spec: &'a ChainSpec,
+    // entry point version
+    entry_point_version: EntryPointVersion,
 
     // required fields
     required: UserOperationRequiredFields,
@@ -759,8 +800,11 @@ pub struct UserOperationBuilder<'a> {
     paymaster_data: Bytes,
     packed_uo: Option<PackedUserOperation>,
 
-    /// eip 7702 - tuple of authority.
+    /// eip 7702 authorization tuple
     authorization_tuple: Option<Eip7702Auth>,
+    /// Paymaster signature - only entry point v0.9+
+    paymaster_signature: Option<Bytes>,
+    /// Signature aggregator address
     aggregator: Option<Address>,
 }
 
@@ -788,7 +832,11 @@ pub struct UserOperationRequiredFields {
 
 impl<'a> UserOperationBuilder<'a> {
     /// Creates a new builder
-    pub fn new(chain_spec: &'a ChainSpec, required: UserOperationRequiredFields) -> Self {
+    pub fn new(
+        chain_spec: &'a ChainSpec,
+        entry_point_version: EntryPointVersion,
+        required: UserOperationRequiredFields,
+    ) -> Self {
         Self {
             chain_spec,
             required,
@@ -801,6 +849,8 @@ impl<'a> UserOperationBuilder<'a> {
             packed_uo: None,
             authorization_tuple: None,
             aggregator: None,
+            paymaster_signature: None,
+            entry_point_version,
         }
     }
 
@@ -808,9 +858,11 @@ impl<'a> UserOperationBuilder<'a> {
     pub fn from_packed(
         puo: PackedUserOperation,
         chain_spec: &'a ChainSpec,
+        entry_point_version: EntryPointVersion,
     ) -> Result<Self, FromUintError<u128>> {
         let mut builder = UserOperationBuilder::new(
             chain_spec,
+            entry_point_version,
             UserOperationRequiredFields {
                 sender: puo.sender,
                 nonce: puo.nonce,
@@ -855,6 +907,7 @@ impl<'a> UserOperationBuilder<'a> {
     pub fn from_uo(uo: UserOperation, chain_spec: &'a ChainSpec) -> Self {
         Self {
             chain_spec,
+            entry_point_version: uo.entry_point_version(),
             required: UserOperationRequiredFields {
                 sender: uo.sender,
                 nonce: uo.nonce,
@@ -875,6 +928,7 @@ impl<'a> UserOperationBuilder<'a> {
             packed_uo: None,
             authorization_tuple: uo.authorization_tuple,
             aggregator: uo.aggregator,
+            paymaster_signature: uo.paymaster_signature,
         }
     }
 
@@ -972,8 +1026,24 @@ impl<'a> UserOperationBuilder<'a> {
         self
     }
 
-    /// Builds the UserOperation
+    /// Sets the paymaster signature
+    /// PANICS if entry point version is < v0.9
+    pub fn paymaster_signature(mut self, paymaster_signature: Bytes) -> Self {
+        if self.entry_point_version < EntryPointVersion::V0_9 {
+            panic!("Paymaster signature is only supported for entry point v0.9+");
+        }
+
+        self.paymaster_signature = Some(paymaster_signature);
+        self
+    }
+
+    /// Builds the UserOperation for the given entry point version
     pub fn build(self) -> UserOperation {
+        let entry_point = self
+            .chain_spec
+            .entry_point_address(self.entry_point_version);
+        let delegation_address = self.authorization_tuple.as_ref().map(|auth| auth.address);
+
         let uo = UserOperation {
             sender: self.required.sender,
             nonce: self.required.nonce,
@@ -990,8 +1060,10 @@ impl<'a> UserOperationBuilder<'a> {
             paymaster_post_op_gas_limit: self.paymaster_post_op_gas_limit,
             paymaster_data: self.paymaster_data,
             authorization_tuple: self.authorization_tuple,
+            paymaster_signature: self.paymaster_signature,
             signature: self.required.signature,
-            entry_point: self.chain_spec.entry_point_address_v0_7,
+            entry_point_version: self.entry_point_version,
+            entry_point,
             chain_id: self.chain_spec.id,
             hash: B256::ZERO,
             packed: PackedUserOperation::default(),
@@ -1009,8 +1081,10 @@ impl<'a> UserOperationBuilder<'a> {
             .unwrap_or_else(|| pack_user_operation(uo.clone()));
         let hash = hash_packed_user_operation(
             &packed,
-            self.chain_spec.entry_point_address_v0_7,
+            entry_point,
+            self.entry_point_version,
             self.chain_spec.id,
+            delegation_address,
         );
 
         let (calldata_gas_cost, calldata_floor_gas_limit) =
@@ -1038,13 +1112,34 @@ fn pack_user_operation(uo: UserOperation) -> PackedUserOperation {
     let account_gas_limits = concat_u128_be(uo.verification_gas_limit, uo.call_gas_limit);
     let gas_fees = concat_u128_be(uo.max_priority_fee_per_gas, uo.max_fee_per_gas);
 
-    let pvgl: [u8; 16] = uo.paymaster_verification_gas_limit.to_be_bytes();
-    let pogl: [u8; 16] = uo.paymaster_post_op_gas_limit.to_be_bytes();
     let paymaster_and_data = if let Some(paymaster) = uo.paymaster {
         let mut paymaster_and_data = paymaster.to_vec();
+        let pvgl: [u8; 16] = uo.paymaster_verification_gas_limit.to_be_bytes();
+        let pogl: [u8; 16] = uo.paymaster_post_op_gas_limit.to_be_bytes();
         paymaster_and_data.extend_from_slice(&pvgl);
         paymaster_and_data.extend_from_slice(&pogl);
-        paymaster_and_data.extend_from_slice(&uo.paymaster_data);
+
+        if let Some(paymaster_signature) = uo.paymaster_signature {
+            // ignore the paymaster signature if paymaster and data doesn't end with the magic
+            if !uo.paymaster_data.ends_with(&PAYMASTER_SIG_MAGIC) {
+                paymaster_and_data.extend_from_slice(&uo.paymaster_data);
+            } else {
+                // remove the magic bytes from the end of paymaster and data
+                paymaster_and_data.extend_from_slice(
+                    &uo.paymaster_data[..uo.paymaster_data.len() - PAYMASTER_SIG_MAGIC.len()],
+                );
+                // append the paymaster signature
+                paymaster_and_data.extend_from_slice(&paymaster_signature);
+                // append the length of the paymaster signature in 2 bytes
+                paymaster_and_data
+                    .extend_from_slice(&(paymaster_signature.len() as u16).to_be_bytes());
+                // append the magic bytes
+                paymaster_and_data.extend_from_slice(&PAYMASTER_SIG_MAGIC);
+            }
+        } else {
+            paymaster_and_data.extend_from_slice(&uo.paymaster_data);
+        }
+
         Bytes::from(paymaster_and_data)
     } else {
         Bytes::new()
@@ -1094,6 +1189,27 @@ sol! {
 fn hash_packed_user_operation(
     puo: &PackedUserOperation,
     entry_point: Address,
+    entry_point_version: EntryPointVersion,
+    chain_id: u64,
+    delegation_address: Option<Address>,
+) -> B256 {
+    match entry_point_version {
+        EntryPointVersion::V0_6 => {
+            panic!("v0.7 user operation ABI created with v0.6 entry point version")
+        }
+        EntryPointVersion::V0_7 => hash_packed_user_operation_v0_7(puo, entry_point, chain_id),
+        EntryPointVersion::V0_8 | EntryPointVersion::V0_9 => hash_packed_user_operation_v0_8_plus(
+            puo.clone(),
+            entry_point,
+            chain_id,
+            delegation_address,
+        ),
+    }
+}
+
+fn hash_packed_user_operation_v0_7(
+    puo: &PackedUserOperation,
+    entry_point: Address,
     chain_id: u64,
 ) -> B256 {
     let hash_init_code = alloy_primitives::keccak256(&puo.initCode);
@@ -1122,6 +1238,62 @@ fn hash_packed_user_operation(
     alloy_primitives::keccak256(encoded.abi_encode())
 }
 
+fn hash_packed_user_operation_v0_8_plus(
+    puo: PackedUserOperation,
+    entry_point: Address,
+    chain_id: u64,
+    delegation_address: Option<Address>,
+) -> B256 {
+    let mut puo_no_sig: PackedUserOperationNoSig = puo.into();
+
+    if puo_no_sig.initCode.starts_with(&INITCODE_EIP7702_MARKER) {
+        let Some(delegation_address) = delegation_address else {
+            // We cannot calculate a valid hash without a delegation address
+            return INVALID_HASH;
+        };
+
+        puo_no_sig.initCode = [
+            delegation_address.as_ref(),
+            &puo_no_sig.initCode[INITCODE_EIP7702_MARKER.len()..],
+        ]
+        .concat()
+        .into();
+    }
+
+    // perform paymaster signature hash override
+    // if paymaster data length is incorrect, override will not be applied
+    let pd_len = puo_no_sig.paymasterAndData.len();
+    if pd_len >= MIN_PAYMASTER_DATA_WITH_SUFFIX_LEN
+        && puo_no_sig.paymasterAndData.ends_with(&PAYMASTER_SIG_MAGIC)
+    {
+        let paymaster_signature_length = u16::from_be_bytes(
+            puo_no_sig.paymasterAndData
+                [pd_len - PAYMASTER_SIG_MAGIC.len() - 2..pd_len - PAYMASTER_SIG_MAGIC.len()]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+
+        if pd_len >= paymaster_signature_length + MIN_PAYMASTER_DATA_WITH_SUFFIX_LEN {
+            // remove the paymaster signature, length, and magic bytes from the paymaster and data
+            let pd_no_sig = &puo_no_sig.paymasterAndData
+                [..pd_len - PAYMASTER_SIG_MAGIC.len() - 2 - paymaster_signature_length];
+            puo_no_sig.paymasterAndData = [pd_no_sig, &PAYMASTER_SIG_MAGIC].concat().into();
+        } else {
+            // paymaster signature is invalid, return invalid hash
+            return INVALID_HASH;
+        }
+    }
+
+    let domain = eip712_domain! {
+        name: "ERC4337",
+        version: "1",
+        chain_id: chain_id,
+        verifying_contract: entry_point,
+    };
+
+    puo_no_sig.eip712_signing_hash(&domain)
+}
+
 fn concat_u128_be(a: u128, b: u128) -> [u8; 32] {
     let a = a.to_be_bytes();
     let b = b.to_be_bytes();
@@ -1145,6 +1317,7 @@ mod tests {
         let cs = ChainSpec::default();
         let builder = UserOperationBuilder::new(
             &cs,
+            EntryPointVersion::V0_7,
             UserOperationRequiredFields {
                 sender: Address::ZERO,
                 nonce: U256::ZERO,
@@ -1160,7 +1333,7 @@ mod tests {
 
         let uo = builder.build();
         let packed = uo.clone().pack();
-        let unpacked = UserOperationBuilder::from_packed(packed, &cs)
+        let unpacked = UserOperationBuilder::from_packed(packed, &cs, EntryPointVersion::V0_7)
             .unwrap()
             .build();
 
@@ -1172,6 +1345,7 @@ mod tests {
         let cs = ChainSpec::default();
         let builder = UserOperationBuilder::new(
             &cs,
+            EntryPointVersion::V0_7,
             UserOperationRequiredFields {
                 sender: Address::ZERO,
                 nonce: U256::ZERO,
@@ -1190,7 +1364,7 @@ mod tests {
 
         let uo = builder.build();
         let packed = uo.clone().pack();
-        let unpacked = UserOperationBuilder::from_packed(packed, &cs)
+        let unpacked = UserOperationBuilder::from_packed(packed, &cs, EntryPointVersion::V0_7)
             .unwrap()
             .build();
 
@@ -1218,7 +1392,9 @@ mod tests {
         };
 
         let hash = b256!("e486401370d145766c3cf7ba089553214a1230d38662ae532c9b62eb6dadcf7e");
-        let uo = UserOperationBuilder::from_packed(puo, &cs).unwrap().build();
+        let uo = UserOperationBuilder::from_packed(puo, &cs, EntryPointVersion::V0_7)
+            .unwrap()
+            .build();
         assert_eq!(uo.hash(), hash);
     }
 
@@ -1230,6 +1406,7 @@ mod tests {
 
         let uo = UserOperationBuilder::new(
             &cs,
+            EntryPointVersion::V0_7,
             UserOperationRequiredFields {
                 sender: Address::ZERO,
                 nonce: U256::ZERO,
@@ -1260,6 +1437,7 @@ mod tests {
         let new_sig = bytes!("12341234");
         let uo = UserOperationBuilder::new(
             &cs,
+            EntryPointVersion::V0_7,
             UserOperationRequiredFields {
                 sender: Address::ZERO,
                 nonce: U256::ZERO,

@@ -18,9 +18,7 @@ use futures_util::{future, TryFutureExt};
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_provider::{EvmProvider, FeeEstimator};
 use rundler_types::{
-    chain::{ChainSpec, IntoWithSpec},
-    pool::Pool,
-    UserOperation, UserOperationId, UserOperationVariant,
+    chain::ChainSpec, pool::Pool, UserOperation, UserOperationId, UserOperationVariant,
 };
 use tracing::instrument;
 
@@ -30,7 +28,7 @@ use crate::{
         RpcMinedUserOperation, RpcUserOperation, RpcUserOperationStatus, UOStatusEnum,
         UserOperationStatusEnum,
     },
-    utils,
+    utils::{self, TryIntoRundlerType},
 };
 
 #[rpc(client, server, namespace = "rundler")]
@@ -193,7 +191,15 @@ where
         user_op: RpcUserOperation,
         entry_point: Address,
     ) -> EthResult<Option<B256>> {
-        let uo: UserOperationVariant = user_op.into_with_spec(&self.chain_spec);
+        let Some(ep_version) = self.chain_spec.entry_point_version(entry_point) else {
+            Err(EthRpcError::InvalidParams(format!(
+                "Unsupported entry point: {:?}",
+                entry_point
+            )))?
+        };
+
+        let uo: UserOperationVariant =
+            user_op.try_into_rundler_type(&self.chain_spec, ep_version)?;
         let id = uo.id();
 
         if uo.pre_verification_gas() != 0

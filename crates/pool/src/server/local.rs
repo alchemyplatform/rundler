@@ -709,8 +709,9 @@ impl LocalPoolServerRunner {
                                                 break 'resp Err(anyhow::anyhow!("Invalid user operation version for mempool v0.7 {:?}", op.uo_type()).into());
                                             }
                                         }
-                                        EntryPointVersion::Unspecified => {
-                                            panic!("Found mempool with unspecified entry point version")
+                                        EntryPointVersion::V0_8 | EntryPointVersion::V0_9 => {
+                                            // TODO(entrypoints)
+                                            todo!("entry point v0.8 and v0.9 are not supported");
                                         }
                                     }
 
