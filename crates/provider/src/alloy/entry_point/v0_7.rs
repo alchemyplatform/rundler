@@ -22,16 +22,20 @@ use alloy_rpc_types_eth::{
 use alloy_sol_types::{ContractError as SolContractError, SolInterface, SolValue};
 use alloy_transport::TransportError;
 use anyhow::Context;
-use rundler_contracts::v0_7::{
-    DepositInfo as DepositInfoV0_7, GetEntryPointBalances, IAggregator,
-    IEntryPoint::{
-        FailedOp, FailedOpWithRevert, IEntryPointCalls, IEntryPointErrors, IEntryPointInstance,
+use rundler_contracts::{
+    v0_7::{
+        DepositInfo as DepositInfoV0_7, GetEntryPointBalances, IAggregator,
+        IEntryPoint::{
+            FailedOp, FailedOpWithRevert, IEntryPointCalls, IEntryPointErrors, IEntryPointInstance,
+        },
+        IEntryPointSimulations::{
+            self, ExecutionResult as ExecutionResultV0_7, IEntryPointSimulationsInstance,
+        },
+        UserOpsPerAggregator as UserOpsPerAggregatorV0_7, ValidationResult as ValidationResultV0_7,
+        ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE,
     },
-    IEntryPointSimulations::{
-        self, ExecutionResult as ExecutionResultV0_7, IEntryPointSimulationsInstance,
-    },
-    UserOpsPerAggregator as UserOpsPerAggregatorV0_7, ValidationResult as ValidationResultV0_7,
-    ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE,
+    v0_8::ENTRY_POINT_SIMULATIONS_V0_8_DEPLOYED_BYTECODE,
+    v0_9::ENTRY_POINT_SIMULATIONS_V0_9_DEPLOYED_BYTECODE,
 };
 use rundler_types::{
     authorization::Eip7702Auth,
@@ -62,15 +66,19 @@ pub struct EntryPointProvider<AP, D> {
     max_gas_estimation_gas: u64,
     max_aggregation_gas: u64,
     chain_spec: ChainSpec,
+    ep_version: EntryPointVersion,
 }
 
 impl<AP, D> EntryPointProvider<AP, D>
 where
     AP: AlloyProvider + Clone,
 {
-    /// Create a new `EntryPoint` instance for v0.7
+    /// Create a new `EntryPoint` instance for v0.7 ABI
+    /// PANICS if entry point version is < v0.7
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         chain_spec: ChainSpec,
+        ep_version: EntryPointVersion,
         max_verification_gas: u64,
         max_simulate_handle_ops_gas: u64,
         max_gas_estimation_gas: u64,
@@ -78,9 +86,13 @@ where
         provider: AP,
         da_gas_oracle: D,
     ) -> Self {
+        if ep_version < EntryPointVersion::V0_7 {
+            panic!("entry point version must be >= v0.7")
+        }
+
         Self {
             i_entry_point: IEntryPointInstance::new(
-                chain_spec.entry_point_address_v0_7,
+                chain_spec.entry_point_address(ep_version),
                 provider.clone(),
             ),
             da_gas_oracle,
@@ -89,6 +101,7 @@ where
             max_gas_estimation_gas,
             max_aggregation_gas,
             chain_spec,
+            ep_version,
         }
     }
 }
@@ -469,7 +482,11 @@ where
             .unwrap_or(u64::MAX);
 
         let mut override_ep = StateOverride::default();
-        add_simulations_override(&mut override_ep, addr);
+        add_simulations_override(
+            self.get_simulations_bytecode().clone(),
+            &mut override_ep,
+            addr,
+        );
 
         add_authorization_tuple(
             user_op.sender(),
@@ -531,6 +548,7 @@ where
     ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
         simulate_handle_op_inner(
             &self.chain_spec,
+            self.get_simulations_bytecode().clone(),
             self.max_simulate_handle_ops_gas,
             &self.i_entry_point,
             op,
@@ -554,6 +572,7 @@ where
     ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
         simulate_handle_op_inner(
             &self.chain_spec,
+            self.get_simulations_bytecode().clone(),
             self.max_gas_estimation_gas,
             &self.i_entry_point,
             op,
@@ -577,6 +596,17 @@ where
     fn simulation_should_revert(&self) -> bool {
         false
     }
+
+    fn get_simulations_bytecode(&self) -> &Bytes {
+        match self.ep_version {
+            EntryPointVersion::V0_6 => {
+                unreachable!("v0.7 entry point ABI created with v0.6 entry point version")
+            }
+            EntryPointVersion::V0_7 => &ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE,
+            EntryPointVersion::V0_8 => &ENTRY_POINT_SIMULATIONS_V0_8_DEPLOYED_BYTECODE,
+            EntryPointVersion::V0_9 => &ENTRY_POINT_SIMULATIONS_V0_9_DEPLOYED_BYTECODE,
+        }
+    }
 }
 
 impl<AP, D> EntryPointProviderTrait<UserOperation> for EntryPointProvider<AP, D>
@@ -586,7 +616,11 @@ where
 {
 }
 
-fn add_simulations_override(state_override: &mut StateOverride, addr: Address) {
+fn add_simulations_override(
+    simulations_bytecode: Bytes,
+    state_override: &mut StateOverride,
+    addr: Address,
+) {
     // Do nothing if the caller has already overridden the entry point code.
     // We'll trust they know what they're doing and not replace their code.
     // This is needed for call gas estimation, where the entry point is
@@ -594,7 +628,7 @@ fn add_simulations_override(state_override: &mut StateOverride, addr: Address) {
     state_override
         .entry(addr)
         .or_insert_with(|| AccountOverride {
-            code: Some(ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE.clone()),
+            code: Some(simulations_bytecode),
             ..Default::default()
         });
 }
@@ -738,6 +772,7 @@ pub fn decode_ops_from_calldata(
 #[allow(clippy::too_many_arguments)]
 async fn simulate_handle_op_inner<AP: AlloyProvider>(
     chain_spec: &ChainSpec,
+    simulations_bytecode: Bytes,
     execution_gas_limit: u64,
     entry_point: &IEntryPointInstance<AP, AnyNetwork>,
     op: UserOperation,
@@ -752,7 +787,11 @@ async fn simulate_handle_op_inner<AP: AlloyProvider>(
         .try_into()
         .unwrap_or(u64::MAX);
 
-    add_simulations_override(&mut state_override, *entry_point.address());
+    add_simulations_override(
+        simulations_bytecode,
+        &mut state_override,
+        *entry_point.address(),
+    );
 
     add_authorization_tuple(op.sender(), op.authorization_tuple(), &mut state_override);
 

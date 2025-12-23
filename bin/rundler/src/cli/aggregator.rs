@@ -19,6 +19,7 @@ use rundler_provider::Providers;
 use rundler_types::{
     aggregator::SignatureAggregator,
     chain::{ChainSpec, ContractRegistry},
+    EntryPointVersion,
 };
 
 use super::CommonArgs;
@@ -43,7 +44,7 @@ pub fn instantiate_aggregators(
             .map(|v| v.parse().expect("invalid BLS_ADDRESS"));
 
         let ep_v0_7 = providers
-            .ep_v0_7()
+            .ep_v0_7(EntryPointVersion::V0_7)
             .as_ref()
             .expect("BLS aggregator requires entry point v0.7");
         let bls_aggregator = BlsSignatureAggregatorV0_7::new(ep_v0_7.clone(), bls_address);
@@ -55,7 +56,7 @@ pub fn instantiate_aggregators(
             .map(|v| v.parse().expect("invalid PBH_ADDRESS"));
 
         let ep_v0_7 = providers
-            .ep_v0_7()
+            .ep_v0_7(EntryPointVersion::V0_7)
             .as_ref()
             .expect("PBH aggregator requires entry point v0.7");
         let pbh_aggregator = PbhSignatureAggregator::new(ep_v0_7.clone(), pbh_address);

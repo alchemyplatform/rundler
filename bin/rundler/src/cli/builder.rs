@@ -217,7 +217,10 @@ impl BuilderArgs {
         let mut entry_points = vec![];
         let mut num_builders = 0;
 
-        if !common.disable_entry_point_v0_6 {
+        if common
+            .enabled_entry_points
+            .contains(&EntryPointVersion::V0_6)
+        {
             let builders = entry_point_builders
                 .as_ref()
                 .and_then(|builder_configs| {
@@ -237,7 +240,10 @@ impl BuilderArgs {
 
             num_builders += common.num_builders_v0_6;
         }
-        if !common.disable_entry_point_v0_7 {
+        if common
+            .enabled_entry_points
+            .contains(&EntryPointVersion::V0_7)
+        {
             let builders = entry_point_builders
                 .as_ref()
                 .and_then(|builder_configs| {
