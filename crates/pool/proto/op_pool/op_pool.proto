@@ -24,6 +24,14 @@ message UserOperation {
   }
 }
 
+enum EntryPointVersion {
+  ENTRY_POINT_VERSION_UNSPECIFIED = 0;
+  ENTRY_POINT_VERSION_V0_6 = 1;
+  ENTRY_POINT_VERSION_V0_7 = 2;
+  ENTRY_POINT_VERSION_V0_8 = 3;
+  ENTRY_POINT_VERSION_V0_9 = 4;
+}
+
 message UserOperationPermissions {
   bool trusted = 1;
   optional uint64 max_allowed_in_pool_for_sender = 2;
@@ -125,6 +133,9 @@ message UserOperationV07 {
   AuthorizationTuple authorization_tuple = 18;
   // aggregator
   bytes aggregator = 19;
+
+  // Entry point version
+  EntryPointVersion entry_point_version = 20;
 }
 
 enum EntityType {

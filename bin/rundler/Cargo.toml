@@ -9,6 +9,7 @@ description = """
 ERC-4337 bundler implementation
 """
 publish = false
+default-run = "rundler"
 
 [dependencies]
 alloy-consensus.workspace = true

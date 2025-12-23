@@ -14,11 +14,16 @@
 use alloy_primitives::{Address, B256, U128, U256, U64};
 use rundler_provider::{Log, TransactionReceipt};
 use rundler_types::{
-    chain::{ChainSpec, FromWithSpec, IntoWithSpec},
+    chain::ChainSpec,
     pool::{Reputation, ReputationStatus},
-    UserOperationOptionalGas, UserOperationVariant,
+    EntryPointVersion, UserOperationOptionalGas, UserOperationVariant,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::{
+    eth::EthRpcError,
+    utils::{FromRpcType, IntoRundlerType, TryFromRpcType, TryIntoRundlerType},
+};
 
 mod permissions;
 pub(crate) use permissions::RpcUserOperationPermissions;
@@ -112,11 +117,19 @@ impl From<UserOperationVariant> for RpcUserOperation {
     }
 }
 
-impl FromWithSpec<RpcUserOperation> for UserOperationVariant {
-    fn from_with_spec(op: RpcUserOperation, chain_spec: &ChainSpec) -> Self {
+impl TryFromRpcType<RpcUserOperation> for UserOperationVariant {
+    fn try_from_rpc_type(
+        op: RpcUserOperation,
+        chain_spec: &ChainSpec,
+        ep_version: EntryPointVersion,
+    ) -> Result<Self, EthRpcError> {
         match op {
-            RpcUserOperation::V0_6(op) => UserOperationVariant::V0_6(op.into_with_spec(chain_spec)),
-            RpcUserOperation::V0_7(op) => UserOperationVariant::V0_7(op.into_with_spec(chain_spec)),
+            RpcUserOperation::V0_6(op) => Ok(UserOperationVariant::V0_6(
+                op.try_into_rundler_type(chain_spec, ep_version)?,
+            )),
+            RpcUserOperation::V0_7(op) => Ok(UserOperationVariant::V0_7(
+                op.try_into_rundler_type(chain_spec, ep_version)?,
+            )),
         }
     }
 }
@@ -145,11 +158,19 @@ pub(crate) enum RpcUserOperationOptionalGas {
     V0_7(RpcUserOperationOptionalGasV0_7),
 }
 
-impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
-    fn from(op: RpcUserOperationOptionalGas) -> Self {
+impl FromRpcType<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
+    fn from_rpc_type(
+        op: RpcUserOperationOptionalGas,
+        chain_spec: &ChainSpec,
+        ep_version: EntryPointVersion,
+    ) -> Self {
         match op {
-            RpcUserOperationOptionalGas::V0_6(op) => UserOperationOptionalGas::V0_6(op.into()),
-            RpcUserOperationOptionalGas::V0_7(op) => UserOperationOptionalGas::V0_7(op.into()),
+            RpcUserOperationOptionalGas::V0_6(op) => {
+                UserOperationOptionalGas::V0_6(op.into_rundler_type(chain_spec, ep_version))
+            }
+            RpcUserOperationOptionalGas::V0_7(op) => {
+                UserOperationOptionalGas::V0_7(op.into_rundler_type(chain_spec, ep_version))
+            }
         }
     }
 }

@@ -204,7 +204,7 @@ impl From<UserOperation> for UserOperationPackedForHash {
 impl UserOperationTrait for UserOperation {
     type OptionalGas = UserOperationOptionalGas;
 
-    fn entry_point_version() -> EntryPointVersion {
+    fn entry_point_version(&self) -> EntryPointVersion {
         EntryPointVersion::V0_6
     }
 

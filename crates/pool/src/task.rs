@@ -13,7 +13,7 @@
 
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 use futures::FutureExt;
 use rundler_provider::{EntryPoint, Providers, ProvidersWithEntryPointT};
 use rundler_sim::{
@@ -148,8 +148,9 @@ where
 
                     mempools.insert(pool_config.entry_point, pool);
                 }
-                EntryPointVersion::Unspecified => {
-                    bail!("Unsupported entry point version");
+                EntryPointVersion::V0_8 | EntryPointVersion::V0_9 => {
+                    // TODO(entrypoints)
+                    todo!("entry point v0.8 and v0.9 are not supported");
                 }
             }
         }

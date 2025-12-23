@@ -18,10 +18,14 @@ use std::{collections::HashMap, str::FromStr, sync::Arc};
 use alloy_primitives::Address;
 use serde::{Deserialize, Serialize};
 
-use crate::{aggregator::SignatureAggregator, da::DAGasOracleType, proxy::SubmissionProxy};
+use crate::{
+    aggregator::SignatureAggregator, da::DAGasOracleType, proxy::SubmissionProxy, EntryPointVersion,
+};
 
 const ENTRY_POINT_ADDRESS_V0_6: &str = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789";
 const ENTRY_POINT_ADDRESS_V0_7: &str = "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
+const ENTRY_POINT_ADDRESS_V0_8: &str = "0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108";
+const ENTRY_POINT_ADDRESS_V0_9: &str = "0x433709009B8330FDa32311DF1C2AFA402eD8D009";
 const MULTICALL3_ADDRESS: &str = "0xcA11bde05977b3631167028862bE2a173976CA11";
 
 /// Chain specification for Rundler
@@ -38,6 +42,10 @@ pub struct ChainSpec {
     pub entry_point_address_v0_6: Address,
     /// entry point address for v0_7
     pub entry_point_address_v0_7: Address,
+    /// entry point address for v0.8
+    pub entry_point_address_v0_8: Address,
+    /// entry point address for v0.9
+    pub entry_point_address_v0_9: Address,
     /// address of the multicall3 contract
     pub multicall3_address: Address,
     /// flashblocks enabled
@@ -175,6 +183,8 @@ impl Default for ChainSpec {
             block_gas_limit: 30_000_000,
             entry_point_address_v0_6: Address::from_str(ENTRY_POINT_ADDRESS_V0_6).unwrap(),
             entry_point_address_v0_7: Address::from_str(ENTRY_POINT_ADDRESS_V0_7).unwrap(),
+            entry_point_address_v0_8: Address::from_str(ENTRY_POINT_ADDRESS_V0_8).unwrap(),
+            entry_point_address_v0_9: Address::from_str(ENTRY_POINT_ADDRESS_V0_9).unwrap(),
             multicall3_address: Address::from_str(MULTICALL3_ADDRESS).unwrap(),
             flashblocks_enabled: false,
             deposit_transfer_overhead: 30_000,
@@ -334,6 +344,27 @@ impl ChainSpec {
     /// Check if the chain supports EIP-7702
     pub fn supports_eip7702(&self, entry_point: Address) -> bool {
         self.eip7702_enabled && entry_point == self.entry_point_address_v0_7
+    }
+
+    /// Get the entry point address for a given version
+    pub fn entry_point_address(&self, entry_point_version: EntryPointVersion) -> Address {
+        match entry_point_version {
+            EntryPointVersion::V0_6 => self.entry_point_address_v0_6,
+            EntryPointVersion::V0_7 => self.entry_point_address_v0_7,
+            EntryPointVersion::V0_8 => self.entry_point_address_v0_8,
+            EntryPointVersion::V0_9 => self.entry_point_address_v0_9,
+        }
+    }
+
+    /// Get the entry point version for a given address
+    pub fn entry_point_version(&self, entry_point: Address) -> Option<EntryPointVersion> {
+        match entry_point {
+            ep if ep == self.entry_point_address_v0_6 => Some(EntryPointVersion::V0_6),
+            ep if ep == self.entry_point_address_v0_7 => Some(EntryPointVersion::V0_7),
+            ep if ep == self.entry_point_address_v0_8 => Some(EntryPointVersion::V0_8),
+            ep if ep == self.entry_point_address_v0_9 => Some(EntryPointVersion::V0_9),
+            _ => None,
+        }
     }
 }
 

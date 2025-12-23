@@ -20,6 +20,7 @@ use jsonrpsee::{
 };
 use metrics::Counter;
 use metrics_derive::Metrics;
+use rundler_types::{chain::ChainSpec, EntryPointVersion};
 
 use crate::{error::rpc_err, eth::EthRpcError};
 
@@ -64,5 +65,51 @@ impl From<anyhow::Error> for InternalRpcError {
 impl From<InternalRpcError> for ErrorObjectOwned {
     fn from(e: InternalRpcError) -> Self {
         rpc_err(INTERNAL_ERROR_CODE, e.0.to_string())
+    }
+}
+
+pub(crate) trait FromRpcType<T> {
+    fn from_rpc_type(value: T, chain_spec: &ChainSpec, ep_version: EntryPointVersion) -> Self;
+}
+
+pub(crate) trait IntoRundlerType<T> {
+    fn into_rundler_type(self, chain_spec: &ChainSpec, ep_version: EntryPointVersion) -> T;
+}
+
+impl<T, U> IntoRundlerType<U> for T
+where
+    U: FromRpcType<T>,
+{
+    fn into_rundler_type(self, chain_spec: &ChainSpec, ep_version: EntryPointVersion) -> U {
+        U::from_rpc_type(self, chain_spec, ep_version)
+    }
+}
+
+pub(crate) trait TryFromRpcType<T>: Sized {
+    fn try_from_rpc_type(
+        value: T,
+        chain_spec: &ChainSpec,
+        ep_version: EntryPointVersion,
+    ) -> Result<Self, EthRpcError>;
+}
+
+pub(crate) trait TryIntoRundlerType<T> {
+    fn try_into_rundler_type(
+        self,
+        chain_spec: &ChainSpec,
+        ep_version: EntryPointVersion,
+    ) -> Result<T, EthRpcError>;
+}
+
+impl<T, U> TryIntoRundlerType<U> for T
+where
+    U: TryFromRpcType<T>,
+{
+    fn try_into_rundler_type(
+        self,
+        chain_spec: &ChainSpec,
+        ep_version: EntryPointVersion,
+    ) -> Result<U, EthRpcError> {
+        U::try_from_rpc_type(self, chain_spec, ep_version)
     }
 }

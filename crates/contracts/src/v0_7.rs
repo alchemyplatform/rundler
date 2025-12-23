@@ -158,6 +158,10 @@ sol!(
         ) external view returns (DepositInfo memory info);
 
         function balanceOf(address account) external view returns (uint256);
+
+        function getUserOpHash(
+            PackedUserOperation calldata userOp
+        ) public view returns (bytes32);
     }
 
     #[allow(missing_docs)]
@@ -257,6 +261,28 @@ sol!(
     }
 );
 
+mod no_sig {
+    use alloy_sol_macro::sol;
+
+    sol!(
+        /// Packed user operation without signature
+        /// Used for hashing the user operation to calculate the correct
+        /// EIP-712 type hash according to UserOperationLib.sol
+        #[allow(missing_docs)]
+        #[derive(Default, Debug, PartialEq, Eq)]
+        struct PackedUserOperation {
+            address sender;
+            uint256 nonce;
+            bytes initCode;
+            bytes callData;
+            bytes32 accountGasLimits;
+            uint256 preVerificationGas;
+            bytes32 gasFees;
+            bytes paymasterAndData;
+        }
+    );
+}
+
 sol!(
     #[allow(missing_docs)]
     #[sol(rpc)]
@@ -310,3 +336,20 @@ static __VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE: [u8; 5252] =
 
 pub static VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE: Bytes =
     Bytes::from_static(&__VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE);
+
+pub use no_sig::PackedUserOperation as PackedUserOperationNoSig;
+
+impl From<PackedUserOperation> for PackedUserOperationNoSig {
+    fn from(puo: PackedUserOperation) -> Self {
+        PackedUserOperationNoSig {
+            sender: puo.sender,
+            nonce: puo.nonce,
+            initCode: puo.initCode,
+            callData: puo.callData,
+            accountGasLimits: puo.accountGasLimits,
+            preVerificationGas: puo.preVerificationGas,
+            gasFees: puo.gasFees,
+            paymasterAndData: puo.paymasterAndData,
+        }
+    }
+}

@@ -852,6 +852,9 @@ where
             .context("builder should remove update entities in the pool")
     }
 
+    // TODO(entrypoints): In entrypoint v0.8+ we can no longer rely on the user operation hash
+    // built from a packed user operation to match the mempool hash, as its lacking its authorization
+    // Either (1) pull the authorization from the reverted transaction or (2) use sender/nonce to remove
     async fn process_revert(&self, tx_hash: B256) -> anyhow::Result<()> {
         warn!("Bundle transaction {tx_hash:?} reverted onchain");
 

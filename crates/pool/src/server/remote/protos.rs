@@ -30,7 +30,8 @@ use rundler_types::{
     },
     v0_6, v0_7, BundlerSponsorship as RundlerBundlerSponsorship, Entity as RundlerEntity,
     EntityInfos, EntityType as RundlerEntityType, EntityUpdate as RundlerEntityUpdate,
-    EntityUpdateType as RundlerEntityUpdateType, StakeInfo as RundlerStakeInfo, UserOperation as _,
+    EntityUpdateType as RundlerEntityUpdateType, EntryPointVersion as RundlerEntryPointVersion,
+    StakeInfo as RundlerStakeInfo, UserOperation as _,
     UserOperationPermissions as RundlerUserOperationPermissions, UserOperationVariant,
     ValidTimeRange,
 };
@@ -173,6 +174,7 @@ impl From<&v0_7::UserOperation> for UserOperation {
                 .aggregator()
                 .map(|a| a.to_proto_bytes())
                 .unwrap_or_default(),
+            entry_point_version: EntryPointVersion::from(op.entry_point_version()).into(),
         };
         UserOperation {
             uo: Some(user_operation::Uo::V07(op)),
@@ -190,8 +192,12 @@ impl TryUoFromProto<UserOperationV07> for v0_7::UserOperation {
             .as_ref()
             .map(|authorization| Eip7702Auth::from(authorization.clone()));
 
+        let ep_version = EntryPointVersion::try_from(op.entry_point_version)
+            .map_err(|_| ConversionError::InvalidEnumValue(op.entry_point_version))?;
+
         let mut builder = v0_7::UserOperationBuilder::new(
             chain_spec,
+            ep_version.try_into()?,
             v0_7::UserOperationRequiredFields {
                 sender: from_bytes(&op.sender)?,
                 nonce: from_bytes(&op.nonce)?,
@@ -716,5 +722,32 @@ impl TryFrom<PoolOperationSummary> for RundlerPoolOperationSummary {
             entry_point: from_bytes(&summary.entry_point)?,
             sender: from_bytes(&summary.sender)?,
         })
+    }
+}
+
+impl From<RundlerEntryPointVersion> for EntryPointVersion {
+    fn from(version: RundlerEntryPointVersion) -> Self {
+        match version {
+            RundlerEntryPointVersion::V0_6 => EntryPointVersion::V06,
+            RundlerEntryPointVersion::V0_7 => EntryPointVersion::V07,
+            RundlerEntryPointVersion::V0_8 => EntryPointVersion::V08,
+            RundlerEntryPointVersion::V0_9 => EntryPointVersion::V09,
+        }
+    }
+}
+
+impl TryFrom<EntryPointVersion> for RundlerEntryPointVersion {
+    type Error = ConversionError;
+
+    fn try_from(version: EntryPointVersion) -> Result<Self, Self::Error> {
+        match version {
+            EntryPointVersion::V06 => Ok(RundlerEntryPointVersion::V0_6),
+            EntryPointVersion::V07 => Ok(RundlerEntryPointVersion::V0_7),
+            EntryPointVersion::V08 => Ok(RundlerEntryPointVersion::V0_8),
+            EntryPointVersion::V09 => Ok(RundlerEntryPointVersion::V0_9),
+            EntryPointVersion::Unspecified => {
+                Err(ConversionError::InvalidEnumValue(version as i32))
+            }
+        }
     }
 }

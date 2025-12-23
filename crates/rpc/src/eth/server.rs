@@ -14,16 +14,17 @@
 use alloy_primitives::{Address, B256, U64};
 use jsonrpsee::core::RpcResult;
 use rundler_provider::StateOverride;
-use rundler_types::{chain::IntoWithSpec, pool::Pool, BlockTag, UserOperationPermissions};
+use rundler_types::{pool::Pool, BlockTag, UserOperationPermissions};
 use tracing::instrument;
 
 use super::{api::EthApi, EthApiServer};
 use crate::{
+    eth::EthRpcError,
     types::{
         RpcGasEstimate, RpcUserOperation, RpcUserOperationByHash, RpcUserOperationOptionalGas,
         RpcUserOperationPermissions, RpcUserOperationReceipt,
     },
-    utils,
+    utils::{self, IntoRundlerType, TryIntoRundlerType},
 };
 
 #[async_trait::async_trait]
@@ -38,10 +39,17 @@ where
         entry_point: Address,
         permissions: Option<RpcUserOperationPermissions>,
     ) -> RpcResult<B256> {
+        let Some(ep_version) = self.chain_spec.entry_point_version(entry_point) else {
+            Err(EthRpcError::InvalidParams(format!(
+                "Unsupported entry point: {:?}",
+                entry_point
+            )))?
+        };
+
         // if permissions are not enabled, default them
         let mut permissions = if self.permissions_enabled {
             permissions
-                .map(|p| p.into_with_spec(&self.chain_spec))
+                .map(|p| p.into_rundler_type(&self.chain_spec, ep_version))
                 .unwrap_or_default()
         } else {
             UserOperationPermissions::default()
@@ -55,7 +63,7 @@ where
             "eth_sendUserOperation",
             EthApi::send_user_operation(
                 self,
-                op.into_with_spec(&self.chain_spec),
+                op.try_into_rundler_type(&self.chain_spec, ep_version)?,
                 entry_point,
                 permissions,
             ),
@@ -70,9 +78,21 @@ where
         entry_point: Address,
         state_override: Option<StateOverride>,
     ) -> RpcResult<RpcGasEstimate> {
+        let Some(ep_version) = self.chain_spec.entry_point_version(entry_point) else {
+            Err(EthRpcError::InvalidParams(format!(
+                "Unsupported entry point: {:?}",
+                entry_point
+            )))?
+        };
+
         utils::safe_call_rpc_handler(
             "eth_estimateUserOperationGas",
-            EthApi::estimate_user_operation_gas(self, op.into(), entry_point, state_override),
+            EthApi::estimate_user_operation_gas(
+                self,
+                op.into_rundler_type(&self.chain_spec, ep_version),
+                entry_point,
+                state_override,
+            ),
         )
         .await
     }

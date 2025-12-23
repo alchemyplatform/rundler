@@ -883,7 +883,11 @@ impl<P: EvmProvider> Chain<P> {
                 Some(EntryPointVersion::V0_7) => {
                     Self::load_v0_7(log, &mut mined_ops, &mut entity_balance_updates)
                 }
-                Some(EntryPointVersion::Unspecified) | None => {
+                Some(EntryPointVersion::V0_8) | Some(EntryPointVersion::V0_9) => {
+                    // TODO(entrypoints)
+                    todo!("entry point v0.8 and v0.9 are not supported");
+                }
+                None => {
                     warn!(
                         "Log with unknown entry point address: {:?}. Ignoring.",
                         log.address()
