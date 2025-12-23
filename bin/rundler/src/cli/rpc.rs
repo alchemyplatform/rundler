@@ -20,10 +20,7 @@ use rundler_pool::RemotePoolClient;
 use rundler_provider::Providers;
 use rundler_rpc::{EthApiSettings, RpcTask, RpcTaskArgs};
 use rundler_task::{server::connect_with_retries_shutdown, TaskSpawnerExt};
-use rundler_types::{
-    chain::{ChainSpec, TryIntoWithSpec},
-    EntryPointVersion,
-};
+use rundler_types::chain::{ChainSpec, TryIntoWithSpec};
 
 use super::CommonArgs;
 
@@ -135,12 +132,7 @@ impl RpcArgs {
             estimation_settings: common.try_into_with_spec(&chain_spec)?,
             rpc_timeout: Duration::from_secs(self.timeout_seconds.parse()?),
             max_connections: self.max_connections,
-            entry_point_v0_6_enabled: common
-                .enabled_entry_points
-                .contains(&EntryPointVersion::V0_6),
-            entry_point_v0_7_enabled: common
-                .enabled_entry_points
-                .contains(&EntryPointVersion::V0_7),
+            enabled_entry_points: common.enabled_entry_points.clone(),
             corsdomain: self.corsdomain.clone(),
             chain_spec,
         })

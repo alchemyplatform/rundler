@@ -12,6 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use std::{
+    collections::HashMap,
     fmt::{self, Debug},
     marker::PhantomData,
     sync::Arc,
@@ -21,7 +22,8 @@ use alloy_primitives::{Address, B256};
 use rundler_provider::{EntryPoint, SimulationProvider, StateOverride, TransactionReceipt};
 use rundler_sim::{GasEstimationError, GasEstimator};
 use rundler_types::{
-    EntryPointVersion, GasEstimate, UserOperation, UserOperationOptionalGas, UserOperationVariant,
+    EntryPointAbiVersion, EntryPointVersion, GasEstimate, UserOperation, UserOperationOptionalGas,
+    UserOperationVariant,
 };
 
 use super::events::UserOperationEventProvider;
@@ -35,57 +37,44 @@ use crate::{
 
 #[derive(Default)]
 pub(crate) struct EntryPointRouterBuilder {
-    entry_points: Vec<Address>,
-    v0_6: Option<(Address, Arc<dyn EntryPointRoute>)>,
-    v0_7: Option<(Address, Arc<dyn EntryPointRoute>)>,
+    entry_points: HashMap<Address, Arc<dyn EntryPointRoute>>,
 }
 
 impl EntryPointRouterBuilder {
-    pub(crate) fn v0_6<R>(mut self, route: R) -> Self
+    pub(crate) fn add_route<R>(mut self, route: R) -> Self
     where
         R: EntryPointRoute + 'static,
     {
-        self.entry_points.push(route.address());
-        self.v0_6 = Some((route.address(), Arc::new(route)));
-        self
-    }
-
-    pub(crate) fn v0_7<R>(mut self, route: R) -> Self
-    where
-        R: EntryPointRoute + 'static,
-    {
-        self.entry_points.push(route.address());
-        self.v0_7 = Some((route.address(), Arc::new(route)));
+        self.entry_points.insert(route.address(), Arc::new(route));
         self
     }
 
     pub(crate) fn build(self) -> EntryPointRouter {
         EntryPointRouter {
             entry_points: self.entry_points,
-            v0_6: self.v0_6,
-            v0_7: self.v0_7,
         }
     }
 }
 
 #[derive(Clone)]
 pub(crate) struct EntryPointRouter {
-    entry_points: Vec<Address>,
-    v0_6: Option<(Address, Arc<dyn EntryPointRoute>)>,
-    v0_7: Option<(Address, Arc<dyn EntryPointRoute>)>,
+    entry_points: HashMap<Address, Arc<dyn EntryPointRoute>>,
 }
 
 impl fmt::Debug for EntryPointRouter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EntryPointRouter")
-            .field("entry_points", &self.entry_points)
+            .field(
+                "entry_points",
+                &self.entry_points.keys().collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
 
 impl EntryPointRouter {
     pub(crate) fn entry_points(&self) -> impl Iterator<Item = &Address> {
-        self.entry_points.iter()
+        self.entry_points.keys()
     }
 
     pub(crate) fn check_and_get_route(
@@ -93,30 +82,28 @@ impl EntryPointRouter {
         entry_point: &Address,
         uo: &UserOperationVariant,
     ) -> EthResult<&Arc<dyn EntryPointRoute>> {
-        match self.get_ep_version(entry_point)? {
-            EntryPointVersion::V0_6 => {
+        let route = self.get_route(entry_point)?;
+
+        match route.version().abi_version() {
+            EntryPointAbiVersion::V0_6 => {
                 if !matches!(uo, UserOperationVariant::V0_6(_)) {
                     return Err(EthRpcError::InvalidParams(format!(
                         "Invalid user operation for entry point: {:?}",
-                        entry_point
+                        route.address()
                     )));
                 }
-                Ok(&self.v0_6.as_ref().unwrap().1)
             }
-            EntryPointVersion::V0_7 => {
+            EntryPointAbiVersion::V0_7 => {
                 if !matches!(uo, UserOperationVariant::V0_7(_)) {
                     return Err(EthRpcError::InvalidParams(format!(
                         "Invalid user operation for entry point: {:?}",
-                        entry_point
+                        route.address()
                     )));
                 }
-                Ok(&self.v0_7.as_ref().unwrap().1)
-            }
-            EntryPointVersion::V0_8 | EntryPointVersion::V0_9 => {
-                // TODO(entrypoints)
-                todo!("entry point v0.8 and v0.9 are not supported");
             }
         }
+
+        Ok(route)
     }
 
     pub(crate) async fn get_mined_by_hash(
@@ -172,46 +159,28 @@ impl EntryPointRouter {
         uo: UserOperationOptionalGas,
         state_override: Option<StateOverride>,
     ) -> EthResult<RpcGasEstimate> {
-        match self.get_ep_version(entry_point)? {
-            EntryPointVersion::V0_6 => {
+        let route = self.get_route(entry_point)?;
+
+        match route.version().abi_version() {
+            EntryPointAbiVersion::V0_6 => {
                 if !matches!(uo, UserOperationOptionalGas::V0_6(_)) {
                     return Err(EthRpcError::InvalidParams(format!(
                         "Invalid user operation for entry point: {:?}",
-                        entry_point
+                        route.address()
                     )));
                 }
-
-                let e = self
-                    .v0_6
-                    .as_ref()
-                    .unwrap()
-                    .1
-                    .estimate_gas(uo, state_override)
-                    .await?;
-
+                let e = route.estimate_gas(uo, state_override).await?;
                 Ok(RpcGasEstimateV0_6::from(e).into())
             }
-            EntryPointVersion::V0_7 => {
+            EntryPointAbiVersion::V0_7 => {
                 if !matches!(uo, UserOperationOptionalGas::V0_7(_)) {
                     return Err(EthRpcError::InvalidParams(format!(
                         "Invalid user operation for entry point: {:?}",
-                        entry_point
+                        route.address()
                     )));
                 }
-
-                let e = self
-                    .v0_7
-                    .as_ref()
-                    .unwrap()
-                    .1
-                    .estimate_gas(uo, state_override)
-                    .await?;
-
+                let e = route.estimate_gas(uo, state_override).await?;
                 Ok(RpcGasEstimateV0_7::from(e).into())
-            }
-            EntryPointVersion::V0_8 | EntryPointVersion::V0_9 => {
-                // TODO(entrypoints)
-                todo!("entry point v0.8 and v0.9 are not supported");
             }
         }
     }
@@ -227,40 +196,21 @@ impl EntryPointRouter {
             .map_err(Into::into)
     }
 
-    fn get_ep_version(&self, entry_point: &Address) -> EthResult<EntryPointVersion> {
-        if let Some((addr, _)) = self.v0_6 {
-            if addr == *entry_point {
-                return Ok(EntryPointVersion::V0_6);
-            }
-        }
-        if let Some((addr, _)) = self.v0_7 {
-            if addr == *entry_point {
-                return Ok(EntryPointVersion::V0_7);
-            }
-        }
-
-        Err(EthRpcError::InvalidParams(format!(
-            "No entry point found for address: {:?}",
-            entry_point
-        )))
-    }
-
     fn get_route(&self, entry_point: &Address) -> EthResult<&Arc<dyn EntryPointRoute>> {
-        let ep = self.get_ep_version(entry_point)?;
-
-        match ep {
-            EntryPointVersion::V0_6 => Ok(&self.v0_6.as_ref().unwrap().1),
-            EntryPointVersion::V0_7 => Ok(&self.v0_7.as_ref().unwrap().1),
-            EntryPointVersion::V0_8 | EntryPointVersion::V0_9 => {
-                // TODO(entrypoints)
-                todo!("entry point v0.8 and v0.9 are not supported");
-            }
-        }
+        let route = self
+            .entry_points
+            .get(entry_point)
+            .ok_or(EthRpcError::InvalidParams(format!(
+                "No entry point found for address: {:?}",
+                entry_point
+            )))?;
+        Ok(route)
     }
 }
 
 #[async_trait::async_trait]
 pub(crate) trait EntryPointRoute: Send + Sync {
+    fn version(&self) -> EntryPointVersion;
     fn address(&self) -> Address;
 
     async fn get_mined_by_hash(&self, hash: B256)
@@ -310,6 +260,10 @@ where
     G::UserOperationOptionalGas: From<UserOperationOptionalGas>,
     EV: UserOperationEventProvider,
 {
+    fn version(&self) -> EntryPointVersion {
+        self.entry_point.version()
+    }
+
     fn address(&self) -> Address {
         *self.entry_point.address()
     }
