@@ -21,7 +21,7 @@ use rundler_sim::{
     PrecheckerImpl, Simulator,
 };
 use rundler_task::TaskSpawnerExt;
-use rundler_types::{chain::ChainSpec, EntryPointVersion, UserOperation, UserOperationVariant};
+use rundler_types::{chain::ChainSpec, EntryPointAbiVersion, UserOperation, UserOperationVariant};
 use rundler_utils::emit::WithEntryPoint;
 use tokio::sync::broadcast;
 
@@ -121,8 +121,8 @@ where
         // create mempools
         let mut mempools = HashMap::new();
         for pool_config in &self.args.pool_configs {
-            match pool_config.entry_point_version {
-                EntryPointVersion::V0_6 => {
+            match pool_config.entry_point_version.abi_version() {
+                EntryPointAbiVersion::V0_6 => {
                     let pool = self
                         .create_mempool_v0_6(
                             &task_spawner,
@@ -135,7 +135,7 @@ where
 
                     mempools.insert(pool_config.entry_point, pool);
                 }
-                EntryPointVersion::V0_7 => {
+                EntryPointAbiVersion::V0_7 => {
                     let pool = self
                         .create_mempool_v0_7(
                             &task_spawner,
@@ -147,10 +147,6 @@ where
                         .context("should have created mempool")?;
 
                     mempools.insert(pool_config.entry_point, pool);
-                }
-                EntryPointVersion::V0_8 | EntryPointVersion::V0_9 => {
-                    // TODO(entrypoints)
-                    todo!("entry point v0.8 and v0.9 are not supported");
                 }
             }
         }
@@ -248,9 +244,12 @@ where
     {
         let ep_providers = self
             .providers
-            .ep_v0_7_providers(EntryPointVersion::V0_7)
+            .ep_v0_7_providers(pool_config.entry_point_version)
             .clone()
-            .context("entry point v0.7 not supplied")?;
+            .context(format!(
+                "entry point v0.7 not supplied for entry point version: {:?}",
+                pool_config.entry_point_version
+            ))?;
 
         if unsafe_mode {
             let simulator = UnsafeSimulator::new(
