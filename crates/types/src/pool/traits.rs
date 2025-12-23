@@ -90,12 +90,13 @@ pub trait Pool: Send + Sync {
     /// Remove operations from the pool by hash
     async fn remove_ops(&self, entry_point: Address, ops: Vec<B256>) -> PoolResult<()>;
 
-    /// Remove an operation from the pool by id
-    async fn remove_op_by_id(
+    /// Remove operations from the pool by id
+    /// Returns the hashes of the removed operations
+    async fn remove_ops_by_id(
         &self,
         entry_point: Address,
-        id: UserOperationId,
-    ) -> PoolResult<Option<B256>>;
+        ids: Vec<UserOperationId>,
+    ) -> PoolResult<Vec<B256>>;
 
     /// Update operations associated with entities from the pool
     async fn update_entities(
@@ -205,11 +206,11 @@ mockall::mock! {
         async fn get_op_by_hash(&self, hash: B256) -> PoolResult<(Option<PoolOperation>, Option<PreconfInfo>)>;
         async fn get_op_by_id(&self, id: UserOperationId) -> PoolResult<Option<PoolOperation>>;
         async fn remove_ops(&self, entry_point: Address, ops: Vec<B256>) -> PoolResult<()>;
-        async fn remove_op_by_id(
+        async fn remove_ops_by_id(
             &self,
             entry_point: Address,
-            id: UserOperationId,
-        ) -> PoolResult<Option<B256>>;
+            ids: Vec<UserOperationId>,
+        ) -> PoolResult<Vec<B256>>;
         async fn update_entities(
             &self,
             entry_point: Address,

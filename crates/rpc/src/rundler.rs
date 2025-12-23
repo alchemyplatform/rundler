@@ -223,14 +223,14 @@ where
         // remove the op from the pool
         let ret = self
             .pool_server
-            .remove_op_by_id(entry_point, id)
+            .remove_ops_by_id(entry_point, vec![id])
             .await
             .map_err(|e| {
                 tracing::info!("Error dropping user operation: {}", e);
                 EthRpcError::from(e)
             })?;
 
-        Ok(ret)
+        Ok(ret.into_iter().next())
     }
 
     async fn get_mined_user_operation(

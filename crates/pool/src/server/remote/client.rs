@@ -17,7 +17,7 @@ use alloy_primitives::{Address, B256};
 use anyhow::Context;
 use futures_util::Stream;
 use rundler_task::{
-    grpc::protos::{from_bytes, ConversionError, ToProtoBytes},
+    grpc::protos::{from_bytes, ConversionError, FromProtoBytes, ToProtoBytes},
     server::{HealthCheck, ServerStatus},
     TaskSpawner,
 };
@@ -47,7 +47,7 @@ use super::protos::{
     debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
     get_op_by_id_response, get_ops_by_hashes_response, get_ops_response,
     get_ops_summaries_response, get_reputation_status_response, get_stake_status_response,
-    op_pool_client::OpPoolClient, remove_op_by_id_response, remove_ops_response,
+    op_pool_client::OpPoolClient, remove_ops_by_id_response, remove_ops_response,
     update_entities_response, AddOpRequest, AdminSetTrackingRequest, DebugClearStateRequest,
     DebugDumpMempoolRequest, DebugDumpPaymasterBalancesRequest, DebugDumpReputationRequest,
     DebugSetReputationRequest, GetOpByIdRequest, GetOpsRequest, GetReputationStatusRequest,
@@ -392,18 +392,23 @@ impl Pool for RemotePoolClient {
         }
     }
 
-    async fn remove_op_by_id(
+    async fn remove_ops_by_id(
         &self,
         entry_point: Address,
-        id: UserOperationId,
-    ) -> PoolResult<Option<B256>> {
+        ids: Vec<UserOperationId>,
+    ) -> PoolResult<Vec<B256>> {
         let res = self
             .op_pool_client
             .clone()
-            .remove_op_by_id(protos::RemoveOpByIdRequest {
+            .remove_ops_by_id(protos::RemoveOpsByIdRequest {
                 entry_point: entry_point.to_proto_bytes(),
-                sender: id.sender.to_proto_bytes(),
-                nonce: id.nonce.to_proto_bytes(),
+                ids: ids
+                    .into_iter()
+                    .map(|id| protos::UserOperationId {
+                        sender: id.sender.to_proto_bytes(),
+                        nonce: id.nonce.to_proto_bytes(),
+                    })
+                    .collect(),
             })
             .await
             .map_err(anyhow::Error::from)?
@@ -411,14 +416,13 @@ impl Pool for RemotePoolClient {
             .result;
 
         match res {
-            Some(remove_op_by_id_response::Result::Success(s)) => {
-                if s.hash.is_empty() {
-                    Ok(None)
-                } else {
-                    Ok(Some(B256::from_slice(&s.hash)))
-                }
-            }
-            Some(remove_op_by_id_response::Result::Failure(f)) => Err(f.try_into()?),
+            Some(remove_ops_by_id_response::Result::Success(s)) => Ok(s
+                .hashes
+                .into_iter()
+                .map(|h| B256::from_proto_bytes(&h))
+                .collect::<Result<_, _>>()
+                .map_err(|e| PoolError::Other(anyhow::anyhow!(e)))?),
+            Some(remove_ops_by_id_response::Result::Failure(f)) => Err(f.try_into()?),
             None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,

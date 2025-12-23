@@ -42,7 +42,7 @@ use rundler_types::{
     proxy::SubmissionProxy,
     BundleExpectedStorage, Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate,
     EntityUpdateType, EntryPointVersion, ExpectedStorage, GasFees, Timestamp, UserOperation,
-    UserOperationVariant, UserOpsPerAggregator, ValidTimeRange, ValidationRevert,
+    UserOperationId, UserOperationVariant, UserOpsPerAggregator, ValidTimeRange, ValidationRevert,
     BUNDLE_BYTE_OVERHEAD, TIME_RANGE_BUFFER,
 };
 use rundler_utils::{emit::WithEntryPoint, eth, guard_timer::CustomTimerGuard, math};
@@ -885,12 +885,12 @@ where
         context.reject_all();
     }
 
-    async fn reject_hash(
+    async fn reject_op_by_id(
         &self,
         context: &mut ProposalContext<<Self as BundleProposer>::UO>,
-        hash: B256,
+        id: UserOperationId,
     ) -> bool {
-        let Some(index) = context.get_op_index(hash) else {
+        let Some(index) = context.get_op_index(id) else {
             return false;
         };
 
@@ -1037,8 +1037,8 @@ where
                         .collect::<Vec<_>>();
                     let to_remove = proxy.process_revert(&revert_data, &ops).await;
                     let mut removed = false;
-                    for hash in to_remove {
-                        removed |= self.reject_hash(context, hash).await;
+                    for id in to_remove {
+                        removed |= self.reject_op_by_id(context, id).await;
                     }
 
                     if !removed {
@@ -1480,9 +1480,9 @@ impl<UO: UserOperation> ProposalContext<UO> {
         anyhow::bail!("op at {index} out of bounds")
     }
 
-    fn get_op_index(&self, hash: B256) -> Option<usize> {
+    fn get_op_index(&self, id: UserOperationId) -> Option<usize> {
         self.iter_ops_with_simulations()
-            .position(|op| op.op.hash() == *hash)
+            .position(|op| op.op.id() == id)
     }
 
     fn reject_all(&mut self) {
@@ -3425,7 +3425,7 @@ mod tests {
     #[tokio::test]
     async fn test_submitter_proxy_revert() {
         let op = default_op();
-        let op_hash = op.hash();
+        let op_id = op.id();
         let proxy_address = address(1);
         let bytes = bytes(1);
         let cloned_bytes = bytes.clone();
@@ -3435,7 +3435,7 @@ mod tests {
         proxy
             .expect_process_revert()
             .withf(move |b, _| *b == cloned_bytes)
-            .returning(move |_, _| vec![op_hash]);
+            .returning(move |_, _| vec![op_id]);
 
         let bundle = mock_make_bundle(
             vec![MockOp {

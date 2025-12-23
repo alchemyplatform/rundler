@@ -476,6 +476,28 @@ pub struct CommonArgs {
     )]
     pub num_builders_v0_7: u64,
 
+    // Ignored if v0.8 is not enabled
+    // Ignored if entry_point_builders_path is set
+    #[arg(
+        long = "num_builders_v0_8",
+        name = "num_builders_v0_8",
+        env = "NUM_BUILDERS_V0_8",
+        default_value = "1",
+        global = true
+    )]
+    pub num_builders_v0_8: u64,
+
+    // Ignored if v0.9 is not enabled
+    // Ignored if entry_point_builders_path is set
+    #[arg(
+        long = "num_builders_v0_9",
+        name = "num_builders_v0_9",
+        env = "NUM_BUILDERS_V0_9",
+        default_value = "1",
+        global = true
+    )]
+    pub num_builders_v0_9: u64,
+
     #[arg(
         long = "da_gas_tracking_enabled",
         name = "da_gas_tracking_enabled",
@@ -555,6 +577,15 @@ impl CommonArgs {
                 .transaction_gas_limit_mult(self.target_bundle_transaction_gas_limit_ratio),
             max_bundle_execution_gas_limit: chain_spec
                 .transaction_gas_limit_mult(self.max_bundle_transaction_gas_limit_ratio),
+        }
+    }
+
+    pub fn num_builders_for_entry_point(&self, entry_point_version: EntryPointVersion) -> u64 {
+        match entry_point_version {
+            EntryPointVersion::V0_6 => self.num_builders_v0_6,
+            EntryPointVersion::V0_7 => self.num_builders_v0_7,
+            EntryPointVersion::V0_8 => self.num_builders_v0_8,
+            EntryPointVersion::V0_9 => self.num_builders_v0_9,
         }
     }
 }

@@ -15,9 +15,9 @@
 
 use std::fmt::Debug;
 
-use alloy_primitives::{Address, Bytes, B256};
+use alloy_primitives::{Address, Bytes};
 
-use crate::{UserOperationVariant, UserOpsPerAggregator};
+use crate::{UserOperationId, UserOperationVariant, UserOpsPerAggregator};
 
 /// Submission proxy trait
 #[async_trait::async_trait]
@@ -31,7 +31,7 @@ pub trait SubmissionProxy: Sync + Send + Debug {
         &self,
         revert_data: &Bytes,
         ops: &[UserOpsPerAggregator<UserOperationVariant>],
-    ) -> Vec<B256>;
+    ) -> Vec<UserOperationId>;
 }
 
 #[cfg(feature = "test-utils")]
@@ -47,6 +47,6 @@ mockall::mock! {
             &self,
             revert_data: &Bytes,
             ops: &[UserOpsPerAggregator<UserOperationVariant>],
-        ) -> Vec<B256>;
+        ) -> Vec<UserOperationId>;
     }
 }

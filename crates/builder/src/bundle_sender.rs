@@ -33,7 +33,7 @@ use rundler_types::{
     chain::ChainSpec,
     pool::{AddressUpdate, NewHead, Pool, PoolOperation},
     proxy::SubmissionProxy,
-    EntityUpdate, ExpectedStorage, UserOperation,
+    EntityUpdate, ExpectedStorage, UserOperation, UserOperationId,
 };
 use rundler_utils::{emit::WithEntryPoint, eth};
 use tokio::{
@@ -838,11 +838,12 @@ where
             .context("builder should remove rejected ops from pool")
     }
 
-    async fn remove_ops_from_pool_by_hash(&self, hashes: Vec<B256>) -> anyhow::Result<()> {
+    async fn remove_ops_from_pool_by_id(&self, ids: Vec<UserOperationId>) -> anyhow::Result<()> {
         self.pool
-            .remove_ops(self.ep_address, hashes)
+            .remove_ops_by_id(self.ep_address, ids)
             .await
             .context("builder should remove rejected ops from pool")
+            .map(|_| ())
     }
 
     async fn update_entities_in_pool(&self, entity_updates: &[EntityUpdate]) -> anyhow::Result<()> {
@@ -852,9 +853,6 @@ where
             .context("builder should remove update entities in the pool")
     }
 
-    // TODO(entrypoints): In entrypoint v0.8+ we can no longer rely on the user operation hash
-    // built from a packed user operation to match the mempool hash, as its lacking its authorization
-    // Either (1) pull the authorization from the reverted transaction or (2) use sender/nonce to remove
     async fn process_revert(&self, tx_hash: B256) -> anyhow::Result<()> {
         warn!("Bundle transaction {tx_hash:?} reverted onchain");
 
@@ -880,9 +878,9 @@ where
             tracing::error!("revert has not output, removing all ops from bundle from pool");
             let to_remove = ops
                 .iter()
-                .flat_map(|ops| ops.user_ops.iter().map(|op| op.hash()))
+                .flat_map(|ops| ops.user_ops.iter().map(|op| op.id()))
                 .collect();
-            return self.remove_ops_from_pool_by_hash(to_remove).await;
+            return self.remove_ops_from_pool_by_id(to_remove).await;
         };
         tracing::warn!("Onchain revert data for {tx_hash:?}: {revert_data:?}");
 
@@ -895,7 +893,7 @@ where
                 .collect::<Vec<_>>();
             let to_remove = proxy.process_revert(&revert_data, &ops).await;
             if !to_remove.is_empty() {
-                return self.remove_ops_from_pool_by_hash(to_remove).await;
+                return self.remove_ops_from_pool_by_id(to_remove).await;
             }
         }
 
@@ -916,7 +914,7 @@ where
                 ops.iter()
                     .flat_map(|ops| ops.user_ops.iter())
                     .nth(index)
-                    .map(|op| vec![op.hash()])
+                    .map(|op| vec![op.id()])
                     .unwrap_or_default()
             }
             Some(HandleOpsOut::SignatureValidationFailed(aggregator)) => {
@@ -925,18 +923,18 @@ where
                 );
                 ops.iter()
                     .find(|op| op.aggregator == aggregator)
-                    .map(|ops| ops.user_ops.iter().map(|op| op.hash()).collect())
+                    .map(|ops| ops.user_ops.iter().map(|op| op.id()).collect())
                     .unwrap_or_default()
             }
             None | Some(HandleOpsOut::Revert(_)) | Some(HandleOpsOut::PostOpRevert) => {
                 tracing::warn!("removing all ops from pool for reverted bundle");
                 ops.iter()
-                    .flat_map(|ops| ops.user_ops.iter().map(|op| op.hash()))
+                    .flat_map(|ops| ops.user_ops.iter().map(|op| op.id()))
                     .collect()
             }
         };
 
-        self.remove_ops_from_pool_by_hash(to_remove).await
+        self.remove_ops_from_pool_by_id(to_remove).await
     }
 
     fn emit(&self, event: BuilderEvent) {
@@ -2166,6 +2164,7 @@ mod tests {
         let output_clone = output.clone();
         let op = UserOperation::default();
         let op_hash = op.hash();
+        let op_id = op.id();
 
         mock_evm
             .expect_debug_trace_transaction()
@@ -2194,10 +2193,10 @@ mod tests {
             .returning(|_, _| Some(HandleOpsOut::FailedOp(0, "revert".to_string())));
 
         mock_pool
-            .expect_remove_ops()
+            .expect_remove_ops_by_id()
             .once()
-            .withf(move |_, hashes| hashes.len() == 1 && hashes[0] == op_hash)
-            .returning(|_, _| Ok(()));
+            .withf(move |_, ids| ids.len() == 1 && ids[0] == op_id)
+            .returning(move |_, _| Ok(vec![op_hash]));
 
         let mut sender = new_sender(mock_proposer, mock_entry_point, mock_evm, mock_pool);
 

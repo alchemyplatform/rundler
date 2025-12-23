@@ -44,7 +44,7 @@ use super::protos::{
     get_op_by_id_response, get_ops_by_hashes_response, get_ops_response,
     get_ops_summaries_response, get_reputation_status_response, get_stake_status_response,
     op_pool_server::{OpPool, OpPoolServer},
-    remove_op_by_id_response, remove_ops_response, update_entities_response, AddOpRequest,
+    remove_ops_by_id_response, remove_ops_response, update_entities_response, AddOpRequest,
     AddOpResponse, AddOpSuccess, AdminSetTrackingRequest, AdminSetTrackingResponse,
     AdminSetTrackingSuccess, DebugClearStateRequest, DebugClearStateResponse,
     DebugClearStateSuccess, DebugDumpMempoolRequest, DebugDumpMempoolResponse,
@@ -58,8 +58,8 @@ use super::protos::{
     GetReputationStatusRequest, GetReputationStatusResponse, GetReputationStatusSuccess,
     GetStakeStatusRequest, GetStakeStatusResponse, GetStakeStatusSuccess,
     GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, MempoolOp,
-    PoolOperationSummary, PreconfInfo, RemoveOpByIdRequest, RemoveOpByIdResponse,
-    RemoveOpByIdSuccess, RemoveOpsRequest, RemoveOpsResponse, RemoveOpsSuccess, ReputationStatus,
+    PoolOperationSummary, PreconfInfo, RemoveOpsByIdRequest, RemoveOpsByIdResponse,
+    RemoveOpsByIdSuccess, RemoveOpsRequest, RemoveOpsResponse, RemoveOpsSuccess, ReputationStatus,
     SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, TryUoFromProto, UpdateEntitiesRequest,
     UpdateEntitiesResponse, UpdateEntitiesSuccess, OP_POOL_FILE_DESCRIPTOR_SET,
 };
@@ -364,35 +364,42 @@ impl OpPool for OpPoolImpl {
         Ok(Response::new(resp))
     }
 
-    async fn remove_op_by_id(
+    async fn remove_ops_by_id(
         &self,
-        request: Request<RemoveOpByIdRequest>,
-    ) -> Result<Response<RemoveOpByIdResponse>> {
+        request: Request<RemoveOpsByIdRequest>,
+    ) -> Result<Response<RemoveOpsByIdResponse>> {
         let req = request.into_inner();
         let ep = self.get_entry_point(&req.entry_point)?;
 
         let resp = match self
             .local_pool
-            .remove_op_by_id(
+            .remove_ops_by_id(
                 ep,
-                UserOperationId {
-                    sender: from_bytes(&req.sender)
-                        .map_err(|e| Status::invalid_argument(format!("Invalid sender: {e}")))?,
-                    nonce: from_bytes(&req.nonce)
-                        .map_err(|e| Status::invalid_argument(format!("Invalid nonce: {e}")))?,
-                },
+                req.ids
+                    .into_iter()
+                    .map(|id| {
+                        Ok::<UserOperationId, Status>(UserOperationId {
+                            sender: from_bytes(&id.sender).map_err(|e| {
+                                Status::invalid_argument(format!("Invalid sender: {e}"))
+                            })?,
+                            nonce: from_bytes(&id.nonce).map_err(|e| {
+                                Status::invalid_argument(format!("Invalid nonce: {e}"))
+                            })?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
             )
             .await
         {
-            Ok(hash) => RemoveOpByIdResponse {
-                result: Some(remove_op_by_id_response::Result::Success(
-                    RemoveOpByIdSuccess {
-                        hash: hash.map_or(vec![], |h| h.to_vec()),
+            Ok(hash) => RemoveOpsByIdResponse {
+                result: Some(remove_ops_by_id_response::Result::Success(
+                    RemoveOpsByIdSuccess {
+                        hashes: hash.into_iter().map(|h| h.to_vec()).collect(),
                     },
                 )),
             },
-            Err(error) => RemoveOpByIdResponse {
-                result: Some(remove_op_by_id_response::Result::Failure(error.into())),
+            Err(error) => RemoveOpsByIdResponse {
+                result: Some(remove_ops_by_id_response::Result::Failure(error.into())),
             },
         };
 
