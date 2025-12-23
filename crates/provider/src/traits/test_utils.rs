@@ -191,6 +191,7 @@ mockall::mock! {
             revert_data: &Bytes,
         ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>>;
         fn simulation_should_revert(&self) -> bool;
+        fn get_simulations_bytecode(&self) -> &Bytes;
     }
 
     #[async_trait::async_trait]
@@ -295,6 +296,7 @@ mockall::mock! {
             revert_data: &Bytes,
         ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>>;
         fn simulation_should_revert(&self) -> bool;
+        fn get_simulations_bytecode(&self) -> &Bytes;
     }
 
     #[async_trait::async_trait]
