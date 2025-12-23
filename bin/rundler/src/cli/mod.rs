@@ -21,6 +21,7 @@ use clap::{
     builder::{PossibleValuesParser, ValueParser},
     Args, Parser, Subcommand,
 };
+use strum::EnumCount;
 use url::Url;
 
 mod admin;
@@ -54,7 +55,7 @@ use rundler_types::{
     da::DAGasOracleType,
     v0_6::UserOperation as UserOperationV0_6,
     v0_7::UserOperation as UserOperationV0_7,
-    PriorityFeeMode,
+    EntryPointAbiVersion, EntryPointVersion, PriorityFeeMode,
 };
 use secrecy::SecretString;
 
@@ -445,24 +446,15 @@ pub struct CommonArgs {
     builders_config_path: Option<String>,
 
     #[arg(
-        long = "disable_entry_point_v0_6",
-        name = "disable_entry_point_v0_6",
-        env = "DISABLE_ENTRY_POINT_V0_6",
-        default_value = "false",
+        long = "enabled_entry_points",
+        name = "enabled_entry_points",
+        env = "ENABLED_ENTRY_POINTS",
+        default_value = "v0.7",
         global = true
     )]
-    pub disable_entry_point_v0_6: bool,
+    pub enabled_entry_points: Vec<EntryPointVersion>,
 
-    #[arg(
-        long = "disable_entry_point_v0_7",
-        name = "disable_entry_point_v0_7",
-        env = "DISABLE_ENTRY_POINT_V0_7",
-        default_value = "false",
-        global = true
-    )]
-    pub disable_entry_point_v0_7: bool,
-
-    // Ignored if disable_entry_point_v0_6 is true
+    // Ignored if v0.6 is not enabled
     // Ignored if entry_point_builders_path is set
     #[arg(
         long = "num_builders_v0_6",
@@ -473,7 +465,7 @@ pub struct CommonArgs {
     )]
     pub num_builders_v0_6: u64,
 
-    // Ignored if disable_entry_point_v0_7 is true
+    // Ignored if v0.7 is not enabled
     // Ignored if entry_point_builders_path is set
     #[arg(
         long = "num_builders_v0_7",
@@ -822,7 +814,7 @@ pub struct Cli {
 pub struct RundlerProviders<P, EP06, EP07, D, DS, F> {
     provider: P,
     ep_v0_6: Option<EP06>,
-    ep_v0_7: Option<EP07>,
+    ep_v0_7_abi: [Option<EP07>; EntryPointVersion::COUNT],
     da_gas_oracle: D,
     da_gas_oracle_sync: Option<DS>,
     fee_estimator: F,
@@ -852,8 +844,8 @@ where
         &self.ep_v0_6
     }
 
-    fn ep_v0_7(&self) -> &Option<Self::EntryPointV0_7> {
-        &self.ep_v0_7
+    fn ep_v0_7(&self, ep_version: EntryPointVersion) -> &Option<Self::EntryPointV0_7> {
+        &self.ep_v0_7_abi[ep_version as usize]
     }
 
     fn da_gas_oracle(&self) -> &Self::DAGasOracle {
@@ -886,33 +878,36 @@ pub fn construct_providers(
 
     let evm = AlloyEvmProvider::new(provider.clone());
 
-    let ep_v0_6 = if args.disable_entry_point_v0_6 {
-        None
-    } else {
-        Some(AlloyEntryPointV0_6::new(
-            chain_spec.clone(),
-            args.max_verification_gas,
-            max_bundle_execution_gas,
-            args.max_gas_estimation_gas,
-            max_bundle_execution_gas,
-            provider.clone(),
-            da_gas_oracle.clone(),
-        ))
-    };
+    let mut ep_v0_7_abi = [const { None }; EntryPointVersion::COUNT];
+    let mut ep_v0_6 = None;
 
-    let ep_v0_7 = if args.disable_entry_point_v0_7 {
-        None
-    } else {
-        Some(AlloyEntryPointV0_7::new(
-            chain_spec.clone(),
-            args.max_verification_gas,
-            max_bundle_execution_gas,
-            args.max_gas_estimation_gas,
-            max_bundle_execution_gas,
-            provider.clone(),
-            da_gas_oracle.clone(),
-        ))
-    };
+    for ep_version in &args.enabled_entry_points {
+        match ep_version.abi_version() {
+            EntryPointAbiVersion::V0_6 => {
+                ep_v0_6 = Some(AlloyEntryPointV0_6::new(
+                    chain_spec.clone(),
+                    args.max_verification_gas,
+                    max_bundle_execution_gas,
+                    args.max_gas_estimation_gas,
+                    max_bundle_execution_gas,
+                    provider.clone(),
+                    da_gas_oracle.clone(),
+                ))
+            }
+            EntryPointAbiVersion::V0_7 => {
+                ep_v0_7_abi[*ep_version as usize] = Some(AlloyEntryPointV0_7::new(
+                    chain_spec.clone(),
+                    *ep_version,
+                    args.max_verification_gas,
+                    max_bundle_execution_gas,
+                    args.max_gas_estimation_gas,
+                    max_bundle_execution_gas,
+                    provider.clone(),
+                    da_gas_oracle.clone(),
+                ))
+            }
+        }
+    }
 
     let priority_fee_mode = PriorityFeeMode::try_from(
         args.priority_fee_mode_kind.as_str(),
@@ -929,7 +924,7 @@ pub fn construct_providers(
     Ok(RundlerProviders {
         provider: evm,
         ep_v0_6,
-        ep_v0_7,
+        ep_v0_7_abi,
         da_gas_oracle,
         da_gas_oracle_sync,
         fee_estimator,

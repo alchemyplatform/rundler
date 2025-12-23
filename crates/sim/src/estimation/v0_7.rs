@@ -289,6 +289,7 @@ where
             settings,
             CallGasEstimatorSpecializationV07 {
                 chain_spec: chain_spec.clone(),
+                simulations_bytecode: entry_point.get_simulations_bytecode().clone(),
             },
         );
         Self {
@@ -475,6 +476,7 @@ where
 #[derive(Debug, Clone)]
 pub struct CallGasEstimatorSpecializationV07 {
     chain_spec: ChainSpec,
+    simulations_bytecode: Bytes,
 }
 
 impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV07 {
@@ -491,7 +493,7 @@ impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV07 {
         state_override.insert(
             moved_entry_point_address,
             AccountOverride {
-                code: Some(ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE.clone()),
+                code: Some(self.simulations_bytecode.clone()),
                 ..Default::default()
             },
         );
@@ -718,6 +720,9 @@ mod tests {
         entry.expect_simulation_should_revert().return_const(true);
 
         entry.expect_address().return_const(Address::ZERO);
+        entry
+            .expect_get_simulations_bytecode()
+            .return_const(ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE.clone());
 
         (entry, provider)
     }

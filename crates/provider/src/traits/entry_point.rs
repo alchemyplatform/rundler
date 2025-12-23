@@ -244,6 +244,9 @@ pub trait SimulationProvider: Send + Sync {
     /// Returns true if this entry point uses reverts to communicate simulation
     /// results.
     fn simulation_should_revert(&self) -> bool;
+
+    /// Get the simulations bytecode for the entry point
+    fn get_simulations_bytecode(&self) -> &Bytes;
 }
 
 /// Trait for a provider that provides all entry point functionality
