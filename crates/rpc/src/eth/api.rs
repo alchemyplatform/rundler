@@ -436,7 +436,7 @@ mod tests {
         };
 
         let router = EntryPointRouterBuilder::default()
-            .v0_6(EntryPointRouteImpl::new(
+            .add_route(EntryPointRouteImpl::new(
                 ep.clone(),
                 gas_estimator,
                 UserOperationEventProviderV0_6::new(
