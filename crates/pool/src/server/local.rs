@@ -261,15 +261,15 @@ impl Pool for LocalPoolHandle {
         }
     }
 
-    async fn remove_op_by_id(
+    async fn remove_ops_by_id(
         &self,
         entry_point: Address,
-        id: UserOperationId,
-    ) -> PoolResult<Option<B256>> {
-        let req = ServerRequestKind::RemoveOpById { entry_point, id };
+        ids: Vec<UserOperationId>,
+    ) -> PoolResult<Vec<B256>> {
+        let req = ServerRequestKind::RemoveOpsById { entry_point, ids };
         let resp = self.send(req).await?;
         match resp {
-            ServerResponse::RemoveOpById { hash } => Ok(hash),
+            ServerResponse::RemoveOpsById { ids } => Ok(ids),
             _ => Err(PoolError::UnexpectedResponse),
         }
     }
@@ -547,13 +547,21 @@ impl LocalPoolServerRunner {
         Ok(())
     }
 
-    fn remove_op_by_id(
+    fn remove_ops_by_id(
         &self,
         entry_point: Address,
-        id: &UserOperationId,
-    ) -> PoolResult<Option<B256>> {
+        ids: &[UserOperationId],
+    ) -> PoolResult<Vec<B256>> {
         let mempool = self.get_pool(entry_point)?;
-        mempool.remove_op_by_id(id).map_err(|e| e.into())
+
+        ids.iter()
+            .filter_map(|id| {
+                mempool
+                    .remove_op_by_id(id)
+                    .map_err(|e| e.into())
+                    .transpose()
+            })
+            .collect()
     }
 
     fn update_entities<'a>(
@@ -782,9 +790,9 @@ impl LocalPoolServerRunner {
                                 Err(e) => Err(e),
                             }
                         },
-                        ServerRequestKind::RemoveOpById { entry_point, id } => {
-                            match self.remove_op_by_id(entry_point, &id) {
-                                Ok(hash) => Ok(ServerResponse::RemoveOpById{ hash }),
+                        ServerRequestKind::RemoveOpsById { entry_point, ids } => {
+                            match self.remove_ops_by_id(entry_point, &ids) {
+                                Ok(ids) => Ok(ServerResponse::RemoveOpsById{ ids }),
                                 Err(e) => Err(e),
                             }
                         },
@@ -890,9 +898,9 @@ enum ServerRequestKind {
         entry_point: Address,
         ops: Vec<B256>,
     },
-    RemoveOpById {
+    RemoveOpsById {
         entry_point: Address,
-        id: UserOperationId,
+        ids: Vec<UserOperationId>,
     },
     UpdateEntities {
         entry_point: Address,
@@ -960,8 +968,8 @@ enum ServerResponse {
         op: Option<PoolOperation>,
     },
     RemoveOps,
-    RemoveOpById {
-        hash: Option<B256>,
+    RemoveOpsById {
+        ids: Vec<B256>,
     },
     UpdateEntities,
     DebugClearState,

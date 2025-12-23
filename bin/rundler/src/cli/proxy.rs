@@ -11,8 +11,10 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, Bytes, B256};
-use rundler_types::{proxy::SubmissionProxy, UserOperationVariant, UserOpsPerAggregator};
+use alloy_primitives::{Address, Bytes};
+use rundler_types::{
+    proxy::SubmissionProxy, UserOperationId, UserOperationVariant, UserOpsPerAggregator,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString)]
 #[strum(serialize_all = "SCREAMING_SNAKE_CASE", ascii_case_insensitive)]
@@ -36,7 +38,7 @@ impl SubmissionProxy for PassThroughProxy {
         &self,
         _revert_data: &Bytes,
         _ops: &[UserOpsPerAggregator<UserOperationVariant>],
-    ) -> Vec<B256> {
+    ) -> Vec<UserOperationId> {
         vec![]
     }
 }
