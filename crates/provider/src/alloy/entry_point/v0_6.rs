@@ -29,6 +29,7 @@ use rundler_contracts::v0_6::{
         IEntryPointInstance,
     },
     UserOperation as ContractUserOperation, UserOpsPerAggregator as UserOpsPerAggregatorV0_6,
+    ENTRY_POINT_V0_6_DEPLOYED_BYTECODE,
 };
 use rundler_types::{
     chain::ChainSpec,
@@ -539,6 +540,10 @@ where
 
     fn simulation_should_revert(&self) -> bool {
         true
+    }
+
+    fn get_simulations_bytecode(&self) -> &Bytes {
+        &ENTRY_POINT_V0_6_DEPLOYED_BYTECODE
     }
 }
 

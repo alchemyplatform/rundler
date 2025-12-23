@@ -333,7 +333,7 @@ where
         info!("Mempool config for ep v0.7: {:?}", ep.mempool_configs);
         let ep_providers = self
             .providers
-            .ep_v0_7_providers()
+            .ep_v0_7_providers(EntryPointVersion::V0_7)
             .clone()
             .context("entry point v0.7 not supplied")?;
         let mut bundle_sender_actions = vec![];

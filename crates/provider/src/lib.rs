@@ -65,7 +65,7 @@ pub use alloy_rpc_types_trace::geth::{
 pub use rundler_contracts::utils::GetGasUsed::GasUsedResult;
 use rundler_types::{
     v0_6::UserOperation as UserOperationV0_6, v0_7::UserOperation as UserOperationV0_7,
-    UserOperation, UserOperationVariant,
+    EntryPointVersion, UserOperation, UserOperationVariant,
 };
 #[cfg(any(test, feature = "test-utils"))]
 pub use traits::test_utils::*;
@@ -109,8 +109,8 @@ pub trait Providers: Send + Sync + Clone {
     /// Returns the entry point provider for v0.6.
     fn ep_v0_6(&self) -> &Option<Self::EntryPointV0_6>;
 
-    /// Returns the entry point provider for v0.7.
-    fn ep_v0_7(&self) -> &Option<Self::EntryPointV0_7>;
+    /// Returns the entry point provider for v0.7 ABI entrypoints
+    fn ep_v0_7(&self, ep_version: EntryPointVersion) -> &Option<Self::EntryPointV0_7>;
 
     /// Returns the DA gas oracle.
     fn da_gas_oracle(&self) -> &Self::DAGasOracle;
@@ -147,6 +147,7 @@ pub trait Providers: Send + Sync + Clone {
     #[allow(clippy::type_complexity)]
     fn ep_v0_7_providers(
         &self,
+        ep_version: EntryPointVersion,
     ) -> Option<
         ProvidersWithEntryPoint<
             UserOperationV0_7,
@@ -156,13 +157,15 @@ pub trait Providers: Send + Sync + Clone {
             Self::FeeEstimator,
         >,
     > {
-        self.ep_v0_7().as_ref().map(|ep| ProvidersWithEntryPoint {
-            evm: self.evm().clone(),
-            ep: ep.clone(),
-            da_gas_oracle_sync: self.da_gas_oracle_sync().clone(),
-            fee_estimator: self.fee_estimator().clone(),
-            _phantom: PhantomData,
-        })
+        self.ep_v0_7(ep_version)
+            .as_ref()
+            .map(|ep| ProvidersWithEntryPoint {
+                evm: self.evm().clone(),
+                ep: ep.clone(),
+                da_gas_oracle_sync: self.da_gas_oracle_sync().clone(),
+                fee_estimator: self.fee_estimator().clone(),
+                _phantom: PhantomData,
+            })
     }
 }
 

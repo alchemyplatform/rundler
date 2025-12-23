@@ -26,7 +26,9 @@ use rundler_task::{
     server::{format_socket_addr, HealthCheck},
     TaskSpawnerExt,
 };
-use rundler_types::{builder::Builder as BuilderT, chain::ChainSpec, pool::Pool as PoolT};
+use rundler_types::{
+    builder::Builder as BuilderT, chain::ChainSpec, pool::Pool as PoolT, EntryPointVersion,
+};
 use tracing::info;
 
 use crate::{
@@ -144,7 +146,7 @@ where
         if self.args.entry_point_v0_7_enabled {
             let ep = self
                 .providers
-                .ep_v0_7()
+                .ep_v0_7(EntryPointVersion::V0_7)
                 .clone()
                 .context("entry point v0.7 not supplied")?;
 

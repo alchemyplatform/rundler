@@ -19,6 +19,7 @@ use alloy_sol_types::SolValue;
 /// User operation permissions
 mod permissions;
 pub use permissions::{BundlerSponsorship, UserOperationPermissions};
+use strum::{EnumCount, EnumString};
 
 /// User Operation types for Entry Point v0.6
 pub mod v0_6;
@@ -43,17 +44,43 @@ pub const BUNDLE_BYTE_OVERHEAD: usize = 4 + 32 + 32 + 32;
 /// within handleOps `ops` array
 pub const USER_OP_OFFSET_WORD_SIZE: usize = 32;
 
-/// ERC-4337 Entry point version
+/// Entry point ABI version
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd)]
-pub enum EntryPointVersion {
+pub enum EntryPointAbiVersion {
     /// Version 0.6
     V0_6,
     /// Version 0.7
+    /// Same ABI for v0.8 and v0.8
+    V0_7,
+}
+
+/// ERC-4337 Entry point version
+#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, EnumString, EnumCount)]
+pub enum EntryPointVersion {
+    /// Version 0.6
+    #[strum(serialize = "v0.6", serialize = "v0.6.0")]
+    V0_6,
+    /// Version 0.7
+    #[strum(serialize = "v0.7", serialize = "v0.7.0")]
     V0_7,
     /// Version 0.8
+    #[strum(serialize = "v0.8", serialize = "v0.8.0")]
     V0_8,
     /// Version 0.9
+    #[strum(serialize = "v0.9", serialize = "v0.9.0")]
     V0_9,
+}
+
+impl EntryPointVersion {
+    /// Get the ABI version for the entry point version
+    pub fn abi_version(&self) -> EntryPointAbiVersion {
+        match self {
+            EntryPointVersion::V0_6 => EntryPointAbiVersion::V0_6,
+            EntryPointVersion::V0_7 | EntryPointVersion::V0_8 | EntryPointVersion::V0_9 => {
+                EntryPointAbiVersion::V0_7
+            }
+        }
+    }
 }
 
 /// Unique identifier for a user operation from a given sender
