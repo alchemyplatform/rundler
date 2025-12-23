@@ -35,7 +35,7 @@ use rundler_types::{
         MempoolError, NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation,
         PoolOperationSummary, PoolResult, PreconfInfo, Reputation, ReputationStatus, StakeStatus,
     },
-    EntityUpdate, EntryPointVersion, UserOperation, UserOperationId, UserOperationPermissions,
+    EntityUpdate, EntryPointAbiVersion, UserOperation, UserOperationId, UserOperationPermissions,
     UserOperationVariant,
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -698,20 +698,16 @@ impl LocalPoolServerRunner {
                         ServerRequestKind::AddOp { entry_point, op, perms, origin } => {
                             let fut = |mempool: Arc<dyn Mempool>, response: oneshot::Sender<Result<ServerResponse, PoolError>>| async move {
                                 let resp = 'resp: {
-                                    match mempool.entry_point_version() {
-                                        EntryPointVersion::V0_6 => {
+                                    match mempool.entry_point_version().abi_version() {
+                                        EntryPointAbiVersion::V0_6 => {
                                             if !matches!(&op, UserOperationVariant::V0_6(_)){
                                                  break 'resp Err(anyhow::anyhow!("Invalid user operation version for mempool v0.6 {:?}", op.uo_type()).into());
                                             }
                                         }
-                                        EntryPointVersion::V0_7 => {
+                                        EntryPointAbiVersion::V0_7 => {
                                             if !matches!(&op, UserOperationVariant::V0_7(_)){
                                                 break 'resp Err(anyhow::anyhow!("Invalid user operation version for mempool v0.7 {:?}", op.uo_type()).into());
                                             }
-                                        }
-                                        EntryPointVersion::V0_8 | EntryPointVersion::V0_9 => {
-                                            // TODO(entrypoints)
-                                            todo!("entry point v0.8 and v0.9 are not supported");
                                         }
                                     }
 
@@ -1000,7 +996,7 @@ mod tests {
     use reth_tasks::TaskManager;
     use rundler_types::{
         chain::ChainSpec, v0_6::UserOperation as UserOperationV0_6,
-        v0_7::UserOperation as UserOperationV0_7,
+        v0_7::UserOperation as UserOperationV0_7, EntryPointVersion,
     };
 
     use super::*;

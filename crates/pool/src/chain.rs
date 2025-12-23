@@ -39,7 +39,9 @@ use rundler_contracts::{
 };
 use rundler_provider::{Block, BlockId, EvmProvider, Filter, Log, TransactionTrait};
 use rundler_task::{block_watcher, GracefulShutdown};
-use rundler_types::{pool::AddressUpdate, EntryPointVersion, Timestamp, UserOperationId};
+use rundler_types::{
+    pool::AddressUpdate, EntryPointAbiVersion, EntryPointVersion, Timestamp, UserOperationId,
+};
 use tokio::{
     select,
     sync::{broadcast, Semaphore},
@@ -185,7 +187,8 @@ impl<P: EvmProvider> Chain<P> {
         if settings
             .entry_point_addresses
             .values()
-            .any(|v| *v == EntryPointVersion::V0_6)
+            .map(|v| v.abi_version())
+            .any(|v| v == EntryPointAbiVersion::V0_6)
         {
             events.push(UserOperationEventV06::SIGNATURE_HASH);
             events.push(DepositedV06::SIGNATURE_HASH);
@@ -194,7 +197,8 @@ impl<P: EvmProvider> Chain<P> {
         if settings
             .entry_point_addresses
             .values()
-            .any(|v| *v == EntryPointVersion::V0_7)
+            .map(|v| v.abi_version())
+            .any(|v| v == EntryPointAbiVersion::V0_7)
         {
             events.push(UserOperationEventV07::SIGNATURE_HASH);
             events.push(DepositedV07::SIGNATURE_HASH);
@@ -876,16 +880,17 @@ impl<P: EvmProvider> Chain<P> {
         let mut mined_ops = vec![];
         let mut entity_balance_updates = vec![];
         for log in logs {
-            match self.settings.entry_point_addresses.get(&log.address()) {
-                Some(EntryPointVersion::V0_6) => {
+            match self
+                .settings
+                .entry_point_addresses
+                .get(&log.address())
+                .map(|ep| ep.abi_version())
+            {
+                Some(EntryPointAbiVersion::V0_6) => {
                     Self::load_v0_6(log, &mut mined_ops, &mut entity_balance_updates)
                 }
-                Some(EntryPointVersion::V0_7) => {
+                Some(EntryPointAbiVersion::V0_7) => {
                     Self::load_v0_7(log, &mut mined_ops, &mut entity_balance_updates)
-                }
-                Some(EntryPointVersion::V0_8) | Some(EntryPointVersion::V0_9) => {
-                    // TODO(entrypoints)
-                    todo!("entry point v0.8 and v0.9 are not supported");
                 }
                 None => {
                     warn!(

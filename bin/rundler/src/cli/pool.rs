@@ -233,27 +233,12 @@ impl PoolArgs {
 
         let mut pool_configs = vec![];
 
-        if common
-            .enabled_entry_points
-            .contains(&EntryPointVersion::V0_6)
-        {
+        for ep in &common.enabled_entry_points {
             pool_configs.push(PoolConfig {
-                entry_point: chain_spec.entry_point_address_v0_6,
-                entry_point_version: EntryPointVersion::V0_6,
+                entry_point: chain_spec.entry_point_address(*ep),
+                entry_point_version: *ep,
                 mempool_channel_configs: mempool_channel_configs
-                    .get_for_entry_point(chain_spec.entry_point_address_v0_6),
-                ..pool_config_base.clone()
-            });
-        }
-        if common
-            .enabled_entry_points
-            .contains(&EntryPointVersion::V0_7)
-        {
-            pool_configs.push(PoolConfig {
-                entry_point: chain_spec.entry_point_address_v0_7,
-                entry_point_version: EntryPointVersion::V0_7,
-                mempool_channel_configs: mempool_channel_configs
-                    .get_for_entry_point(chain_spec.entry_point_address_v0_7),
+                    .get_for_entry_point(chain_spec.entry_point_address(*ep)),
                 ..pool_config_base.clone()
             });
         }
