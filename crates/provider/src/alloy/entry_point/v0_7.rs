@@ -295,9 +295,9 @@ where
                 // Trigger an AA10 error
                 UserOperationBuilder::new(
                     &self.chain_spec,
-                    EntryPointVersion::V0_7,
+                    self.ep_version,
                     UserOperationRequiredFields {
-                        sender: self.chain_spec.entry_point_address_v0_7,
+                        sender: self.chain_spec.entry_point_address(self.ep_version),
                         nonce: U256::ZERO,
                         call_data: Bytes::new(),
                         call_gas_limit: 0,
@@ -308,7 +308,10 @@ where
                         signature: Bytes::new(),
                     },
                 )
-                .factory(self.chain_spec.entry_point_address_v0_7, Bytes::new())
+                .factory(
+                    self.chain_spec.entry_point_address(self.ep_version),
+                    Bytes::new(),
+                )
                 .build(),
             );
         }
