@@ -343,7 +343,7 @@ impl ChainSpec {
 
     /// Check if the chain supports EIP-7702
     pub fn supports_eip7702(&self, entry_point: Address) -> bool {
-        self.eip7702_enabled && entry_point == self.entry_point_address_v0_7
+        self.eip7702_enabled && entry_point != self.entry_point_address_v0_6
     }
 
     /// Get the entry point address for a given version
