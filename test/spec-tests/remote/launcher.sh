@@ -2,8 +2,6 @@
 # Launcher script for the rundler.
 set -x
 export TAG=latest
-export DISABLE_ENTRY_POINT_V0_6=false
-export DISABLE_ENTRY_POINT_V0_7=false
 cd `dirname \`realpath $0\``
 case $1 in
 
@@ -14,10 +12,13 @@ case $1 in
  start)
 	case $2 in
 		v0_6)
-		export DISABLE_ENTRY_POINT_V0_7=true
+		export ENABLED_ENTRY_POINTS="v0.6"
 		;;
 		v0_7)
-		export DISABLE_ENTRY_POINT_V0_6=true
+		export ENABLED_ENTRY_POINTS="v0.7"
+		;;
+		v0_8)
+		export ENABLED_ENTRY_POINTS="v0.8"
 		;;
 		*)
     cat <<EOF

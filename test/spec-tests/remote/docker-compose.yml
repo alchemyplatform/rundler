@@ -1,7 +1,7 @@
 services:
   geth:
-    image: ethereum/client-go:release-1.14
-    ports: [ '8545:8545' ]
+    image: ethereum/client-go:release-1.16
+    ports: ["8545:8545"]
     command: --verbosity 1
       --http.vhosts '*,localhost,host.docker.internal'
       --http
@@ -29,8 +29,7 @@ services:
       - PRIORITY_FEE_MODE_KIND=base_fee_percent
       - PRIORITY_FEE_MODE_VALUE=0
       - POOL_HOST=0.0.0.0
-      - DISABLE_ENTRY_POINT_V0_6=${DISABLE_ENTRY_POINT_V0_6}
-      - DISABLE_ENTRY_POINT_V0_7=${DISABLE_ENTRY_POINT_V0_7}
+      - ENABLED_ENTRY_POINTS=${ENABLED_ENTRY_POINTS}
       - MAX_VERIFICATION_GAS=10000000
 
   rundler-builder:
@@ -50,8 +49,7 @@ services:
       - BUILDER_POOL_URL=https://rundler-pool:50051
       - BUILDER_HOST=0.0.0.0
       - BUILDER_PORT=50051
-      - DISABLE_ENTRY_POINT_V0_6=${DISABLE_ENTRY_POINT_V0_6}
-      - DISABLE_ENTRY_POINT_V0_7=${DISABLE_ENTRY_POINT_V0_7}
+      - ENABLED_ENTRY_POINTS=${ENABLED_ENTRY_POINTS}
       - MAX_VERIFICATION_GAS=10000000
 
   rundler-rpc:
@@ -71,8 +69,7 @@ services:
       - RPC_API=eth,debug
       - RPC_POOL_URL=https://rundler-pool:50051
       - RPC_BUILDER_URL=https://rundler-builder:50051
-      - DISABLE_ENTRY_POINT_V0_6=${DISABLE_ENTRY_POINT_V0_6}
-      - DISABLE_ENTRY_POINT_V0_7=${DISABLE_ENTRY_POINT_V0_7}
+      - ENABLED_ENTRY_POINTS=${ENABLED_ENTRY_POINTS}
       - MAX_VERIFICATION_GAS=10000000
     healthcheck:
       test: curl --fail http://localhost:3000/health || exit 1
