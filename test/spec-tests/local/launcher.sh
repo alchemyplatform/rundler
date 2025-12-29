@@ -8,7 +8,7 @@ case $1 in
 	docker compose up -d
 	sleep 10
 	cast send --unlocked --from $(cast rpc eth_accounts | tail -n 1 | tr -d '[]"') --value 1000ether 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 > /dev/null
-	(cd ../$2/bundler-spec-tests/@account-abstraction && yarn deploy --network localhost)
+	(cd ../$2/bundler-spec-tests/@account-abstraction && pwd && yarn deploy --network localhost)
 	../../../target/debug/rundler node --log.file out.log &
 	while [[ "$(curl -s -o /dev/null -w ''%{http_code}'' localhost:3000/health)" != "200" ]]; do sleep 1 ; done
 	;;
