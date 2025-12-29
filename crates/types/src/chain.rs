@@ -98,7 +98,7 @@ pub struct ChainSpec {
      */
     /// true if eip1559 is enabled, and thus priority fees are used
     pub eip1559_enabled: bool,
-    /// true if eip7702 is enabled, and thus the 7702 priority fee mechanism is used
+    /// true if eip7702 is enabled
     pub eip7702_enabled: bool,
     /// true if eip7623 is enabled, and thus the 7623 calldata floor mechanism is used
     pub eip7623_enabled: bool,

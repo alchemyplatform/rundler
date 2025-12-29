@@ -26,7 +26,9 @@ use super::protos::{
     AccessedUndeployedContract, AccessedUnsupportedContractType, AggregatorError,
     AggregatorMismatch, AssociatedStorageDuringDeploy, AssociatedStorageIsAlternateSender,
     CallGasLimitTooLow, CallHadValue, CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert,
-    DiscardedOnInsertError, Eip7702Disabled, Eip7702SenderPendingTransactionCountTooHigh, Entity,
+    DiscardedOnInsertError, Eip7702ChainIdMismatch, Eip7702Disabled, Eip7702InvalidFactory,
+    Eip7702InvalidSignature, Eip7702NonceMismatch, Eip7702NotSupported,
+    Eip7702SenderPendingTransactionCountTooHigh, Eip7702SenderRecoveredAuthorityMismatch, Entity,
     EntityThrottledError, EntityType, EntryPointRevert, ExecutionGasLimitEfficiencyTooLow,
     ExistingSenderWithInitCode, FactoryCalledCreate2Twice, FactoryIsNotContract,
     FactoryMustBeEmpty, Invalid7702AuthSignature, InvalidAccountSignature,
@@ -306,11 +308,6 @@ impl From<PrecheckViolation> for ProtoPrecheckViolationError {
                     ),
                 ),
             },
-            PrecheckViolation::Eip7702Disabled => ProtoPrecheckViolationError {
-                violation: Some(precheck_violation_error::Violation::Eip7702Disabled(
-                    Eip7702Disabled {},
-                )),
-            },
             PrecheckViolation::FactoryIsNotContract(addr) => ProtoPrecheckViolationError {
                 violation: Some(precheck_violation_error::Violation::FactoryIsNotContract(
                     FactoryIsNotContract {
@@ -416,6 +413,52 @@ impl From<PrecheckViolation> for ProtoPrecheckViolationError {
                     },
                 )),
             },
+            PrecheckViolation::Eip7702NotSupported(entry_point) => ProtoPrecheckViolationError {
+                violation: Some(precheck_violation_error::Violation::Eip7702NotSupported(
+                    Eip7702NotSupported {
+                        entry_point: entry_point.to_proto_bytes(),
+                    },
+                )),
+            },
+            PrecheckViolation::Eip7702Disabled => ProtoPrecheckViolationError {
+                violation: Some(precheck_violation_error::Violation::Eip7702Disabled(
+                    Eip7702Disabled {},
+                )),
+            },
+            PrecheckViolation::Eip7702ChainIdMismatch(expected, actual) => ProtoPrecheckViolationError {
+                violation: Some(precheck_violation_error::Violation::Eip7702ChainIdMismatch(
+                    Eip7702ChainIdMismatch {
+                        expected_chain_id: expected,
+                        actual_chain_id: actual,
+                    },
+                )),
+            },
+            PrecheckViolation::Eip7702InvalidSignature(reason) => ProtoPrecheckViolationError {
+                violation: Some(precheck_violation_error::Violation::Eip7702InvalidSignature(
+                    Eip7702InvalidSignature { reason },
+                )),
+            },
+            PrecheckViolation::Eip7702SenderRecoveredAuthorityMismatch(sender, recovered) => ProtoPrecheckViolationError {
+                violation: Some(precheck_violation_error::Violation::Eip7702SenderRecoveredAuthorityMismatch(
+                    Eip7702SenderRecoveredAuthorityMismatch {
+                        sender_address: sender.to_proto_bytes(),
+                        recovered_authority: recovered.to_proto_bytes(),
+                    },
+                )),
+            },
+            PrecheckViolation::Eip7702NonceMismatch(expected, actual) => ProtoPrecheckViolationError {
+                violation: Some(precheck_violation_error::Violation::Eip7702NonceMismatch(
+                    Eip7702NonceMismatch {
+                        expected_nonce: expected,
+                        actual_nonce: actual,
+                    },
+                )),
+            },
+            PrecheckViolation::Eip7702InvalidFactory(reason) => ProtoPrecheckViolationError {
+                violation: Some(precheck_violation_error::Violation::Eip7702InvalidFactory(
+                    Eip7702InvalidFactory { reason },
+                )),
+            },
             PrecheckViolation::Eip7702SenderPendingTransactionCountTooHigh(count) => ProtoPrecheckViolationError {
                 violation: Some(precheck_violation_error::Violation::Eip7702SenderPendingTransactionCountTooHigh(
                     Eip7702SenderPendingTransactionCountTooHigh {
@@ -437,9 +480,6 @@ impl TryFrom<ProtoPrecheckViolationError> for PrecheckViolation {
             }
             Some(precheck_violation_error::Violation::ExistingSenderWithInitCode(e)) => {
                 PrecheckViolation::ExistingSenderWithInitCode(from_bytes(&e.sender_address)?)
-            }
-            Some(precheck_violation_error::Violation::Eip7702Disabled(_)) => {
-                PrecheckViolation::Eip7702Disabled
             }
             Some(precheck_violation_error::Violation::FactoryIsNotContract(e)) => {
                 PrecheckViolation::FactoryIsNotContract(from_bytes(&e.factory_address)?)
@@ -503,6 +543,30 @@ impl TryFrom<ProtoPrecheckViolationError> for PrecheckViolation {
                     from_bytes(&e.actual_cost)?,
                     from_bytes(&e.max_cost)?,
                 )
+            }
+            Some(precheck_violation_error::Violation::Eip7702NotSupported(e)) => {
+                PrecheckViolation::Eip7702NotSupported(from_bytes(&e.entry_point)?)
+            }
+            Some(precheck_violation_error::Violation::Eip7702Disabled(_)) => {
+                PrecheckViolation::Eip7702Disabled
+            }
+            Some(precheck_violation_error::Violation::Eip7702ChainIdMismatch(e)) => {
+                PrecheckViolation::Eip7702ChainIdMismatch(e.expected_chain_id, e.actual_chain_id)
+            }
+            Some(precheck_violation_error::Violation::Eip7702InvalidSignature(e)) => {
+                PrecheckViolation::Eip7702InvalidSignature(e.reason)
+            }
+            Some(precheck_violation_error::Violation::Eip7702SenderRecoveredAuthorityMismatch(
+                e,
+            )) => PrecheckViolation::Eip7702SenderRecoveredAuthorityMismatch(
+                from_bytes(&e.sender_address)?,
+                from_bytes(&e.recovered_authority)?,
+            ),
+            Some(precheck_violation_error::Violation::Eip7702NonceMismatch(e)) => {
+                PrecheckViolation::Eip7702NonceMismatch(e.expected_nonce, e.actual_nonce)
+            }
+            Some(precheck_violation_error::Violation::Eip7702InvalidFactory(e)) => {
+                PrecheckViolation::Eip7702InvalidFactory(e.reason)
             }
             Some(
                 precheck_violation_error::Violation::Eip7702SenderPendingTransactionCountTooHigh(e),

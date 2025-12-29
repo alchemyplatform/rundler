@@ -11,7 +11,9 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{b256, ruint::FromUintError, Address, Bytes, FixedBytes, B256, U256};
+use alloy_primitives::{
+    address, b256, ruint::FromUintError, Address, Bytes, FixedBytes, B256, U256,
+};
 use alloy_sol_types::{eip712_domain, sol, SolStruct, SolValue};
 use rundler_contracts::v0_7::{PackedUserOperation, PackedUserOperationNoSig};
 use rundler_utils::random::{random_bytes, random_bytes_array};
@@ -43,8 +45,10 @@ const ABI_ENCODED_USER_OPERATION_FIXED_LEN: usize = 416;
 const PAYMASTER_SIG_MAGIC: [u8; 8] = [0x22, 0xe3, 0x25, 0xa2, 0x97, 0x43, 0x96, 0x56];
 // Minimum length of paymaster data that can contain a paymaster signature
 const MIN_PAYMASTER_DATA_WITH_SUFFIX_LEN: usize = 62;
-// EIP-7702 initCode marker
-const INITCODE_EIP7702_MARKER: [u8; 20] = [
+/// EIP-7702 factory marker
+pub const EIP7702_FACTORY_MARKER: Address = address!("7702000000000000000000000000000000000000");
+/// EIP-7702 initCode marker
+pub const EIP7702_INITCODE_MARKER: [u8; 20] = [
     0x77, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00,
 ];
@@ -1246,7 +1250,7 @@ fn hash_packed_user_operation_v0_8_plus(
 ) -> B256 {
     let mut puo_no_sig: PackedUserOperationNoSig = puo.into();
 
-    if puo_no_sig.initCode.starts_with(&INITCODE_EIP7702_MARKER) {
+    if puo_no_sig.initCode.starts_with(&EIP7702_INITCODE_MARKER) {
         let Some(delegation_address) = delegation_address else {
             // We cannot calculate a valid hash without a delegation address
             return INVALID_HASH;
@@ -1254,7 +1258,7 @@ fn hash_packed_user_operation_v0_8_plus(
 
         puo_no_sig.initCode = [
             delegation_address.as_ref(),
-            &puo_no_sig.initCode[INITCODE_EIP7702_MARKER.len()..],
+            &puo_no_sig.initCode[EIP7702_INITCODE_MARKER.len()..],
         ]
         .concat()
         .into();

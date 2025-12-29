@@ -122,9 +122,6 @@ pub enum PrecheckViolation {
     /// The sender is already deployed, and an init code is provided.
     #[display("sender {0:?} is an existing contract, but initCode is nonempty")]
     ExistingSenderWithInitCode(Address),
-    /// EIP-7702 is disabled
-    #[display("EIP-7702 is disabled")]
-    Eip7702Disabled,
     /// An init code contains a factory address that is not deployed.
     #[display("initCode indicates factory with no code: {0:?}")]
     FactoryIsNotContract(Address),
@@ -163,6 +160,27 @@ pub enum PrecheckViolation {
     /// The UO's maximum cost is above the max bundle fee
     #[display("UO's maximum cost is {0} but must be at most {1}")]
     OverMaxCost(U256, U256),
+    /// The EIP-7702 is not supported
+    #[display("EIP-7702 is not supported for entry point {0:?}")]
+    Eip7702NotSupported(Address),
+    /// EIP-7702 is disabled
+    #[display("EIP-7702 is disabled")]
+    Eip7702Disabled,
+    /// The EIP-7702 chain id mismatch
+    #[display("EIP-7702 authorization chainId mismatch. Expected: {0}, Actual: {1}")]
+    Eip7702ChainIdMismatch(u64, u64),
+    /// The EIP-7702 authorization signature is invalid
+    #[display("EIP-7702 authorization signature is invalid")]
+    Eip7702InvalidSignature(String),
+    /// The EIP-7702 authority sender mismatch
+    #[display("EIP-7702 sender/recovered authority mismatch. User operation sender: {0:?}, Recovered authority: {1:?}")]
+    Eip7702SenderRecoveredAuthorityMismatch(Address, Address),
+    /// The EIP-7702 nonce mismatch
+    #[display("EIP-7702 nonce mismatch. Expected: {0}, Actual: {1}")]
+    Eip7702NonceMismatch(u64, u64),
+    /// The EIP-7702 factory is invalid
+    #[display("EIP-7702 factory is invalid")]
+    Eip7702InvalidFactory(String),
     /// The EIP-7702 sender has too many pending transactions
     #[display("EIP-7702 auth sender has too many pending transactions: {0}. Max allowed: 1")]
     Eip7702SenderPendingTransactionCountTooHigh(u64),

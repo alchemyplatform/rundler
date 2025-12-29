@@ -5195,8 +5195,6 @@ dependencies = [
  "alloy-primitives",
  "alloy-rpc-types-eth",
  "alloy-serde",
- "alloy-signer",
- "alloy-signer-local",
  "alloy-sol-types",
  "anyhow",
  "async-stream",
@@ -5342,6 +5340,7 @@ dependencies = [
 name = "rundler-sim"
 version = "0.10.0"
 dependencies = [
+ "alloy-eips",
  "alloy-json-rpc",
  "alloy-primitives",
  "alloy-sol-types",

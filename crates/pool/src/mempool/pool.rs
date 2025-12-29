@@ -499,24 +499,6 @@ where
         Ok(())
     }
 
-    pub(crate) fn check_eip7702(&self, uo: &UserOperationVariant) -> MempoolResult<()> {
-        if let Some(auth) = uo.authorization_tuple() {
-            if self
-                .config
-                .chain_spec
-                .supports_eip7702(self.config.entry_point)
-            {
-                auth.validate(uo.sender())
-                    .map_err(|err| MempoolError::Invalid7702AuthSignature(err.to_string()))?;
-                Ok(())
-            } else {
-                Err(MempoolError::EIPNotSupported("EIP-7702".to_string()))
-            }
-        } else {
-            Ok(())
-        }
-    }
-
     pub(crate) fn mine_operation(
         &mut self,
         mined_op: &MinedOp,

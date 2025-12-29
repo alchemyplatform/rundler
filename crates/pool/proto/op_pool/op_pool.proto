@@ -755,6 +755,12 @@ message PrecheckViolationError {
     OverMaxCost over_max_cost = 14;
     Eip7702Disabled eip_7702_disabled = 15;
     Eip7702SenderPendingTransactionCountTooHigh eip_7702_sender_pending_transaction_count_too_high = 16;
+    Eip7702NotSupported eip_7702_not_supported = 17;
+    Eip7702ChainIdMismatch eip_7702_chain_id_mismatch = 18;
+    Eip7702InvalidSignature eip_7702_invalid_signature = 19;
+    Eip7702SenderRecoveredAuthorityMismatch eip_7702_sender_recovered_authority_mismatch = 20;
+    Eip7702NonceMismatch eip_7702_nonce_mismatch = 21;
+    Eip7702InvalidFactory eip_7702_invalid_factory = 22;
   }
 }
 
@@ -833,8 +839,35 @@ message OverMaxCost {
 
 message Eip7702Disabled {}
 
+message Eip7702NotSupported {
+  bytes entry_point = 1;
+}
+
 message Eip7702SenderPendingTransactionCountTooHigh {
   uint64 pending_transaction_count = 1;
+}
+
+message Eip7702ChainIdMismatch {
+  uint64 expected_chain_id = 1;
+  uint64 actual_chain_id = 2;
+}
+
+message Eip7702InvalidSignature {
+  string reason = 1;
+}
+
+message Eip7702SenderRecoveredAuthorityMismatch {
+  bytes sender_address = 1;
+  bytes recovered_authority = 2;
+}
+
+message Eip7702NonceMismatch {
+  uint64 expected_nonce = 1;
+  uint64 actual_nonce = 2;
+}
+
+message Eip7702InvalidFactory {
+  string reason = 1;
 }
 
 // SIMULATION VIOLATIONS
