@@ -11,11 +11,12 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, Bytes, B256, U128, U256};
+use alloy_primitives::{bytes, Address, Bytes, B256, U128, U256};
 use rundler_types::{
     chain::ChainSpec,
     v0_7::{
         UserOperation, UserOperationBuilder, UserOperationOptionalGas, UserOperationRequiredFields,
+        EIP7702_FACTORY_MARKER,
     },
     EntryPointVersion, GasEstimate,
 };
@@ -40,7 +41,7 @@ pub(crate) struct RpcUserOperation {
     max_priority_fee_per_gas: U128,
     max_fee_per_gas: U128,
     #[serde(skip_serializing_if = "Option::is_none")]
-    factory: Option<Address>,
+    factory: Option<Bytes>,
     #[serde(skip_serializing_if = "Option::is_none")]
     factory_data: Option<Bytes>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -89,7 +90,7 @@ impl From<UserOperation> for RpcUserOperation {
             pre_verification_gas: U256::from(op.pre_verification_gas),
             max_priority_fee_per_gas: U128::from(op.max_priority_fee_per_gas),
             max_fee_per_gas: U128::from(op.max_fee_per_gas),
-            factory: op.factory,
+            factory: op.factory.map(|f| f.to_vec().into()),
             factory_data,
             paymaster: op.paymaster,
             paymaster_verification_gas_limit: paymaster_verification_gas_limit
@@ -138,6 +139,18 @@ impl TryFromRpcType<RpcUserOperation> for UserOperation {
             );
         }
         if let Some(factory) = def.factory {
+            // special handling for "0x7702" shortened factory marker
+            let factory = if factory == bytes!("7702") {
+                EIP7702_FACTORY_MARKER
+            } else if factory.len() == 20 {
+                Address::from_slice(&factory)
+            } else {
+                return Err(EthRpcError::InvalidParams(format!(
+                    "Invalid factory length. Expected 20 bytes. Got: {:?}",
+                    factory.len()
+                )));
+            };
+
             builder = builder.factory(factory, def.factory_data.unwrap_or_default());
         }
         if let Some(auth) = def.eip7702_auth {
