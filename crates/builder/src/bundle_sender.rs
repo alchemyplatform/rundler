@@ -603,6 +603,7 @@ where
                 self.sender_eoa,
                 self.ep_address,
                 self.builder_settings.filter_id.clone(),
+                state.block_number(),
             )
             .await?;
         if ops.is_empty() {
@@ -872,7 +873,11 @@ where
             .try_into_call_frame()
             .context("trace is not a call tracer")?;
 
-        let ops = EP::EntryPoint::decode_ops_from_calldata(&self.chain_spec, &frame.input);
+        let ops = EP::EntryPoint::decode_ops_from_calldata(
+            &self.chain_spec,
+            self.ep_address,
+            &frame.input,
+        );
 
         let Some(revert_data) = frame.output else {
             tracing::error!("revert has not output, removing all ops from bundle from pool");
@@ -1574,6 +1579,7 @@ mod tests {
                     hash: B256::ZERO,
                     sender: Address::ZERO,
                     entry_point: ENTRY_POINT_ADDRESS_V0_6,
+                    sim_block_number: 0,
                 }])
             });
         mock_pool
@@ -1640,6 +1646,7 @@ mod tests {
                     hash: B256::ZERO,
                     sender: Address::ZERO,
                     entry_point: ENTRY_POINT_ADDRESS_V0_6,
+                    sim_block_number: 0,
                 }])
             });
         mock_pool
@@ -1862,6 +1869,7 @@ mod tests {
                     hash: B256::ZERO,
                     sender: Address::ZERO,
                     entry_point: ENTRY_POINT_ADDRESS_V0_6,
+                    sim_block_number: 0,
                 }])
             });
         mock_pool
@@ -2038,6 +2046,7 @@ mod tests {
                     hash: B256::ZERO,
                     sender: Address::ZERO,
                     entry_point: ENTRY_POINT_ADDRESS_V0_6,
+                    sim_block_number: 0,
                 }])
             });
         mock_pool
@@ -2179,8 +2188,8 @@ mod tests {
 
         let ctx = MockEntryPointV0_6::decode_ops_from_calldata_context();
         ctx.expect()
-            .withf(move |_, data| *data == input_clone)
-            .returning(move |_, _| {
+            .withf(move |_, _, data| *data == input_clone)
+            .returning(move |_, _, _| {
                 vec![UserOpsPerAggregator {
                     user_ops: vec![op.clone()],
                     ..Default::default()
