@@ -13,6 +13,7 @@
 
 use alloy_primitives::{bytes, Address, Bytes, B256, U128, U256};
 use rundler_types::{
+    authorization::Eip7702Auth,
     chain::ChainSpec,
     v0_7::{
         UserOperation, UserOperationBuilder, UserOperationOptionalGas, UserOperationRequiredFields,
@@ -22,7 +23,7 @@ use rundler_types::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{rpc_authorization::RpcEip7702Auth, RpcAddress};
+use super::RpcAddress;
 use crate::{
     eth::EthRpcError,
     utils::{FromRpcType, TryFromRpcType},
@@ -54,7 +55,7 @@ pub(crate) struct RpcUserOperation {
     paymaster_data: Option<Bytes>,
     signature: Bytes,
     #[serde(skip_serializing_if = "Option::is_none")]
-    eip7702_auth: Option<RpcEip7702Auth>,
+    eip7702_auth: Option<Eip7702Auth>,
     #[serde(skip_serializing_if = "Option::is_none")]
     aggregator: Option<Address>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -98,7 +99,7 @@ impl From<UserOperation> for RpcUserOperation {
             paymaster_post_op_gas_limit: paymaster_post_op_gas_limit.map(|x| U128::from(x)),
             paymaster_data,
             signature: op.signature,
-            eip7702_auth: op.authorization_tuple.map(|a| a.into()),
+            eip7702_auth: op.authorization_tuple,
             aggregator: op.aggregator,
             paymaster_signature: op.paymaster_signature,
         }
@@ -154,7 +155,7 @@ impl TryFromRpcType<RpcUserOperation> for UserOperation {
             builder = builder.factory(factory, def.factory_data.unwrap_or_default());
         }
         if let Some(auth) = def.eip7702_auth {
-            builder = builder.authorization_tuple(auth.into());
+            builder = builder.authorization_tuple(auth);
         }
         if let Some(aggregator) = def.aggregator {
             builder = builder.aggregator(aggregator);
@@ -203,7 +204,7 @@ pub(crate) struct RpcUserOperationOptionalGas {
     paymaster_post_op_gas_limit: Option<U128>,
     paymaster_data: Option<Bytes>,
     signature: Bytes,
-    eip7702_auth: Option<RpcEip7702Auth>,
+    eip7702_auth: Option<Eip7702Auth>,
     aggregator: Option<Address>,
     paymaster_signature: Option<Bytes>,
 }

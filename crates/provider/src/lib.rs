@@ -64,8 +64,9 @@ pub use alloy_rpc_types_trace::geth::{
 // re-export contract types
 pub use rundler_contracts::utils::GetGasUsed::GasUsedResult;
 use rundler_types::{
-    v0_6::UserOperation as UserOperationV0_6, v0_7::UserOperation as UserOperationV0_7,
-    EntryPointVersion, UserOperation, UserOperationVariant,
+    authorization::Eip7702Auth, v0_6::UserOperation as UserOperationV0_6,
+    v0_7::UserOperation as UserOperationV0_7, EntryPointVersion, UserOperation,
+    UserOperationVariant,
 };
 #[cfg(any(test, feature = "test-utils"))]
 pub use traits::test_utils::*;
@@ -251,4 +252,16 @@ where
     fn fee_estimator(&self) -> &Self::FeeEstimator {
         &self.fee_estimator
     }
+}
+
+/// Get the authorization list from a transaction
+pub fn get_auth_list_from_transaction(tx: &Transaction) -> Vec<Eip7702Auth> {
+    tx.as_envelope()
+        .and_then(|e| e.as_eip7702())
+        .and_then(|t| t.tx().authorization_list())
+        .into_iter()
+        .flatten()
+        .cloned()
+        .map(Eip7702Auth::from)
+        .collect()
 }

@@ -12,38 +12,55 @@
 // If not, see https://www.gnu.org/licenses/.
 //! 7702 authorization list suport.
 
-use alloy_eips::eip7702::SignedAuthorization;
+use std::ops::Deref;
+
+use alloy_eips::eip7702::{Authorization, SignedAuthorization};
 use alloy_primitives::{Address, U256};
 use rundler_utils::random::random_bytes_array;
 use serde::{Deserialize, Serialize};
 
 /// authorization tuple for 7702 txn support
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Eip7702Auth {
-    /// The chain ID of the authorization.
-    pub chain_id: u64,
-    /// The address of the authorization.
-    pub address: Address,
-    /// The nonce for the authorization.
-    pub nonce: u64,
-    /// signed authorization tuple.
-    pub y_parity: u8,
-    /// signed authorization tuple.
-    pub r: U256,
-    /// signed authorization tuple.
-    pub s: U256,
+    #[serde(flatten)]
+    inner: SignedAuthorization,
 }
 
-impl From<Eip7702Auth> for alloy_eips::eip7702::SignedAuthorization {
-    fn from(value: Eip7702Auth) -> Self {
-        let authorization = alloy_eips::eip7702::Authorization {
-            chain_id: U256::from(value.chain_id),
-            address: value.address,
-            nonce: value.nonce,
-        };
+impl Default for Eip7702Auth {
+    fn default() -> Self {
+        Self {
+            inner: SignedAuthorization::new_unchecked(
+                Authorization {
+                    chain_id: U256::ZERO,
+                    address: Address::ZERO,
+                    nonce: 0,
+                },
+                0,
+                U256::ZERO,
+                U256::ZERO,
+            ),
+        }
+    }
+}
 
-        SignedAuthorization::new_unchecked(authorization, value.y_parity, value.r, value.s)
+impl From<SignedAuthorization> for Eip7702Auth {
+    fn from(value: SignedAuthorization) -> Self {
+        Eip7702Auth { inner: value }
+    }
+}
+
+impl From<Eip7702Auth> for SignedAuthorization {
+    fn from(value: Eip7702Auth) -> Self {
+        value.inner
+    }
+}
+
+impl Deref for Eip7702Auth {
+    type Target = SignedAuthorization;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
     }
 }
 
@@ -51,30 +68,38 @@ impl Eip7702Auth {
     /// Genreate a random filled Eip7702Auth entity.
     pub fn random_fill(&self) -> Eip7702Auth {
         Self {
-            chain_id: self.chain_id,
-            address: self.address,
-            nonce: u64::from_le_bytes(random_bytes_array::<8, 4>()),
-            y_parity: 27,
-            r: U256::from_le_bytes(random_bytes_array::<32, 8>()),
-            s: U256::from_le_bytes(random_bytes_array::<32, 8>()),
+            inner: SignedAuthorization::new_unchecked(
+                Authorization {
+                    chain_id: self.chain_id,
+                    address: self.address,
+                    nonce: u64::from_le_bytes(random_bytes_array::<8, 4>()),
+                },
+                27,
+                U256::from_le_bytes(random_bytes_array::<32, 8>()),
+                U256::from_le_bytes(random_bytes_array::<32, 8>()),
+            ),
         }
     }
+
     /// Generate a maxfilled Eip7702Auth entity.
     pub fn max_fill(&self) -> Eip7702Auth {
         Self {
-            chain_id: self.chain_id,
-            address: self.address,
-            nonce: u64::MAX,
-            y_parity: 27,
-            r: U256::MAX,
-            s: U256::MAX,
+            inner: SignedAuthorization::new_unchecked(
+                Authorization {
+                    chain_id: self.chain_id,
+                    address: self.address,
+                    nonce: u64::MAX,
+                },
+                27,
+                U256::MAX,
+                U256::MAX,
+            ),
         }
     }
 
     /// validate a Eip7702Auth's signature.
     pub fn validate(&self, signer: Address) -> anyhow::Result<()> {
-        let signed_auth = SignedAuthorization::from(self.clone());
-        match signed_auth.recover_authority() {
+        match self.recover_authority() {
             Ok(address) => {
                 if address == signer {
                     Ok(())
@@ -83,6 +108,22 @@ impl Eip7702Auth {
                 }
             }
             Err(e) => Err(anyhow::anyhow!(e.to_string())),
+        }
+    }
+
+    /// Create from chain id and address, for the fill methods.
+    pub fn from_chain_id_and_address(chain_id: u64, address: Address) -> Self {
+        Self {
+            inner: SignedAuthorization::new_unchecked(
+                Authorization {
+                    chain_id: U256::from(chain_id),
+                    address,
+                    nonce: 0,
+                },
+                0,
+                U256::ZERO,
+                U256::ZERO,
+            ),
         }
     }
 }

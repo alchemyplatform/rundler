@@ -17,7 +17,7 @@ use rundler_contracts::v0_6::IEntryPoint::{
     BeforeExecution, UserOperationEvent, UserOperationRevertReason,
 };
 use rundler_provider::{Log, TransactionReceipt};
-use rundler_types::{chain::ChainSpec, v0_6::UserOperation};
+use rundler_types::{authorization::Eip7702Auth, chain::ChainSpec, v0_6::UserOperation};
 
 use super::common::{EntryPointEvents, UserOperationEventProviderImpl};
 use crate::types::{RpcUserOperationReceipt, UOStatusEnum};
@@ -76,6 +76,7 @@ impl EntryPointEvents for EntryPointFiltersV0_6 {
     fn get_user_operations_from_tx_data(
         to_address: Address,
         tx_data: Bytes,
+        _tx_auth_list: &[Eip7702Auth],
         chain_spec: &ChainSpec,
     ) -> Vec<Self::UO> {
         let uos_per_agg =

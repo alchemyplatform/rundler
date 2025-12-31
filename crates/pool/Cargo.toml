@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 
+alloy-eips.workspace = true
 alloy-network-primitives.workspace = true
 alloy-primitives.workspace = true
 alloy-sol-types.workspace = true

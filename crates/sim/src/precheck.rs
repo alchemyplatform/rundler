@@ -419,9 +419,10 @@ where
         }
 
         // chain id must match spec chain id or be 0 for no chain id
-        if authorization_tuple.chain_id != 0 && authorization_tuple.chain_id != self.chain_spec.id {
+        let auth_chain_id: u64 = authorization_tuple.chain_id.try_into().unwrap_or(u64::MAX);
+        if auth_chain_id != 0 && auth_chain_id != self.chain_spec.id {
             violations.push(PrecheckViolation::Eip7702ChainIdMismatch(
-                authorization_tuple.chain_id,
+                auth_chain_id,
                 self.chain_spec.id,
             ));
         }

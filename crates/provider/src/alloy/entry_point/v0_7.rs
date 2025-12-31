@@ -414,8 +414,9 @@ where
         chain_spec: &ChainSpec,
         address: Address,
         calldata: &Bytes,
+        auth_list: &[Eip7702Auth],
     ) -> Vec<UserOpsPerAggregator<UserOperation>> {
-        decode_ops_from_calldata(chain_spec, address, calldata)
+        decode_ops_from_calldata(chain_spec, address, calldata, auth_list)
     }
 }
 
@@ -718,6 +719,7 @@ pub fn decode_ops_from_calldata(
     chain_spec: &ChainSpec,
     address: Address,
     calldata: &Bytes,
+    tx_auth_list: &[Eip7702Auth],
 ) -> Vec<UserOpsPerAggregator<UserOperation>> {
     let entry_point_calls = match IEntryPointCalls::abi_decode(calldata) {
         Ok(entry_point_calls) => entry_point_calls,
@@ -733,7 +735,12 @@ pub fn decode_ops_from_calldata(
                 .ops
                 .into_iter()
                 .filter_map(|op| {
-                    UserOperationBuilder::from_packed(op, chain_spec, ep_version)
+                    let maybe_auth = tx_auth_list
+                        .iter()
+                        .find(|auth| auth.recover_authority().is_ok_and(|addr| addr == op.sender))
+                        .cloned();
+
+                    UserOperationBuilder::from_packed(op, chain_spec, ep_version, maybe_auth)
                         .ok()
                         .map(|uo| uo.build())
                 })
@@ -754,9 +761,18 @@ pub fn decode_ops_from_calldata(
                         .userOps
                         .into_iter()
                         .filter_map(|op| {
-                            UserOperationBuilder::from_packed(op, chain_spec, ep_version)
-                                .ok()
-                                .map(|uo| uo.build())
+                            let maybe_auth = tx_auth_list
+                                .iter()
+                                .find(|auth| {
+                                    auth.recover_authority().is_ok_and(|addr| addr == op.sender)
+                                })
+                                .cloned();
+
+                            UserOperationBuilder::from_packed(
+                                op, chain_spec, ep_version, maybe_auth,
+                            )
+                            .ok()
+                            .map(|uo| uo.build())
                         })
                         .collect(),
                     aggregator: ops.aggregator,

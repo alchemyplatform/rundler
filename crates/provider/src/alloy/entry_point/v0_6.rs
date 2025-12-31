@@ -32,6 +32,7 @@ use rundler_contracts::v0_6::{
     ENTRY_POINT_V0_6_DEPLOYED_BYTECODE,
 };
 use rundler_types::{
+    authorization::Eip7702Auth,
     chain::ChainSpec,
     da::{DAGasBlockData, DAGasData},
     v0_6::{UserOperation, UserOperationBuilder},
@@ -336,6 +337,7 @@ where
         chain_spec: &ChainSpec,
         address: Address,
         calldata: &Bytes,
+        _auth_list: &[Eip7702Auth],
     ) -> Vec<UserOpsPerAggregator<UserOperation>> {
         decode_ops_from_calldata(chain_spec, address, calldata)
     }

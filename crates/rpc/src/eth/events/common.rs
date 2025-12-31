@@ -22,7 +22,9 @@ use rundler_provider::{
     EvmProvider, Filter, GethDebugBuiltInTracerType, GethDebugTracerType, GethDebugTracingOptions,
     GethTrace, Log, TransactionReceipt,
 };
-use rundler_types::{chain::ChainSpec, UserOperation, UserOperationVariant};
+use rundler_types::{
+    authorization::Eip7702Auth, chain::ChainSpec, UserOperation, UserOperationVariant,
+};
 use rundler_utils::log::LogOnError;
 use tracing::instrument;
 
@@ -54,6 +56,7 @@ pub(crate) trait EntryPointEvents: Send + Sync {
     fn get_user_operations_from_tx_data(
         to_address: Address,
         tx_data: Bytes,
+        tx_auth_list: &[Eip7702Auth],
         chain_spec: &ChainSpec,
     ) -> Vec<Self::UO>;
 
@@ -250,6 +253,8 @@ where
             .context("should have fetched tx from provider")?
             .context("should have found tx")?;
 
+        let auth_list = rundler_provider::get_auth_list_from_transaction(&tx);
+
         // We should return null if the tx isn't included in the block yet
         if tx.block_hash.is_none() && tx.block_number.is_none() {
             return Ok(None);
@@ -267,6 +272,7 @@ where
             E::get_user_operations_from_tx_data(
                 self.entry_point_address,
                 input.clone(),
+                &auth_list,
                 &self.chain_spec,
             )
             .into_iter()
@@ -274,7 +280,7 @@ where
             .context("matching user operation should be found in tx data")?
         } else {
             tracing::debug!("Unknown entrypoint {to:?}, falling back to trace");
-            self.trace_find_user_operation(tx_hash, uo_hash)
+            self.trace_find_user_operation(tx_hash, uo_hash, &auth_list)
                 .await
                 .context("error running trace")?
                 .context("should have found user operation in trace")?
@@ -343,6 +349,7 @@ where
         &self,
         tx_hash: B256,
         user_op_hash: B256,
+        auth_list: &[Eip7702Auth],
     ) -> anyhow::Result<Option<E::UO>> {
         // initial call wasn't to an entrypoint, so we need to trace the transaction to find the user operation
         let trace_options = GethDebugTracingOptions {
@@ -374,6 +381,7 @@ where
                 if let Some(uo) = E::get_user_operations_from_tx_data(
                     self.entry_point_address,
                     call_frame.input,
+                    auth_list,
                     &self.chain_spec,
                 )
                 .into_iter()

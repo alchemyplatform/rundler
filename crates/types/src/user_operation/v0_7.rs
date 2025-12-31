@@ -608,11 +608,7 @@ impl UserOperationOptionalGas {
             builder = builder.factory(factory, vec![255_u8; self.factory_data.len()].into());
         }
         if let Some(eip_7702_auth_address) = self.eip7702_auth_address {
-            let auth = Eip7702Auth {
-                address: eip_7702_auth_address,
-                chain_id: chain_spec.id,
-                ..Default::default()
-            };
+            let auth = Eip7702Auth::from_chain_id_and_address(chain_spec.id, eip_7702_auth_address);
             builder = builder.authorization_tuple(auth.max_fill());
         }
         if let Some(aggregator) = self.aggregator {
@@ -671,11 +667,7 @@ impl UserOperationOptionalGas {
             builder = builder.factory(self.factory.unwrap(), random_bytes(self.factory_data.len()))
         }
         if let Some(address) = self.eip7702_auth_address {
-            let auth = Eip7702Auth {
-                address,
-                chain_id: chain_spec.id,
-                ..Default::default()
-            };
+            let auth = Eip7702Auth::from_chain_id_and_address(chain_spec.id, address);
             builder = builder.authorization_tuple(auth.random_fill());
         }
         if let Some(aggregator) = self.aggregator {
@@ -746,10 +738,10 @@ impl UserOperationOptionalGas {
             );
         }
         if let Some(contract) = self.eip7702_auth_address {
-            builder = builder.authorization_tuple(Eip7702Auth {
-                address: contract,
-                ..Default::default()
-            });
+            builder = builder.authorization_tuple(Eip7702Auth::from_chain_id_and_address(
+                chain_spec.id,
+                contract,
+            ));
         }
         builder
     }
@@ -863,6 +855,7 @@ impl<'a> UserOperationBuilder<'a> {
         puo: PackedUserOperation,
         chain_spec: &'a ChainSpec,
         entry_point_version: EntryPointVersion,
+        eip7702_auth: Option<Eip7702Auth>,
     ) -> Result<Self, FromUintError<u128>> {
         let mut builder = UserOperationBuilder::new(
             chain_spec,
@@ -879,6 +872,9 @@ impl<'a> UserOperationBuilder<'a> {
                 signature: puo.signature.clone(),
             },
         );
+        if let Some(auth) = eip7702_auth {
+            builder = builder.authorization_tuple(auth);
+        }
 
         builder = builder.packed(puo.clone());
 
@@ -1337,9 +1333,10 @@ mod tests {
 
         let uo = builder.build();
         let packed = uo.clone().pack();
-        let unpacked = UserOperationBuilder::from_packed(packed, &cs, EntryPointVersion::V0_7)
-            .unwrap()
-            .build();
+        let unpacked =
+            UserOperationBuilder::from_packed(packed, &cs, EntryPointVersion::V0_7, None)
+                .unwrap()
+                .build();
 
         assert_eq!(uo, unpacked);
     }
@@ -1368,9 +1365,10 @@ mod tests {
 
         let uo = builder.build();
         let packed = uo.clone().pack();
-        let unpacked = UserOperationBuilder::from_packed(packed, &cs, EntryPointVersion::V0_7)
-            .unwrap()
-            .build();
+        let unpacked =
+            UserOperationBuilder::from_packed(packed, &cs, EntryPointVersion::V0_7, None)
+                .unwrap()
+                .build();
 
         assert_eq!(uo, unpacked);
     }
@@ -1396,7 +1394,7 @@ mod tests {
         };
 
         let hash = b256!("e486401370d145766c3cf7ba089553214a1230d38662ae532c9b62eb6dadcf7e");
-        let uo = UserOperationBuilder::from_packed(puo, &cs, EntryPointVersion::V0_7)
+        let uo = UserOperationBuilder::from_packed(puo, &cs, EntryPointVersion::V0_7, None)
             .unwrap()
             .build();
         assert_eq!(uo.hash(), hash);
