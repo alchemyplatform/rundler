@@ -14,6 +14,9 @@
 /// Builder server errors
 #[derive(Debug, thiserror::Error)]
 pub enum BuilderError {
+    /// No operations to send
+    #[error("No operations to send")]
+    NoOperationsToSend,
     /// Builder returned an unexpected response type for the given request
     #[error("Unexpected response from Builder")]
     UnexpectedResponse,

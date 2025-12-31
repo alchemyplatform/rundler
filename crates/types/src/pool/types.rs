@@ -12,7 +12,6 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_primitives::{Address, B256, U256};
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
     da::DAGasData, entity::EntityInfos, Entity, EntityType, StakeInfo, UserOperation,
@@ -56,41 +55,14 @@ pub struct Reputation {
 
 /// Reputation status for an entity
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[repr(u64)]
 pub enum ReputationStatus {
     /// Entity is not throttled or banned
-    Ok,
+    Ok = 0,
     /// Entity is throttled
-    Throttled,
+    Throttled = 1,
     /// Entity is banned
-    Banned,
-}
-
-impl Serialize for ReputationStatus {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            ReputationStatus::Ok => serializer.serialize_str("ok"),
-            ReputationStatus::Throttled => serializer.serialize_str("throttled"),
-            ReputationStatus::Banned => serializer.serialize_str("banned"),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for ReputationStatus {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        match s.as_str() {
-            "ok" => Ok(ReputationStatus::Ok),
-            "throttled" => Ok(ReputationStatus::Throttled),
-            "banned" => Ok(ReputationStatus::Banned),
-            _ => Err(de::Error::custom(format!("Invalid reputation status {s}"))),
-        }
-    }
+    Banned = 2,
 }
 
 /// Stake status structure

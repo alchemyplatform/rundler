@@ -229,6 +229,7 @@ mockall::mock! {
         fn decode_handle_ops_revert(message: &str, revert_data: &Option<Bytes>) -> Option<HandleOpsOut>;
         fn decode_ops_from_calldata(
             chain_spec: &ChainSpec,
+            address: Address,
             calldata: &Bytes,
         ) -> Vec<UserOpsPerAggregator<v0_6::UserOperation>>;
     }
@@ -334,6 +335,7 @@ mockall::mock! {
         fn decode_handle_ops_revert(message: &str, revert_data: &Option<Bytes>) -> Option<HandleOpsOut>;
         fn decode_ops_from_calldata(
             chain_spec: &ChainSpec,
+            address: Address,
             calldata: &Bytes,
         ) -> Vec<UserOpsPerAggregator<v0_7::UserOperation>>;
     }

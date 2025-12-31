@@ -601,11 +601,13 @@ impl LocalPoolServerRunner {
 
     fn debug_dump_mempool(&self, entry_point: Address) -> PoolResult<Vec<PoolOperation>> {
         let mempool = self.get_pool(entry_point)?;
-        Ok(mempool
+        let mut ops = mempool
             .all_operations(usize::MAX)
             .iter()
             .map(|op| (**op).clone())
-            .collect())
+            .collect::<Vec<_>>();
+        ops.sort_by(|a, b| a.uo.id().cmp(&b.uo.id()));
+        Ok(ops)
     }
 
     fn debug_set_reputations<'a>(

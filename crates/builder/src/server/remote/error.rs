@@ -13,7 +13,10 @@
 
 use rundler_types::builder::BuilderError;
 
-use super::protos::{builder_error, BuilderError as ProtoBuilderError};
+use super::protos::{
+    builder_error, BuilderError as ProtoBuilderError,
+    NoOperationsToSendError as ProtoNoOperationsToSendError,
+};
 
 impl TryFrom<ProtoBuilderError> for BuilderError {
     type Error = anyhow::Error;
@@ -21,6 +24,9 @@ impl TryFrom<ProtoBuilderError> for BuilderError {
     fn try_from(value: ProtoBuilderError) -> Result<Self, Self::Error> {
         match value.error {
             Some(builder_error::Error::Internal(e)) => Ok(BuilderError::Other(anyhow::anyhow!(e))),
+            Some(builder_error::Error::NoOperationsToSend(_)) => {
+                Ok(BuilderError::NoOperationsToSend)
+            }
             None => Ok(BuilderError::Other(anyhow::anyhow!("Unknown error"))),
         }
     }
@@ -36,6 +42,11 @@ impl From<BuilderError> for ProtoBuilderError {
             },
             BuilderError::Other(e) => ProtoBuilderError {
                 error: Some(builder_error::Error::Internal(e.to_string())),
+            },
+            BuilderError::NoOperationsToSend => ProtoBuilderError {
+                error: Some(builder_error::Error::NoOperationsToSend(
+                    ProtoNoOperationsToSendError {},
+                )),
             },
         }
     }

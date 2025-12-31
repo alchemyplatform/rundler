@@ -37,6 +37,8 @@ pub struct PoolOperationSummary {
     pub hash: B256,
     /// Sender of the operation
     pub sender: Address,
+    /// Sim block number of the operation
+    pub sim_block_number: u64,
 }
 
 /// Pool server trait
@@ -170,6 +172,7 @@ impl From<&PoolOperation> for PoolOperationSummary {
             entry_point: op.entry_point,
             hash: op.uo.hash(),
             sender: op.uo.sender(),
+            sim_block_number: op.sim_block_number,
         }
     }
 }

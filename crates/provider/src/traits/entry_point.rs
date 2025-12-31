@@ -167,6 +167,7 @@ pub trait BundleHandler: Send + Sync {
     /// Decode user ops from calldata
     fn decode_ops_from_calldata(
         chain_spec: &ChainSpec,
+        address: Address,
         calldata: &Bytes,
     ) -> Vec<UserOpsPerAggregator<Self::UO>>;
 }

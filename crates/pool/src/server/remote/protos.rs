@@ -709,6 +709,7 @@ impl From<RundlerPoolOperationSummary> for PoolOperationSummary {
             hash: summary.hash.to_proto_bytes(),
             entry_point: summary.entry_point.to_proto_bytes(),
             sender: summary.sender.to_proto_bytes(),
+            sim_block_number: summary.sim_block_number,
         }
     }
 }
@@ -721,6 +722,7 @@ impl TryFrom<PoolOperationSummary> for RundlerPoolOperationSummary {
             hash: from_bytes(&summary.hash)?,
             entry_point: from_bytes(&summary.entry_point)?,
             sender: from_bytes(&summary.sender)?,
+            sim_block_number: summary.sim_block_number,
         })
     }
 }

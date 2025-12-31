@@ -258,6 +258,15 @@ where
                             address,
                             slot,
                         ) => {
+                            // [STO-022] - if factory is staked, then any associated storage access is allowed
+                            if entity_infos
+                                .get(EntityType::Factory)
+                                .is_some_and(|f| f.is_staked)
+                            {
+                                continue;
+                            }
+
+                            // If factory is not staked, then the accessing entity must be staked
                             let needs_stake_entity = needs_stake.and_then(|t| entity_infos.get(t));
 
                             if needs_stake.is_none() {
@@ -369,6 +378,14 @@ where
                     ));
                 }
             }
+        }
+
+        if context.op.paymaster().is_some()
+            && !entry_point_out.return_info.paymaster_context.is_empty()
+            && !context.entity_infos.paymaster.unwrap().is_staked
+        {
+            // [EREP-050]
+            violations.push(SimulationViolation::UnstakedPaymasterContext);
         }
 
         // Get violations specific to the implemented entry point from the context provider
