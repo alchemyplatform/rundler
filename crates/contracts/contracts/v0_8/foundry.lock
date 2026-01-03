@@ -5,6 +5,9 @@
   "../../../../test/spec-tests/v0_7/bundler-spec-tests": {
     "rev": "e641dcfd33ffd965ef90397a44f71eda4d90c6a7"
   },
+  "../../../../test/spec-tests/v0_8/bundler-spec-tests": {
+    "rev": "7acb8bafec75be86a4be7e0336daf942a09c4660"
+  },
   "../../../bindings/fastlz/fastlz": {
     "rev": "344eb4025f9ae866ebf7a2ec48850f7113a97a42"
   },
@@ -23,9 +26,12 @@
   "../v0_7/lib/openzeppelin-contracts": {
     "rev": "dbb6104ce834628e473d2173bbc9d47f81a9eec3"
   },
+  "../v0_9/lib/account-abstraction": {
+    "rev": "b36a1ed52ae00da6f8a4c8d50181e2877e4fa410"
+  },
   "lib/account-abstraction": {
     "branch": {
-      "name": "releases/v0.6",
+      "name": "releases/v0.8",
       "rev": "4cbc06072cdc19fd60f285c5997f4f7f57a588de"
     }
   }

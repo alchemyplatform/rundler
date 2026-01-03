@@ -18,7 +18,7 @@ static __ENTRY_POINT_SIMULATIONS_V0_8_DEPLOYED_BYTECODE_HEX: &[u8] = include_byt
     "../contracts/out/v0_8/EntryPointSimulations.sol/EntryPointSimulations_deployedBytecode.txt"
 );
 
-static __ENTRY_POINT_SIMULATIONS_V0_8_DEPLOYED_BYTECODE: [u8; 18842] = {
+static __ENTRY_POINT_SIMULATIONS_V0_8_DEPLOYED_BYTECODE: [u8; 23951] = {
     match const_hex::const_decode_to_array(__ENTRY_POINT_SIMULATIONS_V0_8_DEPLOYED_BYTECODE_HEX) {
         Ok(a) => a,
         Err(_) => panic!("Failed to decode entry point simulations hex"),
