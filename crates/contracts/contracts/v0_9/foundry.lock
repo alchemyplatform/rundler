@@ -28,8 +28,8 @@
   },
   "lib/account-abstraction": {
     "branch": {
-      "name": "releases/v0.6",
-      "rev": "4cbc06072cdc19fd60f285c5997f4f7f57a588de"
+      "name": "releases/v0.9",
+      "rev": "b36a1ed52ae00da6f8a4c8d50181e2877e4fa410"
     }
   }
 }
