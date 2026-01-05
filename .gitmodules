@@ -2,6 +2,14 @@
 	path = crates/contracts/contracts/common/lib/forge-std
 	url = https://github.com/foundry-rs/forge-std
 	branch = v1.9.7
+[submodule "crates/contracts/contracts/v0_9/lib/account-abstraction"]
+	path = crates/contracts/contracts/v0_9/lib/account-abstraction
+	url = https://github.com/eth-infinitism/account-abstraction
+	branch = releases/v0.9
+[submodule "crates/contracts/contracts/v0_8/lib/account-abstraction"]
+	path = crates/contracts/contracts/v0_8/lib/account-abstraction
+	url = https://github.com/eth-infinitism/account-abstraction
+	branch = releases/v0.8
 [submodule "crates/contracts/contracts/v0_7/lib/account-abstraction"]
 	path = crates/contracts/contracts/v0_7/lib/account-abstraction
 	url = https://github.com/eth-infinitism/account-abstraction
@@ -13,7 +21,7 @@
 [submodule "crates/contracts/contracts/v0_7/lib/openzeppelin-contracts"]
 	path = crates/contracts/contracts/v0_7/lib/openzeppelin-contracts
 	url = https://github.com/OpenZeppelin/openzeppelin-contracts
-	branch = release-v5.0
+	branch = release-v5.1
 [submodule "crates/contracts/contracts/v0_6/lib/openzeppelin-contracts"]
 	path = crates/contracts/contracts/v0_6/lib/openzeppelin-contracts
 	url = https://github.com/OpenZeppelin/openzeppelin-contracts
