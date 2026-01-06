@@ -441,6 +441,7 @@ mod tests {
                 gas_estimator,
                 UserOperationEventProviderV0_6::new(
                     chain_spec.clone(),
+                    chain_spec.entry_point_address_v0_6,
                     provider.clone(),
                     None,
                     None,
