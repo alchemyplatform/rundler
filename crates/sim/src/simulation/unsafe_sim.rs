@@ -13,14 +13,14 @@
 
 use std::marker::PhantomData;
 
-use alloy_primitives::{map::HashSet, Address, B256};
+use alloy_primitives::{Address, B256, map::HashSet};
 use rundler_provider::{EntryPoint, SimulationProvider};
 use rundler_types::{
-    pool::SimulationViolation, ExpectedStorage, UserOperation, ValidTimeRange, TIME_RANGE_BUFFER,
+    ExpectedStorage, TIME_RANGE_BUFFER, UserOperation, ValidTimeRange, pool::SimulationViolation,
 };
 
 use super::Settings;
-use crate::{simulation::context, SimulationError, SimulationResult, Simulator, ViolationError};
+use crate::{SimulationError, SimulationResult, Simulator, ViolationError, simulation::context};
 
 /// An unsafe simulator that can be used in place of a regular simulator
 /// to extract the information needed from simulation while avoiding the use

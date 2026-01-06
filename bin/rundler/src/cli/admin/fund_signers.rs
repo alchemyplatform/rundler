@@ -55,10 +55,9 @@ pub(super) async fn fund_signers(
     if let SigningScheme::KmsFunding {
         subkeys_by_key_id, ..
     } = &signing_scheme
+        && subkeys_by_key_id.len() > 1
     {
-        if subkeys_by_key_id.len() > 1 {
-            anyhow::bail!("Only one key ID with mnemonic is supported for funding");
-        }
+        anyhow::bail!("Only one key ID with mnemonic is supported for funding");
     }
 
     let signer_manager = rundler_signer::new_signer_manager(

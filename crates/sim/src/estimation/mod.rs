@@ -15,7 +15,7 @@ use std::{future::Future, pin::Pin};
 
 use alloy_primitives::{Address, Bytes};
 use alloy_sol_types::SolInterface;
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use metrics::Histogram;
 use metrics_derive::Metrics;
 #[cfg(feature = "test-utils")]

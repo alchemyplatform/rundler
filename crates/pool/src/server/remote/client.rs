@@ -17,17 +17,17 @@ use alloy_primitives::{Address, B256};
 use anyhow::Context;
 use futures_util::Stream;
 use rundler_task::{
-    grpc::protos::{from_bytes, ConversionError, ToProtoBytes},
-    server::{HealthCheck, ServerStatus},
     TaskSpawner,
+    grpc::protos::{ConversionError, ToProtoBytes, from_bytes},
+    server::{HealthCheck, ServerStatus},
 };
 use rundler_types::{
+    EntityUpdate, UserOperationId, UserOperationPermissions, UserOperationVariant,
     chain::ChainSpec,
     pool::{
         NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation, PoolOperationSummary,
         PoolResult, PreconfInfo, Reputation, ReputationStatus, StakeStatus,
     },
-    EntityUpdate, UserOperationId, UserOperationPermissions, UserOperationVariant,
 };
 use rundler_utils::retry::{self, UnlimitedRetryOpts};
 use tokio::sync::mpsc;
@@ -37,22 +37,22 @@ use tonic::{
     transport::{Channel, Uri},
 };
 use tonic_health::{
-    pb::{health_client::HealthClient, HealthCheckRequest},
     ServingStatus,
+    pb::{HealthCheckRequest, health_client::HealthClient},
 };
 
 use super::protos::{
-    self, add_op_response, admin_set_tracking_response, debug_clear_state_response,
-    debug_dump_mempool_response, debug_dump_paymaster_balances_response,
-    debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
-    get_op_by_id_response, get_ops_by_hashes_response, get_ops_response,
-    get_ops_summaries_response, get_reputation_status_response, get_stake_status_response,
-    op_pool_client::OpPoolClient, remove_op_by_id_response, remove_ops_response,
-    update_entities_response, AddOpRequest, AdminSetTrackingRequest, DebugClearStateRequest,
-    DebugDumpMempoolRequest, DebugDumpPaymasterBalancesRequest, DebugDumpReputationRequest,
-    DebugSetReputationRequest, GetOpByIdRequest, GetOpsRequest, GetReputationStatusRequest,
-    GetStakeStatusRequest, RemoveOpsRequest, ReputationStatus as ProtoReputationStatus,
-    SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, TryUoFromProto, UpdateEntitiesRequest,
+    self, AddOpRequest, AdminSetTrackingRequest, DebugClearStateRequest, DebugDumpMempoolRequest,
+    DebugDumpPaymasterBalancesRequest, DebugDumpReputationRequest, DebugSetReputationRequest,
+    GetOpByIdRequest, GetOpsRequest, GetReputationStatusRequest, GetStakeStatusRequest,
+    RemoveOpsRequest, ReputationStatus as ProtoReputationStatus, SubscribeNewHeadsRequest,
+    SubscribeNewHeadsResponse, TryUoFromProto, UpdateEntitiesRequest, add_op_response,
+    admin_set_tracking_response, debug_clear_state_response, debug_dump_mempool_response,
+    debug_dump_paymaster_balances_response, debug_dump_reputation_response,
+    debug_set_reputation_response, get_op_by_hash_response, get_op_by_id_response,
+    get_ops_by_hashes_response, get_ops_response, get_ops_summaries_response,
+    get_reputation_status_response, get_stake_status_response, op_pool_client::OpPoolClient,
+    remove_op_by_id_response, remove_ops_response, update_entities_response,
 };
 
 /// Remote pool client

@@ -47,8 +47,8 @@ mod precheck;
 #[cfg(feature = "test-utils")]
 pub use precheck::MockPrechecker;
 pub use precheck::{
-    PrecheckError, PrecheckReturn, Prechecker, PrecheckerImpl, Settings as PrecheckSettings,
-    MIN_CALL_GAS_LIMIT,
+    MIN_CALL_GAS_LIMIT, PrecheckError, PrecheckReturn, Prechecker, PrecheckerImpl,
+    Settings as PrecheckSettings,
 };
 
 /// Simulation and violation checking

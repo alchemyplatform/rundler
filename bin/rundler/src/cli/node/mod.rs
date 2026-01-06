@@ -21,16 +21,16 @@ use rundler_rpc::RpcTask;
 use rundler_sim::MempoolConfigs;
 use rundler_task::TaskSpawnerExt;
 use rundler_types::chain::ChainSpec;
-use rundler_utils::emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY};
+use rundler_utils::emit::{self, EVENT_CHANNEL_CAPACITY, WithEntryPoint};
 use tokio::sync::broadcast;
 
 use self::events::Event;
 use super::EntryPointBuilderConfigs;
 use crate::cli::{
+    CommonArgs,
     builder::{self, BuilderArgs},
     pool::PoolArgs,
     rpc::RpcArgs,
-    CommonArgs,
 };
 mod events;
 

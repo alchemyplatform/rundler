@@ -31,8 +31,9 @@ use rundler_task::TaskSpawner;
 use tokio::sync::Notify;
 
 use crate::{
+    Error, Result,
     funding::{self, FunderSettings},
-    utils, Error, Result,
+    utils,
 };
 
 /// Trait for a signer manager
@@ -357,7 +358,7 @@ pub(crate) struct SignerMetrics {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{address, U256};
+    use alloy_primitives::{U256, address};
     use rundler_provider::{MockEvmProvider, ZeroDAGasOracle};
     use rundler_task::TokioTaskExecutor;
     use rundler_types::chain::ChainSpec;

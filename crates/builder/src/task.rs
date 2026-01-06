@@ -25,13 +25,13 @@ use rundler_provider::{
 };
 use rundler_signer::{SignerManager, SigningScheme};
 use rundler_sim::{
-    simulation::{self, UnsafeSimulator},
     MempoolConfig, SimulationSettings, Simulator,
+    simulation::{self, UnsafeSimulator},
 };
 use rundler_task::TaskSpawnerExt;
 use rundler_types::{
-    chain::ChainSpec, pool::Pool as PoolT, EntryPointAbiVersion, EntryPointVersion, UserOperation,
-    UserOperationVariant,
+    EntryPointAbiVersion, EntryPointVersion, UserOperation, UserOperationVariant, chain::ChainSpec,
+    pool::Pool as PoolT,
 };
 use rundler_utils::emit::WithEntryPoint;
 use tokio::sync::{broadcast, mpsc};

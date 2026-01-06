@@ -13,9 +13,15 @@
 
 use alloy_eips::eip7702::{Authorization, SignedAuthorization};
 use alloy_primitives::{Address, B256, U256};
-use anyhow::{anyhow, Context};
-use rundler_task::grpc::protos::{from_bytes, ConversionError, ToProtoBytes};
+use anyhow::{Context, anyhow};
+use rundler_task::grpc::protos::{ConversionError, ToProtoBytes, from_bytes};
 use rundler_types::{
+    BundlerSponsorship as RundlerBundlerSponsorship, Entity as RundlerEntity, EntityInfos,
+    EntityType as RundlerEntityType, EntityUpdate as RundlerEntityUpdate,
+    EntityUpdateType as RundlerEntityUpdateType, EntryPointVersion as RundlerEntryPointVersion,
+    StakeInfo as RundlerStakeInfo, UserOperation as _,
+    UserOperationPermissions as RundlerUserOperationPermissions, UserOperationVariant,
+    ValidTimeRange,
     authorization::Eip7702Auth,
     chain::ChainSpec,
     da::{
@@ -29,12 +35,7 @@ use rundler_types::{
         Reputation as PoolReputation, ReputationStatus as PoolReputationStatus,
         StakeStatus as RundlerStakeStatus,
     },
-    v0_6, v0_7, BundlerSponsorship as RundlerBundlerSponsorship, Entity as RundlerEntity,
-    EntityInfos, EntityType as RundlerEntityType, EntityUpdate as RundlerEntityUpdate,
-    EntityUpdateType as RundlerEntityUpdateType, EntryPointVersion as RundlerEntryPointVersion,
-    StakeInfo as RundlerStakeInfo, UserOperation as _,
-    UserOperationPermissions as RundlerUserOperationPermissions, UserOperationVariant,
-    ValidTimeRange,
+    v0_6, v0_7,
 };
 
 tonic::include_proto!("op_pool");

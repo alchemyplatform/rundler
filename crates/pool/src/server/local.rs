@@ -27,16 +27,16 @@ use futures_util::Stream;
 use metrics::Histogram;
 use metrics_derive::Metrics;
 use rundler_task::{
-    server::{HealthCheck, ServerStatus},
     GracefulShutdown, TaskSpawner,
+    server::{HealthCheck, ServerStatus},
 };
 use rundler_types::{
+    EntityUpdate, EntryPointAbiVersion, UserOperation, UserOperationId, UserOperationPermissions,
+    UserOperationVariant,
     pool::{
         MempoolError, NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation,
         PoolOperationSummary, PoolResult, PreconfInfo, Reputation, ReputationStatus, StakeStatus,
     },
-    EntityUpdate, EntryPointAbiVersion, UserOperation, UserOperationId, UserOperationPermissions,
-    UserOperationVariant,
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{error, info};
@@ -997,8 +997,8 @@ mod tests {
     use parking_lot::RwLock;
     use reth_tasks::TaskManager;
     use rundler_types::{
-        chain::ChainSpec, v0_6::UserOperation as UserOperationV0_6,
-        v0_7::UserOperation as UserOperationV0_7, EntryPointVersion,
+        EntryPointVersion, chain::ChainSpec, v0_6::UserOperation as UserOperationV0_6,
+        v0_7::UserOperation as UserOperationV0_7,
     };
 
     use super::*;

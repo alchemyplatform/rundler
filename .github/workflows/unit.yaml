@@ -20,7 +20,7 @@ jobs:
           submodules: recursive
 
       - name: Install toolchain
-        uses: dtolnay/rust-toolchain@1.87.0
+        uses: dtolnay/rust-toolchain@1.92.0
         with:
           components: llvm-tools-preview
 

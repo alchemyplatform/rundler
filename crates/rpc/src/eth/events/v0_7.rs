@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{ruint::UintTryFrom, Address, Bytes, B256, U128};
+use alloy_primitives::{Address, B256, Bytes, U128, ruint::UintTryFrom};
 use alloy_sol_types::SolEvent;
 use rundler_contracts::v0_7::IEntryPoint::{
     BeforeExecution, UserOperationEvent, UserOperationRevertReason,

@@ -34,13 +34,13 @@ use alloy_primitives::{Address, B256};
 use mockall::automock;
 use rundler_sim::{MempoolConfig, PrecheckSettings, SimulationSettings};
 use rundler_types::{
+    EntityUpdate, EntryPointVersion, UserOperationId, UserOperationPermissions,
+    UserOperationVariant,
     chain::ChainSpec,
     pool::{
         MempoolError, PaymasterMetadata, PoolOperation, PreconfInfo, Reputation, ReputationStatus,
         StakeStatus,
     },
-    EntityUpdate, EntryPointVersion, UserOperationId, UserOperationPermissions,
-    UserOperationVariant,
 };
 use tonic::async_trait;
 pub(crate) use uo_pool::{UoPool, UoPoolProviders};
@@ -201,8 +201,8 @@ pub enum OperationOrigin {
 #[cfg(test)]
 mod tests {
     use rundler_types::{
-        v0_6::{UserOperationBuilder, UserOperationRequiredFields},
         Entity, EntityInfo, EntityInfos, EntityType, ValidTimeRange,
+        v0_6::{UserOperationBuilder, UserOperationRequiredFields},
     };
 
     use super::*;

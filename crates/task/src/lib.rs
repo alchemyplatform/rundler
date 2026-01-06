@@ -24,8 +24,8 @@ pub mod grpc;
 pub mod server;
 
 pub use reth_tasks::{
-    shutdown::GracefulShutdown, TaskSpawner, TaskSpawnerExt as RethTaskSpawnerExt,
-    TokioTaskExecutor,
+    TaskSpawner, TaskSpawnerExt as RethTaskSpawnerExt, TokioTaskExecutor,
+    shutdown::GracefulShutdown,
 };
 
 /// A trait that extends Reth's `TaskSpawner` with additional methods.

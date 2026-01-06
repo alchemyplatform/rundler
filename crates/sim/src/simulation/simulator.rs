@@ -21,28 +21,28 @@ use async_trait::async_trait;
 use futures_util::TryFutureExt;
 use rundler_provider::{EntryPoint, EvmProvider, SimulationProvider};
 use rundler_types::{
+    Entity, EntityInfo, EntityInfos, EntityType, Opcode, StorageSlot, UserOperation,
+    ValidTimeRange, ValidationOutput, ValidationReturnInfo, ViolationOpCode,
     pool::{NeedsStakeInformation, SimulationViolation},
     v0_6::UserOperation as UserOperationV0_6,
     v0_7::UserOperation as UserOperationV0_7,
-    Entity, EntityInfo, EntityInfos, EntityType, Opcode, StorageSlot, UserOperation,
-    ValidTimeRange, ValidationOutput, ValidationReturnInfo, ViolationOpCode,
 };
 
 use super::{
+    UnsafeSimulator,
     context::{
         self, AccessInfo, AssociatedSlotsByAddress, ValidationContext, ValidationContextProvider,
     },
-    UnsafeSimulator,
 };
 use crate::{
+    SimulationError, SimulationResult,
     simulation::{
+        Settings, Simulator,
         mempool::{self, AllowEntity, AllowRule, MempoolConfig, MempoolMatchResult},
         v0_6::ValidationContextProvider as ValidationContextProviderV0_6,
         v0_7::ValidationContextProvider as ValidationContextProviderV0_7,
-        Settings, Simulator,
     },
     types::ViolationError,
-    SimulationError, SimulationResult,
 };
 
 /// Create a new simulator for v0.6 entry point contracts
@@ -131,10 +131,10 @@ where
         let mut allow_unstaked_addresses = HashSet::new();
         for config in mempool_configs.values() {
             for entry in &config.allowlist {
-                if entry.rule == AllowRule::NotStaked {
-                    if let AllowEntity::Address(address) = entry.entity {
-                        allow_unstaked_addresses.insert(address);
-                    }
+                if entry.rule == AllowRule::NotStaked
+                    && let AllowEntity::Address(address) = entry.entity
+                {
+                    allow_unstaked_addresses.insert(address);
                 }
             }
         }
@@ -269,20 +269,23 @@ where
                             // If factory is not staked, then the accessing entity must be staked
                             let needs_stake_entity = needs_stake.and_then(|t| entity_infos.get(t));
 
-                            if needs_stake.is_none() {
-                                if let Some(factory) = entity_infos.get(EntityType::Factory) {
-                                    if factory.is_staked {
-                                        tracing::debug!("Associated storage accessed by staked entity during deploy, and factory is staked");
-                                        continue;
-                                    }
-                                }
+                            if needs_stake.is_none()
+                                && let Some(factory) = entity_infos.get(EntityType::Factory)
+                                && factory.is_staked
+                            {
+                                tracing::debug!(
+                                    "Associated storage accessed by staked entity during deploy, and factory is staked"
+                                );
+                                continue;
                             }
 
-                            if let Some(needs_stake_entity_info) = needs_stake_entity {
-                                if needs_stake_entity_info.is_staked {
-                                    tracing::debug!("Associated storage accessed by staked entity during deploy, and entity is staked");
-                                    continue;
-                                }
+                            if let Some(needs_stake_entity_info) = needs_stake_entity
+                                && needs_stake_entity_info.is_staked
+                            {
+                                tracing::debug!(
+                                    "Associated storage accessed by staked entity during deploy, and entity is staked"
+                                );
+                                continue;
                             }
 
                             // [STO-022]
@@ -499,10 +502,10 @@ where
             MempoolMatchResult::NoMatch(i) => {
                 return Err(SimulationError {
                     violation_error: ViolationError::Violations(vec![
-                        overridable_violations[i].clone()
+                        overridable_violations[i].clone(),
                     ]),
                     entity_infos: Some(context.entity_infos),
-                })
+                });
             }
         };
 
@@ -674,14 +677,14 @@ fn override_infos_staked(eis: &mut EntityInfos, allow_unstaked_addresses: &HashS
 mod tests {
     use std::{ops::Sub, sync::Arc, time::Duration};
 
-    use alloy_primitives::{address, b256, bytes, uint, Bytes};
+    use alloy_primitives::{Bytes, address, b256, bytes, uint};
     use context::ContractInfo;
     use rundler_provider::{BlockId, BlockNumberOrTag, MockEntryPointV0_6, MockEvmProvider};
     use rundler_types::{
+        AggregatorInfo, Opcode, StakeInfo, Timestamp, UserOperation as _,
         aggregator::AggregatorCosts,
         chain::ChainSpec,
         v0_6::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
-        AggregatorInfo, Opcode, StakeInfo, Timestamp, UserOperation as _,
     };
 
     use self::context::{Phase, TracerOutput};

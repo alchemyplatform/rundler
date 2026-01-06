@@ -13,40 +13,40 @@
 
 use std::{cmp, ops::Add, time::Instant};
 
-use alloy_primitives::{Address, Bytes, B256, U256};
+use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_sol_types::{SolCall, SolInterface};
 use rundler_contracts::v0_6::{
+    CALL_GAS_ESTIMATION_PROXY_V0_6_DEPLOYED_BYTECODE,
     CallGasEstimationProxy::{
-        estimateCallGasCall, testCallGasCall, CallGasEstimationProxyCalls, EstimateCallGasArgs,
+        CallGasEstimationProxyCalls, EstimateCallGasArgs, estimateCallGasCall, testCallGasCall,
     },
+    ENTRY_POINT_V0_6_DEPLOYED_BYTECODE, VERIFICATION_GAS_ESTIMATION_HELPER_V0_6_DEPLOYED_BYTECODE,
     VerificationGasEstimationHelper::{
-        estimateVerificationGasCall, EstimateGasArgs as ContractEstimateGasArgs,
+        EstimateGasArgs as ContractEstimateGasArgs, estimateVerificationGasCall,
     },
-    CALL_GAS_ESTIMATION_PROXY_V0_6_DEPLOYED_BYTECODE, ENTRY_POINT_V0_6_DEPLOYED_BYTECODE,
-    VERIFICATION_GAS_ESTIMATION_HELPER_V0_6_DEPLOYED_BYTECODE,
 };
 use rundler_provider::{
     AccountOverride, DAGasProvider, EntryPoint, EvmProvider, FeeEstimator, SimulationProvider,
     StateOverride,
 };
 use rundler_types::{
-    self,
+    self, GasEstimate, UserOperation as _,
     chain::ChainSpec,
     v0_6::{UserOperation, UserOperationBuilder, UserOperationOptionalGas},
-    GasEstimate, UserOperation as _,
 };
 use rundler_utils::{guard_timer::CustomTimerGuard, math};
 use tokio::join;
 use tracing::instrument;
 
 use super::{
-    estimate_verification_gas::VerificationGasEstimatorSpecialization, CallGasEstimator,
-    CallGasEstimatorImpl, CallGasEstimatorSpecialization, GasEstimationError, Metrics, Settings,
-    VerificationGasEstimator,
+    CallGasEstimator, CallGasEstimatorImpl, CallGasEstimatorSpecialization, GasEstimationError,
+    Metrics, Settings, VerificationGasEstimator,
+    estimate_verification_gas::VerificationGasEstimatorSpecialization,
 };
 use crate::{
+    GasEstimator as GasEstimatorTrait, VerificationGasEstimatorImpl,
     estimation::estimate_verification_gas::EstimateGasArgs, gas, precheck::MIN_CALL_GAS_LIMIT,
-    simulation, GasEstimator as GasEstimatorTrait, VerificationGasEstimatorImpl,
+    simulation,
 };
 
 /// Gas estimator implementation
@@ -274,21 +274,21 @@ where
         &self,
         optional_op: &UserOperationOptionalGas,
     ) -> Result<(), GasEstimationError> {
-        if let Some(vl) = optional_op.verification_gas_limit {
-            if vl > self.settings.max_verification_gas {
-                return Err(GasEstimationError::GasFieldTooLarge(
-                    "verificationGasLimit",
-                    self.settings.max_verification_gas,
-                ));
-            }
+        if let Some(vl) = optional_op.verification_gas_limit
+            && vl > self.settings.max_verification_gas
+        {
+            return Err(GasEstimationError::GasFieldTooLarge(
+                "verificationGasLimit",
+                self.settings.max_verification_gas,
+            ));
         }
-        if let Some(cl) = optional_op.call_gas_limit {
-            if cl > self.settings.max_bundle_execution_gas {
-                return Err(GasEstimationError::GasFieldTooLarge(
-                    "callGasLimit",
-                    self.settings.max_bundle_execution_gas,
-                ));
-            }
+        if let Some(cl) = optional_op.call_gas_limit
+            && cl > self.settings.max_bundle_execution_gas
+        {
+            return Err(GasEstimationError::GasFieldTooLarge(
+                "callGasLimit",
+                self.settings.max_bundle_execution_gas,
+            ));
         }
 
         Ok(())
@@ -303,12 +303,12 @@ where
         state_override: StateOverride,
     ) -> Result<u128, GasEstimationError> {
         // if set and non-zero, don't estimate
-        if let Some(vl) = optional_op.verification_gas_limit {
-            if vl != 0 {
-                // No need to do an extra simulation here, if the user provides a value that is
-                // insufficient it will cause a revert during call gas estimation (or simulation).
-                return Ok(vl);
-            }
+        if let Some(vl) = optional_op.verification_gas_limit
+            && vl != 0
+        {
+            // No need to do an extra simulation here, if the user provides a value that is
+            // insufficient it will cause a revert during call gas estimation (or simulation).
+            return Ok(vl);
         }
 
         let _timer = CustomTimerGuard::new(self.metrics.vgl_estimate_ms.clone());
@@ -349,14 +349,14 @@ where
     ) -> Result<u128, GasEstimationError> {
         let _timer = CustomTimerGuard::new(self.metrics.cgl_estimate_ms.clone());
         // if set and non-zero, don't estimate
-        if let Some(cl) = optional_op.call_gas_limit {
-            if cl != 0 {
-                // The user provided a non-zero value, simulate once
-                self.call_gas_estimator
-                    .simulate_handle_op_with_result(full_op, block_hash, state_override)
-                    .await?;
-                return Ok(cl);
-            }
+        if let Some(cl) = optional_op.call_gas_limit
+            && cl != 0
+        {
+            // The user provided a non-zero value, simulate once
+            self.call_gas_estimator
+                .simulate_handle_op_with_result(full_op, block_hash, state_override)
+                .await?;
+            return Ok(cl);
         }
 
         let call_gas_limit = self
@@ -530,20 +530,20 @@ mod tests {
         ProviderError,
     };
     use rundler_types::{
+        GasFees,
         da::DAGasOracleType,
         v0_6::{UserOperation, UserOperationOptionalGas, UserOperationRequiredFields},
-        GasFees,
     };
     use serde_json::value::RawValue;
 
     use super::*;
     use crate::{
+        VerificationGasEstimatorImpl,
         estimation::{
-            estimate_call_gas::PROXY_IMPLEMENTATION_ADDRESS_MARKER, CALL_GAS_BUFFER_VALUE,
-            VERIFICATION_GAS_BUFFER_PERCENT,
+            CALL_GAS_BUFFER_VALUE, VERIFICATION_GAS_BUFFER_PERCENT,
+            estimate_call_gas::PROXY_IMPLEMENTATION_ADDRESS_MARKER,
         },
         simulation::v0_6::REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER,
-        VerificationGasEstimatorImpl,
     };
 
     // Gas overhead defaults

@@ -11,8 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{ruint::FromUintError, Address, Bytes, B256, U256};
-use alloy_sol_types::{sol, SolValue};
+use alloy_primitives::{Address, B256, Bytes, U256, ruint::FromUintError};
+use alloy_sol_types::{SolValue, sol};
 pub use rundler_contracts::v0_6::UserOperation as ContractUserOperation;
 use rundler_utils::random::{random_bytes, random_bytes_array};
 use serde::{Deserialize, Serialize};
@@ -20,11 +20,11 @@ use strum::IntoEnumIterator;
 
 use super::{UserOperation as UserOperationTrait, UserOperationId, UserOperationVariant};
 use crate::{
+    EntryPointVersion,
     aggregator::AggregatorCosts,
     authorization::Eip7702Auth,
     chain::ChainSpec,
     entity::{Entity, EntityType},
-    EntryPointVersion,
 };
 
 /// Gas overhead required by the entry point contract for the inner call

@@ -14,8 +14,8 @@
 use rundler_types::builder::BuilderError;
 
 use super::protos::{
-    builder_error, BuilderError as ProtoBuilderError,
-    NoOperationsToSendError as ProtoNoOperationsToSendError,
+    BuilderError as ProtoBuilderError, NoOperationsToSendError as ProtoNoOperationsToSendError,
+    builder_error,
 };
 
 impl TryFrom<ProtoBuilderError> for BuilderError {

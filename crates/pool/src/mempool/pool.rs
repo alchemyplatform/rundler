@@ -13,7 +13,7 @@
 
 use std::{
     cmp::Ordering,
-    collections::{hash_map::Entry, BTreeSet, HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet, hash_map::Entry},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -25,17 +25,17 @@ use metrics_derive::Metrics;
 use parking_lot::RwLock;
 use rundler_provider::DAGasOracleSync;
 use rundler_types::{
+    Entity, EntityType, GasFees, Timestamp, UserOperation, UserOperationId, UserOperationVariant,
     chain::ChainSpec,
     da::DAGasBlockData,
     pool::{MempoolError, PoolOperation},
-    Entity, EntityType, GasFees, Timestamp, UserOperation, UserOperationId, UserOperationVariant,
 };
 use rundler_utils::{emit::WithEntryPoint, math};
 use tokio::sync::broadcast;
 use tracing::info;
 
-use super::{entity_tracker::EntityCounter, size::SizeTracker, MempoolResult, PoolConfig};
-use crate::{chain::MinedOp, emit::OpRemovalReason, PoolEvent};
+use super::{MempoolResult, PoolConfig, entity_tracker::EntityCounter, size::SizeTracker};
+use crate::{PoolEvent, chain::MinedOp, emit::OpRemovalReason};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PoolInnerConfig {
@@ -345,16 +345,13 @@ where
             }
 
             // check for eligibility
-            if self.da_gas_oracle.is_some()
-                && block_da_data.is_some()
+            if let Some(da_gas_oracle) = self.da_gas_oracle.as_ref()
+                && let Some(block_da_data) = block_da_data
                 && op.po.perms.bundler_sponsorship.is_none()
             // skip if bundler sponsored
             {
                 // TODO(bundle): assuming a bundle size of 1
                 let bundle_size = 1;
-
-                let da_gas_oracle = self.da_gas_oracle.as_ref().unwrap();
-                let block_da_data = block_da_data.unwrap();
 
                 let required_da_gas = da_gas_oracle.calc_da_gas_sync(
                     &op.po.da_gas_data,
@@ -453,21 +450,21 @@ where
         &self,
         uo: &UserOperationVariant,
     ) -> MempoolResult<()> {
-        if let Some(ec) = self.count_by_address.get(&uo.sender()) {
-            if ec.includes_non_sender() {
-                return Err(MempoolError::SenderAddressUsedAsAlternateEntity(
-                    uo.sender(),
-                ));
-            }
+        if let Some(ec) = self.count_by_address.get(&uo.sender())
+            && ec.includes_non_sender()
+        {
+            return Err(MempoolError::SenderAddressUsedAsAlternateEntity(
+                uo.sender(),
+            ));
         }
 
         for e in uo.entities() {
             match e.kind {
                 EntityType::Factory | EntityType::Paymaster | EntityType::Aggregator => {
-                    if let Some(ec) = self.count_by_address.get(&e.address) {
-                        if ec.sender().gt(&0) {
-                            return Err(MempoolError::MultipleRolesViolation(e));
-                        }
+                    if let Some(ec) = self.count_by_address.get(&e.address)
+                        && ec.sender().gt(&0)
+                    {
+                        return Err(MempoolError::MultipleRolesViolation(e));
                     }
                 }
                 _ => {}
@@ -484,15 +481,12 @@ where
         uo: &UserOperationVariant,
     ) -> MempoolResult<()> {
         for storage_address in accessed_storage {
-            if let Some(ec) = self.count_by_address.get(storage_address) {
-                if ec.sender().gt(&0) && storage_address.ne(&uo.sender()) {
-                    // Reject UO if the sender is also an entity in another UO in the mempool
-                    for entity in uo.entities() {
-                        if storage_address.eq(&entity.address) {
-                            return Err(MempoolError::AssociatedStorageIsAlternateSender);
-                        }
-                    }
-                }
+            if let Some(ec) = self.count_by_address.get(storage_address)
+                && ec.sender().gt(&0)
+                && storage_address.ne(&uo.sender())
+            {
+                // Reject UO if the sender is also an entity in another UO in the mempool
+                return Err(MempoolError::AssociatedStorageIsAlternateSender);
             }
         }
 
@@ -899,9 +893,9 @@ mod tests {
     use alloy_primitives::U256;
     use rundler_provider::MockDAGasOracleSync;
     use rundler_types::{
-        v0_6::{UserOperationBuilder, UserOperationRequiredFields},
         BundlerSponsorship, EntityInfo, EntityInfos, GasFees, UserOperation as UserOperationTrait,
         UserOperationPermissions, ValidTimeRange,
+        v0_6::{UserOperationBuilder, UserOperationRequiredFields},
     };
 
     use super::*;
@@ -978,7 +972,7 @@ mod tests {
         let mut pool = pool();
         let addr_a = Address::random();
         let addr_b = Address::random();
-        let ops = vec![
+        let ops = [
             create_op(addr_a, 0, 1),
             create_op(addr_a, 1, 2),
             create_op(addr_b, 0, 3),
@@ -1000,7 +994,7 @@ mod tests {
     #[test]
     fn best_ties() {
         let mut pool = pool();
-        let ops = vec![
+        let ops = [
             create_op(Address::random(), 0, 1),
             create_op(Address::random(), 0, 1),
             create_op(Address::random(), 0, 1),
@@ -1021,7 +1015,7 @@ mod tests {
     #[test]
     fn remove_op() {
         let mut pool = pool();
-        let ops = vec![
+        let ops = [
             create_op(Address::random(), 0, 3),
             create_op(Address::random(), 0, 2),
             create_op(Address::random(), 0, 1),

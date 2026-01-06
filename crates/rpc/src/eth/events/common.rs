@@ -14,7 +14,7 @@
 use std::{collections::VecDeque, marker::PhantomData};
 
 use alloy_consensus::Transaction;
-use alloy_primitives::{Address, Bytes, B256, U256};
+use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_sol_types::SolEvent;
 use anyhow::Context;
 use itertools::Itertools;
@@ -23,7 +23,7 @@ use rundler_provider::{
     GethTrace, Log, TransactionReceipt,
 };
 use rundler_types::{
-    authorization::Eip7702Auth, chain::ChainSpec, UserOperation, UserOperationVariant,
+    UserOperation, UserOperationVariant, authorization::Eip7702Auth, chain::ChainSpec,
 };
 use rundler_utils::log::LogOnError;
 use tracing::instrument;
@@ -208,7 +208,9 @@ where
             Ok(logs) => Ok(logs),
             Err(e) => {
                 if let Some(fallback_distance) = self.event_block_distance_fallback {
-                    tracing::warn!("Error querying for event at from block {from_block:?} to block {to_block:?} falling back to a distance of {fallback_distance:?}. Error {e:?}");
+                    tracing::warn!(
+                        "Error querying for event at from block {from_block:?} to block {to_block:?} falling back to a distance of {fallback_distance:?}. Error {e:?}"
+                    );
                     self.get_event_by_hash_at(
                         hash,
                         to_block.saturating_sub(fallback_distance),

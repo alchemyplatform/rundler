@@ -17,8 +17,8 @@ use alloy_primitives::{Address, U256};
 use anyhow::Context;
 use rundler_provider::BlockId;
 use rundler_types::{
-    pool::SimulationViolation, EntityInfos, EntityType, ExpectedStorage, Opcode, StakeInfo,
-    UserOperation, ValidationOutput,
+    EntityInfos, EntityType, ExpectedStorage, Opcode, StakeInfo, UserOperation, ValidationOutput,
+    pool::SimulationViolation,
 };
 use serde::{Deserialize, Serialize};
 

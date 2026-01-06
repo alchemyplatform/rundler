@@ -24,8 +24,8 @@ use metrics::Histogram;
 use metrics_derive::Metrics;
 use rundler_signer::SignerManager;
 use rundler_task::{
-    server::{HealthCheck, ServerStatus},
     GracefulShutdown,
+    server::{HealthCheck, ServerStatus},
 };
 use rundler_types::{
     builder::{Builder, BuilderError, BuilderResult, BundlingMode},

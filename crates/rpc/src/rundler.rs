@@ -14,11 +14,11 @@
 use alloy_primitives::{Address, B256, U128, U256};
 use anyhow::Context;
 use async_trait::async_trait;
-use futures_util::{future, TryFutureExt};
+use futures_util::{TryFutureExt, future};
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_provider::{EvmProvider, FeeEstimator};
 use rundler_types::{
-    chain::ChainSpec, pool::Pool, UserOperation, UserOperationId, UserOperationVariant,
+    UserOperation, UserOperationId, UserOperationVariant, chain::ChainSpec, pool::Pool,
 };
 use tracing::instrument;
 

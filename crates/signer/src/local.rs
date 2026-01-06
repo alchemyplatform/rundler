@@ -14,7 +14,7 @@
 use alloy_network::EthereumWallet;
 use alloy_signer::Signer;
 use alloy_signer_local::{
-    coins_bip39::English, LocalSignerError, MnemonicBuilder, PrivateKeySigner,
+    LocalSignerError, MnemonicBuilder, PrivateKeySigner, coins_bip39::English,
 };
 use anyhow::Context;
 use secrecy::{ExposeSecret, SecretString};

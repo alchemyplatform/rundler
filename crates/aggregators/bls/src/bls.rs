@@ -13,14 +13,14 @@
 
 use std::fmt::Debug;
 
-use alloy_primitives::{address, bytes, Address, Bytes};
+use alloy_primitives::{Address, Bytes, address, bytes};
 use rundler_provider::{AggregatorOut, SignatureAggregator as EpSignatureAggregator};
 use rundler_types::{
+    UserOperationVariant,
     aggregator::{
         AggregatorCosts, SignatureAggregator, SignatureAggregatorError, SignatureAggregatorResult,
     },
     v0_7::UserOperation,
-    UserOperationVariant,
 };
 
 const BLS_AGGREGATOR_ADDRESS: Address = address!("9d3a231e887a495ce6c454e7a38ed5e734bd5de4");

@@ -13,7 +13,7 @@
 
 //! Utilities for 7702 authorization tuples
 
-use alloy_primitives::{fixed_bytes, Address, FixedBytes};
+use alloy_primitives::{Address, FixedBytes, fixed_bytes};
 use alloy_rpc_types_eth::state::{AccountOverride, StateOverride};
 
 /// Apply a [7702](https://github.com/ethereum/EIPs/blob/master/EIPS/eip-7702.md)
