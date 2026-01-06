@@ -45,13 +45,6 @@ impl EntryPointRouterBuilder {
     where
         R: EntryPointRoute + 'static,
     {
-        if route.version() != EntryPointVersion::V0_6 {
-            panic!(
-                "Invalid entry point version for route: {:?}",
-                route.version()
-            );
-        }
-
         self.entry_points.push(route.address());
         self.v0_6 = Some((route.address(), Arc::new(route)));
         self
@@ -61,13 +54,6 @@ impl EntryPointRouterBuilder {
     where
         R: EntryPointRoute + 'static,
     {
-        if route.version() != EntryPointVersion::V0_7 {
-            panic!(
-                "Invalid entry point version for route: {:?}",
-                route.version()
-            );
-        }
-
         self.entry_points.push(route.address());
         self.v0_7 = Some((route.address(), Arc::new(route)));
         self
@@ -126,7 +112,10 @@ impl EntryPointRouter {
                 }
                 Ok(&self.v0_7.as_ref().unwrap().1)
             }
-            EntryPointVersion::Unspecified => unreachable!("unspecified entry point version"),
+            EntryPointVersion::V0_8 | EntryPointVersion::V0_9 => {
+                // TODO(entrypoints)
+                todo!("entry point v0.8 and v0.9 are not supported");
+            }
         }
     }
 
@@ -220,7 +209,10 @@ impl EntryPointRouter {
 
                 Ok(RpcGasEstimateV0_7::from(e).into())
             }
-            EntryPointVersion::Unspecified => unreachable!("unspecified entry point version"),
+            EntryPointVersion::V0_8 | EntryPointVersion::V0_9 => {
+                // TODO(entrypoints)
+                todo!("entry point v0.8 and v0.9 are not supported");
+            }
         }
     }
 
@@ -259,15 +251,16 @@ impl EntryPointRouter {
         match ep {
             EntryPointVersion::V0_6 => Ok(&self.v0_6.as_ref().unwrap().1),
             EntryPointVersion::V0_7 => Ok(&self.v0_7.as_ref().unwrap().1),
-            EntryPointVersion::Unspecified => unreachable!("unspecified entry point version"),
+            EntryPointVersion::V0_8 | EntryPointVersion::V0_9 => {
+                // TODO(entrypoints)
+                todo!("entry point v0.8 and v0.9 are not supported");
+            }
         }
     }
 }
 
 #[async_trait::async_trait]
 pub(crate) trait EntryPointRoute: Send + Sync {
-    fn version(&self) -> EntryPointVersion;
-
     fn address(&self) -> Address;
 
     async fn get_mined_by_hash(&self, hash: B256)
@@ -317,10 +310,6 @@ where
     G::UserOperationOptionalGas: From<UserOperationOptionalGas>,
     EV: UserOperationEventProvider,
 {
-    fn version(&self) -> EntryPointVersion {
-        UO::entry_point_version()
-    }
-
     fn address(&self) -> Address {
         *self.entry_point.address()
     }

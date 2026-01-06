@@ -13,15 +13,19 @@
 
 use alloy_primitives::{Address, Bytes, U128, U256};
 use rundler_types::{
-    chain::{ChainSpec, FromWithSpec},
+    chain::ChainSpec,
     v0_6::{
         UserOperation, UserOperationBuilder, UserOperationOptionalGas, UserOperationRequiredFields,
     },
-    GasEstimate,
+    EntryPointVersion, GasEstimate,
 };
 use serde::{Deserialize, Serialize};
 
 use super::{rpc_authorization::RpcEip7702Auth, RpcAddress};
+use crate::{
+    eth::EthRpcError,
+    utils::{FromRpcType, TryFromRpcType},
+};
 
 /// User operation definition for RPC
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -65,8 +69,18 @@ impl From<UserOperation> for RpcUserOperation {
     }
 }
 
-impl FromWithSpec<RpcUserOperation> for UserOperation {
-    fn from_with_spec(def: RpcUserOperation, chain_spec: &ChainSpec) -> Self {
+impl TryFromRpcType<RpcUserOperation> for UserOperation {
+    fn try_from_rpc_type(
+        def: RpcUserOperation,
+        chain_spec: &ChainSpec,
+        ep_version: EntryPointVersion,
+    ) -> Result<Self, EthRpcError> {
+        assert!(
+            ep_version == EntryPointVersion::V0_6,
+            "expected entry point version v0.6, got {:?}",
+            ep_version
+        );
+
         let mut builder = UserOperationBuilder::new(
             chain_spec,
             UserOperationRequiredFields {
@@ -92,7 +106,7 @@ impl FromWithSpec<RpcUserOperation> for UserOperation {
             builder = builder.aggregator(agg);
         }
 
-        builder.build()
+        Ok(builder.build())
     }
 }
 
@@ -114,8 +128,12 @@ pub(crate) struct RpcUserOperationOptionalGas {
     aggregator: Option<Address>,
 }
 
-impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
-    fn from(def: RpcUserOperationOptionalGas) -> Self {
+impl FromRpcType<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
+    fn from_rpc_type(
+        def: RpcUserOperationOptionalGas,
+        _chain_spec: &ChainSpec,
+        _ep_version: EntryPointVersion,
+    ) -> Self {
         UserOperationOptionalGas {
             sender: def.sender,
             nonce: def.nonce,

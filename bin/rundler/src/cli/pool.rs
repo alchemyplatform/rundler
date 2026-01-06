@@ -205,7 +205,7 @@ impl PoolArgs {
         let pool_config_base = PoolConfig {
             // update per entry point
             entry_point: Address::ZERO,
-            entry_point_version: EntryPointVersion::Unspecified,
+            entry_point_version: EntryPointVersion::V0_6,
             mempool_channel_configs: HashMap::new(),
             // Base config
             chain_spec: chain_spec.clone(),

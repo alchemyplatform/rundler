@@ -282,6 +282,7 @@ where
                 // Trigger an AA10 error
                 UserOperationBuilder::new(
                     &self.chain_spec,
+                    EntryPointVersion::V0_7,
                     UserOperationRequiredFields {
                         sender: self.chain_spec.entry_point_address_v0_7,
                         nonce: U256::ZERO,
@@ -695,7 +696,7 @@ pub fn decode_ops_from_calldata(
                 .ops
                 .into_iter()
                 .filter_map(|op| {
-                    UserOperationBuilder::from_packed(op, chain_spec)
+                    UserOperationBuilder::from_packed(op, chain_spec, EntryPointVersion::V0_7)
                         .ok()
                         .map(|uo| uo.build())
                 })
@@ -716,9 +717,13 @@ pub fn decode_ops_from_calldata(
                         .userOps
                         .into_iter()
                         .filter_map(|op| {
-                            UserOperationBuilder::from_packed(op, chain_spec)
-                                .ok()
-                                .map(|uo| uo.build())
+                            UserOperationBuilder::from_packed(
+                                op,
+                                chain_spec,
+                                EntryPointVersion::V0_7,
+                            )
+                            .ok()
+                            .map(|uo| uo.build())
                         })
                         .collect(),
                     aggregator: ops.aggregator,
