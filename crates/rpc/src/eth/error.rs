@@ -323,7 +323,19 @@ impl From<MempoolError> for EthRpcError {
 
 impl From<PrecheckViolation> for EthRpcError {
     fn from(value: PrecheckViolation) -> Self {
-        Self::PrecheckFailed(value)
+        match value {
+            PrecheckViolation::Eip7702NotSupported(_)
+            | PrecheckViolation::Eip7702Disabled
+            | PrecheckViolation::Eip7702ChainIdMismatch(_, _)
+            | PrecheckViolation::Eip7702InvalidSignature(_)
+            | PrecheckViolation::Eip7702SenderRecoveredAuthorityMismatch(_, _)
+            | PrecheckViolation::Eip7702InvalidFactory(_) => Self::InvalidParams(value.to_string()),
+            PrecheckViolation::Eip7702NonceMismatch(_, _)
+            | PrecheckViolation::Eip7702SenderPendingTransactionCountTooHigh(_) => {
+                Self::EntryPointValidationRejected(value.to_string())
+            }
+            _ => Self::PrecheckFailed(value),
+        }
     }
 }
 

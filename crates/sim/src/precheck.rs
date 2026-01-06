@@ -13,9 +13,11 @@
 
 use std::{cmp, marker::PhantomData};
 
+use alloy_eips::eip7702::SignedAuthorization;
 use alloy_primitives::{Address, Bytes, B256, U256};
 use anyhow::Context;
 use arrayvec::ArrayVec;
+use futures_util::TryFutureExt;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use rundler_provider::{DAGasProvider, EntryPoint, EvmProvider, FeeEstimator};
@@ -23,7 +25,8 @@ use rundler_types::{
     chain::ChainSpec,
     da::DAGasData,
     pool::{MempoolError, PrecheckViolation},
-    PriorityFeeMode, UserOperation, UserOperationPermissions,
+    v0_7::EIP7702_FACTORY_MARKER,
+    EntryPointVersion, PriorityFeeMode, UserOperation, UserOperationPermissions,
 };
 use rundler_utils::math;
 use tracing::instrument;
@@ -144,7 +147,13 @@ struct AsyncData {
     base_fee: u128,
     min_pre_verification_gas: u128,
     da_gas_data: DAGasData,
-    eip7702_authority_pending_transaction_count: Option<u64>,
+    eip7702_authority_data: Option<Eip7702AuthorityData>,
+}
+
+#[derive(Clone, Debug)]
+struct Eip7702AuthorityData {
+    latest_transaction_count: u64,
+    pending_transaction_count: Option<u64>,
 }
 
 #[async_trait::async_trait]
@@ -166,7 +175,12 @@ where
     ) -> Result<PrecheckReturn, PrecheckError> {
         let async_data = self.load_async_data(op, block_hash, perms).await?;
         let mut violations: Vec<PrecheckViolation> = vec![];
-        violations.extend(self.check_init_code(op, &async_data, perms));
+
+        if let Some(data) = &async_data.eip7702_authority_data {
+            violations.extend(self.check_eip7702_init(op, data, perms));
+        } else {
+            violations.extend(self.check_init_code(op, &async_data, perms));
+        }
         violations.extend(self.check_gas(op, &async_data, perms));
         violations.extend(self.check_payer(op, &async_data));
         if !violations.is_empty() {
@@ -211,50 +225,35 @@ where
         op: &UO,
         async_data: &AsyncData,
         perms: &UserOperationPermissions,
-    ) -> ArrayVec<PrecheckViolation, 2> {
+    ) -> ArrayVec<PrecheckViolation, 6> {
         let AsyncData {
             factory_exists,
             sender_bytecode,
-            eip7702_authority_pending_transaction_count,
             ..
         } = async_data;
+
         let mut violations = ArrayVec::new();
 
-        // 7702 delegation case
-        if op.authorization_tuple().is_some() {
-            if op.factory().is_some() {
-                violations.push(PrecheckViolation::FactoryMustBeEmpty(op.factory().unwrap()));
-            }
-            if eip7702_authority_pending_transaction_count.is_some()
-                && eip7702_authority_pending_transaction_count.unwrap() > 1
-            {
-                violations.push(
-                    PrecheckViolation::Eip7702SenderPendingTransactionCountTooHigh(
-                        eip7702_authority_pending_transaction_count.unwrap(),
-                    ),
-                );
-            }
-            if perms.eip7702_disabled {
-                violations.push(PrecheckViolation::Eip7702Disabled);
-            }
-        // factory case
-        } else if op.factory().is_some() {
+        if op.factory().is_some() {
             if !factory_exists {
                 violations.push(PrecheckViolation::FactoryIsNotContract(
                     op.factory().unwrap(),
                 ))
             }
+            // sender already deployed case
             if !sender_bytecode.is_empty() {
                 violations.push(PrecheckViolation::ExistingSenderWithInitCode(op.sender()));
             }
-        // sender already deployed case
+        // Expected factory case
         } else if sender_bytecode.is_empty() {
             violations.push(PrecheckViolation::SenderIsNotContractAndNoInitCode(
                 op.sender(),
             ));
+        // EIP-7702 disabled case
         } else if perms.eip7702_disabled && is_7702_bytecode(sender_bytecode) {
             violations.push(PrecheckViolation::Eip7702Disabled);
         }
+
         violations
     }
 
@@ -397,6 +396,91 @@ where
         None
     }
 
+    fn check_eip7702_init(
+        &self,
+        op: &UO,
+        authority_data: &Eip7702AuthorityData,
+        perms: &UserOperationPermissions,
+    ) -> ArrayVec<PrecheckViolation, 6> {
+        let mut violations = ArrayVec::new();
+        let authorization_tuple = op
+            .authorization_tuple()
+            .expect("EIP-7702 authorization tuple is required when calling check_eip7702_init");
+
+        if !self.chain_spec.supports_eip7702(op.entry_point()) {
+            violations.push(PrecheckViolation::Eip7702NotSupported(op.entry_point()));
+            return violations;
+        }
+
+        // check if the EIP-7702 is disabled
+        if perms.eip7702_disabled {
+            violations.push(PrecheckViolation::Eip7702Disabled);
+            return violations;
+        }
+
+        // chain id must match spec chain id or be 0 for no chain id
+        let auth_chain_id: u64 = authorization_tuple.chain_id.try_into().unwrap_or(u64::MAX);
+        if auth_chain_id != 0 && auth_chain_id != self.chain_spec.id {
+            violations.push(PrecheckViolation::Eip7702ChainIdMismatch(
+                auth_chain_id,
+                self.chain_spec.id,
+            ));
+        }
+
+        // check the signature of the authorization tuple, must recover to the UO sender
+        match SignedAuthorization::from(authorization_tuple.clone()).recover_authority() {
+            Ok(authority) => {
+                if authority != op.sender() {
+                    violations.push(PrecheckViolation::Eip7702SenderRecoveredAuthorityMismatch(
+                        op.sender(),
+                        authority,
+                    ));
+                }
+            }
+            Err(e) => {
+                violations.push(PrecheckViolation::Eip7702InvalidSignature(e.to_string()));
+            }
+        }
+
+        // nonce check
+        if authorization_tuple.nonce != authority_data.latest_transaction_count {
+            violations.push(PrecheckViolation::Eip7702NonceMismatch(
+                authority_data.latest_transaction_count,
+                authorization_tuple.nonce,
+            ));
+        }
+
+        // factory check
+        if let Some(factory) = op.factory() {
+            if op.entry_point_version() > EntryPointVersion::V0_7 {
+                if factory != EIP7702_FACTORY_MARKER {
+                    violations.push(PrecheckViolation::Eip7702InvalidFactory(
+                        "factory can only be EIP-7702 factory 0x7702000000000000000000000000000000000000 when authorization is sent in entrypoint v0.7 and above"
+                            .to_string(),
+                    ));
+                }
+            } else {
+                violations.push(PrecheckViolation::Eip7702InvalidFactory(
+                    "factory must be empty when authorization is sent in entrypoint v0.7 and below"
+                        .to_string(),
+                ));
+            }
+        }
+
+        // pending transaction count check, if enabled
+        if let Some(pending_transaction_count) = authority_data.pending_transaction_count {
+            if pending_transaction_count - authority_data.latest_transaction_count > 1 {
+                violations.push(
+                    PrecheckViolation::Eip7702SenderPendingTransactionCountTooHigh(
+                        authority_data.pending_transaction_count.unwrap(),
+                    ),
+                );
+            }
+        }
+
+        violations
+    }
+
     #[instrument(skip_all)]
     async fn load_async_data(
         &self,
@@ -412,14 +496,14 @@ where
             paymaster_exists,
             payer_funds,
             (min_pre_verification_gas, da_gas_data),
-            eip7702_authority_pending_transaction_count,
+            eip7702_authority_data,
         ) = tokio::try_join!(
             self.is_contract(op.factory()),
             self.get_bytecode(op.sender()),
             self.is_contract(op.paymaster()),
             self.get_payer_funds(op),
             self.get_required_pre_verification_gas(op.clone(), block_hash, base_fee, perms),
-            self.get_eip7702_authority_pending_transaction_count(op)
+            self.get_eip7702_authority_data(op)
         )?;
         Ok(AsyncData {
             factory_exists,
@@ -429,7 +513,7 @@ where
             base_fee,
             min_pre_verification_gas,
             da_gas_data,
-            eip7702_authority_pending_transaction_count,
+            eip7702_authority_data,
         })
     }
 
@@ -513,21 +597,32 @@ where
         .await
     }
 
-    async fn get_eip7702_authority_pending_transaction_count(
+    async fn get_eip7702_authority_data(
         &self,
         op: &UO,
-    ) -> anyhow::Result<Option<u64>> {
-        if op.authorization_tuple().is_none()
-            || !self.settings.eip7702_authority_pending_check_enabled
-        {
+    ) -> anyhow::Result<Option<Eip7702AuthorityData>> {
+        if op.authorization_tuple().is_none() {
             return Ok(None);
         }
         let sender = op.sender();
-        let (pending_count, transaction_count) = tokio::try_join!(
-            self.provider.get_pending_transaction_count(sender),
-            self.provider.get_transaction_count(sender),
-        )?;
-        Ok(Some(pending_count - transaction_count))
+        let tx_count_fut = self.provider.get_transaction_count(sender);
+
+        let (transaction_count, pending_transaction_count) =
+            if self.settings.eip7702_authority_pending_check_enabled {
+                tokio::try_join!(
+                    tx_count_fut,
+                    self.provider
+                        .get_pending_transaction_count(sender)
+                        .map_ok(Some)
+                )?
+            } else {
+                (tx_count_fut.await?, None)
+            };
+
+        Ok(Some(Eip7702AuthorityData {
+            latest_transaction_count: transaction_count,
+            pending_transaction_count,
+        }))
     }
 }
 
@@ -575,7 +670,7 @@ mod tests {
             base_fee: 4_000,
             min_pre_verification_gas: 1_000,
             da_gas_data: DAGasData::Empty,
-            eip7702_authority_pending_transaction_count: None,
+            eip7702_authority_data: None,
         }
     }
 
@@ -1150,5 +1245,351 @@ mod tests {
 
         let res = prechecker.check_gas(&op, &async_data, &UserOperationPermissions::default());
         assert!(res.is_empty());
+    }
+
+    mod eip7702_tests {
+        use alloy_eips::eip7702::Authorization;
+        use alloy_primitives::{b256, B256};
+        use alloy_signer::Signer;
+        use alloy_signer_local::PrivateKeySigner;
+        use rundler_provider::{MockEntryPointV0_7, MockEvmProvider, MockFeeEstimator};
+        use rundler_types::{
+            authorization::Eip7702Auth,
+            v0_7::{
+                UserOperation as UserOperationV07, UserOperationBuilder as UserOperationBuilderV07,
+                UserOperationRequiredFields as UserOperationRequiredFieldsV07,
+                EIP7702_FACTORY_MARKER,
+            },
+            EntryPointVersion,
+        };
+
+        use super::*;
+
+        // Private key 1: 0x0000...0001
+        const TEST_PRIVATE_KEY: B256 =
+            b256!("0000000000000000000000000000000000000000000000000000000000000001");
+        // Address for private key 1: 0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf
+        const TEST_SENDER: Address = address!("7E5F4552091A69125d5DfCb7b8C2659029395Bdf");
+
+        // Private key 2: 0x0000...0002 (for mismatch test)
+        const TEST_PRIVATE_KEY_2: B256 =
+            b256!("0000000000000000000000000000000000000000000000000000000000000002");
+        // Address for private key 2: 0x2B5AD5c4795c026514f8317c7a215E218DcCD6cF
+        const TEST_SENDER_2: Address = address!("2B5AD5c4795c026514f8317c7a215E218DcCD6cF");
+
+        const TEST_AUTH_ADDRESS: Address = address!("1111111111111111111111111111111111111111");
+
+        type TestPrechecker = PrecheckerImpl<
+            UserOperationV07,
+            Arc<MockEvmProvider>,
+            MockEntryPointV0_7,
+            MockFeeEstimator,
+        >;
+
+        fn create_base_config_v07() -> (ChainSpec, TestPrechecker) {
+            let cs = ChainSpec {
+                id: 1,
+                eip7702_enabled: true,
+                ..Default::default()
+            };
+            let prechecker = PrecheckerImpl::new(
+                cs.clone(),
+                Arc::new(MockEvmProvider::new()),
+                MockEntryPointV0_7::new(),
+                MockFeeEstimator::new(),
+                Settings::default(),
+            );
+            (cs, prechecker)
+        }
+
+        fn get_authority_data(
+            latest_tx_count: u64,
+            pending_tx_count: Option<u64>,
+        ) -> Eip7702AuthorityData {
+            Eip7702AuthorityData {
+                latest_transaction_count: latest_tx_count,
+                pending_transaction_count: pending_tx_count,
+            }
+        }
+
+        async fn create_signed_auth(private_key: B256, chain_id: u64, nonce: u64) -> Eip7702Auth {
+            let signer = PrivateKeySigner::from_bytes(&private_key).unwrap();
+            let auth = Authorization {
+                chain_id: U256::from(chain_id),
+                address: TEST_AUTH_ADDRESS,
+                nonce,
+            };
+            let sig = signer.sign_hash(&auth.signature_hash()).await.unwrap();
+            Eip7702Auth::from(auth.into_signed(sig))
+        }
+
+        fn create_uo_builder(
+            cs: &ChainSpec,
+            ep_version: EntryPointVersion,
+        ) -> UserOperationBuilderV07<'_> {
+            UserOperationBuilderV07::new(
+                cs,
+                ep_version,
+                UserOperationRequiredFieldsV07 {
+                    sender: TEST_SENDER,
+                    nonce: U256::ZERO,
+                    call_data: Bytes::default(),
+                    call_gas_limit: MIN_CALL_GAS_LIMIT,
+                    verification_gas_limit: 100_000,
+                    pre_verification_gas: 1_000,
+                    max_fee_per_gas: 5_000,
+                    max_priority_fee_per_gas: 2_000,
+                    signature: Bytes::default(),
+                },
+            )
+        }
+
+        #[tokio::test]
+        async fn test_check_eip7702_not_supported() {
+            let (mut cs, _) = create_base_config_v07();
+            cs.eip7702_enabled = false;
+            let prechecker = PrecheckerImpl::new(
+                cs.clone(),
+                Arc::new(MockEvmProvider::new()),
+                MockEntryPointV0_7::new(),
+                MockFeeEstimator::new(),
+                Settings::default(),
+            );
+
+            let op = create_uo_builder(&cs, EntryPointVersion::V0_7)
+                .authorization_tuple(create_signed_auth(TEST_PRIVATE_KEY, cs.id, 0).await)
+                .build();
+
+            let res = prechecker.check_eip7702_init(
+                &op,
+                &get_authority_data(0, None),
+                &UserOperationPermissions::default(),
+            );
+
+            let mut expected: ArrayVec<PrecheckViolation, 6> = ArrayVec::new();
+            expected.push(PrecheckViolation::Eip7702NotSupported(op.entry_point()));
+            assert_eq!(res, expected);
+        }
+
+        #[tokio::test]
+        async fn test_check_eip7702_disabled_via_perms() {
+            let (cs, prechecker) = create_base_config_v07();
+
+            let op = create_uo_builder(&cs, EntryPointVersion::V0_7)
+                .authorization_tuple(create_signed_auth(TEST_PRIVATE_KEY, cs.id, 0).await)
+                .build();
+
+            let perms = UserOperationPermissions {
+                eip7702_disabled: true,
+                ..Default::default()
+            };
+
+            let res = prechecker.check_eip7702_init(&op, &get_authority_data(0, None), &perms);
+
+            let mut expected: ArrayVec<PrecheckViolation, 6> = ArrayVec::new();
+            expected.push(PrecheckViolation::Eip7702Disabled);
+            assert_eq!(res, expected);
+        }
+
+        #[tokio::test]
+        async fn test_check_eip7702_chain_id_mismatch() {
+            let (cs, prechecker) = create_base_config_v07();
+
+            let op = create_uo_builder(&cs, EntryPointVersion::V0_7)
+                .authorization_tuple(create_signed_auth(TEST_PRIVATE_KEY, 9999, 0).await)
+                .build();
+
+            let res = prechecker.check_eip7702_init(
+                &op,
+                &get_authority_data(0, None),
+                &UserOperationPermissions::default(),
+            );
+
+            let mut expected: ArrayVec<PrecheckViolation, 6> = ArrayVec::new();
+            expected.push(PrecheckViolation::Eip7702ChainIdMismatch(9999, 1));
+            assert_eq!(res, expected);
+        }
+
+        #[tokio::test]
+        async fn test_check_eip7702_chain_id_zero_allowed() {
+            let (cs, prechecker) = create_base_config_v07();
+
+            let op = create_uo_builder(&cs, EntryPointVersion::V0_7)
+                .authorization_tuple(create_signed_auth(TEST_PRIVATE_KEY, 0, 0).await)
+                .build();
+
+            let res = prechecker.check_eip7702_init(
+                &op,
+                &get_authority_data(0, None),
+                &UserOperationPermissions::default(),
+            );
+
+            assert!(res.is_empty());
+        }
+
+        #[tokio::test]
+        async fn test_check_eip7702_nonce_mismatch() {
+            let (cs, prechecker) = create_base_config_v07();
+
+            let op = create_uo_builder(&cs, EntryPointVersion::V0_7)
+                .authorization_tuple(create_signed_auth(TEST_PRIVATE_KEY, cs.id, 5).await)
+                .build();
+
+            let res = prechecker.check_eip7702_init(
+                &op,
+                &get_authority_data(0, None),
+                &UserOperationPermissions::default(),
+            );
+
+            let mut expected: ArrayVec<PrecheckViolation, 6> = ArrayVec::new();
+            expected.push(PrecheckViolation::Eip7702NonceMismatch(0, 5));
+            assert_eq!(res, expected);
+        }
+
+        #[tokio::test]
+        async fn test_check_eip7702_factory_invalid_v0_7() {
+            let (cs, prechecker) = create_base_config_v07();
+
+            let op = create_uo_builder(&cs, EntryPointVersion::V0_7)
+                .factory(
+                    address!("2222222222222222222222222222222222222222"),
+                    Bytes::default(),
+                )
+                .authorization_tuple(create_signed_auth(TEST_PRIVATE_KEY, cs.id, 0).await)
+                .build();
+
+            let res = prechecker.check_eip7702_init(
+                &op,
+                &get_authority_data(0, None),
+                &UserOperationPermissions::default(),
+            );
+
+            let mut expected: ArrayVec<PrecheckViolation, 6> = ArrayVec::new();
+            expected.push(PrecheckViolation::Eip7702InvalidFactory(
+                "factory must be empty when authorization is sent in entrypoint v0.7 and below"
+                    .to_string(),
+            ));
+            assert_eq!(res, expected);
+        }
+
+        #[tokio::test]
+        async fn test_check_eip7702_factory_must_be_marker_v0_8() {
+            let (cs, prechecker) = create_base_config_v07();
+
+            let op = create_uo_builder(&cs, EntryPointVersion::V0_8)
+                .factory(
+                    address!("2222222222222222222222222222222222222222"),
+                    Bytes::default(),
+                )
+                .authorization_tuple(create_signed_auth(TEST_PRIVATE_KEY, cs.id, 0).await)
+                .build();
+
+            let res = prechecker.check_eip7702_init(
+                &op,
+                &get_authority_data(0, None),
+                &UserOperationPermissions::default(),
+            );
+
+            let mut expected: ArrayVec<PrecheckViolation, 6> = ArrayVec::new();
+            expected.push(PrecheckViolation::Eip7702InvalidFactory(
+                "factory can only be EIP-7702 factory 0x7702000000000000000000000000000000000000 when authorization is sent in entrypoint v0.7 and above"
+                    .to_string(),
+            ));
+            assert_eq!(res, expected);
+        }
+
+        #[tokio::test]
+        async fn test_check_eip7702_factory_marker_allowed_v0_8() {
+            let (cs, prechecker) = create_base_config_v07();
+
+            let op = create_uo_builder(&cs, EntryPointVersion::V0_8)
+                .factory(EIP7702_FACTORY_MARKER, Bytes::default())
+                .authorization_tuple(create_signed_auth(TEST_PRIVATE_KEY, cs.id, 0).await)
+                .build();
+
+            let res = prechecker.check_eip7702_init(
+                &op,
+                &get_authority_data(0, None),
+                &UserOperationPermissions::default(),
+            );
+
+            assert!(res.is_empty());
+        }
+
+        #[tokio::test]
+        async fn test_check_eip7702_pending_tx_count_too_high() {
+            let (cs, prechecker) = create_base_config_v07();
+
+            let op = create_uo_builder(&cs, EntryPointVersion::V0_7)
+                .authorization_tuple(create_signed_auth(TEST_PRIVATE_KEY, cs.id, 5).await)
+                .build();
+
+            let res = prechecker.check_eip7702_init(
+                &op,
+                &get_authority_data(5, Some(10)),
+                &UserOperationPermissions::default(),
+            );
+
+            let mut expected: ArrayVec<PrecheckViolation, 6> = ArrayVec::new();
+            expected.push(PrecheckViolation::Eip7702SenderPendingTransactionCountTooHigh(10));
+            assert_eq!(res, expected);
+        }
+
+        #[tokio::test]
+        async fn test_check_eip7702_pending_tx_count_allowed() {
+            let (cs, prechecker) = create_base_config_v07();
+
+            let op = create_uo_builder(&cs, EntryPointVersion::V0_7)
+                .authorization_tuple(create_signed_auth(TEST_PRIVATE_KEY, cs.id, 5).await)
+                .build();
+
+            let res = prechecker.check_eip7702_init(
+                &op,
+                &get_authority_data(5, Some(6)),
+                &UserOperationPermissions::default(),
+            );
+
+            assert!(res.is_empty());
+        }
+
+        #[tokio::test]
+        async fn test_check_eip7702_authority_sender_mismatch() {
+            let (cs, prechecker) = create_base_config_v07();
+
+            // Sign with private key 2, but sender is address of private key 1
+            let op = create_uo_builder(&cs, EntryPointVersion::V0_7)
+                .authorization_tuple(create_signed_auth(TEST_PRIVATE_KEY_2, cs.id, 0).await)
+                .build();
+
+            let res = prechecker.check_eip7702_init(
+                &op,
+                &get_authority_data(0, None),
+                &UserOperationPermissions::default(),
+            );
+
+            let mut expected: ArrayVec<PrecheckViolation, 6> = ArrayVec::new();
+            expected.push(PrecheckViolation::Eip7702SenderRecoveredAuthorityMismatch(
+                TEST_SENDER,
+                TEST_SENDER_2,
+            ));
+            assert_eq!(res, expected);
+        }
+
+        #[tokio::test]
+        async fn test_check_eip7702_valid_signature_passes() {
+            let (cs, prechecker) = create_base_config_v07();
+
+            let op = create_uo_builder(&cs, EntryPointVersion::V0_7)
+                .authorization_tuple(create_signed_auth(TEST_PRIVATE_KEY, cs.id, 0).await)
+                .build();
+
+            let res = prechecker.check_eip7702_init(
+                &op,
+                &get_authority_data(0, None),
+                &UserOperationPermissions::default(),
+            );
+
+            assert!(res.is_empty());
+        }
     }
 }
