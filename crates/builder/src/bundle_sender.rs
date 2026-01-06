@@ -29,6 +29,7 @@ use rundler_provider::{
 };
 use rundler_task::TaskSpawner;
 use rundler_types::{
+    authorization::Eip7702Auth,
     builder::BundlingMode,
     chain::ChainSpec,
     pool::{AddressUpdate, NewHead, Pool, PoolOperation},
@@ -862,12 +863,17 @@ where
         )
         .with_call_config(GethDebugTracerCallConfig::default().only_top_call());
 
-        let trace = self
+        let trace_fut = self
             .ep_providers
             .evm()
-            .debug_trace_transaction(tx_hash, trace_options)
-            .await
-            .context("should have fetched trace from provider")?;
+            .debug_trace_transaction(tx_hash, trace_options);
+        let get_fut = self.ep_providers.evm().get_transaction_by_hash(tx_hash);
+        let (trace, tx) = tokio::try_join!(trace_fut, get_fut)
+            .context("should have fetched trace and tx from provider")?;
+
+        let auth_list: Vec<Eip7702Auth> = tx
+            .map(|tx| rundler_provider::get_auth_list_from_transaction(&tx))
+            .unwrap_or_default();
 
         let frame = trace
             .try_into_call_frame()
@@ -877,6 +883,7 @@ where
             &self.chain_spec,
             self.ep_address,
             &frame.input,
+            &auth_list,
         );
 
         let Some(revert_data) = frame.output else {
@@ -2186,10 +2193,14 @@ mod tests {
                 .into())
             });
 
+        mock_evm
+            .expect_get_transaction_by_hash()
+            .returning(move |_| Ok(None));
+
         let ctx = MockEntryPointV0_6::decode_ops_from_calldata_context();
         ctx.expect()
-            .withf(move |_, _, data| *data == input_clone)
-            .returning(move |_, _, _| {
+            .withf(move |_, _, data, _| *data == input_clone)
+            .returning(move |_, _, _, _| {
                 vec![UserOpsPerAggregator {
                     user_ops: vec![op.clone()],
                     ..Default::default()

@@ -11,7 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, B256};
+use alloy_eips::eip7702::{Authorization, SignedAuthorization};
+use alloy_primitives::{Address, B256, U256};
 use anyhow::{anyhow, Context};
 use rundler_task::grpc::protos::{from_bytes, ConversionError, ToProtoBytes};
 use rundler_types::{
@@ -85,26 +86,29 @@ pub trait TryUoFromProto<T>: Sized {
 
 impl From<AuthorizationTuple> for Eip7702Auth {
     fn from(value: AuthorizationTuple) -> Self {
-        Eip7702Auth {
-            chain_id: value.chain_id,
-            address: from_bytes(&value.address).unwrap_or_default(),
-            nonce: value.nonce,
-            y_parity: value.y_parity as u8,
-            r: from_bytes(&value.r).unwrap_or_default(),
-            s: from_bytes(&value.s).unwrap_or_default(),
-        }
+        SignedAuthorization::new_unchecked(
+            Authorization {
+                chain_id: U256::from(value.chain_id),
+                address: from_bytes(&value.address).unwrap_or_default(),
+                nonce: value.nonce,
+            },
+            value.y_parity as u8,
+            from_bytes(&value.r).unwrap_or_default(),
+            from_bytes(&value.s).unwrap_or_default(),
+        )
+        .into()
     }
 }
 
 impl From<Eip7702Auth> for AuthorizationTuple {
     fn from(value: Eip7702Auth) -> Self {
         AuthorizationTuple {
-            chain_id: value.chain_id,
+            chain_id: value.chain_id.try_into().unwrap_or(u64::MAX),
             address: value.address.to_proto_bytes(),
             nonce: value.nonce,
-            y_parity: value.y_parity.into(),
-            r: value.r.to_proto_bytes(),
-            s: value.s.to_proto_bytes(),
+            y_parity: value.y_parity().into(),
+            r: value.r().to_proto_bytes(),
+            s: value.s().to_proto_bytes(),
         }
     }
 }

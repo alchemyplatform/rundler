@@ -13,6 +13,7 @@
 
 use alloy_primitives::{Address, Bytes, U128, U256};
 use rundler_types::{
+    authorization::Eip7702Auth,
     chain::ChainSpec,
     v0_6::{
         UserOperation, UserOperationBuilder, UserOperationOptionalGas, UserOperationRequiredFields,
@@ -21,7 +22,7 @@ use rundler_types::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{rpc_authorization::RpcEip7702Auth, RpcAddress};
+use super::RpcAddress;
 use crate::{
     eth::EthRpcError,
     utils::{FromRpcType, TryFromRpcType},
@@ -43,7 +44,7 @@ pub(crate) struct RpcUserOperation {
     paymaster_and_data: Bytes,
     signature: Bytes,
     #[serde(skip_serializing_if = "Option::is_none")]
-    eip7702_auth: Option<RpcEip7702Auth>,
+    eip7702_auth: Option<Eip7702Auth>,
     #[serde(skip_serializing_if = "Option::is_none")]
     aggregator: Option<Address>,
 }
@@ -63,7 +64,7 @@ impl From<UserOperation> for RpcUserOperation {
             max_priority_fee_per_gas: U128::from(op.max_priority_fee_per_gas),
             paymaster_and_data: op.paymaster_and_data,
             signature: op.signature,
-            eip7702_auth: op.authorization_tuple.map(|a| a.into()),
+            eip7702_auth: op.authorization_tuple,
             aggregator: op.aggregator,
         }
     }
@@ -99,7 +100,7 @@ impl TryFromRpcType<RpcUserOperation> for UserOperation {
         );
 
         if let Some(auth) = def.eip7702_auth {
-            builder = builder.authorization_tuple(auth.into());
+            builder = builder.authorization_tuple(auth);
         }
 
         if let Some(agg) = def.aggregator {
