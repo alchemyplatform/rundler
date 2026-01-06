@@ -217,57 +217,41 @@ impl BuilderArgs {
         let mut entry_points = vec![];
         let mut num_builders = 0;
 
-        if common
-            .enabled_entry_points
-            .contains(&EntryPointVersion::V0_6)
-        {
+        for ep in &common.enabled_entry_points {
+            let ep_address = chain_spec.entry_point_address(*ep);
             let builders = entry_point_builders
                 .as_ref()
                 .and_then(|builder_configs| {
                     builder_configs
-                        .get_for_entry_point(chain_spec.entry_point_address_v0_6)
+                        .get_for_entry_point(ep_address)
                         .map(|ep| ep.builders())
                 })
-                .unwrap_or_else(|| builder_settings_from_cli(common.num_builders_v0_6));
+                .unwrap_or_else(|| {
+                    builder_settings_from_cli(common.num_builders_for_entry_point(*ep))
+                });
+
+            // check for submission proxy on EP v0.9+ and fail
+            if *ep >= EntryPointVersion::V0_9
+                && builders.iter().any(|b| b.submission_proxy.is_some())
+            {
+                return Err(anyhow::anyhow!(
+                    "Submission proxy is not supported for entry point version: {:?}",
+                    *ep
+                ));
+            }
+
+            num_builders += builders.len();
 
             entry_points.push(EntryPointBuilderSettings {
-                address: chain_spec.entry_point_address_v0_6,
-                version: EntryPointVersion::V0_6,
-                mempool_configs: mempool_configs
-                    .get_for_entry_point(chain_spec.entry_point_address_v0_6),
+                address: ep_address,
+                version: *ep,
+                mempool_configs: mempool_configs.get_for_entry_point(ep_address),
                 builders,
             });
-
-            num_builders += common.num_builders_v0_6;
-        }
-        if common
-            .enabled_entry_points
-            .contains(&EntryPointVersion::V0_7)
-        {
-            let builders = entry_point_builders
-                .as_ref()
-                .and_then(|builder_configs| {
-                    builder_configs
-                        .get_for_entry_point(chain_spec.entry_point_address_v0_7)
-                        .map(|ep| ep.builders())
-                })
-                .unwrap_or_else(|| builder_settings_from_cli(common.num_builders_v0_7));
-
-            entry_points.push(EntryPointBuilderSettings {
-                address: chain_spec.entry_point_address_v0_7,
-                version: EntryPointVersion::V0_7,
-                mempool_configs: mempool_configs
-                    .get_for_entry_point(chain_spec.entry_point_address_v0_7),
-                builders,
-            });
-
-            num_builders += common.num_builders_v0_7;
         }
 
         let sender_args = self.sender_args(&chain_spec, &rpc_url)?;
-        let signing_scheme = self
-            .signer_args
-            .signing_scheme(Some(num_builders as usize))?;
+        let signing_scheme = self.signer_args.signing_scheme(Some(num_builders))?;
 
         let da_gas_tracking_enabled =
             super::lint_da_gas_tracking(common.da_gas_tracking_enabled, &chain_spec);
