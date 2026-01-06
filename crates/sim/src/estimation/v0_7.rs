@@ -681,7 +681,7 @@ mod tests {
     use rundler_provider::{
         ExecutionResult, MockEntryPointV0_7, MockEvmProvider, MockFeeEstimator,
     };
-    use rundler_types::v0_7::UserOperationOptionalGas;
+    use rundler_types::{v0_7::UserOperationOptionalGas, EntryPointVersion};
 
     use super::*;
     use crate::{
@@ -781,6 +781,9 @@ mod tests {
             factory_data: Bytes::new(),
             eip7702_auth_address: None,
             aggregator: None,
+            paymaster_signature: None,
+
+            entry_point_version: EntryPointVersion::V0_7,
         }
     }
 
@@ -1015,6 +1018,9 @@ mod tests {
             factory_data: Bytes::new(),
             eip7702_auth_address: None,
             aggregator: None,
+            paymaster_signature: None,
+
+            entry_point_version: EntryPointVersion::V0_7,
         };
 
         let estimation = estimator

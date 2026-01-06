@@ -230,8 +230,9 @@ where
                     bundle_sender_actions.extend(actions);
                     supported_entry_points.insert(self.args.chain_spec.entry_point_address_v0_7);
                 }
-                EntryPointVersion::Unspecified => {
-                    panic!("Unspecified entry point version")
+                EntryPointVersion::V0_8 | EntryPointVersion::V0_9 => {
+                    // TODO(entrypoints)
+                    todo!("entry point v0.8 and v0.9 are not supported");
                 }
             }
         }
