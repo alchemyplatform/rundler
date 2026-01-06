@@ -97,6 +97,12 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
 - `--num_builders_v0_7`: The number of bundle builders to run on entry point v0.7 (default: `1`)
   - env: _NUM_BUILDERS_V0_7_
   - NOTE: ignored if `entry_point_builders_path` is set
+- `--num_builders_v0_8`: The number of bundle builders to run on entry point v0.8 (default: `1`)
+  - env: _NUM_BUILDERS_V0_8_
+  - NOTE: ignored if `entry_point_builders_path` is set
+- `--num_builders_v0_9`: The number of bundle builders to run on entry point v0.9 (default: `1`)
+  - env: _NUM_BUILDERS_V0_9_
+  - NOTE: ignored if `entry_point_builders_path` is set
 - `--da_gas_tracking_enabled`: Enable the DA gas tracking feature of the mempool (default: `false`)
   - env: _DA_GAS_TRACKING_ENABLED_
 - `--max_expected_storage_slots`: Optionally set the maximum number of expected storage slots to submit with a conditional transaction. (default: `None`)
