@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 
+alloy-eips.workspace = true
 alloy-primitives.workspace = true
 alloy-sol-types.workspace = true
 
@@ -32,6 +33,8 @@ tracing.workspace = true
 [dev-dependencies]
 alloy-json-rpc.workspace = true
 alloy-primitives = { workspace = true, features = ["rand"] }
+alloy-signer.workspace = true
+alloy-signer-local.workspace = true
 alloy-transport.workspace = true
 mockall.workspace = true
 rundler-provider = { workspace = true, features = ["test-utils"] }

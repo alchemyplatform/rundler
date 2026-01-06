@@ -413,9 +413,11 @@ where
 
     fn decode_ops_from_calldata(
         chain_spec: &ChainSpec,
+        address: Address,
         calldata: &Bytes,
+        auth_list: &[Eip7702Auth],
     ) -> Vec<UserOpsPerAggregator<UserOperation>> {
-        decode_ops_from_calldata(chain_spec, calldata)
+        decode_ops_from_calldata(chain_spec, address, calldata, auth_list)
     }
 }
 
@@ -720,11 +722,16 @@ pub fn decode_validation_revert(err_bytes: &Bytes) -> ValidationRevert {
 /// Decode user ops from calldata
 pub fn decode_ops_from_calldata(
     chain_spec: &ChainSpec,
+    address: Address,
     calldata: &Bytes,
+    tx_auth_list: &[Eip7702Auth],
 ) -> Vec<UserOpsPerAggregator<UserOperation>> {
     let entry_point_calls = match IEntryPointCalls::abi_decode(calldata) {
         Ok(entry_point_calls) => entry_point_calls,
         Err(_) => return vec![],
+    };
+    let Some(ep_version) = chain_spec.entry_point_version(address) else {
+        return vec![];
     };
 
     match entry_point_calls {
@@ -733,7 +740,12 @@ pub fn decode_ops_from_calldata(
                 .ops
                 .into_iter()
                 .filter_map(|op| {
-                    UserOperationBuilder::from_packed(op, chain_spec, EntryPointVersion::V0_7)
+                    let maybe_auth = tx_auth_list
+                        .iter()
+                        .find(|auth| auth.recover_authority().is_ok_and(|addr| addr == op.sender))
+                        .cloned();
+
+                    UserOperationBuilder::from_packed(op, chain_spec, ep_version, maybe_auth)
                         .ok()
                         .map(|uo| uo.build())
                 })
@@ -754,10 +766,15 @@ pub fn decode_ops_from_calldata(
                         .userOps
                         .into_iter()
                         .filter_map(|op| {
+                            let maybe_auth = tx_auth_list
+                                .iter()
+                                .find(|auth| {
+                                    auth.recover_authority().is_ok_and(|addr| addr == op.sender)
+                                })
+                                .cloned();
+
                             UserOperationBuilder::from_packed(
-                                op,
-                                chain_spec,
-                                EntryPointVersion::V0_7,
+                                op, chain_spec, ep_version, maybe_auth,
                             )
                             .ok()
                             .map(|uo| uo.build())

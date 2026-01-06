@@ -11,7 +11,9 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{b256, ruint::FromUintError, Address, Bytes, FixedBytes, B256, U256};
+use alloy_primitives::{
+    address, b256, ruint::FromUintError, Address, Bytes, FixedBytes, B256, U256,
+};
 use alloy_sol_types::{eip712_domain, sol, SolStruct, SolValue};
 use rundler_contracts::v0_7::{PackedUserOperation, PackedUserOperationNoSig};
 use rundler_utils::random::{random_bytes, random_bytes_array};
@@ -43,8 +45,10 @@ const ABI_ENCODED_USER_OPERATION_FIXED_LEN: usize = 416;
 const PAYMASTER_SIG_MAGIC: [u8; 8] = [0x22, 0xe3, 0x25, 0xa2, 0x97, 0x43, 0x96, 0x56];
 // Minimum length of paymaster data that can contain a paymaster signature
 const MIN_PAYMASTER_DATA_WITH_SUFFIX_LEN: usize = 62;
-// EIP-7702 initCode marker
-const INITCODE_EIP7702_MARKER: [u8; 20] = [
+/// EIP-7702 factory marker
+pub const EIP7702_FACTORY_MARKER: Address = address!("7702000000000000000000000000000000000000");
+/// EIP-7702 initCode marker
+pub const EIP7702_INITCODE_MARKER: [u8; 20] = [
     0x77, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00,
 ];
@@ -604,12 +608,10 @@ impl UserOperationOptionalGas {
             builder = builder.factory(factory, vec![255_u8; self.factory_data.len()].into());
         }
         if let Some(eip_7702_auth_address) = self.eip7702_auth_address {
-            let auth = Eip7702Auth {
-                address: eip_7702_auth_address,
-                chain_id: chain_spec.id,
-                ..Default::default()
-            };
-            builder = builder.authorization_tuple(auth.max_fill());
+            builder = builder.authorization_tuple(Eip7702Auth::new_max_fill(
+                chain_spec.id,
+                eip_7702_auth_address,
+            ));
         }
         if let Some(aggregator) = self.aggregator {
             builder = builder.aggregator(aggregator);
@@ -667,12 +669,8 @@ impl UserOperationOptionalGas {
             builder = builder.factory(self.factory.unwrap(), random_bytes(self.factory_data.len()))
         }
         if let Some(address) = self.eip7702_auth_address {
-            let auth = Eip7702Auth {
-                address,
-                chain_id: chain_spec.id,
-                ..Default::default()
-            };
-            builder = builder.authorization_tuple(auth.random_fill());
+            builder =
+                builder.authorization_tuple(Eip7702Auth::new_random_fill(chain_spec.id, address));
         }
         if let Some(aggregator) = self.aggregator {
             builder = builder.aggregator(aggregator);
@@ -742,10 +740,7 @@ impl UserOperationOptionalGas {
             );
         }
         if let Some(contract) = self.eip7702_auth_address {
-            builder = builder.authorization_tuple(Eip7702Auth {
-                address: contract,
-                ..Default::default()
-            });
+            builder = builder.authorization_tuple(Eip7702Auth::new_dummy(chain_spec.id, contract));
         }
         builder
     }
@@ -859,6 +854,7 @@ impl<'a> UserOperationBuilder<'a> {
         puo: PackedUserOperation,
         chain_spec: &'a ChainSpec,
         entry_point_version: EntryPointVersion,
+        eip7702_auth: Option<Eip7702Auth>,
     ) -> Result<Self, FromUintError<u128>> {
         let mut builder = UserOperationBuilder::new(
             chain_spec,
@@ -875,6 +871,9 @@ impl<'a> UserOperationBuilder<'a> {
                 signature: puo.signature.clone(),
             },
         );
+        if let Some(auth) = eip7702_auth {
+            builder = builder.authorization_tuple(auth);
+        }
 
         builder = builder.packed(puo.clone());
 
@@ -1246,7 +1245,7 @@ fn hash_packed_user_operation_v0_8_plus(
 ) -> B256 {
     let mut puo_no_sig: PackedUserOperationNoSig = puo.into();
 
-    if puo_no_sig.initCode.starts_with(&INITCODE_EIP7702_MARKER) {
+    if puo_no_sig.initCode.starts_with(&EIP7702_INITCODE_MARKER) {
         let Some(delegation_address) = delegation_address else {
             // We cannot calculate a valid hash without a delegation address
             return INVALID_HASH;
@@ -1254,7 +1253,7 @@ fn hash_packed_user_operation_v0_8_plus(
 
         puo_no_sig.initCode = [
             delegation_address.as_ref(),
-            &puo_no_sig.initCode[INITCODE_EIP7702_MARKER.len()..],
+            &puo_no_sig.initCode[EIP7702_INITCODE_MARKER.len()..],
         ]
         .concat()
         .into();
@@ -1333,9 +1332,10 @@ mod tests {
 
         let uo = builder.build();
         let packed = uo.clone().pack();
-        let unpacked = UserOperationBuilder::from_packed(packed, &cs, EntryPointVersion::V0_7)
-            .unwrap()
-            .build();
+        let unpacked =
+            UserOperationBuilder::from_packed(packed, &cs, EntryPointVersion::V0_7, None)
+                .unwrap()
+                .build();
 
         assert_eq!(uo, unpacked);
     }
@@ -1364,9 +1364,10 @@ mod tests {
 
         let uo = builder.build();
         let packed = uo.clone().pack();
-        let unpacked = UserOperationBuilder::from_packed(packed, &cs, EntryPointVersion::V0_7)
-            .unwrap()
-            .build();
+        let unpacked =
+            UserOperationBuilder::from_packed(packed, &cs, EntryPointVersion::V0_7, None)
+                .unwrap()
+                .build();
 
         assert_eq!(uo, unpacked);
     }
@@ -1392,7 +1393,7 @@ mod tests {
         };
 
         let hash = b256!("e486401370d145766c3cf7ba089553214a1230d38662ae532c9b62eb6dadcf7e");
-        let uo = UserOperationBuilder::from_packed(puo, &cs, EntryPointVersion::V0_7)
+        let uo = UserOperationBuilder::from_packed(puo, &cs, EntryPointVersion::V0_7, None)
             .unwrap()
             .build();
         assert_eq!(uo.hash(), hash);
@@ -1493,7 +1494,7 @@ mod tests {
         };
 
         let hash = b256!("063B6A12FDFB3DB99A1844B05709E346278575281DAB0FB99A20E400D9C760B5");
-        let uo = UserOperationBuilder::from_packed(puo, &cs, EntryPointVersion::V0_8)
+        let uo = UserOperationBuilder::from_packed(puo, &cs, EntryPointVersion::V0_8, None)
             .unwrap()
             .build();
         assert_eq!(uo.hash(), hash);
@@ -1527,7 +1528,7 @@ mod tests {
         };
 
         let hash = b256!("4E12D8B45C2AD5CED3AC06F5CCBF1FDB89D136D000D869AAA4689B97B52FD834");
-        let uo = UserOperationBuilder::from_packed(puo, &cs, EntryPointVersion::V0_9)
+        let uo = UserOperationBuilder::from_packed(puo, &cs, EntryPointVersion::V0_9, None)
             .unwrap()
             .build();
         assert_eq!(uo.hash(), hash);
