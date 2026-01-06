@@ -11,10 +11,11 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, Bytes, B256, U256};
+use alloy_primitives::{Address, Bytes, U256};
 use alloy_sol_types::{sol, SolInterface, SolValue};
 use rundler_types::{
-    proxy::SubmissionProxy, UserOperation as _, UserOperationVariant, UserOpsPerAggregator,
+    proxy::SubmissionProxy, UserOperation as _, UserOperationId, UserOperationVariant,
+    UserOpsPerAggregator,
 };
 use PBHEntryPoint::{InvalidExternalNullifier, InvalidNullifier, PBHEntryPointErrors};
 
@@ -41,7 +42,7 @@ impl SubmissionProxy for PbhSubmissionProxy {
         &self,
         revert_data: &Bytes,
         ops: &[UserOpsPerAggregator<UserOperationVariant>],
-    ) -> Vec<B256> {
+    ) -> Vec<UserOperationId> {
         let Ok(decoded) = PBHEntryPointErrors::abi_decode(revert_data) else {
             tracing::warn!("unknown revert data for PBH submission proxy: {revert_data:?}");
             return vec![];
@@ -70,10 +71,11 @@ impl SubmissionProxy for PbhSubmissionProxy {
             .find(|uo| get_signal_hash(uo) == signal_hash)
             .map(|uo| {
                 let uo_hash = uo.hash();
+                let id = uo.id();
                 tracing::info!(
-                    "PBH proxy process_revert found invalid user operation: {uo_hash:?}"
+                    "PBH proxy process_revert found invalid user operation hash: {uo_hash:?}, id: {id:?}",
                 );
-                vec![uo_hash]
+                vec![id]
             })
             .unwrap_or_default()
     }

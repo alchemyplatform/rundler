@@ -30,7 +30,8 @@ use rundler_sim::{
 };
 use rundler_task::TaskSpawnerExt;
 use rundler_types::{
-    chain::ChainSpec, pool::Pool as PoolT, EntryPointVersion, UserOperation, UserOperationVariant,
+    chain::ChainSpec, pool::Pool as PoolT, EntryPointAbiVersion, EntryPointVersion, UserOperation,
+    UserOperationVariant,
 };
 use rundler_utils::emit::WithEntryPoint;
 use tokio::sync::{broadcast, mpsc};
@@ -205,8 +206,8 @@ where
 
         let mut supported_entry_points = HashSet::new();
         for ep in &self.args.entry_points {
-            match ep.version {
-                EntryPointVersion::V0_6 => {
+            match ep.version.abi_version() {
+                EntryPointAbiVersion::V0_6 => {
                     let actions = self
                         .create_builders_v0_6(
                             &task_spawner,
@@ -216,9 +217,9 @@ where
                         )
                         .await?;
                     bundle_sender_actions.extend(actions);
-                    supported_entry_points.insert(self.args.chain_spec.entry_point_address_v0_6);
+                    supported_entry_points.insert(ep.address);
                 }
-                EntryPointVersion::V0_7 => {
+                EntryPointAbiVersion::V0_7 => {
                     let actions = self
                         .create_builders_v0_7(
                             &task_spawner,
@@ -228,11 +229,7 @@ where
                         )
                         .await?;
                     bundle_sender_actions.extend(actions);
-                    supported_entry_points.insert(self.args.chain_spec.entry_point_address_v0_7);
-                }
-                EntryPointVersion::V0_8 | EntryPointVersion::V0_9 => {
-                    // TODO(entrypoints)
-                    todo!("entry point v0.8 and v0.9 are not supported");
+                    supported_entry_points.insert(ep.address);
                 }
             }
         }
@@ -330,12 +327,18 @@ where
     where
         T: TaskSpawnerExt,
     {
-        info!("Mempool config for ep v0.7: {:?}", ep.mempool_configs);
+        info!(
+            "Mempool config for ep {:?}: {:?}",
+            ep.version, ep.mempool_configs
+        );
         let ep_providers = self
             .providers
-            .ep_v0_7_providers(EntryPointVersion::V0_7)
+            .ep_v0_7_providers(ep.version)
             .clone()
-            .context("entry point v0.7 not supplied")?;
+            .context(format!(
+                "entry point v0.7 abi providers not supplied for entry point version: {:?}",
+                ep.version
+            ))?;
         let mut bundle_sender_actions = vec![];
         for settings in &ep.builders {
             let bundle_sender_action = if self.args.unsafe_mode {
