@@ -43,7 +43,7 @@ fn max_bundle_transaction_data(
         .input(data.into())
         .nonce(nonce);
     if let Some(auth) = au {
-        tx = tx.with_authorization_list(vec![auth.max_fill().into()])
+        tx = tx.with_authorization_list(vec![auth.clone().into_max_fill().into()])
     }
 
     // these conversions should not fail.

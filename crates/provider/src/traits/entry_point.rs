@@ -13,6 +13,7 @@
 
 use alloy_primitives::{Address, Bytes, U256};
 use rundler_types::{
+    authorization::Eip7702Auth,
     chain::ChainSpec,
     da::{DAGasBlockData, DAGasData},
     EntryPointVersion, GasFees, Timestamp, UserOperation, UserOpsPerAggregator, ValidationOutput,
@@ -167,7 +168,9 @@ pub trait BundleHandler: Send + Sync {
     /// Decode user ops from calldata
     fn decode_ops_from_calldata(
         chain_spec: &ChainSpec,
+        address: Address,
         calldata: &Bytes,
+        auth_list: &[Eip7702Auth],
     ) -> Vec<UserOpsPerAggregator<Self::UO>>;
 }
 

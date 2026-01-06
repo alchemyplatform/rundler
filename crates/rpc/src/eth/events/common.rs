@@ -22,7 +22,9 @@ use rundler_provider::{
     EvmProvider, Filter, GethDebugBuiltInTracerType, GethDebugTracerType, GethDebugTracingOptions,
     GethTrace, Log, TransactionReceipt,
 };
-use rundler_types::{chain::ChainSpec, UserOperation, UserOperationVariant};
+use rundler_types::{
+    authorization::Eip7702Auth, chain::ChainSpec, UserOperation, UserOperationVariant,
+};
 use rundler_utils::log::LogOnError;
 use tracing::instrument;
 
@@ -32,6 +34,7 @@ use crate::types::{RpcUserOperationByHash, RpcUserOperationReceipt, UOStatusEnum
 #[derive(Debug)]
 pub(crate) struct UserOperationEventProviderImpl<P, F> {
     chain_spec: ChainSpec,
+    entry_point_address: Address,
     provider: P,
     event_block_distance: Option<u64>,
     event_block_distance_fallback: Option<u64>,
@@ -50,9 +53,12 @@ pub(crate) trait EntryPointEvents: Send + Sync {
         tx_receipt: TransactionReceipt,
     ) -> RpcUserOperationReceipt;
 
-    fn get_user_operations_from_tx_data(tx_data: Bytes, chain_spec: &ChainSpec) -> Vec<Self::UO>;
-
-    fn address(chain_spec: &ChainSpec) -> Address;
+    fn get_user_operations_from_tx_data(
+        to_address: Address,
+        tx_data: Bytes,
+        tx_auth_list: &[Eip7702Auth],
+        chain_spec: &ChainSpec,
+    ) -> Vec<Self::UO>;
 
     fn before_execution_selector() -> B256;
 }
@@ -134,7 +140,7 @@ where
             return Ok(None);
         };
 
-        if event.address() != E::address(&self.chain_spec) {
+        if event.address() != self.entry_point_address {
             return Ok(None);
         }
 
@@ -174,12 +180,14 @@ where
 {
     pub(crate) fn new(
         chain_spec: ChainSpec,
+        entry_point_address: Address,
         provider: P,
         event_block_distance: Option<u64>,
         event_block_distance_fallback: Option<u64>,
     ) -> Self {
         Self {
             chain_spec,
+            entry_point_address,
             provider,
             event_block_distance,
             event_block_distance_fallback,
@@ -222,7 +230,7 @@ where
         to_block: u64,
     ) -> anyhow::Result<Option<Log>> {
         let filter = Filter::new()
-            .address(E::address(&self.chain_spec))
+            .address(vec![self.entry_point_address])
             .event_signature(E::UserOperationEvent::SIGNATURE_HASH)
             .from_block(from_block)
             .to_block(to_block)
@@ -245,6 +253,8 @@ where
             .context("should have fetched tx from provider")?
             .context("should have found tx")?;
 
+        let auth_list = rundler_provider::get_auth_list_from_transaction(&tx);
+
         // We should return null if the tx isn't included in the block yet
         if tx.block_hash.is_none() && tx.block_number.is_none() {
             return Ok(None);
@@ -256,20 +266,25 @@ where
 
         let input = tx.input();
 
-        let ep_address = E::address(&self.chain_spec);
-        let user_operation =
-            if ep_address == to || self.chain_spec.known_proxy_addresses().contains(&to) {
-                E::get_user_operations_from_tx_data(input.clone(), &self.chain_spec)
-                    .into_iter()
-                    .find(|op| op.hash() == uo_hash)
-                    .context("matching user operation should be found in tx data")?
-            } else {
-                tracing::debug!("Unknown entrypoint {to:?}, falling back to trace");
-                self.trace_find_user_operation(tx_hash, uo_hash)
-                    .await
-                    .context("error running trace")?
-                    .context("should have found user operation in trace")?
-            };
+        let user_operation = if self.entry_point_address == to
+            || self.chain_spec.known_proxy_addresses().contains(&to)
+        {
+            E::get_user_operations_from_tx_data(
+                self.entry_point_address,
+                input.clone(),
+                &auth_list,
+                &self.chain_spec,
+            )
+            .into_iter()
+            .find(|op| op.hash() == uo_hash)
+            .context("matching user operation should be found in tx data")?
+        } else {
+            tracing::debug!("Unknown entrypoint {to:?}, falling back to trace");
+            self.trace_find_user_operation(tx_hash, uo_hash, &auth_list)
+                .await
+                .context("error running trace")?
+                .context("should have found user operation in trace")?
+        };
 
         Ok(Some(RpcUserOperationByHash {
             user_operation: user_operation.into().into(),
@@ -299,7 +314,7 @@ where
     ) -> anyhow::Result<RpcUserOperationReceipt> {
         // filter receipt logs
         let filtered_logs = super::filter_receipt_logs_matching_user_op(
-            E::address(&self.chain_spec),
+            self.entry_point_address,
             E::before_execution_selector(),
             &event,
             &tx_receipt,
@@ -313,7 +328,7 @@ where
 
         Ok(E::construct_receipt(
             uo_event,
-            E::address(&self.chain_spec),
+            self.entry_point_address,
             filtered_logs,
             tx_receipt,
         ))
@@ -334,6 +349,7 @@ where
         &self,
         tx_hash: B256,
         user_op_hash: B256,
+        auth_list: &[Eip7702Auth],
     ) -> anyhow::Result<Option<E::UO>> {
         // initial call wasn't to an entrypoint, so we need to trace the transaction to find the user operation
         let trace_options = GethDebugTracingOptions {
@@ -359,13 +375,17 @@ where
             // check if the call is to an entrypoint, if not enqueue the child calls if any
             if call_frame
                 .to
-                .is_some_and(|to| to == E::address(&self.chain_spec))
+                .is_some_and(|to| to == self.entry_point_address)
             {
                 // check if the user operation is in the call frame
-                if let Some(uo) =
-                    E::get_user_operations_from_tx_data(call_frame.input, &self.chain_spec)
-                        .into_iter()
-                        .find(|op| op.hash() == user_op_hash)
+                if let Some(uo) = E::get_user_operations_from_tx_data(
+                    self.entry_point_address,
+                    call_frame.input,
+                    auth_list,
+                    &self.chain_spec,
+                )
+                .into_iter()
+                .find(|op| op.hash() == user_op_hash)
                 {
                     return Ok(Some(uo));
                 }

@@ -14,9 +14,8 @@
 use alloy_primitives::{Address, B256, U128, U256, U64};
 use rundler_provider::{Log, TransactionReceipt};
 use rundler_types::{
-    chain::ChainSpec,
-    pool::{Reputation, ReputationStatus},
-    EntryPointVersion, UserOperationOptionalGas, UserOperationVariant,
+    chain::ChainSpec, pool::Reputation, EntryPointVersion, UserOperationOptionalGas,
+    UserOperationVariant,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -38,8 +37,6 @@ pub(crate) use v0_7::{
     RpcGasEstimate as RpcGasEstimateV0_7, RpcUserOperation as RpcUserOperationV0_7,
     RpcUserOperationOptionalGas as RpcUserOperationOptionalGasV0_7,
 };
-
-mod rpc_authorization;
 
 /// API namespace
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, strum::EnumString)]
@@ -253,7 +250,7 @@ pub struct RpcReputationOutput {
     /// Number of operations included in this interval
     pub ops_included: U64,
     /// Reputation status
-    pub status: ReputationStatus,
+    pub status: U64,
 }
 
 impl From<RpcReputationInput> for Reputation {

@@ -261,7 +261,7 @@ impl LocalBuilderServerRunner {
                                         Ok(ServerResponse::DebugSendBundleNow { hash: tx_hash, block_number })
                                     },
                                     SendBundleResult::NoOperationsInitially => {
-                                        Err(anyhow::anyhow!("no ops to send").into())
+                                        Err(BuilderError::NoOperationsToSend)
                                     },
                                     SendBundleResult::StalledAtMaxFeeIncreases => Err(anyhow::anyhow!("stalled at max fee increases").into()),
                                     SendBundleResult::Error(e) => Err(anyhow::anyhow!("send bundle error: {e:?}").into()),

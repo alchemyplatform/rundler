@@ -11,13 +11,15 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use std::time::Duration;
+
 use alloy_primitives::{Address, B256, U64};
 use anyhow::Context;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_types::{
-    builder::{Builder, BundlingMode},
+    builder::{Builder, BuilderError, BundlingMode},
     pool::Pool,
 };
 
@@ -26,7 +28,7 @@ use crate::{
         RpcDebugPaymasterBalance, RpcReputationInput, RpcReputationOutput, RpcStakeInfo,
         RpcStakeStatus, RpcUserOperation,
     },
-    utils::{self, InternalRpcResult},
+    utils::{self, InternalRpcError, InternalRpcResult},
 };
 
 /// Debug API
@@ -244,10 +246,31 @@ where
             .await
             .context("should subscribe new heads")?;
 
-        let (tx, block_number) = self.builder.debug_send_bundle_now().await.map_err(|e| {
-            tracing::error!("Error sending bundle {e:?}");
-            anyhow::anyhow!(e)
-        })?;
+        // send bundle now, retrying a few times if no operations are available
+        let (tx, block_number) = {
+            let mut out = None;
+            for _ in 0..3 {
+                match self.builder.debug_send_bundle_now().await {
+                    Ok((tx, block_number)) => {
+                        out = Some((tx, block_number));
+                        break;
+                    }
+                    Err(BuilderError::NoOperationsToSend) => {
+                        tracing::info!("No ops to send, retrying after 1 second");
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                    Err(e) => {
+                        tracing::error!("Error sending bundle {e:?}");
+                        return Err::<_, InternalRpcError>(anyhow::anyhow!(e).into());
+                    }
+                }
+            }
+            Ok::<_, InternalRpcError>(out.unwrap_or((B256::ZERO, 0)))
+        }?;
+
+        if tx == B256::ZERO {
+            return Ok(B256::ZERO);
+        }
 
         tracing::debug!("Waiting for block number {block_number}");
 
@@ -320,7 +343,7 @@ where
                 address: r.address,
                 ops_seen: U64::from(r.ops_seen),
                 ops_included: U64::from(r.ops_included),
-                status,
+                status: U64::from(status as u64),
             };
 
             results.push(reputation);

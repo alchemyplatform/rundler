@@ -20,6 +20,7 @@ use alloy_rpc_types_trace::geth::{
 };
 use rundler_contracts::utils::GetGasUsed::GasUsedResult;
 use rundler_types::{
+    authorization::Eip7702Auth,
     chain::ChainSpec,
     da::{DAGasBlockData, DAGasData},
     v0_6, v0_7, EntryPointVersion, ExpectedStorage, GasFees, UserOpsPerAggregator,
@@ -229,7 +230,9 @@ mockall::mock! {
         fn decode_handle_ops_revert(message: &str, revert_data: &Option<Bytes>) -> Option<HandleOpsOut>;
         fn decode_ops_from_calldata(
             chain_spec: &ChainSpec,
+            address: Address,
             calldata: &Bytes,
+            auth_list: &[Eip7702Auth],
         ) -> Vec<UserOpsPerAggregator<v0_6::UserOperation>>;
     }
 
@@ -334,7 +337,9 @@ mockall::mock! {
         fn decode_handle_ops_revert(message: &str, revert_data: &Option<Bytes>) -> Option<HandleOpsOut>;
         fn decode_ops_from_calldata(
             chain_spec: &ChainSpec,
+            address: Address,
             calldata: &Bytes,
+            auth_list: &[Eip7702Auth],
         ) -> Vec<UserOpsPerAggregator<v0_7::UserOperation>>;
     }
 

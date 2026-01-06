@@ -523,9 +523,6 @@ where
             // Check if op violates the STO-040 spec rule
             state.pool.check_multiple_roles_violation(&op)?;
 
-            // Check if op use 7702
-            state.pool.check_eip7702(&op)?;
-
             // Check if op is already known or replacing another, and if so, ensure its fees are high enough
             state
                 .pool
@@ -1041,8 +1038,6 @@ mod tests {
     use alloy_primitives::{address, bytes, uint, Address, Bytes, Log as PrimitiveLog, LogData};
     use alloy_rpc_types_eth::TransactionReceipt as AlloyTransactionReceipt;
     use alloy_serde::WithOtherFields;
-    use alloy_signer::SignerSync;
-    use alloy_signer_local::PrivateKeySigner;
     use alloy_sol_types::SolEvent;
     use mockall::Sequence;
     use rundler_contracts::v0_6::IEntryPoint::UserOperationEvent as UserOperationEventV06;
@@ -1059,7 +1054,6 @@ mod tests {
         aggregator::{
             AggregatorCosts, MockSignatureAggregator, SignatureAggregator, SignatureAggregatorError,
         },
-        authorization::Eip7702Auth,
         chain::{ChainSpec, ContractRegistry},
         da::DAGasData,
         pool::{PrecheckViolation, SimulationViolation},
@@ -2134,79 +2128,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_auth_support() {
-        let mut config = default_config();
-        let op = create_op_with_auth(
-            UserOperationRequiredFields {
-                call_gas_limit: 50_000,
-                max_fee_per_gas: 0,
-                max_priority_fee_per_gas: 0,
-                ..Default::default()
-            },
-            Eip7702Auth::default(),
-        );
-        {
-            let pool = create_pool_with_config(config.clone(), vec![op.clone()]);
-            assert!(pool
-                .add_operation(OperationOrigin::Local, op.clone().op, default_perms())
-                .await
-                .is_err());
-        }
-        {
-            config.chain_spec.eip7702_enabled = true;
-            config.entry_point_version = EntryPointVersion::V0_7;
-            config.entry_point = config.chain_spec.entry_point_address_v0_7;
-            let pool = create_pool_with_config(config.clone(), vec![op.clone()]);
-            assert!(pool
-                .add_operation(OperationOrigin::Local, op.clone().op, default_perms())
-                .await
-                .is_err());
-        }
-        {
-            config.chain_spec.eip7702_enabled = true;
-            let private_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-            let signer: PrivateKeySigner = PrivateKeySigner::from_str(private_key).unwrap();
-            let authorization = alloy_eips::eip7702::Authorization {
-                chain_id: U256::from(11011),
-                address: Address::from_str("0x1234123412341234123412341234123412341234").unwrap(),
-                nonce: 1,
-            };
-            let signature = signer
-                .sign_hash_sync(&authorization.signature_hash())
-                .unwrap();
-            let signed_authorization = authorization.into_signed(signature);
-            let signed_op = create_op_with_auth(
-                UserOperationRequiredFields {
-                    sender: Address::from_str("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266")
-                        .unwrap(),
-                    call_gas_limit: 50_000,
-                    max_fee_per_gas: 0,
-                    max_priority_fee_per_gas: 0,
-                    ..Default::default()
-                },
-                Eip7702Auth {
-                    address: signed_authorization.address,
-                    chain_id: signed_authorization.chain_id.try_into().unwrap(),
-                    nonce: signed_authorization.nonce,
-                    y_parity: signed_authorization.y_parity(),
-                    r: signed_authorization.r(),
-                    s: signed_authorization.s(),
-                },
-            );
-
-            let pool = create_pool_with_config(config.clone(), vec![signed_op.clone()]);
-            assert!(pool
-                .add_operation(
-                    OperationOrigin::Local,
-                    signed_op.clone().op,
-                    default_perms()
-                )
-                .await
-                .is_ok());
-        }
-    }
-
-    #[tokio::test]
     async fn test_da_gas_ineligible() {
         let mut config = default_config();
         config.da_gas_tracking_enabled = true;
@@ -2737,21 +2658,6 @@ mod tests {
             precheck_error,
             simulation_error,
             staked,
-            trusted: false,
-        }
-    }
-
-    fn create_op_with_auth(op: UserOperationRequiredFields, auth: Eip7702Auth) -> OpWithErrors {
-        let op = UserOperationBuilder::new(&ChainSpec::default(), op)
-            .authorization_tuple(auth)
-            .build()
-            .into();
-        OpWithErrors {
-            op,
-            valid_time_range: ValidTimeRange::default(),
-            precheck_error: None,
-            simulation_error: None,
-            staked: false,
             trusted: false,
         }
     }

@@ -29,6 +29,7 @@ use rundler_provider::{
 };
 use rundler_task::TaskSpawner;
 use rundler_types::{
+    authorization::Eip7702Auth,
     builder::BundlingMode,
     chain::ChainSpec,
     pool::{AddressUpdate, NewHead, Pool, PoolOperation},
@@ -603,6 +604,7 @@ where
                 self.sender_eoa,
                 self.ep_address,
                 self.builder_settings.filter_id.clone(),
+                state.block_number(),
             )
             .await?;
         if ops.is_empty() {
@@ -860,18 +862,28 @@ where
         )
         .with_call_config(GethDebugTracerCallConfig::default().only_top_call());
 
-        let trace = self
+        let trace_fut = self
             .ep_providers
             .evm()
-            .debug_trace_transaction(tx_hash, trace_options)
-            .await
-            .context("should have fetched trace from provider")?;
+            .debug_trace_transaction(tx_hash, trace_options);
+        let get_fut = self.ep_providers.evm().get_transaction_by_hash(tx_hash);
+        let (trace, tx) = tokio::try_join!(trace_fut, get_fut)
+            .context("should have fetched trace and tx from provider")?;
+
+        let auth_list: Vec<Eip7702Auth> = tx
+            .map(|tx| rundler_provider::get_auth_list_from_transaction(&tx))
+            .unwrap_or_default();
 
         let frame = trace
             .try_into_call_frame()
             .context("trace is not a call tracer")?;
 
-        let ops = EP::EntryPoint::decode_ops_from_calldata(&self.chain_spec, &frame.input);
+        let ops = EP::EntryPoint::decode_ops_from_calldata(
+            &self.chain_spec,
+            self.ep_address,
+            &frame.input,
+            &auth_list,
+        );
 
         let Some(revert_data) = frame.output else {
             tracing::error!("revert has not output, removing all ops from bundle from pool");
@@ -1573,6 +1585,7 @@ mod tests {
                     hash: B256::ZERO,
                     sender: Address::ZERO,
                     entry_point: ENTRY_POINT_ADDRESS_V0_6,
+                    sim_block_number: 0,
                 }])
             });
         mock_pool
@@ -1639,6 +1652,7 @@ mod tests {
                     hash: B256::ZERO,
                     sender: Address::ZERO,
                     entry_point: ENTRY_POINT_ADDRESS_V0_6,
+                    sim_block_number: 0,
                 }])
             });
         mock_pool
@@ -1861,6 +1875,7 @@ mod tests {
                     hash: B256::ZERO,
                     sender: Address::ZERO,
                     entry_point: ENTRY_POINT_ADDRESS_V0_6,
+                    sim_block_number: 0,
                 }])
             });
         mock_pool
@@ -2037,6 +2052,7 @@ mod tests {
                     hash: B256::ZERO,
                     sender: Address::ZERO,
                     entry_point: ENTRY_POINT_ADDRESS_V0_6,
+                    sim_block_number: 0,
                 }])
             });
         mock_pool
@@ -2175,10 +2191,14 @@ mod tests {
                 .into())
             });
 
+        mock_evm
+            .expect_get_transaction_by_hash()
+            .returning(move |_| Ok(None));
+
         let ctx = MockEntryPointV0_6::decode_ops_from_calldata_context();
         ctx.expect()
-            .withf(move |_, data| *data == input_clone)
-            .returning(move |_, _| {
+            .withf(move |_, _, data, _| *data == input_clone)
+            .returning(move |_, _, _, _| {
                 vec![UserOpsPerAggregator {
                     user_ops: vec![op.clone()],
                     ..Default::default()

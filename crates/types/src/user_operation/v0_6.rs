@@ -575,14 +575,7 @@ impl UserOperationOptionalGas {
         );
 
         if let Some(auth) = self.eip7702_auth_address {
-            let auth = Eip7702Auth {
-                address: auth,
-                chain_id: chain_spec.id,
-                ..Default::default()
-            }
-            .max_fill();
-
-            builder = builder.authorization_tuple(auth);
+            builder = builder.authorization_tuple(Eip7702Auth::new_max_fill(chain_spec.id, auth));
         }
 
         if let Some(agg) = self.aggregator {
@@ -628,14 +621,8 @@ impl UserOperationOptionalGas {
         );
 
         if let Some(auth) = self.eip7702_auth_address {
-            let auth = Eip7702Auth {
-                address: auth,
-                chain_id: chain_spec.id,
-                ..Default::default()
-            }
-            .random_fill();
-
-            builder = builder.authorization_tuple(auth);
+            builder =
+                builder.authorization_tuple(Eip7702Auth::new_random_fill(chain_spec.id, auth));
         }
 
         if let Some(agg) = self.aggregator {
@@ -666,10 +653,9 @@ impl UserOperationOptionalGas {
             super::default_if_none_or_equal(self.verification_gas_limit, max_verification_gas, 0);
         let pvg = super::default_if_none_or_equal(self.pre_verification_gas, max_call_gas, 0);
 
-        let authorization_tuple = self.eip7702_auth_address.map(|address| Eip7702Auth {
-            address,
-            ..Default::default()
-        });
+        let authorization_tuple = self
+            .eip7702_auth_address
+            .map(|address| Eip7702Auth::new_dummy(chain_spec.id, address));
         let required = UserOperationRequiredFields {
             sender: self.sender,
             nonce: self.nonce,
