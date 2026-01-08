@@ -32,6 +32,7 @@ use rundler_contracts::v0_6::{
 };
 use rundler_types::{
     chain::ChainSpec,
+    constants::SIMULATION_SENDER,
     da::{DAGasBlockData, DAGasData},
     v0_6::{UserOperation, UserOperationBuilder},
     EntryPointVersion, GasFees, UserOperation as _, UserOpsPerAggregator, ValidationOutput,
@@ -582,12 +583,14 @@ fn get_handle_ops_call<AP: AlloyProvider>(
             entry_point
                 .handleOps(ops_per_aggregator.swap_remove(0).userOps, sender_eoa)
                 .chain_id(chain_id)
+                .from(SIMULATION_SENDER)
                 .into_transaction_request()
                 .inner
         } else {
             entry_point
                 .handleAggregatedOps(ops_per_aggregator, sender_eoa)
                 .chain_id(chain_id)
+                .from(SIMULATION_SENDER)
                 .into_transaction_request()
                 .inner
         };
@@ -688,6 +691,7 @@ async fn simulate_handle_op_inner<S: SimulationProvider, AP: AlloyProvider>(
         .block(block_id)
         .gas(execution_gas_limit.saturating_add(da_gas))
         .state(state_override)
+        .from(SIMULATION_SENDER)
         .call()
         .await
         .err()

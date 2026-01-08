@@ -36,6 +36,7 @@ use rundler_contracts::v0_7::{
 use rundler_types::{
     authorization::Eip7702Auth,
     chain::ChainSpec,
+    constants::SIMULATION_SENDER,
     da::{DAGasBlockData, DAGasData},
     v0_7::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
     EntryPointVersion, GasFees, UserOperation as _, UserOpsPerAggregator, ValidationOutput,
@@ -480,6 +481,7 @@ where
         let call = ep_simulations
             .simulateValidation(user_op.pack())
             .gas(self.max_verification_gas.saturating_add(da_gas))
+            .from(SIMULATION_SENDER)
             .into_transaction_request();
 
         Ok((call.inner, override_ep))
@@ -755,6 +757,7 @@ async fn simulate_handle_op_inner<AP: AlloyProvider>(
             .block(block_id)
             .gas(execution_gas_limit.saturating_add(da_gas))
             .state(state_override)
+            .from(SIMULATION_SENDER)
             .call()
             .await
     } else {
@@ -763,6 +766,7 @@ async fn simulate_handle_op_inner<AP: AlloyProvider>(
             .block(block_id)
             .gas(execution_gas_limit.saturating_add(da_gas))
             .state(state_override)
+            .from(SIMULATION_SENDER)
             .call()
             .await
     };
