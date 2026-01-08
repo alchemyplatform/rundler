@@ -26,6 +26,8 @@ pub mod builder;
 
 pub mod chain;
 
+pub mod constants;
+
 pub mod da;
 
 mod entity;

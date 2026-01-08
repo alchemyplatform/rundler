@@ -16,7 +16,7 @@ use std::{future::Future, pin::Pin};
 use alloy_primitives::{Address, Bytes, B256, U256};
 use async_trait::async_trait;
 use rundler_provider::{EvmProvider, StateOverride, TransactionBuilder, TransactionRequest};
-use rundler_types::{chain::ChainSpec, UserOperation};
+use rundler_types::{chain::ChainSpec, constants::SIMULATION_SENDER, UserOperation};
 use rundler_utils::authorization_utils;
 use tracing::instrument;
 
@@ -180,7 +180,8 @@ where
         let call = TransactionRequest::default()
             .with_input(call)
             .with_gas_limit(self.settings.max_gas_estimation_gas)
-            .with_to(helper_addr);
+            .with_to(helper_addr)
+            .with_from(SIMULATION_SENDER);
 
         let ret = self
             .provider
