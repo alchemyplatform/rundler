@@ -362,6 +362,7 @@ where
         let txn_request = self
             .i_entry_point
             .handleOps(vec![user_op.into()], Address::random())
+            .from(SIMULATION_SENDER)
             .into_transaction_request();
 
         let data = txn_request.inner.input.into_input().unwrap();
@@ -405,6 +406,7 @@ where
         let call = self
             .i_entry_point
             .simulateValidation(user_op.into())
+            .from(SIMULATION_SENDER)
             .gas(self.max_verification_gas.saturating_add(da_gas))
             .into_transaction_request();
         Ok((call.inner, StateOverride::default()))
@@ -424,6 +426,7 @@ where
         let blockless = self
             .i_entry_point
             .simulateValidation(user_op.into())
+            .from(SIMULATION_SENDER)
             .gas(self.max_verification_gas.saturating_add(da_gas));
         let call = match block_id {
             Some(block_id) => blockless.block(block_id),
