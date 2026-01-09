@@ -21,8 +21,8 @@ use super::{
     types::{NewHead, PaymasterMetadata, PoolOperation, Reputation, ReputationStatus, StakeStatus},
 };
 use crate::{
-    pool::PreconfInfo, EntityUpdate, UserOperation, UserOperationId, UserOperationPermissions,
-    UserOperationVariant,
+    EntityUpdate, UserOperation, UserOperationId, UserOperationPermissions, UserOperationVariant,
+    pool::PreconfInfo,
 };
 
 /// Result type for pool server operations.

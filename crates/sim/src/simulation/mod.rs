@@ -20,8 +20,8 @@ use alloy_primitives::{Address, B256, U256};
 use mockall::automock;
 use rundler_provider::ProviderError;
 use rundler_types::{
-    pool::{MempoolError, SimulationViolation},
     EntityInfos, ExpectedStorage, UserOperation, ValidTimeRange,
+    pool::{MempoolError, SimulationViolation},
 };
 
 mod context;
@@ -31,7 +31,7 @@ mod mempool;
 pub use mempool::{MempoolConfig, MempoolConfigs};
 
 mod simulator;
-pub use simulator::{new_v0_6_simulator, new_v0_7_simulator, SimulatorImpl};
+pub use simulator::{SimulatorImpl, new_v0_6_simulator, new_v0_7_simulator};
 
 mod unsafe_sim;
 pub use unsafe_sim::UnsafeSimulator;

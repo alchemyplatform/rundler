@@ -20,8 +20,8 @@ use anyhow::Context;
 use parking_lot::RwLock;
 use rundler_provider::EntryPoint;
 use rundler_types::{
-    pool::{MempoolError, PaymasterMetadata, PoolOperation, StakeStatus},
     StakeInfo, UserOperation, UserOperationId, UserOperationVariant,
+    pool::{MempoolError, PaymasterMetadata, PoolOperation, StakeStatus},
 };
 use rundler_utils::cache::LruMap;
 use tracing::instrument;
@@ -517,11 +517,11 @@ mod tests {
     use alloy_primitives::{Address, B256, U256};
     use rundler_provider::{DepositInfo, MockEntryPointV0_6};
     use rundler_types::{
+        EntityInfos, UserOperation as UserOperationTrait, UserOperationId,
+        UserOperationPermissions, ValidTimeRange,
         chain::ChainSpec,
         pool::{PaymasterMetadata, PoolOperation},
         v0_6::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
-        EntityInfos, UserOperation as UserOperationTrait, UserOperationId,
-        UserOperationPermissions, ValidTimeRange,
     };
 
     use super::*;

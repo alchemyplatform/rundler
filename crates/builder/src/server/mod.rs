@@ -15,5 +15,5 @@ mod local;
 pub use local::{LocalBuilderBuilder, LocalBuilderHandle};
 
 mod remote;
-pub(crate) use remote::remote_builder_server_task;
 pub use remote::RemoteBuilderClient;
+pub(crate) use remote::remote_builder_server_task;

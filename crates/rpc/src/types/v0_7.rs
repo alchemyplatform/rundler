@@ -11,19 +11,18 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{bytes, Address, Bytes, B256, U128, U256};
+use alloy_primitives::{Address, Bytes, U128, U256, bytes};
 use rundler_types::{
+    EntryPointVersion, GasEstimate,
     authorization::Eip7702Auth,
     chain::ChainSpec,
     v0_7::{
-        UserOperation, UserOperationBuilder, UserOperationOptionalGas, UserOperationRequiredFields,
-        EIP7702_FACTORY_MARKER,
+        EIP7702_FACTORY_MARKER, UserOperation, UserOperationBuilder, UserOperationOptionalGas,
+        UserOperationRequiredFields,
     },
-    EntryPointVersion, GasEstimate,
 };
 use serde::{Deserialize, Serialize};
 
-use super::RpcAddress;
 use crate::{
     eth::EthRpcError,
     utils::{FromRpcType, TryFromRpcType},
@@ -173,17 +172,6 @@ impl TryFromRpcType<RpcUserOperation> for UserOperation {
 
         Ok(builder.build())
     }
-}
-
-/// User operation with additional metadata
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct RpcUserOperationByHash {
-    user_operation: RpcUserOperation,
-    entry_point: RpcAddress,
-    block_number: Option<U256>,
-    block_hash: Option<B256>,
-    transaction_hash: Option<B256>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

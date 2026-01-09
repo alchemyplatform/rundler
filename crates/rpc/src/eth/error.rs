@@ -14,16 +14,16 @@
 use std::fmt::Display;
 
 use alloy_json_rpc::RpcError;
-use alloy_primitives::{Address, Bytes, U128, U256, U32};
+use alloy_primitives::{Address, Bytes, U32, U128, U256};
 use jsonrpsee::types::{
-    error::{CALL_EXECUTION_FAILED_CODE, INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE},
     ErrorObjectOwned,
+    error::{CALL_EXECUTION_FAILED_CODE, INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE},
 };
 use rundler_provider::ProviderError;
 use rundler_sim::GasEstimationError;
 use rundler_types::{
-    pool::{MempoolError, PoolError, PrecheckViolation, SimulationViolation},
     Entity, EntityType, Opcode, Timestamp, ValidationRevert,
+    pool::{MempoolError, PoolError, PrecheckViolation, SimulationViolation},
 };
 use serde::Serialize;
 
@@ -70,10 +70,14 @@ pub enum EthRpcError {
     #[error("Paymaster balance too low. Required balance: {0}. Current balance {1}")]
     PaymasterBalanceTooLow(U256, U256),
     /// An Associated storage slot that is accessed in the UserOperation is being used as a sender by another UserOperation in the mempool.
-    #[error("An Associated storage slot that is accessed in the UserOperation is being used as a sender by another UserOperation in the mempool")]
+    #[error(
+        "An Associated storage slot that is accessed in the UserOperation is being used as a sender by another UserOperation in the mempool"
+    )]
     AssociatedStorageIsAlternateSender,
     /// Sender address used as different entity in another UserOperation currently in the mempool.
-    #[error("The sender address {0} is used as a different entity in another UserOperation currently in mempool")]
+    #[error(
+        "The sender address {0} is used as a different entity in another UserOperation currently in mempool"
+    )]
     SenderAddressUsedAsAlternateEntity(Address),
     /// Simulation ran out of gas
     #[error("Simulation ran out of gas for entity: {0}")]
@@ -85,7 +89,9 @@ pub enum EthRpcError {
     #[error("{0}")]
     OpcodeViolationMap(SimulationViolation),
     /// Associated storage accessed during deployment with unstaked factory or accessing entity
-    #[error("Sender storage at (address: {1:?} slot: {2:#032x}) accessed during deployment. Factory (or {0:?}) must be staked")]
+    #[error(
+        "Sender storage at (address: {1:?} slot: {2:#032x}) accessed during deployment. Factory (or {0:?}) must be staked"
+    )]
     AssociatedStorageDuringDeploy(Option<EntityType>, Address, U256),
     /// Invalid storage access, maps to Opcode Violation
     #[error("{0} accesses inaccessible storage at address: {1:?} slot: {2:#032x}")]

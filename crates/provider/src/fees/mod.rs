@@ -13,7 +13,7 @@
 
 use alloy_primitives::B256;
 use anyhow::Context;
-use rundler_types::{chain::ChainSpec, GasFees, PriorityFeeMode};
+use rundler_types::{GasFees, PriorityFeeMode, chain::ChainSpec};
 use rundler_utils::{cache::LruMap, math};
 use tokio::{sync::Mutex as TokioMutex, try_join};
 use tracing::instrument;

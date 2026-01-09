@@ -11,11 +11,11 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, B256, U128, U256, U64};
+use alloy_primitives::{Address, B256, U64, U128, U256};
 use rundler_provider::{Log, TransactionReceipt};
 use rundler_types::{
-    chain::ChainSpec, pool::Reputation, EntryPointVersion, UserOperationOptionalGas,
-    UserOperationVariant,
+    EntryPointVersion, UserOperationOptionalGas, UserOperationVariant, chain::ChainSpec,
+    pool::Reputation,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 

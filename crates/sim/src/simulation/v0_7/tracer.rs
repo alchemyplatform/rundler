@@ -13,13 +13,13 @@
 use std::{collections::HashMap, convert::TryFrom, fmt::Debug};
 
 use alloy_primitives::{Address, U256};
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use async_trait::async_trait;
 use rundler_provider::{
     BlockId, EvmProvider, GethDebugTracerType, GethDebugTracingCallOptions,
     GethDebugTracingOptions, GethTrace, SimulationProvider,
 };
-use rundler_types::{v0_7::UserOperation, ExpectedStorage, Opcode};
+use rundler_types::{ExpectedStorage, Opcode, v0_7::UserOperation};
 use serde::Deserialize;
 
 use crate::simulation::context::ContractInfo;
@@ -162,6 +162,7 @@ where
                     },
                     state_overrides: Some(state_override),
                     block_overrides: None,
+                    tx_index: None,
                 },
             )
             .await?;

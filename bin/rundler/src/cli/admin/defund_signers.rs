@@ -17,10 +17,10 @@ use alloy_consensus::{SignableTransaction, TxEnvelope, TypedTransaction};
 use alloy_eips::eip2718::Encodable2718;
 use alloy_network::TransactionBuilder;
 use alloy_primitives::{Address, Signature, U256};
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use clap::Args;
 use rundler_provider::{DAGasOracle, EvmProvider, Providers, TransactionRequest};
-use rundler_signer::{utils, SignerLease};
+use rundler_signer::{SignerLease, utils};
 use rundler_task::TaskSpawnerExt;
 use rundler_types::chain::ChainSpec;
 

@@ -13,40 +13,40 @@
 
 use std::{ops::Add, time::Instant};
 
-use alloy_primitives::{Address, Bytes, B256, U256};
+use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_sol_types::{SolCall, SolInterface};
 use rundler_contracts::v0_7::{
-    CallGasEstimationProxy::{
-        estimateCallGasCall, testCallGasCall, CallGasEstimationProxyCalls, EstimateCallGasArgs,
-    },
-    VerificationGasEstimationHelper::{
-        estimatePaymasterVerificationGasCall, estimateVerificationGasCall,
-        EstimateGasArgs as ContractEstimateGasArgs,
-    },
     CALL_GAS_ESTIMATION_PROXY_V0_7_DEPLOYED_BYTECODE,
+    CallGasEstimationProxy::{
+        CallGasEstimationProxyCalls, EstimateCallGasArgs, estimateCallGasCall, testCallGasCall,
+    },
     ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE,
     VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE,
+    VerificationGasEstimationHelper::{
+        EstimateGasArgs as ContractEstimateGasArgs, estimatePaymasterVerificationGasCall,
+        estimateVerificationGasCall,
+    },
 };
 use rundler_provider::{
     AccountOverride, DAGasProvider, EntryPoint, EvmProvider, FeeEstimator, SimulationProvider,
     StateOverride,
 };
 use rundler_types::{
+    GasEstimate, UserOperation as _,
     chain::ChainSpec,
     v0_7::{UserOperation, UserOperationBuilder, UserOperationOptionalGas},
-    GasEstimate, UserOperation as _,
 };
 use rundler_utils::{guard_timer::CustomTimerGuard, math};
 use tokio::join;
 use tracing::instrument;
 
 use super::{
-    estimate_verification_gas::{EstimateGasArgs, VerificationGasEstimatorSpecialization},
     GasEstimationError, Metrics, Settings,
+    estimate_verification_gas::{EstimateGasArgs, VerificationGasEstimatorSpecialization},
 };
 use crate::{
-    gas, CallGasEstimator, CallGasEstimatorImpl, CallGasEstimatorSpecialization,
-    VerificationGasEstimator, VerificationGasEstimatorImpl, MIN_CALL_GAS_LIMIT,
+    CallGasEstimator, CallGasEstimatorImpl, CallGasEstimatorSpecialization, MIN_CALL_GAS_LIMIT,
+    VerificationGasEstimator, VerificationGasEstimatorImpl, gas,
 };
 
 /// Gas estimator for entry point v0.7
@@ -319,37 +319,37 @@ where
         &self,
         optional_op: &UserOperationOptionalGas,
     ) -> Result<(), GasEstimationError> {
-        if let Some(vl) = optional_op.verification_gas_limit {
-            if vl > self.settings.max_verification_gas {
-                return Err(GasEstimationError::GasFieldTooLarge(
-                    "verificationGasLimit",
-                    self.settings.max_verification_gas,
-                ));
-            }
+        if let Some(vl) = optional_op.verification_gas_limit
+            && vl > self.settings.max_verification_gas
+        {
+            return Err(GasEstimationError::GasFieldTooLarge(
+                "verificationGasLimit",
+                self.settings.max_verification_gas,
+            ));
         }
-        if let Some(vl) = optional_op.paymaster_verification_gas_limit {
-            if vl > self.settings.max_verification_gas {
-                return Err(GasEstimationError::GasFieldTooLarge(
-                    "paymasterVerificationGasLimit",
-                    self.settings.max_verification_gas,
-                ));
-            }
+        if let Some(vl) = optional_op.paymaster_verification_gas_limit
+            && vl > self.settings.max_verification_gas
+        {
+            return Err(GasEstimationError::GasFieldTooLarge(
+                "paymasterVerificationGasLimit",
+                self.settings.max_verification_gas,
+            ));
         }
-        if let Some(cl) = optional_op.call_gas_limit {
-            if cl > self.settings.max_bundle_execution_gas {
-                return Err(GasEstimationError::GasFieldTooLarge(
-                    "callGasLimit",
-                    self.settings.max_bundle_execution_gas,
-                ));
-            }
+        if let Some(cl) = optional_op.call_gas_limit
+            && cl > self.settings.max_bundle_execution_gas
+        {
+            return Err(GasEstimationError::GasFieldTooLarge(
+                "callGasLimit",
+                self.settings.max_bundle_execution_gas,
+            ));
         }
-        if let Some(cl) = optional_op.paymaster_post_op_gas_limit {
-            if cl > self.settings.max_bundle_execution_gas {
-                return Err(GasEstimationError::GasFieldTooLarge(
-                    "paymasterPostOpGasLimit",
-                    self.settings.max_bundle_execution_gas,
-                ));
-            }
+        if let Some(cl) = optional_op.paymaster_post_op_gas_limit
+            && cl > self.settings.max_bundle_execution_gas
+        {
+            return Err(GasEstimationError::GasFieldTooLarge(
+                "paymasterPostOpGasLimit",
+                self.settings.max_bundle_execution_gas,
+            ));
         }
 
         Ok(())
@@ -364,12 +364,12 @@ where
         state_override: StateOverride,
     ) -> Result<u128, GasEstimationError> {
         // if set and non-zero, don't estimate
-        if let Some(vl) = optional_op.verification_gas_limit {
-            if vl != 0 {
-                // No need to do an extra simulation here, if the user provides a value that is
-                // insufficient it will cause a revert during call gas estimation (or simulation).
-                return Ok(vl);
-            }
+        if let Some(vl) = optional_op.verification_gas_limit
+            && vl != 0
+        {
+            // No need to do an extra simulation here, if the user provides a value that is
+            // insufficient it will cause a revert during call gas estimation (or simulation).
+            return Ok(vl);
         }
 
         let _timer = CustomTimerGuard::new(self.metrics.vgl_estimate_ms.clone());
@@ -408,10 +408,10 @@ where
             return Ok(0);
         }
 
-        if let Some(pvl) = optional_op.paymaster_verification_gas_limit {
-            if pvl != 0 {
-                return Ok(pvl);
-            }
+        if let Some(pvl) = optional_op.paymaster_verification_gas_limit
+            && pvl != 0
+        {
+            return Ok(pvl);
         }
 
         let _timer = CustomTimerGuard::new(self.metrics.pvgl_estimate_ms.clone());
@@ -447,14 +447,14 @@ where
     ) -> Result<u128, GasEstimationError> {
         let _timer = CustomTimerGuard::new(self.metrics.cgl_estimate_ms.clone());
         // if set and non-zero, don't estimate
-        if let Some(cl) = optional_op.call_gas_limit {
-            if cl != 0 {
-                // The user provided a non-zero value, simulate once
-                self.call_gas_estimator
-                    .simulate_handle_op_with_result(full_op, block_hash, state_override)
-                    .await?;
-                return Ok(cl);
-            }
+        if let Some(cl) = optional_op.call_gas_limit
+            && cl != 0
+        {
+            // The user provided a non-zero value, simulate once
+            self.call_gas_estimator
+                .simulate_handle_op_with_result(full_op, block_hash, state_override)
+                .await?;
+            return Ok(cl);
         }
 
         let call_gas_limit = self
@@ -677,17 +677,17 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use alloy_primitives::{hex, U256};
+    use alloy_primitives::{U256, hex};
     use alloy_sol_types::{Revert, SolError};
     use rundler_contracts::common::EstimationTypes::TestCallGasResult;
     use rundler_provider::{
         ExecutionResult, MockEntryPointV0_7, MockEvmProvider, MockFeeEstimator,
     };
-    use rundler_types::{v0_7::UserOperationOptionalGas, EntryPointVersion};
+    use rundler_types::{EntryPointVersion, v0_7::UserOperationOptionalGas};
 
     use super::*;
     use crate::{
-        estimation::estimate_call_gas::PROXY_IMPLEMENTATION_ADDRESS_MARKER, GasEstimator as _,
+        GasEstimator as _, estimation::estimate_call_gas::PROXY_IMPLEMENTATION_ADDRESS_MARKER,
     };
 
     // Alises for complex types (which also satisfy Clippy)

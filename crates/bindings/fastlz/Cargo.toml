@@ -8,5 +8,5 @@ repository.workspace = true
 publish = false
 
 [build-dependencies]
-bindgen = "0.70.1"
+bindgen = "0.72.1"
 cc = { version = "1", features = ["parallel"] }

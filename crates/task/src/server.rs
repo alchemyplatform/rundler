@@ -15,7 +15,7 @@
 
 use std::{future::Future, time::Duration};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use async_trait::async_trait;
 use rundler_utils::retry::{self, RetryOpts};
 

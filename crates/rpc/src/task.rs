@@ -15,20 +15,20 @@ use std::{net::SocketAddr, time::Duration};
 
 use anyhow::Context;
 use futures_util::FutureExt;
-use http::{header::CONTENT_TYPE, HeaderValue};
+use http::{HeaderValue, header::CONTENT_TYPE};
 use jsonrpsee::{
-    server::{middleware::http::ProxyGetRequestLayer, RpcServiceBuilder, ServerBuilder},
     RpcModule,
+    server::{RpcServiceBuilder, ServerBuilder, middleware::http::ProxyGetRequestLayer},
 };
 use rundler_provider::{FeeEstimator, Providers as ProvidersT};
 use rundler_sim::{EstimationSettings, GasEstimatorV0_6, GasEstimatorV0_7, PrecheckSettings};
 use rundler_task::{
-    server::{format_socket_addr, HealthCheck},
     TaskSpawnerExt,
+    server::{HealthCheck, format_socket_addr},
 };
 use rundler_types::{
-    builder::Builder as BuilderT, chain::ChainSpec, pool::Pool as PoolT, EntryPointAbiVersion,
-    EntryPointVersion,
+    EntryPointAbiVersion, EntryPointVersion, builder::Builder as BuilderT, chain::ChainSpec,
+    pool::Pool as PoolT,
 };
 use tracing::info;
 

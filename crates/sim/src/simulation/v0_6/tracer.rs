@@ -12,7 +12,7 @@
 
 use std::{convert::TryFrom, fmt::Debug};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use async_trait::async_trait;
 use rundler_provider::{
     BlockId, EvmProvider, GethDebugTracerType, GethDebugTracingCallOptions,
@@ -88,6 +88,7 @@ where
                         },
                         state_overrides: Some(state_override),
                         block_overrides: None,
+                        tx_index: None,
                     },
                 )
                 .await?,

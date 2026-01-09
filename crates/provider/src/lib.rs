@@ -23,19 +23,20 @@
 
 mod alloy;
 pub use alloy::{
+    AlloyNetworkConfig,
     entry_point::{
         v0_6::{
-            decode_ops_from_calldata as decode_v0_6_ops_from_calldata,
             EntryPointProvider as AlloyEntryPointV0_6,
+            decode_ops_from_calldata as decode_v0_6_ops_from_calldata,
         },
         v0_7::{
+            EntryPointProvider as AlloyEntryPointV0_7,
             decode_ops_from_calldata as decode_v0_7_ops_from_calldata,
             decode_validation_revert as decode_v0_7_validation_revert,
-            EntryPointProvider as AlloyEntryPointV0_7,
         },
     },
     evm::AlloyEvmProvider,
-    new_alloy_da_gas_oracle, new_alloy_evm_provider, new_alloy_provider, AlloyNetworkConfig,
+    new_alloy_da_gas_oracle, new_alloy_evm_provider, new_alloy_provider,
 };
 mod fees;
 pub use alloy_network::{
@@ -52,9 +53,9 @@ pub use alloy_consensus::{ReceiptWithBloom, Transaction as TransactionTrait};
 pub use alloy_json_rpc::{RpcRecv, RpcSend};
 pub use alloy_network::TransactionBuilder;
 pub use alloy_rpc_types_eth::{
-    state::{AccountOverride, StateOverride},
     BlockHashOrNumber, BlockId, BlockNumberOrTag, FeeHistory, Filter, FilterBlockOption,
     Header as BlockHeader, Log, RpcBlockHash,
+    state::{AccountOverride, StateOverride},
 };
 pub use alloy_rpc_types_trace::geth::{
     CallConfig as GethDebugTracerCallConfig, CallFrame as GethDebugTracerCallFrame,
@@ -64,9 +65,8 @@ pub use alloy_rpc_types_trace::geth::{
 // re-export contract types
 pub use rundler_contracts::utils::GetGasUsed::GasUsedResult;
 use rundler_types::{
-    authorization::Eip7702Auth, v0_6::UserOperation as UserOperationV0_6,
-    v0_7::UserOperation as UserOperationV0_7, EntryPointVersion, UserOperation,
-    UserOperationVariant,
+    EntryPointVersion, UserOperation, UserOperationVariant, authorization::Eip7702Auth,
+    v0_6::UserOperation as UserOperationV0_6, v0_7::UserOperation as UserOperationV0_7,
 };
 #[cfg(any(test, feature = "test-utils"))]
 pub use traits::test_utils::*;

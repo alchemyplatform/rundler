@@ -26,11 +26,11 @@ use tracing::{error, instrument};
 
 use super::DAMetrics;
 use crate::{
-    alloy::da::optimism::GasPriceOracle::{
-        baseFeeScalarCall, blobBaseFeeCall, blobBaseFeeScalarCall, l1BaseFeeCall,
-        GasPriceOracleCalls, GasPriceOracleInstance,
-    },
     AlloyProvider, BlockHashOrNumber, DAGasOracle, DAGasOracleSync, ProviderResult,
+    alloy::da::optimism::GasPriceOracle::{
+        GasPriceOracleCalls, GasPriceOracleInstance, baseFeeScalarCall, blobBaseFeeCall,
+        blobBaseFeeScalarCall, l1BaseFeeCall,
+    },
 };
 
 // From https://github.com/ethereum-optimism/optimism/blob/f93f9f40adcd448168c6ea27820aeee5da65fcbd/packages/contracts-bedrock/src/L2/GasPriceOracle.sol#L26

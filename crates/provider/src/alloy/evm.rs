@@ -11,11 +11,11 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, Bytes, TxHash, B256, U256, U64};
+use alloy_primitives::{Address, B256, Bytes, TxHash, U64, U256};
 use alloy_provider::{ext::DebugApi, network::TransactionBuilder};
 use alloy_rpc_types_eth::{
-    state::{AccountOverride, StateOverride},
     BlockId, BlockNumberOrTag, FeeHistory, Filter, Log,
+    state::{AccountOverride, StateOverride},
 };
 use alloy_rpc_types_trace::geth::{
     GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace,

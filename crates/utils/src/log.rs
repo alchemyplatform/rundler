@@ -15,7 +15,7 @@
 
 use std::fmt::{Debug, Display};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use tracing::Level;
 
 /// Trait for adding logging and context to a result-like

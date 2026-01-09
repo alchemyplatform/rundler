@@ -14,10 +14,10 @@
 use alloy_primitives::{Address, B256, U64};
 use jsonrpsee::core::RpcResult;
 use rundler_provider::StateOverride;
-use rundler_types::{pool::Pool, BlockTag, UserOperationPermissions};
+use rundler_types::{BlockTag, UserOperationPermissions, pool::Pool};
 use tracing::instrument;
 
-use super::{api::EthApi, EthApiServer};
+use super::{EthApiServer, api::EthApi};
 use crate::{
     eth::EthRpcError,
     types::{

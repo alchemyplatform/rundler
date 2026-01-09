@@ -84,11 +84,7 @@ mod tests {
         let actual_size = encoded.len();
 
         // The calculated size should be close to the actual size (within reasonable overhead)
-        let diff = if calculated_size > actual_size {
-            calculated_size - actual_size
-        } else {
-            actual_size - calculated_size
-        };
+        let diff = calculated_size.abs_diff(actual_size);
 
         // The estimate is intentionally conservative (overestimates) for safety
         // Allow up to 300 bytes difference for encoding overhead estimation
@@ -153,11 +149,7 @@ mod tests {
         signed_tx.rlp_encode(&mut encoded);
         let actual_size = encoded.len();
 
-        let diff = if calculated_size > actual_size {
-            calculated_size - actual_size
-        } else {
-            actual_size - calculated_size
-        };
+        let diff = calculated_size.abs_diff(actual_size);
 
         // The estimate is intentionally conservative (overestimates) for safety
         // Allow up to 500 bytes difference for encoding overhead estimation

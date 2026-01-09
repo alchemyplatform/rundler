@@ -20,7 +20,7 @@ use std::{
     time::Instant,
 };
 
-use alloy_primitives::{Address, Bytes, B256, U256};
+use alloy_primitives::{Address, B256, Bytes, U256};
 use anyhow::Context;
 use async_trait::async_trait;
 use futures::future;
@@ -35,15 +35,15 @@ use rundler_provider::{
 };
 use rundler_sim::{SimulationError, SimulationResult, Simulator, ViolationError};
 use rundler_types::{
+    BUNDLE_BYTE_OVERHEAD, BundleExpectedStorage, Entity, EntityInfo, EntityInfos, EntityType,
+    EntityUpdate, EntityUpdateType, EntryPointVersion, ExpectedStorage, GasFees, TIME_RANGE_BUFFER,
+    Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator, ValidTimeRange,
+    ValidationRevert,
     aggregator::SignatureAggregatorResult,
     chain::ChainSpec,
     da::{DAGasBlockData, DAGasData},
     pool::{PoolOperation, SimulationViolation},
     proxy::SubmissionProxy,
-    BundleExpectedStorage, Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate,
-    EntityUpdateType, EntryPointVersion, ExpectedStorage, GasFees, Timestamp, UserOperation,
-    UserOperationVariant, UserOpsPerAggregator, ValidTimeRange, ValidationRevert,
-    BUNDLE_BYTE_OVERHEAD, TIME_RANGE_BUFFER,
 };
 use rundler_utils::{emit::WithEntryPoint, eth, guard_timer::CustomTimerGuard, math};
 use tokio::sync::broadcast;
@@ -211,7 +211,9 @@ where
             match da_gas_oracle.da_block_data(block_hash.into()).await {
                 Ok(block_data) => Some(block_data),
                 Err(e) => {
-                    error!("Failed to get block data for block hash {block_hash:?}, falling back to async da gas calculations: {e:?}");
+                    error!(
+                        "Failed to get block data for block hash {block_hash:?}, falling back to async da gas calculations: {e:?}"
+                    );
                     None
                 }
             }
@@ -426,12 +428,10 @@ where
         };
 
         let required_da_gas = if self.settings.da_gas_tracking_enabled
-            && da_block_data.is_some()
-            && self.ep_providers.da_gas_oracle_sync().is_some()
             && op.da_gas_data != DAGasData::Empty
+            && let Some(da_block_data) = da_block_data
+            && let Some(da_gas_oracle) = self.ep_providers.da_gas_oracle_sync().as_ref()
         {
-            let da_gas_oracle = self.ep_providers.da_gas_oracle_sync().as_ref().unwrap();
-            let da_block_data = da_block_data.unwrap();
             let extra_data_len = op.uo.extra_data_len(bundle_size);
 
             da_gas_oracle.calc_da_gas_sync(
@@ -758,7 +758,10 @@ where
             {
                 // Exclude ops that access the sender of another op in the
                 // batch, but don't reject them (remove them from pool).
-                info!("Excluding op from {:?} because it accessed the address of another sender in the bundle.", op.sender());
+                info!(
+                    "Excluding op from {:?} because it accessed the address of another sender in the bundle.",
+                    op.sender()
+                );
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
                     op.hash(),
@@ -769,12 +772,16 @@ where
 
             if let Some(paymaster) = op.paymaster() {
                 let Some(balance) = balances_by_paymaster.get_mut(&paymaster) else {
-                    error!("Op had paymaster with unknown balance, but balances should have been loaded for all paymasters in bundle.");
+                    error!(
+                        "Op had paymaster with unknown balance, but balances should have been loaded for all paymasters in bundle."
+                    );
                     continue;
                 };
                 let max_cost = op.max_gas_cost();
                 if *balance < max_cost {
-                    info!("Rejected paymaster {paymaster:?} because its balance {balance:?} was too low.");
+                    info!(
+                        "Rejected paymaster {paymaster:?} because its balance {balance:?} was too low."
+                    );
                     paymasters_to_reject.push(po.op.entity_infos.paymaster.unwrap());
                     continue;
                 } else {
@@ -1014,13 +1021,17 @@ where
                 Ok(None)
             }
             HandleOpsOut::SignatureValidationFailed(aggregator) => {
-                info!("Rejected aggregator {aggregator:?} because its signature validation failed during gas estimation.");
+                info!(
+                    "Rejected aggregator {aggregator:?} because its signature validation failed during gas estimation."
+                );
                 self.reject_entity(context, Entity::aggregator(aggregator), true)
                     .await;
                 Ok(None)
             }
             HandleOpsOut::PostOpRevert => {
-                warn!("PostOpShortRevert error during gas estimation due to bug in the 0.6 entry point contract. Removing the offending op from the bundle.");
+                warn!(
+                    "PostOpShortRevert error during gas estimation due to bug in the 0.6 entry point contract. Removing the offending op from the bundle."
+                );
                 self.process_post_op_revert(context, gas_limit, bundle_fees)
                     .await?;
                 Ok(None)
@@ -1042,7 +1053,9 @@ where
                     }
 
                     if !removed {
-                        warn!("HandleOps reverted during gas estimation, proxy {proxy:?} returned no hashes to remove. Rejecting full bundle. revert data: {revert_data:?}");
+                        warn!(
+                            "HandleOps reverted during gas estimation, proxy {proxy:?} returned no hashes to remove. Rejecting full bundle. revert data: {revert_data:?}"
+                        );
                         self.reject_bundle(context).await;
                     }
                 } else {
@@ -1119,7 +1132,9 @@ where
             "AA13" | "AA14" | "AA15" => {
                 let op_with_sim = context.get_op_at(index)?;
                 let factory = op_with_sim.op.factory().context("op failed during gas estimation with factory error, but did not include a factory")?;
-                info!("Rejected op because it failed during gas estimation with factory {factory:?} error {message}.");
+                info!(
+                    "Rejected op because it failed during gas estimation with factory {factory:?} error {message}."
+                );
                 self.reject_entity(
                     context,
                     Entity::factory(factory),
@@ -1138,7 +1153,9 @@ where
                 let paymaster = op_with_sim.op.paymaster().context(
                     "op failed during gas estimation with {message}, but had no paymaster",
                 )?;
-                info!("Rejected op because it failed during gas estimation with a paymaster {paymaster:?} error {message}.");
+                info!(
+                    "Rejected op because it failed during gas estimation with a paymaster {paymaster:?} error {message}."
+                );
                 self.reject_entity(
                     context,
                     Entity::paymaster(paymaster),
@@ -1308,7 +1325,10 @@ where
             }
             Err(e) => {
                 // If we get an error here, we can't be sure if the op is the offending op or not, so we remove it to be safe
-                error!("Failed to call handle ops: {e} during postOpRevert handling, removing all ops from aggregator {:?}", agg);
+                error!(
+                    "Failed to call handle ops: {e} during postOpRevert handling, removing all ops from aggregator {:?}",
+                    agg
+                );
                 (start_index..start_index + len).collect()
             }
         }
@@ -1322,20 +1342,19 @@ where
         let mut ops_in_bundle = Vec::new();
         for op in ops {
             // if the op has an aggregator, check if the aggregator is supported, if not skip
-            if let Some(agg) = op.op.uo.aggregator() {
-                if self
+            if let Some(agg) = op.op.uo.aggregator()
+                && self
                     .settings
                     .chain_spec
                     .get_signature_aggregator(&agg)
                     .is_none()
-                {
-                    self.emit(BuilderEvent::skipped_op(
-                        self.builder_tag.clone(),
-                        op.op.uo.hash(),
-                        SkipReason::UnsupportedAggregator(agg),
-                    ));
-                    continue;
-                }
+            {
+                self.emit(BuilderEvent::skipped_op(
+                    self.builder_tag.clone(),
+                    op.op.uo.hash(),
+                    SkipReason::UnsupportedAggregator(agg),
+                ));
+                continue;
             }
 
             // Here we use optimistic gas limits for the UOs by assuming none of the paymaster UOs use postOp calls.
@@ -1463,7 +1482,9 @@ impl<UO: UserOperation> ProposalContext<UO> {
         match result {
             Ok(sig) => self.groups_by_aggregator[&aggregator].signature = sig,
             Err(error) => {
-                error!("Failed to compute aggregator signature, rejecting aggregator {aggregator:?}: {error}");
+                error!(
+                    "Failed to compute aggregator signature, rejecting aggregator {aggregator:?}: {error}"
+                );
                 self.reject_aggregator(aggregator);
             }
         }
@@ -1507,7 +1528,10 @@ impl<UO: UserOperation> ProposalContext<UO> {
             remaining_i -= group.ops_with_simulations.len();
         }
         let Some(found_aggregator) = found_aggregator else {
-            error!("The entry point indicated a failed op at index {i}, but the bundle size is only {}", i - remaining_i);
+            error!(
+                "The entry point indicated a failed op at index {i}, but the bundle size is only {}",
+                i - remaining_i
+            );
             return None;
         };
         // If we just removed the last op from a group, delete that group.
@@ -1612,10 +1636,8 @@ impl<UO: UserOperation> ProposalContext<UO> {
     }
 
     fn reject_op(&mut self, rejected: OpWithSimulation<UO>, paymaster_amendment: bool) {
-        if paymaster_amendment {
-            if let Some(paymaster) = rejected.op.paymaster() {
-                self.add_erep_015_paymaster_amendment(paymaster, 1);
-            }
+        if paymaster_amendment && let Some(paymaster) = rejected.op.paymaster() {
+            self.add_erep_015_paymaster_amendment(paymaster, 1);
         }
         self.rejected_ops
             .push((rejected.op, rejected.simulation.entity_infos));
@@ -1778,10 +1800,10 @@ impl<UO: UserOperation> ProposalContext<UO> {
         // Paymasters should not be held accountable, so the paymaster's `opsSeen` count should be decremented accordingly.
         let is_staked_factory = entity_infos.factory.is_some_and(|f| f.is_staked);
         let is_staked_sender = entity_infos.sender.is_staked;
-        if is_staked_factory || is_staked_sender {
-            if let Some(paymaster) = entity_infos.paymaster {
-                self.add_erep_015_paymaster_amendment(paymaster.address(), 1)
-            }
+        if (is_staked_factory || is_staked_sender)
+            && let Some(paymaster) = entity_infos.paymaster
+        {
+            self.add_erep_015_paymaster_amendment(paymaster.address(), 1)
         }
 
         // [EREP-020] When there is a staked factory any error in validation is attributed to it.
@@ -1881,10 +1903,8 @@ impl<UO: UserOperation> ProposalContext<UO> {
             }
         }
 
-        if paymaster_amendment_required {
-            if let Some(paymaster) = entity_infos.paymaster {
-                self.add_erep_015_paymaster_amendment(paymaster.address(), 1)
-            };
+        if paymaster_amendment_required && let Some(paymaster) = entity_infos.paymaster {
+            self.add_erep_015_paymaster_amendment(paymaster.address(), 1)
         }
     }
 
@@ -1973,7 +1993,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
 mod tests {
     use std::time::Duration;
 
-    use alloy_primitives::{utils::parse_units, Address, B256};
+    use alloy_primitives::{Address, B256, utils::parse_units};
     use anyhow::anyhow;
     use rundler_provider::{
         MockDAGasOracleSync, MockEntryPointV0_6, MockEvmProvider, MockFeeEstimator,
@@ -1981,6 +2001,7 @@ mod tests {
     };
     use rundler_sim::MockSimulator;
     use rundler_types::{
+        BundlerSponsorship, UserOperation as _, UserOperationPermissions, ValidTimeRange,
         aggregator::{
             AggregatorCosts, MockSignatureAggregator, SignatureAggregator, SignatureAggregatorError,
         },
@@ -1989,7 +2010,6 @@ mod tests {
         pool::SimulationViolation,
         proxy::MockSubmissionProxy,
         v0_6::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
-        BundlerSponsorship, UserOperation as _, UserOperationPermissions, ValidTimeRange,
     };
 
     use super::*;

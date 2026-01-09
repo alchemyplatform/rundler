@@ -17,11 +17,11 @@ use anyhow::Context;
 use futures::FutureExt;
 use rundler_provider::{EntryPoint, Providers, ProvidersWithEntryPointT};
 use rundler_sim::{
-    simulation::{self, UnsafeSimulator},
     PrecheckerImpl, Simulator,
+    simulation::{self, UnsafeSimulator},
 };
 use rundler_task::TaskSpawnerExt;
-use rundler_types::{chain::ChainSpec, EntryPointAbiVersion, UserOperation, UserOperationVariant};
+use rundler_types::{EntryPointAbiVersion, UserOperation, UserOperationVariant, chain::ChainSpec};
 use rundler_utils::emit::WithEntryPoint;
 use tokio::sync::broadcast;
 

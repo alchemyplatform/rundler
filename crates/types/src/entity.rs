@@ -16,7 +16,7 @@ use std::{fmt::Display, hash::Hash, str::FromStr};
 use alloy_primitives::Address;
 use anyhow::bail;
 use parse_display::Display;
-use serde::{ser::SerializeStruct, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, ser::SerializeStruct};
 use strum::{EnumIter, IntoEnumIterator};
 
 /// The type of an entity
@@ -240,22 +240,22 @@ impl EntityInfos {
             return Some(EntityType::Account);
         }
 
-        if let Some(factory) = self.factory {
-            if address.eq(&factory.entity.address) {
-                return Some(EntityType::Factory);
-            }
+        if let Some(factory) = self.factory
+            && address.eq(&factory.entity.address)
+        {
+            return Some(EntityType::Factory);
         }
 
-        if let Some(paymaster) = self.paymaster {
-            if address.eq(&paymaster.entity.address) {
-                return Some(EntityType::Paymaster);
-            }
+        if let Some(paymaster) = self.paymaster
+            && address.eq(&paymaster.entity.address)
+        {
+            return Some(EntityType::Paymaster);
         }
 
-        if let Some(aggregator) = self.aggregator {
-            if address.eq(&aggregator.entity.address) {
-                return Some(EntityType::Aggregator);
-            }
+        if let Some(aggregator) = self.aggregator
+            && address.eq(&aggregator.entity.address)
+        {
+            return Some(EntityType::Aggregator);
         }
 
         None

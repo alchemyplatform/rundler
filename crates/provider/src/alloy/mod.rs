@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use alloy_provider::{network::AnyNetwork, Provider as AlloyProvider, ProviderBuilder};
+use alloy_provider::{Provider as AlloyProvider, ProviderBuilder, network::AnyNetwork};
 use alloy_rpc_client::ClientBuilder;
 use evm::AlloyEvmProvider;
 use metrics::AlloyMetricLayer;
@@ -75,7 +75,7 @@ impl Default for AlloyNetworkConfig {
 /// Create a new alloy evm provider from a given RPC URL
 pub fn new_alloy_evm_provider(
     config: &AlloyNetworkConfig,
-) -> anyhow::Result<impl EvmProvider + Clone> {
+) -> anyhow::Result<impl EvmProvider + Clone + use<>> {
     let provider = new_alloy_provider(config)?;
     Ok(AlloyEvmProvider::new(provider))
 }
@@ -83,7 +83,7 @@ pub fn new_alloy_evm_provider(
 /// Create a new alloy provider from a given RPC URL
 pub fn new_alloy_provider(
     config: &AlloyNetworkConfig,
-) -> anyhow::Result<impl AlloyProvider<AnyNetwork> + Clone> {
+) -> anyhow::Result<impl AlloyProvider<AnyNetwork> + Clone + use<>> {
     let create_rate_limit_layer = |config: &AlloyNetworkConfig| {
         alloy_transport::layers::RetryBackoffLayer::new(
             config.rate_limit_retry_max_retries,

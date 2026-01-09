@@ -15,7 +15,7 @@
 
 use std::fmt::Display;
 
-use alloy_primitives::{Address, Bytes, TxHash, B256, U256};
+use alloy_primitives::{Address, B256, Bytes, TxHash, U256};
 use rundler_types::ExpectedStorage;
 
 use crate::{

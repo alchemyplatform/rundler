@@ -15,7 +15,7 @@
 
 use std::fmt::Debug;
 
-use alloy_primitives::{Address, Bytes, B256};
+use alloy_primitives::{Address, B256, Bytes};
 
 use crate::{UserOperationVariant, UserOpsPerAggregator};
 

@@ -14,7 +14,7 @@
 use alloy_primitives::B256;
 use metrics::Histogram;
 use rundler_provider::{BlockHashOrNumber, DAGasProvider, FeeEstimator};
-use rundler_types::{chain::ChainSpec, da::DAGasData, UserOperation};
+use rundler_types::{UserOperation, chain::ChainSpec, da::DAGasData};
 use rundler_utils::guard_timer::CustomTimerGuard;
 use tracing::instrument;
 
@@ -83,7 +83,7 @@ pub async fn estimate_da_gas_with_fees<
             BlockHashOrNumber::Number(_) => {
                 return Err(anyhow::anyhow!(
                     "Block number not supported for fee estimation"
-                ))
+                ));
             }
         };
         let (bundle_fees, base_fee) = fee_estimator.required_bundle_fees(block_hash, None).await?;

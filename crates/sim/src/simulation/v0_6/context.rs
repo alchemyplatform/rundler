@@ -19,20 +19,20 @@ use anyhow::Context;
 use rundler_contracts::v0_6::IEntryPoint::FailedOp;
 use rundler_provider::{BlockId, EvmProvider, SimulationProvider};
 use rundler_types::{
-    pool::SimulationViolation, v0_6::UserOperation, EntityType,
-    UserOperation as UserOperationTrait, ValidationOutput,
+    EntityType, UserOperation as UserOperationTrait, ValidationOutput, pool::SimulationViolation,
+    v0_6::UserOperation,
 };
 
 use super::{
-    tracer::{SimulateValidationTracer, SimulateValidationTracerImpl},
     REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER,
+    tracer::{SimulateValidationTracer, SimulateValidationTracerImpl},
 };
 use crate::{
+    SimulationSettings, ViolationError,
     simulation::context::{
         self as sim_context, ValidationContext,
         ValidationContextProvider as ValidationContextProviderTrait,
     },
-    SimulationSettings, ViolationError,
 };
 
 /// A provider for creating `ValidationContext` for entry point v0.6.
@@ -189,13 +189,13 @@ where
 mod tests {
     use std::collections::HashMap;
 
-    use alloy_primitives::{address, bytes, hex, Bytes, U256};
+    use alloy_primitives::{Bytes, U256, address, bytes, hex};
     use alloy_sol_types::SolError;
     use rundler_contracts::v0_6::IEntryPoint::FailedOp;
     use rundler_types::{
+        Opcode,
         chain::ChainSpec,
         v0_6::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
-        Opcode,
     };
     use sim_context::ContractInfo;
 

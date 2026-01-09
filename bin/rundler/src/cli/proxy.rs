@@ -11,8 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, Bytes, B256};
-use rundler_types::{proxy::SubmissionProxy, UserOperationVariant, UserOpsPerAggregator};
+use alloy_primitives::{Address, B256, Bytes};
+use rundler_types::{UserOperationVariant, UserOpsPerAggregator, proxy::SubmissionProxy};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString)]
 #[strum(serialize_all = "SCREAMING_SNAKE_CASE", ascii_case_insensitive)]

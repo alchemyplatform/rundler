@@ -11,20 +11,21 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, Bytes, TxHash, B256, U256};
+use alloy_primitives::{Address, B256, Bytes, TxHash, U256};
 use alloy_rpc_types_eth::{
-    state::StateOverride, BlockId, BlockNumberOrTag, FeeHistory, Filter, Log,
+    BlockId, BlockNumberOrTag, FeeHistory, Filter, Log, state::StateOverride,
 };
 use alloy_rpc_types_trace::geth::{
     GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace,
 };
 use rundler_contracts::utils::GetGasUsed::GasUsedResult;
 use rundler_types::{
+    EntryPointVersion, ExpectedStorage, GasFees, UserOpsPerAggregator, ValidationOutput,
+    ValidationRevert,
     authorization::Eip7702Auth,
     chain::ChainSpec,
     da::{DAGasBlockData, DAGasData},
-    v0_6, v0_7, EntryPointVersion, ExpectedStorage, GasFees, UserOpsPerAggregator,
-    ValidationOutput, ValidationRevert,
+    v0_6, v0_7,
 };
 
 use super::error::ProviderResult;

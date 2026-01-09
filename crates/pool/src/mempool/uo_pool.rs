@@ -13,7 +13,7 @@
 
 use std::{collections::HashSet, sync::Arc};
 
-use alloy_primitives::{utils::format_units, Address, Bytes, B256, U256};
+use alloy_primitives::{Address, B256, Bytes, U256, utils::format_units};
 use anyhow::Context;
 use futures::TryFutureExt;
 use itertools::Itertools;
@@ -26,12 +26,12 @@ use rundler_provider::{
 };
 use rundler_sim::{MempoolConfig, Prechecker, Simulator};
 use rundler_types::{
+    Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, GasFees, UserOperation,
+    UserOperationId, UserOperationPermissions, UserOperationVariant,
     pool::{
         MempoolError, PaymasterMetadata, PoolOperation, PreconfInfo, Reputation, ReputationStatus,
         StakeStatus,
     },
-    Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, GasFees, UserOperation,
-    UserOperationId, UserOperationPermissions, UserOperationVariant,
 };
 use rundler_utils::{emit::WithEntryPoint, guard_timer::CustomTimerGuard};
 use tokio::sync::broadcast;
@@ -39,8 +39,8 @@ use tonic::async_trait;
 use tracing::{info, instrument};
 
 use super::{
-    paymaster::PaymasterTracker, pool::PoolInner, reputation::AddressReputation, Mempool,
-    MempoolResult, OperationOrigin, PoolConfig,
+    Mempool, MempoolResult, OperationOrigin, PoolConfig, paymaster::PaymasterTracker,
+    pool::PoolInner, reputation::AddressReputation,
 };
 use crate::{
     chain::{ChainUpdate, UpdateType},
@@ -199,7 +199,10 @@ where
                 .await;
             match sim_result {
                 Err(e) => {
-                    tracing::error!("Failed to simulate handle op for gas limit efficiency check, failing open: {:?}", e);
+                    tracing::error!(
+                        "Failed to simulate handle op for gas limit efficiency check, failing open: {:?}",
+                        e
+                    );
                 }
                 Ok(Err(e)) => {
                     tracing::debug!(
@@ -357,31 +360,26 @@ where
                 .chain(unmined_entity_balance_updates)
                 .unique()
                 .collect::<Vec<_>>();
-            if !addresses.is_empty() {
-                if let Err(e) = self
+            if !addresses.is_empty()
+                && let Err(e) = self
                     .paymaster
                     .reset_confirmed_balances_for(&addresses)
                     .await
-                {
-                    tracing::error!("Failed to reset confirmed paymaster balances: {:?}", e);
-                }
+            {
+                tracing::error!("Failed to reset confirmed paymaster balances: {:?}", e);
             }
         }
 
         if mined_op_count > 0 {
             info!(
                 "{mined_op_count} op(s) mined on entry point {:?} when advancing to block with number {}, hash {:?}.",
-                self.config.entry_point,
-                update.latest_block_number,
-                update.latest_block_hash,
+                self.config.entry_point, update.latest_block_number, update.latest_block_hash,
             );
         }
         if unmined_op_count > 0 {
             info!(
                 "{unmined_op_count} op(s) unmined in reorg on entry point {:?} when advancing to block with number {}, hash {:?}.",
-                self.config.entry_point,
-                update.latest_block_number,
-                update.latest_block_hash,
+                self.config.entry_point, update.latest_block_number, update.latest_block_hash,
             );
         }
         let ops_seen: f64 = (mined_op_count as isize - unmined_op_count as isize) as f64;
@@ -472,11 +470,10 @@ where
                     .pool
                     .get_operation_by_hash(*hash)
                     .map(|po| po.sim_block_number);
-                if let Some(block) = block_seen {
-                    if update.latest_block_number - block > self.config.throttled_entity_live_blocks
-                    {
-                        to_remove.insert((*hash, block));
-                    }
+                if let Some(block) = block_seen
+                    && update.latest_block_number - block > self.config.throttled_entity_live_blocks
+                {
+                    to_remove.insert((*hash, block));
                 }
             }
 
@@ -716,10 +713,10 @@ where
                 .filter(|e| e.address != pool_op.entity_infos.sender.address())
             {
                 let mut ops_allowed = self.reputation.get_ops_allowed(entity.address);
-                if let Some(to_replace) = &to_replace {
-                    if to_replace.entities().contains(&entity) {
-                        ops_allowed += 1;
-                    }
+                if let Some(to_replace) = &to_replace
+                    && to_replace.entities().contains(&entity)
+                {
+                    ops_allowed += 1;
                 }
 
                 if state.pool.address_count(&entity.address) >= ops_allowed as usize {
@@ -1035,7 +1032,7 @@ struct UoPoolMetrics {
 mod tests {
     use std::{collections::HashMap, str::FromStr, vec};
 
-    use alloy_primitives::{address, bytes, uint, Address, Bytes, Log as PrimitiveLog, LogData};
+    use alloy_primitives::{Address, Bytes, Log as PrimitiveLog, LogData, address, bytes, uint};
     use alloy_rpc_types_eth::TransactionReceipt as AlloyTransactionReceipt;
     use alloy_serde::WithOtherFields;
     use alloy_sol_types::SolEvent;
@@ -1051,6 +1048,8 @@ mod tests {
         SimulationError, SimulationResult, SimulationSettings, ViolationError,
     };
     use rundler_types::{
+        EntityInfo, EntityInfos, EntityType, EntryPointVersion,
+        UserOperation as UserOperationTrait, ValidTimeRange,
         aggregator::{
             AggregatorCosts, MockSignatureAggregator, SignatureAggregator, SignatureAggregatorError,
         },
@@ -1058,8 +1057,6 @@ mod tests {
         da::DAGasData,
         pool::{PrecheckViolation, SimulationViolation},
         v0_6::{UserOperationBuilder, UserOperationRequiredFields},
-        EntityInfo, EntityInfos, EntityType, EntryPointVersion,
-        UserOperation as UserOperationTrait, ValidTimeRange,
     };
 
     use super::*;
@@ -1546,19 +1543,19 @@ mod tests {
             ..Default::default()
         };
 
-        let ops_1 = vec![create_op_from_required(UserOperationRequiredFields {
+        let ops_1 = [create_op_from_required(UserOperationRequiredFields {
             sender: Address::random(),
             nonce: U256::from(3),
             ..base_required.clone()
         })];
 
-        let ops_2 = vec![create_op_from_required(UserOperationRequiredFields {
+        let ops_2 = [create_op_from_required(UserOperationRequiredFields {
             sender: Address::random(),
             nonce: U256::from(1),
             ..base_required.clone()
         })];
 
-        let ops_3 = vec![create_op_from_required(UserOperationRequiredFields {
+        let ops_3 = [create_op_from_required(UserOperationRequiredFields {
             sender: Address::random(),
             nonce: U256::from(0),
             ..base_required.clone()
@@ -1711,7 +1708,7 @@ mod tests {
             Err(MempoolError::PrecheckViolation(
                 PrecheckViolation::SenderIsNotContractAndNoInitCode(_),
             )) => {}
-            _ => panic!("Expected InitCodeTooShort error"),
+            _ => panic!("Expected SenderIsNotContractAndNoInitCode error"),
         }
         assert_eq!(pool.best_operations(1, None).unwrap(), vec![]);
     }
@@ -1977,10 +1974,11 @@ mod tests {
                 .await
                 .unwrap();
         }
-        assert!(pool
-            .add_operation(OperationOrigin::Local, ops[4].op.clone(), default_perms())
-            .await
-            .is_err());
+        assert!(
+            pool.add_operation(OperationOrigin::Local, ops[4].op.clone(), default_perms())
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

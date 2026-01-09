@@ -175,7 +175,10 @@ impl Assigner {
                 .expect("BUG: confirmed_sender not found in state, lock contract broken");
 
             if *locked_builder_address != builder_address {
-                panic!("BUG: confirmed_sender {:?} is assigned to another builder expected: {:?} found: {:?}, lock contract broken", confirmed_sender, builder_address, locked_builder_address);
+                panic!(
+                    "BUG: confirmed_sender {:?} is assigned to another builder expected: {:?} found: {:?}, lock contract broken",
+                    confirmed_sender, builder_address, locked_builder_address
+                );
             }
 
             // Confirm the sender to the builder
@@ -282,10 +285,10 @@ struct PerBuilderMetrics {
 mod tests {
     use alloy_primitives::B256;
     use rundler_types::{
+        EntityInfos, UserOperation, UserOperationPermissions, ValidTimeRange,
         chain::ChainSpec,
         pool::MockPool,
         v0_6::{UserOperationBuilder, UserOperationRequiredFields},
-        EntityInfos, UserOperation, UserOperationPermissions, ValidTimeRange,
     };
 
     use super::*;

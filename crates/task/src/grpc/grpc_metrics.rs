@@ -22,7 +22,7 @@ use std::{
 use pin_project::pin_project;
 use rundler_types::task::{
     metric_recorder::MethodSessionLogger,
-    status_code::{get_http_status_from_code, HttpCode},
+    status_code::{HttpCode, get_http_status_from_code},
 };
 use tonic::codegen::http;
 use tower::{Layer, Service};

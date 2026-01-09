@@ -11,8 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_consensus::{transaction::SignableTransaction, TxEnvelope, TypedTransaction};
-use alloy_primitives::{address, Address, Bytes, Signature, U256};
+use alloy_consensus::{TxEnvelope, TypedTransaction, transaction::SignableTransaction};
+use alloy_primitives::{Address, Bytes, Signature, U256, address};
 use alloy_provider::network::TransactionBuilder7702;
 use alloy_rlp::Encodable;
 use alloy_rpc_types_eth::TransactionRequest;

@@ -11,11 +11,11 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{hex, Bytes, B256};
+use alloy_primitives::{B256, Bytes, hex};
 use anyhow::Context;
 use jsonrpsee::{
     core::{client::ClientT, traits::ToRpcParams},
-    http_client::{transport::HttpBackend, HeaderMap, HeaderValue, HttpClient, HttpClientBuilder},
+    http_client::{HeaderMap, HeaderValue, HttpClient, HttpClientBuilder, transport::HttpBackend},
 };
 use rundler_provider::{EvmProvider, TransactionRequest};
 use rundler_signer::SignerLease;
@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use tonic::async_trait;
 
-use super::{create_hard_cancel_tx, CancelTxInfo, Result, TransactionSender, TxSenderError};
+use super::{CancelTxInfo, Result, TransactionSender, TxSenderError, create_hard_cancel_tx};
 
 pub(crate) struct PolygonBloxrouteTransactionSender<P> {
     provider: P,
@@ -137,11 +137,10 @@ struct BloxrouteResponse {
 
 impl From<jsonrpsee::core::ClientError> for TxSenderError {
     fn from(value: jsonrpsee::core::ClientError) -> Self {
-        if let jsonrpsee::core::ClientError::Call(e) = &value {
-            if let Some(e) = super::parse_known_call_execution_failed(e.message(), e.code() as i64)
-            {
-                return e;
-            }
+        if let jsonrpsee::core::ClientError::Call(e) = &value
+            && let Some(e) = super::parse_known_call_execution_failed(e.message(), e.code() as i64)
+        {
+            return e;
         }
 
         TxSenderError::Other(value.into())

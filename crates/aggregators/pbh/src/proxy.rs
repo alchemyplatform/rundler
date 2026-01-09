@@ -11,12 +11,12 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, Bytes, B256, U256};
-use alloy_sol_types::{sol, SolInterface, SolValue};
-use rundler_types::{
-    proxy::SubmissionProxy, UserOperation as _, UserOperationVariant, UserOpsPerAggregator,
-};
 use PBHEntryPoint::{InvalidExternalNullifier, InvalidNullifier, PBHEntryPointErrors};
+use alloy_primitives::{Address, B256, Bytes, U256};
+use alloy_sol_types::{SolInterface, SolValue, sol};
+use rundler_types::{
+    UserOperation as _, UserOperationVariant, UserOpsPerAggregator, proxy::SubmissionProxy,
+};
 
 sol! {
     contract PBHEntryPoint {
@@ -53,14 +53,18 @@ impl SubmissionProxy for PbhSubmissionProxy {
                 signalHash,
                 reason,
             }) => {
-                tracing::info!("PBH proxy decoded error: invalid external nullifier: {externalNullifier}, signal hash: {signalHash}, reason: {reason}");
+                tracing::info!(
+                    "PBH proxy decoded error: invalid external nullifier: {externalNullifier}, signal hash: {signalHash}, reason: {reason}"
+                );
                 signalHash
             }
             PBHEntryPointErrors::InvalidNullifier(InvalidNullifier {
                 nullifierHash,
                 signalHash,
             }) => {
-                tracing::info!("PBH proxy decoded error: invalid nullifier: {nullifierHash}, signal hash: {signalHash}");
+                tracing::info!(
+                    "PBH proxy decoded error: invalid nullifier: {nullifierHash}, signal hash: {signalHash}"
+                );
                 signalHash
             }
         };

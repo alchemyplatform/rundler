@@ -152,7 +152,8 @@ impl TransactionSenderArgs {
     pub(crate) fn into_sender(
         self,
         config: &AlloyNetworkConfig,
-    ) -> std::result::Result<TransactionSenderEnum<impl EvmProvider>, SenderConstructorErrors> {
+    ) -> std::result::Result<TransactionSenderEnum<impl EvmProvider + use<>>, SenderConstructorErrors>
+    {
         let provider = rundler_provider::new_alloy_evm_provider(config)?;
         let sender = match self {
             Self::Raw(args) => {

@@ -12,7 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_primitives::{Address, Bytes, U256};
-use alloy_sol_types::{sol, SolCall, SolInterface};
+use alloy_sol_types::{SolCall, SolInterface, sol};
 
 // From https://github.com/mds1/multicall
 sol! {

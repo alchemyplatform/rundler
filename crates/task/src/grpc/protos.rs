@@ -13,7 +13,7 @@
 
 //! Protobuf utilities
 
-use alloy_primitives::{Address, Bytes, B256, U128, U256};
+use alloy_primitives::{Address, B256, Bytes, U128, U256};
 
 /// Error type for conversions from protobuf types to Ethers/local types.
 #[derive(Debug, thiserror::Error)]

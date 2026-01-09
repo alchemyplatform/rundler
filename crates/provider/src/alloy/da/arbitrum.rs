@@ -11,12 +11,12 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use NodeInterface::NodeInterfaceInstance;
 use alloy_primitives::{Address, Bytes};
 use alloy_provider::network::AnyNetwork;
 use alloy_sol_types::sol;
 use rundler_types::da::{DAGasBlockData, DAGasData};
 use tracing::instrument;
-use NodeInterface::NodeInterfaceInstance;
 
 use super::DAGasOracle;
 use crate::{AlloyProvider, BlockHashOrNumber, ProviderResult};

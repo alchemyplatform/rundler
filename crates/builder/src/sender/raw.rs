@@ -20,7 +20,7 @@ use rundler_types::{ExpectedStorage, GasFees};
 use serde_json::json;
 
 use super::{CancelTxInfo, Result};
-use crate::sender::{create_hard_cancel_tx, TransactionSender};
+use crate::sender::{TransactionSender, create_hard_cancel_tx};
 
 #[derive(Debug)]
 pub(crate) struct RawTransactionSender<P> {

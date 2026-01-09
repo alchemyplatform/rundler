@@ -14,7 +14,7 @@
 use std::{cmp, marker::PhantomData};
 
 use alloy_eips::eip7702::SignedAuthorization;
-use alloy_primitives::{Address, Bytes, B256, U256};
+use alloy_primitives::{Address, B256, Bytes, U256};
 use anyhow::Context;
 use arrayvec::ArrayVec;
 use futures_util::TryFutureExt;
@@ -22,11 +22,11 @@ use futures_util::TryFutureExt;
 use mockall::automock;
 use rundler_provider::{DAGasProvider, EntryPoint, EvmProvider, FeeEstimator};
 use rundler_types::{
+    EntryPointVersion, PriorityFeeMode, UserOperation, UserOperationPermissions,
     chain::ChainSpec,
     da::DAGasData,
     pool::{MempoolError, PrecheckViolation},
     v0_7::EIP7702_FACTORY_MARKER,
-    EntryPointVersion, PriorityFeeMode, UserOperation, UserOperationPermissions,
 };
 use rundler_utils::math;
 use tracing::instrument;
@@ -374,10 +374,10 @@ where
             payer_funds,
             ..
         } = *async_data;
-        if let Some(paymaster) = op.paymaster() {
-            if !paymaster_exists {
-                return Some(PrecheckViolation::PaymasterIsNotContract(paymaster));
-            }
+        if let Some(paymaster) = op.paymaster()
+            && !paymaster_exists
+        {
+            return Some(PrecheckViolation::PaymasterIsNotContract(paymaster));
         }
         let max_gas_cost = op.max_gas_cost();
         if payer_funds < max_gas_cost {
@@ -468,14 +468,14 @@ where
         }
 
         // pending transaction count check, if enabled
-        if let Some(pending_transaction_count) = authority_data.pending_transaction_count {
-            if pending_transaction_count - authority_data.latest_transaction_count > 1 {
-                violations.push(
-                    PrecheckViolation::Eip7702SenderPendingTransactionCountTooHigh(
-                        authority_data.pending_transaction_count.unwrap(),
-                    ),
-                );
-            }
+        if let Some(pending_transaction_count) = authority_data.pending_transaction_count
+            && pending_transaction_count - authority_data.latest_transaction_count > 1
+        {
+            violations.push(
+                PrecheckViolation::Eip7702SenderPendingTransactionCountTooHigh(
+                    pending_transaction_count,
+                ),
+            );
         }
 
         violations
@@ -638,11 +638,11 @@ fn is_7702_bytecode(bytecode: &Bytes) -> bool {
 mod tests {
     use std::sync::Arc;
 
-    use alloy_primitives::{address, bytes, Bytes};
+    use alloy_primitives::{Bytes, address, bytes};
     use rundler_provider::{MockEntryPointV0_6, MockEvmProvider, MockFeeEstimator};
     use rundler_types::{
-        v0_6::{UserOperationBuilder, UserOperationRequiredFields},
         BundlerSponsorship, UserOperation as _,
+        v0_6::{UserOperationBuilder, UserOperationRequiredFields},
     };
 
     use super::*;
@@ -1249,18 +1249,18 @@ mod tests {
 
     mod eip7702_tests {
         use alloy_eips::eip7702::Authorization;
-        use alloy_primitives::{b256, B256};
+        use alloy_primitives::{B256, b256};
         use alloy_signer::Signer;
         use alloy_signer_local::PrivateKeySigner;
         use rundler_provider::{MockEntryPointV0_7, MockEvmProvider, MockFeeEstimator};
         use rundler_types::{
+            EntryPointVersion,
             authorization::Eip7702Auth,
             v0_7::{
-                UserOperation as UserOperationV07, UserOperationBuilder as UserOperationBuilderV07,
+                EIP7702_FACTORY_MARKER, UserOperation as UserOperationV07,
+                UserOperationBuilder as UserOperationBuilderV07,
                 UserOperationRequiredFields as UserOperationRequiredFieldsV07,
-                EIP7702_FACTORY_MARKER,
             },
-            EntryPointVersion,
         };
 
         use super::*;

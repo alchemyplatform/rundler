@@ -16,8 +16,8 @@
 use std::{
     net::SocketAddr,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -25,27 +25,20 @@ use alloy_primitives::{Address, B256};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use rundler_task::{
-    grpc::{grpc_metrics::GrpcMetricsLayer, protos::from_bytes},
     GracefulShutdown, TaskSpawner,
+    grpc::{grpc_metrics::GrpcMetricsLayer, protos::from_bytes},
 };
 use rundler_types::{
+    EntityUpdate, UserOperationId, UserOperationVariant,
     chain::ChainSpec,
     pool::{Pool, Reputation},
-    EntityUpdate, UserOperationId, UserOperationVariant,
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tonic::{transport::Server, Request, Response, Result, Status};
+use tonic::{Request, Response, Result, Status, transport::Server};
 
 use super::protos::{
-    add_op_response, admin_set_tracking_response, debug_clear_state_response,
-    debug_dump_mempool_response, debug_dump_paymaster_balances_response,
-    debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
-    get_op_by_id_response, get_ops_by_hashes_response, get_ops_response,
-    get_ops_summaries_response, get_reputation_status_response, get_stake_status_response,
-    op_pool_server::{OpPool, OpPoolServer},
-    remove_op_by_id_response, remove_ops_response, update_entities_response, AddOpRequest,
-    AddOpResponse, AddOpSuccess, AdminSetTrackingRequest, AdminSetTrackingResponse,
+    AddOpRequest, AddOpResponse, AddOpSuccess, AdminSetTrackingRequest, AdminSetTrackingResponse,
     AdminSetTrackingSuccess, DebugClearStateRequest, DebugClearStateResponse,
     DebugClearStateSuccess, DebugDumpMempoolRequest, DebugDumpMempoolResponse,
     DebugDumpMempoolSuccess, DebugDumpPaymasterBalancesRequest, DebugDumpPaymasterBalancesResponse,
@@ -58,10 +51,17 @@ use super::protos::{
     GetReputationStatusRequest, GetReputationStatusResponse, GetReputationStatusSuccess,
     GetStakeStatusRequest, GetStakeStatusResponse, GetStakeStatusSuccess,
     GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, MempoolOp,
-    PoolOperationSummary, PreconfInfo, RemoveOpByIdRequest, RemoveOpByIdResponse,
-    RemoveOpByIdSuccess, RemoveOpsRequest, RemoveOpsResponse, RemoveOpsSuccess, ReputationStatus,
-    SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, TryUoFromProto, UpdateEntitiesRequest,
-    UpdateEntitiesResponse, UpdateEntitiesSuccess, OP_POOL_FILE_DESCRIPTOR_SET,
+    OP_POOL_FILE_DESCRIPTOR_SET, PoolOperationSummary, PreconfInfo, RemoveOpByIdRequest,
+    RemoveOpByIdResponse, RemoveOpByIdSuccess, RemoveOpsRequest, RemoveOpsResponse,
+    RemoveOpsSuccess, ReputationStatus, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse,
+    TryUoFromProto, UpdateEntitiesRequest, UpdateEntitiesResponse, UpdateEntitiesSuccess,
+    add_op_response, admin_set_tracking_response, debug_clear_state_response,
+    debug_dump_mempool_response, debug_dump_paymaster_balances_response,
+    debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
+    get_op_by_id_response, get_ops_by_hashes_response, get_ops_response,
+    get_ops_summaries_response, get_reputation_status_response, get_stake_status_response,
+    op_pool_server::{OpPool, OpPoolServer},
+    remove_op_by_id_response, remove_ops_response, update_entities_response,
 };
 use crate::server::local::LocalPoolHandle;
 

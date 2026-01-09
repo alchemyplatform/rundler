@@ -13,7 +13,7 @@
 
 use std::{cmp::Ordering, ops::Add};
 
-use alloy_primitives::{address, Address, Bytes, U256};
+use alloy_primitives::{Address, Bytes, U256, address};
 use alloy_sol_types::{Panic, Revert, SolError};
 use rundler_contracts::{
     v0_6::{
@@ -32,7 +32,7 @@ use rundler_contracts::{
     },
 };
 
-use crate::{Timestamp, ValidTimeRange, TIME_RANGE_BUFFER};
+use crate::{TIME_RANGE_BUFFER, Timestamp, ValidTimeRange};
 
 /// Both v0.6 and v0.7 contracts use this aggregator address to indicate that the signature validation failed
 /// Zero is also used to indicate that no aggregator is used AND that the signature validation failed.

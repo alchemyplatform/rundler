@@ -14,8 +14,8 @@
 use alloy_primitives::{Address, U256};
 
 use crate::{
-    validation_results::ValidationRevert, Entity, EntityType, StorageSlot, Timestamp,
-    ViolationOpCode,
+    Entity, EntityType, StorageSlot, Timestamp, ViolationOpCode,
+    validation_results::ValidationRevert,
 };
 
 /// Pool server error type
@@ -63,11 +63,15 @@ pub enum MempoolError {
     MultipleRolesViolation(Entity),
     /// An associated storage slot that is accessed in the UserOperation is being used as a sender by another UserOperation in the mempool.
     /// Spec rule: STO-041
-    #[error("An associated storage slot that is accessed in the UserOperation is being used as a sender by another UserOperation in the mempool")]
+    #[error(
+        "An associated storage slot that is accessed in the UserOperation is being used as a sender by another UserOperation in the mempool"
+    )]
     AssociatedStorageIsAlternateSender,
     /// Sender address used as different entity in another UserOperation currently in the mempool.
     /// Spec rule: STO-040
-    #[error("The sender address {0} is used as a different entity in another UserOperation currently in mempool")]
+    #[error(
+        "The sender address {0} is used as a different entity in another UserOperation currently in mempool"
+    )]
     SenderAddressUsedAsAlternateEntity(Address),
     /// An entity associated with the operation is throttled/banned.
     #[error("Entity {0} is throttled/banned")]
@@ -95,7 +99,9 @@ pub enum MempoolError {
     #[error("Unknown entry point {0}")]
     UnknownEntryPoint(Address),
     /// The operation drop attempt too soon after being added to the pool
-    #[error("Operation drop attempt too soon after being added to the pool. Added at {0}, attempted to drop at {1}, must wait {2} blocks.")]
+    #[error(
+        "Operation drop attempt too soon after being added to the pool. Added at {0}, attempted to drop at {1}, must wait {2} blocks."
+    )]
     OperationDropTooSoon(u64, u64, u64),
     /// Verification gas limit efficiency too low
     #[error("Verification gas limit efficiency too low. Required: {0}, Actual: {1}")]
@@ -143,7 +149,9 @@ pub enum PrecheckViolation {
     PaymasterDepositTooLow(U256, U256),
     /// The sender balance is too low to pay for the user operation's maximum cost.
     /// (when not using a paymaster)
-    #[display("sender balance and deposit together is {0} but must be at least {1} to pay for this operation")]
+    #[display(
+        "sender balance and deposit together is {0} but must be at least {1} to pay for this operation"
+    )]
     SenderFundsTooLow(U256, U256),
     /// The provided max priority fee per gas is too low based on the current network rate.
     #[display("maxPriorityFeePerGas is {0} but must be at least {1}")]
@@ -173,7 +181,9 @@ pub enum PrecheckViolation {
     #[display("EIP-7702 authorization signature is invalid")]
     Eip7702InvalidSignature(String),
     /// The EIP-7702 authority sender mismatch
-    #[display("EIP-7702 sender/recovered authority mismatch. User operation sender: {0:?}, Recovered authority: {1:?}")]
+    #[display(
+        "EIP-7702 sender/recovered authority mismatch. User operation sender: {0:?}, Recovered authority: {1:?}"
+    )]
     Eip7702SenderRecoveredAuthorityMismatch(Address, Address),
     /// The EIP-7702 nonce mismatch
     #[display("EIP-7702 nonce mismatch. Expected: {0}, Actual: {1}")]
@@ -225,7 +235,9 @@ pub enum SimulationViolation {
     InvalidStorageAccess(Entity, StorageSlot),
     /// The user operation accessed a storage slot on the sender while being deployed
     /// and the accessing entity or the factory is not staked
-    #[display("Sender storage at slot {1:?} accessed during deployment. Factory or accessing entity ({0:?}) must be staked")]
+    #[display(
+        "Sender storage at slot {1:?} accessed during deployment. Factory or accessing entity ({0:?}) must be staked"
+    )]
     AssociatedStorageDuringDeploy(Option<Entity>, StorageSlot),
     /// The user operation called an entry point method that is not allowed
     #[display("{0.kind} called entry point method other than depositTo")]
@@ -238,7 +250,9 @@ pub enum SimulationViolation {
     #[display("code accessed by validation has changed since the last time validation was run")]
     CodeHashChanged,
     /// The user operation contained an entity that accessed storage without being staked
-    #[display("{0.needs_stake} needs to be staked: {0.accessing_entity} accessed storage at {0.accessed_address} slot {0.slot} (associated with {0.accessed_entity:?})")]
+    #[display(
+        "{0.needs_stake} needs to be staked: {0.accessing_entity} accessed storage at {0.accessed_address} slot {0.slot} (associated with {0.accessed_entity:?})"
+    )]
     NotStaked(Box<NeedsStakeInformation>),
     /// The user operation uses a paymaster that returns a context while being unstaked
     #[display("Unstaked paymaster must not return context")]
@@ -256,7 +270,9 @@ pub enum SimulationViolation {
     #[display("simulateValidation did not revert. Make sure your EntryPoint is valid")]
     DidNotRevert,
     /// Simulation had the wrong number of phases
-    #[display("simulateValidation should have 3 parts but had {0} instead. Make sure your EntryPoint is valid")]
+    #[display(
+        "simulateValidation should have 3 parts but had {0} instead. Make sure your EntryPoint is valid"
+    )]
     WrongNumberOfPhases(u32),
     /// The user operation ran out of gas during validation
     #[display("ran out of gas during {0.kind} validation")]
@@ -265,7 +281,9 @@ pub enum SimulationViolation {
     #[display("signature aggregator mismatch. RPC: {0:?}, Simulated: {1:?}")]
     AggregatorMismatch(Address, Address),
     /// Verification gas limit doesn't have the required buffer on the measured gas
-    #[display("verification gas limit doesn't have the required buffer on the measured gas, limit: {0}, needed: {1}")]
+    #[display(
+        "verification gas limit doesn't have the required buffer on the measured gas, limit: {0}, needed: {1}"
+    )]
     VerificationGasLimitBufferTooLow(u128, u128),
     /// Unsupported contract type
     #[display("accessed unsupported contract type: {0:?} at {1:?}. Address must be whitelisted")]

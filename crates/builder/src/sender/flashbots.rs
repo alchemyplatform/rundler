@@ -15,20 +15,20 @@
 // https://github.com/gakonst/ethers-rs/blob/master/ethers-providers/src/toolbox/pending_transaction.rs
 use std::str::FromStr;
 
-use alloy_primitives::{hex, utils, Address, Bytes, B256, U256, U64};
+use alloy_primitives::{Address, B256, Bytes, U64, U256, hex, utils};
 use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use reqwest::{
-    header::{HeaderMap, HeaderValue, CONTENT_TYPE},
     Client, Response,
+    header::{CONTENT_TYPE, HeaderMap, HeaderValue},
 };
 use rundler_provider::TransactionRequest;
 use rundler_signer::SignerLease;
 use rundler_types::GasFees;
 use secrecy::{ExposeSecret, SecretString};
-use serde::{de, Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize, de};
+use serde_json::{Value, json};
 
 use super::{ExpectedStorage, Result, TransactionSender, TxSenderError};
 use crate::sender::CancelTxInfo;

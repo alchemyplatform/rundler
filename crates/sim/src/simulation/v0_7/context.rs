@@ -14,17 +14,17 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use alloy_primitives::{
-    address,
+    Address, Bytes, U256, address,
     hex::{self, FromHex},
-    keccak256, Address, Bytes, U256,
+    keccak256,
 };
 use alloy_sol_types::SolType;
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use rundler_contracts::v0_7::ValidationResult;
 use rundler_provider::{BlockId, EntryPoint, EvmProvider, SimulationProvider};
 use rundler_types::{
-    pool::SimulationViolation, v0_7::UserOperation, EntityInfos, EntityType, Opcode,
-    UserOperation as UserOperationTrait, ValidationOutput, ValidationRevert,
+    EntityInfos, EntityType, Opcode, UserOperation as UserOperationTrait, ValidationOutput,
+    ValidationRevert, pool::SimulationViolation, v0_7::UserOperation,
 };
 
 use super::tracer::{
@@ -32,12 +32,12 @@ use super::tracer::{
     TopLevelCallInfo, TracerOutput,
 };
 use crate::{
+    SimulationSettings, ViolationError,
     simulation::context::{
         self as sim_context, AccessInfo, AssociatedSlotsByAddress, Phase,
         TracerOutput as ContextTracerOutput, ValidationContext,
         ValidationContextProvider as ValidationContextProviderTrait,
     },
-    SimulationSettings, ViolationError,
 };
 
 // Banned opcodes
@@ -355,10 +355,10 @@ impl<T> ValidationContextProvider<T> {
         {
             phases[0] = Self::parse_call_to_phase(call_from_entry_point, EntityType::Factory);
             // [OP-031] - create2 can only be called once
-            if let Some(count) = call_from_entry_point.opcodes.get(&Opcode::CREATE2) {
-                if *count > 1 {
-                    factory_called_create2_twice = true;
-                }
+            if let Some(count) = call_from_entry_point.opcodes.get(&Opcode::CREATE2)
+                && *count > 1
+            {
+                factory_called_create2_twice = true;
             }
         }
 
@@ -370,10 +370,10 @@ impl<T> ValidationContextProvider<T> {
         {
             phases[1] = Self::parse_call_to_phase(call_from_entry_point, EntityType::Account);
             // [OP-031] - create2 can only be called once
-            if let Some(count) = call_from_entry_point.opcodes.get(&Opcode::CREATE2) {
-                if *count > 1 {
-                    factory_called_create2_twice = true;
-                }
+            if let Some(count) = call_from_entry_point.opcodes.get(&Opcode::CREATE2)
+                && *count > 1
+            {
+                factory_called_create2_twice = true;
             }
         }
 

@@ -16,20 +16,20 @@ use std::str::FromStr;
 use alloy_primitives::{Address, B256};
 use async_trait::async_trait;
 use rundler_task::{
-    grpc::protos::{from_bytes, ConversionError},
+    grpc::protos::{ConversionError, from_bytes},
     server::{HealthCheck, ServerStatus},
 };
 use rundler_types::builder::{Builder, BuilderError, BuilderResult, BundlingMode};
 use tonic::transport::{Channel, Uri};
 use tonic_health::{
-    pb::{health_client::HealthClient, HealthCheckRequest},
     ServingStatus,
+    pb::{HealthCheckRequest, health_client::HealthClient},
 };
 
 use super::protos::{
-    builder_client::BuilderClient, debug_send_bundle_now_response,
-    debug_set_bundling_mode_response, BundlingMode as ProtoBundlingMode, DebugSendBundleNowRequest,
-    DebugSetBundlingModeRequest, GetSupportedEntryPointsRequest,
+    BundlingMode as ProtoBundlingMode, DebugSendBundleNowRequest, DebugSetBundlingModeRequest,
+    GetSupportedEntryPointsRequest, builder_client::BuilderClient, debug_send_bundle_now_response,
+    debug_set_bundling_mode_response,
 };
 
 /// Remote builder client, used for communicating with a remote builder server

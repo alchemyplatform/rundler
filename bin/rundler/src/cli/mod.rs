@@ -16,10 +16,10 @@ use std::{sync::Arc, time::Duration};
 use admin::AdminCliArgs;
 use aggregator::AggregatorType;
 use alloy_primitives::U256;
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use clap::{
-    builder::{PossibleValuesParser, ValueParser},
     Args, Parser, Subcommand,
+    builder::{PossibleValuesParser, ValueParser},
 };
 use strum::EnumCount;
 use url::Url;
@@ -48,14 +48,14 @@ use rundler_provider::{
     DAGasOracleSync, EntryPointProvider, EvmProvider, FeeEstimator, Providers,
 };
 use rundler_sim::{
-    EstimationSettings, MempoolConfigs, PrecheckSettings, SimulationSettings, MIN_CALL_GAS_LIMIT,
+    EstimationSettings, MIN_CALL_GAS_LIMIT, MempoolConfigs, PrecheckSettings, SimulationSettings,
 };
 use rundler_types::{
+    EntryPointAbiVersion, EntryPointVersion, PriorityFeeMode,
     chain::{ChainSpec, TryFromWithSpec},
     da::DAGasOracleType,
     v0_6::UserOperation as UserOperationV0_6,
     v0_7::UserOperation as UserOperationV0_7,
-    EntryPointAbiVersion, EntryPointVersion, PriorityFeeMode,
 };
 use secrecy::SecretString;
 
@@ -692,7 +692,9 @@ impl TryFrom<&CommonArgs> for SimulationSettings {
 
     fn try_from(value: &CommonArgs) -> Result<Self, Self::Error> {
         if go_parse_duration::parse_duration(&value.tracer_timeout).is_err() {
-            bail!("Invalid value for tracer_timeout, must be parsable by the ParseDuration function. See docs https://pkg.go.dev/time#ParseDuration")
+            bail!(
+                "Invalid value for tracer_timeout, must be parsable by the ParseDuration function. See docs https://pkg.go.dev/time#ParseDuration"
+            )
         }
 
         Ok(Self {
@@ -973,7 +975,10 @@ fn lint_da_gas_tracking(da_gas_tracking_enabled: bool, chain_spec: &ChainSpec) -
     } else if !(chain_spec.da_gas_oracle_type == DAGasOracleType::CachedNitro
         || chain_spec.da_gas_oracle_type == DAGasOracleType::LocalBedrock)
     {
-        tracing::warn!("DA tracking is disabled because DA gas oracle contract type {:?} does not support caching", chain_spec.da_gas_oracle_type);
+        tracing::warn!(
+            "DA tracking is disabled because DA gas oracle contract type {:?} does not support caching",
+            chain_spec.da_gas_oracle_type
+        );
         false
     } else {
         true
