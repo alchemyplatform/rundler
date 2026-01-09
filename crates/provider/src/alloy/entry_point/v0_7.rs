@@ -424,6 +424,7 @@ where
         let txn_req = self
             .i_entry_point
             .handleOps(vec![user_op.pack()], Address::random())
+            .from(SIMULATION_SENDER)
             .into_transaction_request();
 
         let data = txn_req.inner.input.into_input().unwrap();
@@ -630,12 +631,14 @@ fn get_handle_ops_call<AP: AlloyProvider>(
             entry_point
                 .handleOps(ops_per_aggregator.swap_remove(0).userOps, sender_eoa)
                 .chain_id(chain_id)
+                .from(SIMULATION_SENDER)
                 .into_transaction_request()
                 .inner
         } else {
             entry_point
                 .handleAggregatedOps(ops_per_aggregator, sender_eoa)
                 .chain_id(chain_id)
+                .from(SIMULATION_SENDER)
                 .into_transaction_request()
                 .inner
         };
