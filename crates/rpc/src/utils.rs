@@ -16,11 +16,11 @@ use std::panic::AssertUnwindSafe;
 use futures_util::{Future, FutureExt};
 use jsonrpsee::{
     core::RpcResult,
-    types::{error::INTERNAL_ERROR_CODE, ErrorObjectOwned},
+    types::{ErrorObjectOwned, error::INTERNAL_ERROR_CODE},
 };
 use metrics::Counter;
 use metrics_derive::Metrics;
-use rundler_types::{chain::ChainSpec, EntryPointVersion};
+use rundler_types::{EntryPointVersion, chain::ChainSpec};
 
 use crate::{error::rpc_err, eth::EthRpcError};
 

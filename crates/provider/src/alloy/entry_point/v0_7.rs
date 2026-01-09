@@ -16,15 +16,16 @@ use alloy_eips::eip7702::SignedAuthorization;
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::network::{AnyNetwork, TransactionBuilder7702};
 use alloy_rpc_types_eth::{
-    state::{AccountOverride, StateOverride},
     BlockId,
+    state::{AccountOverride, StateOverride},
 };
 use alloy_sol_types::{ContractError as SolContractError, SolInterface, SolValue};
 use alloy_transport::TransportError;
 use anyhow::Context;
 use rundler_contracts::{
     v0_7::{
-        DepositInfo as DepositInfoV0_7, GetEntryPointBalances, IAggregator,
+        DepositInfo as DepositInfoV0_7, ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE,
+        GetEntryPointBalances, IAggregator,
         IEntryPoint::{
             FailedOp, FailedOpWithRevert, IEntryPointCalls, IEntryPointErrors, IEntryPointInstance,
         },
@@ -32,19 +33,18 @@ use rundler_contracts::{
             self, ExecutionResult as ExecutionResultV0_7, IEntryPointSimulationsInstance,
         },
         UserOpsPerAggregator as UserOpsPerAggregatorV0_7, ValidationResult as ValidationResultV0_7,
-        ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE,
     },
     v0_8::ENTRY_POINT_SIMULATIONS_V0_8_DEPLOYED_BYTECODE,
     v0_9::ENTRY_POINT_SIMULATIONS_V0_9_DEPLOYED_BYTECODE,
 };
 use rundler_types::{
+    EntryPointVersion, GasFees, UserOperation as _, UserOpsPerAggregator, ValidationOutput,
+    ValidationRevert,
     authorization::Eip7702Auth,
     chain::ChainSpec,
     constants::SIMULATION_SENDER,
     da::{DAGasBlockData, DAGasData},
     v0_7::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
-    EntryPointVersion, GasFees, UserOperation as _, UserOpsPerAggregator, ValidationOutput,
-    ValidationRevert,
 };
 use rundler_utils::authorization_utils;
 use tracing::instrument;

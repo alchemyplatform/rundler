@@ -11,13 +11,13 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use GasPriceOracle::GasPriceOracleInstance;
 use alloy_primitives::{Address, Bytes};
 use alloy_provider::network::AnyNetwork;
 use alloy_sol_types::sol;
 use anyhow::Context;
 use rundler_types::da::{DAGasBlockData, DAGasData};
 use tracing::instrument;
-use GasPriceOracle::GasPriceOracleInstance;
 
 use super::DAGasOracle;
 use crate::{AlloyProvider, BlockHashOrNumber, ProviderResult};

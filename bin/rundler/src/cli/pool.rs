@@ -21,8 +21,8 @@ use rundler_provider::Providers;
 use rundler_sim::MempoolConfigs;
 use rundler_task::TaskSpawnerExt;
 use rundler_types::{
-    chain::{ChainSpec, TryIntoWithSpec},
     EntryPointVersion,
+    chain::{ChainSpec, TryIntoWithSpec},
 };
 use rundler_utils::emit::{self, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;

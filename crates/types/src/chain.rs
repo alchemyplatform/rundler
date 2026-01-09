@@ -19,7 +19,7 @@ use alloy_primitives::Address;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    aggregator::SignatureAggregator, da::DAGasOracleType, proxy::SubmissionProxy, EntryPointVersion,
+    EntryPointVersion, aggregator::SignatureAggregator, da::DAGasOracleType, proxy::SubmissionProxy,
 };
 
 const ENTRY_POINT_ADDRESS_V0_6: &str = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789";

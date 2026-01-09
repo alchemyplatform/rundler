@@ -26,23 +26,23 @@ use rundler_pool::RemotePoolClient;
 use rundler_provider::{AlloyNetworkConfig, Providers};
 use rundler_sim::MempoolConfigs;
 use rundler_task::{
-    server::{connect_with_retries_shutdown, format_socket_addr},
     TaskSpawnerExt,
+    server::{connect_with_retries_shutdown, format_socket_addr},
 };
 use rundler_types::{
+    EntryPointVersion,
     chain::{ChainSpec, ContractRegistry},
     proxy::SubmissionProxy,
-    EntryPointVersion,
 };
-use rundler_utils::emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY};
+use rundler_utils::emit::{self, EVENT_CHANNEL_CAPACITY, WithEntryPoint};
 use secrecy::SecretString;
 use serde::Deserialize;
 use tokio::sync::broadcast;
 
 use super::{
+    CommonArgs,
     proxy::{PassThroughProxy, SubmissionProxyType},
     signer::SignerArgs,
-    CommonArgs,
 };
 
 const REQUEST_CHANNEL_CAPACITY: usize = 1024;
@@ -513,10 +513,10 @@ pub fn is_nonspammy_event(event: &WithEntryPoint<BuilderEvent>) -> bool {
         fee_increase_count,
         ..
     } = &event.event.kind
+        && tx_details.is_none()
+        && *fee_increase_count == 0
     {
-        if tx_details.is_none() && *fee_increase_count == 0 {
-            return false;
-        }
+        return false;
     }
     true
 }

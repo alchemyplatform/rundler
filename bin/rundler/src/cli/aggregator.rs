@@ -17,9 +17,9 @@ use rundler_bls::BlsSignatureAggregatorV0_7;
 use rundler_pbh::PbhSignatureAggregator;
 use rundler_provider::Providers;
 use rundler_types::{
+    EntryPointVersion,
     aggregator::SignatureAggregator,
     chain::{ChainSpec, ContractRegistry},
-    EntryPointVersion,
 };
 
 use super::CommonArgs;

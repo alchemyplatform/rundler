@@ -11,16 +11,16 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use futures_util::{future::BoxFuture, FutureExt};
+use futures_util::{FutureExt, future::BoxFuture};
 use http::{Request as httpRequest, Response as httpResponse};
 use jsonrpsee::{
-    server::{middleware::rpc::RpcServiceT, ConnectionGuard},
-    types::{ErrorCode, Request},
     MethodResponse,
+    server::{ConnectionGuard, middleware::rpc::RpcServiceT},
+    types::{ErrorCode, Request},
 };
 use rundler_types::task::{
     metric_recorder::MethodSessionLogger,
-    status_code::{get_http_status_from_code, HttpCode, RpcCode},
+    status_code::{HttpCode, RpcCode, get_http_status_from_code},
 };
 use tower::{Layer, Service};
 

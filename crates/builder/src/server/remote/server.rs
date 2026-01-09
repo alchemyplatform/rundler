@@ -15,14 +15,14 @@ use std::net::SocketAddr;
 
 use rundler_task::GracefulShutdown;
 use rundler_types::builder::Builder;
-use tonic::{async_trait, transport::Server, Request, Response, Status};
+use tonic::{Request, Response, Status, async_trait, transport::Server};
 
 use super::protos::{
+    BUILDER_FILE_DESCRIPTOR_SET, BundlingMode, DebugSendBundleNowRequest,
+    DebugSendBundleNowResponse, DebugSetBundlingModeRequest, DebugSetBundlingModeResponse,
+    DebugSetBundlingModeSuccess, GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse,
     builder_server::{Builder as GrpcBuilder, BuilderServer as GrpcBuilderServer},
-    debug_send_bundle_now_response, debug_set_bundling_mode_response, BundlingMode,
-    DebugSendBundleNowRequest, DebugSendBundleNowResponse, DebugSetBundlingModeRequest,
-    DebugSetBundlingModeResponse, DebugSetBundlingModeSuccess, GetSupportedEntryPointsRequest,
-    GetSupportedEntryPointsResponse, BUILDER_FILE_DESCRIPTOR_SET,
+    debug_send_bundle_now_response, debug_set_bundling_mode_response,
 };
 use crate::server::{local::LocalBuilderHandle, remote::protos::DebugSendBundleNowSuccess};
 

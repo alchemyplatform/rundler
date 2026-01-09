@@ -14,7 +14,7 @@
 use std::{pin::Pin, sync::Arc, time::Duration};
 
 use alloy_primitives::{Address, B256};
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use async_trait::async_trait;
 use futures::Stream;
 use futures_util::StreamExt;
@@ -29,12 +29,12 @@ use rundler_provider::{
 };
 use rundler_task::TaskSpawner;
 use rundler_types::{
+    EntityUpdate, ExpectedStorage, UserOperation,
     authorization::Eip7702Auth,
     builder::BundlingMode,
     chain::ChainSpec,
     pool::{AddressUpdate, NewHead, Pool, PoolOperation},
     proxy::SubmissionProxy,
-    EntityUpdate, ExpectedStorage, UserOperation,
 };
 use rundler_utils::{emit::WithEntryPoint, eth};
 use tokio::{
@@ -48,13 +48,13 @@ use tokio::{
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
+    BuilderSettings,
     assigner::Assigner,
     bundle_proposer::{Bundle, BundleProposer, BundleProposerError},
     emit::{BuilderEvent, BundleTxDetails},
     transaction_tracker::{
         TrackerState, TrackerUpdate, TransactionTracker, TransactionTrackerError,
     },
-    BuilderSettings,
 };
 
 #[async_trait]
@@ -305,10 +305,19 @@ where
                     if block_number.saturating_sub(underpriced_info.since_block)
                         >= self.settings.max_replacement_underpriced_blocks
                     {
-                        warn!("No operations available, but last replacement underpriced, moving to cancelling state. Round: {}. Since block {}. Current block {}. Max underpriced blocks: {}", underpriced_info.rounds, underpriced_info.since_block, block_number, self.settings.max_replacement_underpriced_blocks);
+                        warn!(
+                            "No operations available, but last replacement underpriced, moving to cancelling state. Round: {}. Since block {}. Current block {}. Max underpriced blocks: {}",
+                            underpriced_info.rounds,
+                            underpriced_info.since_block,
+                            block_number,
+                            self.settings.max_replacement_underpriced_blocks
+                        );
                         state.update(InnerState::Cancelling(inner.to_cancelling()));
                     } else {
-                        info!("No operations available, but last replacement underpriced, starting over and waiting for next trigger. Round: {}. Since block {}. Current block {}", underpriced_info.rounds, underpriced_info.since_block, block_number);
+                        info!(
+                            "No operations available, but last replacement underpriced, starting over and waiting for next trigger. Round: {}. Since block {}. Current block {}",
+                            underpriced_info.rounds, underpriced_info.since_block, block_number
+                        );
                         // Abandon the transaction tracker when we start the next bundle attempt fresh, may cause a `ReplacementUnderpriced` in next round
                         state.transaction_tracker.abandon();
                         state.update(InnerState::Building(inner.underpriced_round()));
@@ -344,7 +353,10 @@ where
                 state.update(InnerState::Building(inner.underpriced(block_number)));
             }
             Ok(SendBundleAttemptResult::ReplacementUnderpriced) => {
-                info!("Replacement transaction underpriced, marking as underpriced. Num fee increases {:?}", inner.fee_increase_count);
+                info!(
+                    "Replacement transaction underpriced, marking as underpriced. Num fee increases {:?}",
+                    inner.fee_increase_count
+                );
                 // unabandon to allow fee estimation to consider any submitted transactions, wait for next trigger
                 state.transaction_tracker.unabandon();
                 state.update(InnerState::Building(inner.underpriced(block_number)));
@@ -356,7 +368,9 @@ where
             }
             Ok(SendBundleAttemptResult::InsufficientFunds) => {
                 // Insufficient funds
-                info!("Insufficient funds sending bundle, resetting state and starting new bundle attempt");
+                info!(
+                    "Insufficient funds sending bundle, resetting state and starting new bundle attempt"
+                );
                 state.reset();
             }
             Ok(SendBundleAttemptResult::Rejected) => {
@@ -397,15 +411,17 @@ where
                     is_success,
                     ..
                 } => {
-                    info!("Bundle transaction mined: block number {block_number}, attempt number {attempt_number}, gas limit {gas_limit:?}, gas used {gas_used:?}, tx hash {tx_hash}, nonce {nonce}, success {is_success}");
+                    info!(
+                        "Bundle transaction mined: block number {block_number}, attempt number {attempt_number}, gas limit {gas_limit:?}, gas used {gas_used:?}, tx hash {tx_hash}, nonce {nonce}, success {is_success}"
+                    );
 
                     self.metrics
                         .process_bundle_txn_mined(gas_limit, gas_used, is_success);
 
-                    if !is_success {
-                        if let Err(e) = self.process_revert(tx_hash).await {
-                            warn!("Failed to process revert for bundle transaction {tx_hash:?}: {e:#?}");
-                        }
+                    if !is_success && let Err(e) = self.process_revert(tx_hash).await {
+                        warn!(
+                            "Failed to process revert for bundle transaction {tx_hash:?}: {e:#?}"
+                        );
                     }
 
                     self.emit(BuilderEvent::transaction_mined(
@@ -492,10 +508,15 @@ where
             Err(TransactionTrackerError::Rejected)
             | Err(TransactionTrackerError::Underpriced)
             | Err(TransactionTrackerError::ReplacementUnderpriced) => {
-                info!("Transaction underpriced/rejected during cancellation, trying again. {cancel_res:?}");
+                info!(
+                    "Transaction underpriced/rejected during cancellation, trying again. {cancel_res:?}"
+                );
                 if inner.fee_increase_count >= self.settings.max_cancellation_fee_increases {
                     // abandon the cancellation
-                    warn!("Abandoning cancellation after max fee increases {}, starting new bundle attempt", inner.fee_increase_count);
+                    warn!(
+                        "Abandoning cancellation after max fee increases {}, starting new bundle attempt",
+                        inner.fee_increase_count
+                    );
                     self.metrics.cancellations_abandoned.increment(1);
                     state.reset();
                 } else {
@@ -576,7 +597,10 @@ where
                 // abandon the cancellation
                 // release all operations after the cancellation abandonment
                 self.assigner.release_all(self.sender_eoa);
-                warn!("Abandoning cancellation after max fee increases {}, starting new bundle attempt", inner.fee_increase_count);
+                warn!(
+                    "Abandoning cancellation after max fee increases {}, starting new bundle attempt",
+                    inner.fee_increase_count
+                );
                 self.metrics.cancellations_abandoned.increment(1);
                 state.reset();
             } else {
@@ -797,10 +821,10 @@ where
         if bundle.is_empty() {
             if !bundle.rejected_ops.is_empty() || !bundle.entity_updates.is_empty() {
                 info!(
-                "Empty bundle with {} rejected ops and {} rejected entities. Removing them from pool.",
-                bundle.rejected_ops.len(),
-                bundle.entity_updates.len()
-            );
+                    "Empty bundle with {} rejected ops and {} rejected entities. Removing them from pool.",
+                    bundle.rejected_ops.len(),
+                    bundle.entity_updates.len()
+                );
             }
             return Ok(None);
         }
@@ -1097,10 +1121,10 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
     }
 
     fn send_result(&mut self, result: SendBundleResult) {
-        if let Some(r) = self.send_bundle_response.take() {
-            if r.send(result).is_err() {
-                error!("Failed to send bundle result to manual caller");
-            }
+        if let Some(r) = self.send_bundle_response.take()
+            && r.send(result).is_err()
+        {
+            error!("Failed to send bundle result to manual caller");
         }
     }
 
@@ -1522,18 +1546,18 @@ impl BuilderMetric {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{address, bytes, Bytes, U256};
+    use alloy_primitives::{Bytes, U256, address, bytes};
     use mockall::Sequence;
     use rundler_provider::{
         GethDebugTracerCallFrame, MockDAGasOracleSync, MockEntryPointV0_6, MockEvmProvider,
         MockFeeEstimator, ProvidersWithEntryPoint,
     };
     use rundler_types::{
+        EntityInfos, GasFees, UserOperation as _, UserOperationPermissions, UserOpsPerAggregator,
+        ValidTimeRange,
         chain::ChainSpec,
         pool::{AddressUpdate, MockPool, PoolOperationSummary},
         v0_6::UserOperation,
-        EntityInfos, GasFees, UserOperation as _, UserOperationPermissions, UserOpsPerAggregator,
-        ValidTimeRange,
     };
     use tokio::sync::{broadcast, mpsc};
 

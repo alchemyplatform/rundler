@@ -17,11 +17,11 @@ use alloy_primitives::{Address, B256, U64};
 use futures_util::future;
 use rundler_provider::StateOverride;
 use rundler_types::{
-    chain::ChainSpec, pool::Pool, BlockTag, UserOperation, UserOperationOptionalGas,
-    UserOperationPermissions, UserOperationVariant,
+    BlockTag, UserOperation, UserOperationOptionalGas, UserOperationPermissions,
+    UserOperationVariant, chain::ChainSpec, pool::Pool,
 };
 use rundler_utils::log::LogOnError;
-use tracing::{instrument, Level};
+use tracing::{Level, instrument};
 
 use super::{
     error::{EthResult, EthRpcError},
@@ -225,20 +225,20 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use alloy_consensus::{transaction::Recovered, Signed, TxEip1559};
+    use alloy_consensus::{Signed, TxEip1559, transaction::Recovered};
     use alloy_primitives::{Log as PrimitiveLog, LogData, Signature, TxKind, U256};
     use alloy_rpc_types_eth::Transaction as AlloyTransaction;
     use alloy_sol_types::SolInterface;
     use mockall::predicate::eq;
-    use rundler_contracts::v0_6::IEntryPoint::{handleOpsCall, IEntryPointCalls};
+    use rundler_contracts::v0_6::IEntryPoint::{IEntryPointCalls, handleOpsCall};
     use rundler_provider::{
         AnyTxEnvelope, Log, MockEntryPointV0_6, MockEvmProvider, Transaction, WithOtherFields,
     };
     use rundler_sim::MockGasEstimator;
     use rundler_types::{
+        EntityInfos, UserOperation as UserOperationTrait, ValidTimeRange,
         pool::{MockPool, PoolOperation},
         v0_6::{UserOperationBuilder, UserOperationRequiredFields},
-        EntityInfos, UserOperation as UserOperationTrait, ValidTimeRange,
     };
 
     use super::*;

@@ -21,7 +21,7 @@ use metrics_derive::Metrics;
 use mockall::automock;
 use rundler_provider::{EvmProvider, ReceiptResponse, TransactionRequest};
 use rundler_signer::SignerLease;
-use rundler_types::{pool::AddressUpdate, ExpectedStorage, GasFees};
+use rundler_types::{ExpectedStorage, GasFees, pool::AddressUpdate};
 use tokio::time::Instant;
 use tracing::{info, warn};
 
@@ -216,14 +216,15 @@ where
             ..
         } = self.get_state()?;
         if nonce != required_nonce {
-            bail!("tried to send transaction with nonce {nonce}, but should match tracker's nonce of {required_nonce}");
+            bail!(
+                "tried to send transaction with nonce {nonce}, but should match tracker's nonce of {required_nonce}"
+            );
         }
-        if let Some(required_fees) = required_fees {
-            if gas_fees.max_fee_per_gas < required_fees.max_fee_per_gas
-                || gas_fees.max_priority_fee_per_gas < required_fees.max_priority_fee_per_gas
-            {
-                bail!("new transaction's gas fees should be at least the required fees")
-            }
+        if let Some(required_fees) = required_fees
+            && (gas_fees.max_fee_per_gas < required_fees.max_fee_per_gas
+                || gas_fees.max_priority_fee_per_gas < required_fees.max_priority_fee_per_gas)
+        {
+            bail!("new transaction's gas fees should be at least the required fees")
         }
         Ok(())
     }
@@ -515,7 +516,8 @@ where
             "Tracker update: nonce has changed from {:?} to {:?}, balance change: {:?}gwei, transactions mined: {:?}",
             self.nonce,
             new_nonce,
-            alloy_primitives::utils::format_units(balance_change, "gwei").unwrap_or("0".to_string()),
+            alloy_primitives::utils::format_units(balance_change, "gwei")
+                .unwrap_or("0".to_string()),
             update.mined_tx_hashes
         );
 
@@ -628,7 +630,7 @@ struct TransactionTrackerMetrics {
 mod tests {
     use std::sync::Arc;
 
-    use alloy_consensus::{transaction::Recovered, Signed, TxEip1559};
+    use alloy_consensus::{Signed, TxEip1559, transaction::Recovered};
     use alloy_network::TxSigner;
     use alloy_primitives::{Address, Signature, U256};
     use alloy_rpc_types_eth::{

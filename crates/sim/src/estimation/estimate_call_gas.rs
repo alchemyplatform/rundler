@@ -13,7 +13,7 @@
 
 use std::{future::Future, pin::Pin};
 
-use alloy_primitives::{Address, Bytes, B256};
+use alloy_primitives::{Address, B256, Bytes};
 use alloy_sol_types::{Revert, SolError};
 use anyhow::Context;
 use async_trait::async_trait;
@@ -24,7 +24,7 @@ use rundler_utils::authorization_utils;
 use tracing::instrument;
 
 use super::Settings;
-use crate::{estimation::BinarySearchResult, GasEstimationError};
+use crate::{GasEstimationError, estimation::BinarySearchResult};
 
 /// Must match the constant in `CallGasEstimationProxyTypes.sol`.
 #[allow(dead_code)]

@@ -12,17 +12,16 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_sol_types::Panic;
-use anyhow::{bail, Context};
-use rundler_task::grpc::protos::{from_bytes, ToProtoBytes};
+use anyhow::{Context, bail};
+use rundler_task::grpc::protos::{ToProtoBytes, from_bytes};
 use rundler_types::{
+    Opcode, StorageSlot, Timestamp, ValidationRevert, ViolationOpCode,
     pool::{
         MempoolError, NeedsStakeInformation, PoolError, PrecheckViolation, SimulationViolation,
     },
-    Opcode, StorageSlot, Timestamp, ValidationRevert, ViolationOpCode,
 };
 
 use super::protos::{
-    mempool_error, precheck_violation_error, simulation_violation_error, validation_revert,
     AccessedUndeployedContract, AccessedUnsupportedContractType, AggregatorError,
     AggregatorMismatch, AssociatedStorageDuringDeploy, AssociatedStorageIsAlternateSender,
     CallGasLimitTooLow, CallHadValue, CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert,
@@ -45,6 +44,7 @@ use super::protos::{
     UseUnsupportedEip, UsedForbiddenOpcode, UsedForbiddenPrecompile,
     ValidationRevert as ProtoValidationRevert, VerificationGasLimitBufferTooLow,
     VerificationGasLimitEfficiencyTooLow, VerificationGasLimitTooHigh, WrongNumberOfPhases,
+    mempool_error, precheck_violation_error, simulation_violation_error, validation_revert,
 };
 
 impl TryFrom<ProtoMempoolError> for PoolError {

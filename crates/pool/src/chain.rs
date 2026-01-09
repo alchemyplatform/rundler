@@ -21,7 +21,7 @@ use std::{
 use alloy_network_primitives::TransactionResponse;
 use alloy_primitives::{Address, B256, U256};
 use alloy_sol_types::SolEvent;
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use futures::future;
 use itertools::Itertools;
 use metrics::{Counter, Gauge, Histogram};
@@ -38,13 +38,13 @@ use rundler_contracts::{
     },
 };
 use rundler_provider::{Block, BlockId, EvmProvider, Filter, Log, TransactionTrait};
-use rundler_task::{block_watcher, GracefulShutdown};
+use rundler_task::{GracefulShutdown, block_watcher};
 use rundler_types::{
-    pool::AddressUpdate, EntryPointAbiVersion, EntryPointVersion, Timestamp, UserOperationId,
+    EntryPointAbiVersion, EntryPointVersion, Timestamp, UserOperationId, pool::AddressUpdate,
 };
 use tokio::{
     select,
-    sync::{broadcast, Semaphore},
+    sync::{Semaphore, broadcast},
     time,
 };
 use tracing::{info, instrument, warn};
@@ -372,10 +372,10 @@ impl<P: EvmProvider> Chain<P> {
             .process_pending_block(&summary, pending_block.header.number)
             .await;
         let header = &pending_block.inner.header;
-        if let Some(pending_block) = &self.pending_block {
-            if pending_block.hash == header.hash {
-                return None;
-            }
+        if let Some(pending_block) = &self.pending_block
+            && pending_block.hash == header.hash
+        {
+            return None;
         }
         self.metrics
             .flashblock_discovery_delay_ms
@@ -485,7 +485,7 @@ impl<P: EvmProvider> Chain<P> {
             }
 
             bail!(
-            "new block number {new_block_number} should be greater than start of history (current block: {current_block_number})"
+                "new block number {new_block_number} should be greater than start of history (current block: {current_block_number})"
             )
         }
 
@@ -1153,10 +1153,10 @@ struct ChainMetrics {
 mod tests {
     use std::ops::DerefMut;
 
-    use alloy_consensus::{transaction::Recovered, SignableTransaction, TypedTransaction};
+    use alloy_consensus::{SignableTransaction, TypedTransaction, transaction::Recovered};
     use alloy_eips::BlockNumberOrTag;
     use alloy_network_primitives::BlockTransactions;
-    use alloy_primitives::{address, Log as PrimitiveLog, LogData, Signature};
+    use alloy_primitives::{Log as PrimitiveLog, LogData, Signature, address};
     use alloy_rpc_types_eth::{Block as AlloyBlock, Transaction as AlloyTransaction};
     use alloy_serde::WithOtherFields;
     use parking_lot::RwLock;
@@ -1929,19 +1929,21 @@ mod tests {
     #[tokio::test]
     async fn test_mixed_event_types() {
         let (mut chain, controller) = new_chain();
-        controller.set_blocks(vec![MockBlock::new(hash(0))
-            .add_ep(
-                ENTRY_POINT_ADDRESS_V0_6,
-                vec![hash(101), hash(102)],
-                vec![addr(1), addr(2)],
-                vec![addr(3), addr(4)],
-            )
-            .add_ep(
-                ENTRY_POINT_ADDRESS_V0_7,
-                vec![hash(201), hash(202)],
-                vec![addr(5), addr(6)],
-                vec![addr(7), addr(8)],
-            )]);
+        controller.set_blocks(vec![
+            MockBlock::new(hash(0))
+                .add_ep(
+                    ENTRY_POINT_ADDRESS_V0_6,
+                    vec![hash(101), hash(102)],
+                    vec![addr(1), addr(2)],
+                    vec![addr(3), addr(4)],
+                )
+                .add_ep(
+                    ENTRY_POINT_ADDRESS_V0_7,
+                    vec![hash(201), hash(202)],
+                    vec![addr(5), addr(6)],
+                    vec![addr(7), addr(8)],
+                ),
+        ]);
         let update = chain.sync_to_block(controller.get_head()).await.unwrap();
         assert_eq!(
             update,

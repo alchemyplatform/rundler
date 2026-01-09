@@ -13,7 +13,7 @@
 
 use std::{fmt::Debug, time::Duration};
 
-use alloy_primitives::{Address, Bytes, B256, U256};
+use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_sol_types::SolValue;
 
 /// User operation permissions
@@ -26,7 +26,7 @@ pub mod v0_6;
 /// User Operation types for Entry Point v0.7
 pub mod v0_7;
 
-use crate::{aggregator::AggregatorCosts, authorization::Eip7702Auth, chain::ChainSpec, Entity};
+use crate::{Entity, aggregator::AggregatorCosts, authorization::Eip7702Auth, chain::ChainSpec};
 
 /// A user op must be valid for at least this long into the future to be included.
 pub const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);

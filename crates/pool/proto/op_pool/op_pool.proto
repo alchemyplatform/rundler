@@ -762,10 +762,6 @@ message PrecheckViolationError {
   }
 }
 
-message InitCodeTooShort {
-  uint64 length = 1;
-}
-
 message SenderIsNotContractAndNoInitCode {
   bytes sender_address = 1;
 }
@@ -791,10 +787,6 @@ message VerificationGasLimitTooHigh {
 message PreVerificationGasTooLow {
   bytes actual_gas = 1;
   bytes min_gas = 2;
-}
-
-message PaymasterTooShort {
-  uint64 length = 1;
 }
 
 message PaymasterIsNotContract {

@@ -20,8 +20,8 @@ use tracing::instrument;
 
 use super::DAMetrics;
 use crate::{
-    alloy::da::arbitrum::NodeInterface::NodeInterfaceInstance, AlloyProvider, BlockHashOrNumber,
-    DAGasOracle, DAGasOracleSync, ProviderResult,
+    AlloyProvider, BlockHashOrNumber, DAGasOracle, DAGasOracleSync, ProviderResult,
+    alloy::da::arbitrum::NodeInterface::NodeInterfaceInstance,
 };
 
 /// Cached Arbitrum Nitro DA gas oracle

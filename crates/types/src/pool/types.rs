@@ -14,8 +14,8 @@
 use alloy_primitives::{Address, B256, U256};
 
 use crate::{
-    da::DAGasData, entity::EntityInfos, Entity, EntityType, StakeInfo, UserOperation,
-    UserOperationPermissions, UserOperationVariant, ValidTimeRange,
+    Entity, EntityType, StakeInfo, UserOperation, UserOperationPermissions, UserOperationVariant,
+    ValidTimeRange, da::DAGasData, entity::EntityInfos,
 };
 
 /// The new head of the chain, as viewed by the pool

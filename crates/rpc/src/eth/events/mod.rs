@@ -28,7 +28,7 @@ pub(crate) use v0_7::UserOperationEventProviderV0_7;
 #[async_trait::async_trait]
 pub(crate) trait UserOperationEventProvider: Send + Sync {
     async fn get_mined_by_hash(&self, hash: B256)
-        -> anyhow::Result<Option<RpcUserOperationByHash>>;
+    -> anyhow::Result<Option<RpcUserOperationByHash>>;
 
     async fn get_mined_from_tx_receipt(
         &self,
@@ -111,7 +111,7 @@ fn filter_receipt_logs_matching_user_op(
 #[cfg(test)]
 mod tests {
 
-    use alloy_primitives::{address, utils::keccak256, Address, Log as PrimitiveLog, LogData};
+    use alloy_primitives::{Address, Log as PrimitiveLog, LogData, address, utils::keccak256};
     use alloy_rpc_types_eth::TransactionReceipt as AlloyTransactionReceipt;
     use rundler_provider::{
         AnyReceiptEnvelope, ReceiptWithBloom, TransactionReceipt, WithOtherFields,

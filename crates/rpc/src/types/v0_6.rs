@@ -13,12 +13,12 @@
 
 use alloy_primitives::{Address, Bytes, U128, U256};
 use rundler_types::{
+    EntryPointVersion, GasEstimate,
     authorization::Eip7702Auth,
     chain::ChainSpec,
     v0_6::{
         UserOperation, UserOperationBuilder, UserOperationOptionalGas, UserOperationRequiredFields,
     },
-    EntryPointVersion, GasEstimate,
 };
 use serde::{Deserialize, Serialize};
 

@@ -28,7 +28,7 @@ use rundler_types::{
 
 use super::events::UserOperationEventProvider;
 use crate::{
-    eth::{error::EthResult, EthRpcError},
+    eth::{EthRpcError, error::EthResult},
     types::{
         RpcGasEstimate, RpcGasEstimateV0_6, RpcGasEstimateV0_7, RpcUserOperationByHash,
         RpcUserOperationReceipt,
@@ -214,7 +214,7 @@ pub(crate) trait EntryPointRoute: Send + Sync {
     fn address(&self) -> Address;
 
     async fn get_mined_by_hash(&self, hash: B256)
-        -> anyhow::Result<Option<RpcUserOperationByHash>>;
+    -> anyhow::Result<Option<RpcUserOperationByHash>>;
 
     async fn get_mined_from_tx_receipt(
         &self,

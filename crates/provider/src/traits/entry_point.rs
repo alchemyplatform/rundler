@@ -13,11 +13,11 @@
 
 use alloy_primitives::{Address, Bytes, U256};
 use rundler_types::{
+    EntryPointVersion, GasFees, Timestamp, UserOperation, UserOpsPerAggregator, ValidationOutput,
+    ValidationRevert,
     authorization::Eip7702Auth,
     chain::ChainSpec,
     da::{DAGasBlockData, DAGasData},
-    EntryPointVersion, GasFees, Timestamp, UserOperation, UserOpsPerAggregator, ValidationOutput,
-    ValidationRevert,
 };
 
 use crate::{BlockHashOrNumber, BlockId, ProviderResult, StateOverride, TransactionRequest};
@@ -100,7 +100,7 @@ pub trait EntryPoint: Send + Sync {
 
     /// Get the balance of an address
     async fn balance_of(&self, address: Address, block_id: Option<BlockId>)
-        -> ProviderResult<U256>;
+    -> ProviderResult<U256>;
 
     /// Get the deposit info for an address
     async fn get_deposit_info(&self, address: Address) -> ProviderResult<DepositInfo>;
@@ -163,7 +163,7 @@ pub trait BundleHandler: Send + Sync {
 
     /// Decode the revert data from a call to `handleOps`
     fn decode_handle_ops_revert(message: &str, revert_data: &Option<Bytes>)
-        -> Option<HandleOpsOut>;
+    -> Option<HandleOpsOut>;
 
     /// Decode user ops from calldata
     fn decode_ops_from_calldata(

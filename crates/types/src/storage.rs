@@ -13,7 +13,7 @@
 
 //! Types for interacting with EVM storage
 
-use std::collections::{btree_map, BTreeMap};
+use std::collections::{BTreeMap, btree_map};
 
 use alloy_primitives::{Address, B256, U256};
 use serde::{Deserialize, Serialize};

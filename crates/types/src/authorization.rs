@@ -109,7 +109,11 @@ impl Eip7702Auth {
                 if address == signer {
                     Ok(())
                 } else {
-                    Err(anyhow::anyhow!("Invalid signature for EIP-7702 authorization tuple - expected {:?} recovered {:?}", signer, address))
+                    Err(anyhow::anyhow!(
+                        "Invalid signature for EIP-7702 authorization tuple - expected {:?} recovered {:?}",
+                        signer,
+                        address
+                    ))
                 }
             }
             Err(e) => Err(anyhow::anyhow!(e.to_string())),

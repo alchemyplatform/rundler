@@ -13,15 +13,15 @@
 
 use std::{future::Future, pin::Pin};
 
-use alloy_primitives::{Address, Bytes, B256, U256};
+use alloy_primitives::{Address, B256, Bytes, U256};
 use async_trait::async_trait;
 use rundler_provider::{EvmProvider, StateOverride, TransactionBuilder, TransactionRequest};
-use rundler_types::{chain::ChainSpec, constants::SIMULATION_SENDER, UserOperation};
+use rundler_types::{UserOperation, chain::ChainSpec, constants::SIMULATION_SENDER};
 use rundler_utils::authorization_utils;
 use tracing::instrument;
 
 use super::Settings;
-use crate::{estimation::BinarySearchResult, GasEstimationError};
+use crate::{GasEstimationError, estimation::BinarySearchResult};
 
 /// Estimates a verification gas limit for a user operation. Can be used to
 /// estimate both verification gas and, in the v0.7 case, paymaster verification

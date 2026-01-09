@@ -17,7 +17,7 @@ use alloy_consensus::{SignableTransaction, TxEnvelope, TypedTransaction};
 use alloy_eips::eip2718::Encodable2718;
 use alloy_network::{EthereumWallet, TransactionBuilder, TxSigner};
 use alloy_primitives::{Address, Bytes, Signature, U256};
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use metrics::{Counter, Gauge};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
@@ -192,7 +192,9 @@ async fn funding_task_inner<P: EvmProvider>(
     let mut total_with_gas = total + gas_fee;
 
     if total_with_gas > funding_balance {
-        tracing::warn!("Not enough funding balance. Funding balance: {funding_balance}, total to fund: {total}. Partial funding will be attempted.");
+        tracing::warn!(
+            "Not enough funding balance. Funding balance: {funding_balance}, total to fund: {total}. Partial funding will be attempted."
+        );
         while total_with_gas > funding_balance && !to_fund.is_empty() {
             let (_, amount) = to_fund.pop().unwrap();
             total_with_gas -= amount + U256::from(GAS_PER_CALL) * U256::from(max_fee_per_gas);
@@ -357,7 +359,7 @@ mod tests {
     use alloy_consensus::Transaction;
     use alloy_eips::eip2718::Decodable2718;
     use alloy_network::AnyTxEnvelope;
-    use alloy_primitives::{address, bytes, B256};
+    use alloy_primitives::{B256, address, bytes};
     use alloy_rpc_types_eth::TransactionReceipt as AlloyTransactionReceipt;
     use alloy_sol_types::SolInterface;
     use mockall::Sequence;

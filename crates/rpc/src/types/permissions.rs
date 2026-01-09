@@ -11,9 +11,9 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{U256, U64};
+use alloy_primitives::{U64, U256};
 use rundler_types::{
-    chain::ChainSpec, BundlerSponsorship, EntryPointVersion, UserOperationPermissions,
+    BundlerSponsorship, EntryPointVersion, UserOperationPermissions, chain::ChainSpec,
 };
 use serde::{Deserialize, Serialize};
 

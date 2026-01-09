@@ -16,7 +16,7 @@ use std::{collections::HashMap, str::FromStr};
 use alloy_primitives::{Address, B256, U256};
 use rundler_types::{Entity, EntityType, Opcode, UserOperation, UserOperationVariant};
 use serde::Deserialize;
-use serde_with::{serde_as, DisplayFromStr};
+use serde_with::{DisplayFromStr, serde_as};
 
 use crate::simulation::SimulationViolation;
 
@@ -265,7 +265,7 @@ pub(crate) fn match_mempools(
 #[cfg(test)]
 mod tests {
     use alloy_primitives::U256;
-    use rundler_types::{pool::NeedsStakeInformation, StorageSlot, ViolationOpCode};
+    use rundler_types::{StorageSlot, ViolationOpCode, pool::NeedsStakeInformation};
 
     use super::*;
 
