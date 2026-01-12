@@ -36,6 +36,7 @@ use rundler_contracts::v0_7::{
 use rundler_types::{
     authorization::Eip7702Auth,
     chain::ChainSpec,
+    constants::SIMULATION_SENDER,
     da::{DAGasBlockData, DAGasData},
     v0_7::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
     EntryPointVersion, GasFees, UserOperation as _, UserOpsPerAggregator, ValidationOutput,
@@ -423,6 +424,7 @@ where
         let txn_req = self
             .i_entry_point
             .handleOps(vec![user_op.pack()], Address::random())
+            .from(SIMULATION_SENDER)
             .into_transaction_request();
 
         let data = txn_req.inner.input.into_input().unwrap();
@@ -480,6 +482,7 @@ where
         let call = ep_simulations
             .simulateValidation(user_op.pack())
             .gas(self.max_verification_gas.saturating_add(da_gas))
+            .from(SIMULATION_SENDER)
             .into_transaction_request();
 
         Ok((call.inner, override_ep))
@@ -628,12 +631,14 @@ fn get_handle_ops_call<AP: AlloyProvider>(
             entry_point
                 .handleOps(ops_per_aggregator.swap_remove(0).userOps, sender_eoa)
                 .chain_id(chain_id)
+                .from(SIMULATION_SENDER)
                 .into_transaction_request()
                 .inner
         } else {
             entry_point
                 .handleAggregatedOps(ops_per_aggregator, sender_eoa)
                 .chain_id(chain_id)
+                .from(SIMULATION_SENDER)
                 .into_transaction_request()
                 .inner
         };
@@ -755,6 +760,7 @@ async fn simulate_handle_op_inner<AP: AlloyProvider>(
             .block(block_id)
             .gas(execution_gas_limit.saturating_add(da_gas))
             .state(state_override)
+            .from(SIMULATION_SENDER)
             .call()
             .await
     } else {
@@ -763,6 +769,7 @@ async fn simulate_handle_op_inner<AP: AlloyProvider>(
             .block(block_id)
             .gas(execution_gas_limit.saturating_add(da_gas))
             .state(state_override)
+            .from(SIMULATION_SENDER)
             .call()
             .await
     };
