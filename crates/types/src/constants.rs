@@ -13,7 +13,7 @@
 
 //! Various constants that have no other home
 
-use alloy_primitives::{address, Address};
+use alloy_primitives::{Address, address};
 
 /// Address used for simulation calls to the entry point.
 /// Calculated as `address(uint160(uint256(keccak256("rundler simulation sender"))))`.
