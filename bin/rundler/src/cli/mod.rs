@@ -449,6 +449,7 @@ pub struct CommonArgs {
         long = "enabled_entry_points",
         name = "enabled_entry_points",
         env = "ENABLED_ENTRY_POINTS",
+        value_delimiter = ',',
         default_value = "v0.7",
         global = true
     )]
