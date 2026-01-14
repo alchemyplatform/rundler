@@ -42,7 +42,7 @@ jobs:
             os: ubuntu-22.04
             profile: release
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-15-intel
             profile: release
           - target: aarch64-apple-darwin
             os: macos-latest
