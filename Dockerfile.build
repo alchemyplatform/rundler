@@ -3,6 +3,13 @@ FROM ghcr.io/foundry-rs/foundry:v1.5.1 AS foundry
 FROM ubuntu:22.04
 
 ENV HOME=/root
+
+# Configure aarch64 cross-compilation (only affects aarch64 target builds)
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+ENV CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+ENV CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
+ENV AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar
+
 WORKDIR /project
 
 # Install build essentials and cross-compilation tools
@@ -11,6 +18,8 @@ RUN apt-get update && apt-get install -y \
     curl \
     gcc \
     g++ \
+    gcc-aarch64-linux-gnu \
+    g++-aarch64-linux-gnu \
     libssl-dev \
     pkg-config \
     ca-certificates \

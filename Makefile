@@ -65,8 +65,12 @@ test-spec-modular-v0_8: ## Run v0.8 spec tests in modular mode
 submodule-update: ## Update git submodules
 	git submodule update
 
-build-%:
-	CROSS_CONTAINER_UID=0 CROSS_CONTAINER_GID=0 cross build --target $* --profile "$(PROFILE)"
+# Use cargo directly for Darwin targets, cross for Linux targets
+build-%-apple-darwin:
+	cargo build --target $*-apple-darwin --profile "$(PROFILE)"
+
+build-%-linux-gnu:
+	CROSS_CONTAINER_UID=0 CROSS_CONTAINER_GID=0 cross build --target $*-linux-gnu --profile "$(PROFILE)"
 	
 .PHONY: fmt
 fmt: ## format code with nightly rust

@@ -1,2 +1,8 @@
 [build]
 dockerfile = "./Dockerfile.build"
+
+[target.aarch64-unknown-linux-gnu]
+pre-build = [
+    "dpkg --add-architecture arm64",
+    "apt-get update && apt-get install -y libc6-dev:arm64 || true"
+]
