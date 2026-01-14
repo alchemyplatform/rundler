@@ -66,7 +66,7 @@ submodule-update: ## Update git submodules
 	git submodule update
 
 build-%:
-	cross build --target $* --profile "$(PROFILE)"
+	CROSS_CONTAINER_UID=0 CROSS_CONTAINER_GID=0 cross build --target $* --profile "$(PROFILE)"
 	
 .PHONY: fmt
 fmt: ## format code with nightly rust
