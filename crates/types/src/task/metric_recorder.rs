@@ -17,6 +17,18 @@ use metrics_derive::Metrics;
 
 use super::status_code::{HttpCode, RpcCode};
 
+/// Guard that ensures `done()` is called even if the future is cancelled.
+/// This prevents connection leaks when requests timeout or are otherwise dropped.
+pub struct MethodSessionGuard<'a> {
+    logger: &'a MethodSessionLogger,
+}
+
+impl<'a> Drop for MethodSessionGuard<'a> {
+    fn drop(&mut self) {
+        self.logger.done();
+    }
+}
+
 /// method logger to log one method invoke session.
 pub struct MethodSessionLogger {
     start_time: Instant,
@@ -117,6 +129,12 @@ impl MethodSessionLogger {
         self.method_metric
             .request_latency
             .record(self.start_time.elapsed().as_millis() as f64);
+    }
+
+    /// Create a guard that ensures `done()` is called even if the future is cancelled.
+    /// This prevents connection leaks when requests timeout or are dropped.
+    pub fn guard(&self) -> MethodSessionGuard {
+        MethodSessionGuard { logger: self }
     }
 
     /// Record current active connections being used within
