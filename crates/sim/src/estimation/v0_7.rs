@@ -20,7 +20,6 @@ use rundler_contracts::v0_7::{
     CallGasEstimationProxy::{
         CallGasEstimationProxyCalls, EstimateCallGasArgs, estimateCallGasCall, testCallGasCall,
     },
-    ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE,
     VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE,
     VerificationGasEstimationHelper::{
         EstimateGasArgs as ContractEstimateGasArgs, estimatePaymasterVerificationGasCall,
@@ -584,6 +583,7 @@ fn construct_verification_args(
 
 fn add_proxy_to_overrides(
     entry_point: Address,
+    simulations_bytecode: Bytes,
     to_override: Address,
     state_override: &mut StateOverride,
 ) {
@@ -597,7 +597,7 @@ fn add_proxy_to_overrides(
     state_override.insert(
         entry_point,
         AccountOverride {
-            code: Some(ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE.clone()),
+            code: Some(simulations_bytecode),
             ..Default::default()
         },
     );
@@ -627,7 +627,12 @@ where
     type UO = UserOperation;
 
     fn add_proxy_to_overrides(&self, to_override: Address, state_override: &mut StateOverride) {
-        add_proxy_to_overrides(*self.entry_point.address(), to_override, state_override);
+        add_proxy_to_overrides(
+            *self.entry_point.address(),
+            self.entry_point.get_simulations_bytecode().clone(),
+            to_override,
+            state_override,
+        );
     }
 
     fn get_call(&self, op: Self::UO, args: &EstimateGasArgs) -> Bytes {
@@ -657,7 +662,12 @@ where
     type UO = UserOperation;
 
     fn add_proxy_to_overrides(&self, to_override: Address, state_override: &mut StateOverride) {
-        add_proxy_to_overrides(*self.entry_point.address(), to_override, state_override);
+        add_proxy_to_overrides(
+            *self.entry_point.address(),
+            self.entry_point.get_simulations_bytecode().clone(),
+            to_override,
+            state_override,
+        );
     }
 
     fn get_call(&self, op: Self::UO, args: &EstimateGasArgs) -> Bytes {
@@ -679,7 +689,10 @@ mod tests {
 
     use alloy_primitives::{U256, hex};
     use alloy_sol_types::{Revert, SolError};
-    use rundler_contracts::common::EstimationTypes::TestCallGasResult;
+    use rundler_contracts::{
+        common::EstimationTypes::TestCallGasResult,
+        v0_7::ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE,
+    };
     use rundler_provider::{
         ExecutionResult, MockEntryPointV0_7, MockEvmProvider, MockFeeEstimator,
     };
