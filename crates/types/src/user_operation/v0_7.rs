@@ -1514,12 +1514,49 @@ mod tests {
         assert_eq!(uo.hash(), hash);
     }
 
-    // TODO(entrypoints): Add test for v0.8 7702 once we have a way to test on a testnet
-    // this is currently tested and working in the v0.8 compliance tests
-    // #[test]
-    // fn test_hash_v0_8_7702() {
-    //     todo!()
-    // }
+    #[test]
+    fn test_hash_v0_8_7702() {
+        // From https://sepolia.basescan.org/tx/0x3177e44651c127dbdc76d29b347407601ca4e3381ba27e721e22254408768641
+        let cs = ChainSpec {
+            id: 84532,
+            ..Default::default()
+        };
+
+        let puo = PackedUserOperation {
+            sender: address!("f479F10B98a66180ebcA5AAe652512b1CFCDf0d3"),
+            nonce: uint!(32629663150294956114847377391616_U256),
+            initCode: bytes!("7702000000000000000000000000000000000000"),
+            callData: bytes!(
+                "b61d27f6000000000000000000000000f479f10b98a66180ebca5aae652512b1cfcdf0d3000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000000"
+            ),
+            accountGasLimits: b256!(
+                "0000000000000000000000000000af9e0000000000000000000000000000238c"
+            ),
+            preVerificationGas: U256::from(188368),
+            gasFees: b256!("00000000000000000000000000000001000000000000000000000000000493e1"),
+            paymasterAndData: bytes!(
+                "df32AD4a17bE64101744c7EDc411cBFF8032975D00000000000000000000000000007aed00000000000000000000000000000000000000000000000000000000786633be55bd0309df99a7147656499fa75c743b802d8799d03dbbc3944d87da5e679e3001ad094b57ec750f5ab98acb3f4d30f9ca8458eca208e2a33fb4b1d91b"
+            ),
+            signature: bytes!(
+                "00fffffffffffffffffffffffffffffff0000000000000000000000000000000007aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1c"
+            ),
+        };
+
+        // The delegation address for the EIP-7702 authorization
+        let delegation_address = address!("0x82cffc0f83a66f016f1273cdd5c43f86e78d2478");
+        let eip7702_auth = Eip7702Auth::new_dummy(cs.id, delegation_address);
+
+        let hash = b256!("9173f293dd690650cbc32afe9d3f6fbfd1ae21a6a86222eceead32426073a065");
+        let uo = UserOperationBuilder::from_packed(
+            puo,
+            &cs,
+            EntryPointVersion::V0_8,
+            Some(eip7702_auth),
+        )
+        .unwrap()
+        .build();
+        assert_eq!(uo.hash(), hash);
+    }
 
     #[test]
     fn test_hash_v0_9_paymaster_signature() {
