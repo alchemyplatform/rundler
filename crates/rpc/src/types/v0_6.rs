@@ -76,11 +76,12 @@ impl TryFromRpcType<RpcUserOperation> for UserOperation {
         chain_spec: &ChainSpec,
         ep_version: EntryPointVersion,
     ) -> Result<Self, EthRpcError> {
-        assert!(
-            ep_version == EntryPointVersion::V0_6,
-            "expected entry point version v0.6, got {:?}",
-            ep_version
-        );
+        if ep_version != EntryPointVersion::V0_6 {
+            return Err(EthRpcError::InvalidParams(format!(
+                "Received v0.6 user operation payload, but entry point version is {:?} based on the address.",
+                ep_version
+            )));
+        }
 
         let mut builder = UserOperationBuilder::new(
             chain_spec,
