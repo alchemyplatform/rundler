@@ -173,27 +173,7 @@ async fn funding_task_inner<P: EvmProvider>(
     )
     .await?;
 
-    let intrinsic_gas = settings.chain_spec.transaction_intrinsic_gas() as u64;
-
-    // Build the call to calculate actual calldata gas
-    let call = create_multicall3_call(to_fund.clone());
-    let calldata = call.abi_encode();
-    let calldata_gas = calculate_calldata_gas(&calldata, &settings.chain_spec);
-    let execution_gas = EXECUTION_OVERHEAD + EXECUTION_PER_CALL * to_fund.len() as u64;
-
-    tracing::info!(
-        "Gas calculation: intrinsic={}, calldata_len={}, calldata_gas={}, execution_gas={}, \
-         calldata_zero_byte_gas={}, calldata_non_zero_byte_gas={}, num_calls={}",
-        intrinsic_gas,
-        calldata.len(),
-        calldata_gas,
-        execution_gas,
-        settings.chain_spec.calldata_zero_byte_gas(),
-        settings.chain_spec.calldata_non_zero_byte_gas(),
-        to_fund.len()
-    );
-
-    let mut gas_limit = intrinsic_gas + calldata_gas + execution_gas;
+    let mut gas_limit = calculate_funding_gas_limit(&to_fund, &settings.chain_spec);
     let mut gas_fee = U256::from(gas_limit) * U256::from(max_fee_per_gas);
     let mut da_gas = 0u64;
 
@@ -242,11 +222,7 @@ async fn funding_task_inner<P: EvmProvider>(
             );
         }
         // Recalculate gas limit with reduced call count
-        let call = create_multicall3_call(to_fund.clone());
-        let calldata = call.abi_encode();
-        let calldata_gas = calculate_calldata_gas(&calldata, &settings.chain_spec);
-        let execution_gas = EXECUTION_OVERHEAD + EXECUTION_PER_CALL * to_fund.len() as u64;
-        gas_limit = intrinsic_gas + calldata_gas + execution_gas;
+        gas_limit = calculate_funding_gas_limit(&to_fund, &settings.chain_spec);
         if settings.chain_spec.da_pre_verification_gas
             && settings.chain_spec.include_da_gas_in_gas_limit
         {
@@ -342,6 +318,29 @@ fn calculate_calldata_gas(data: &[u8], chain_spec: &ChainSpec) -> u64 {
             }
         })
         .sum()
+}
+
+/// Calculate the gas limit for a funding transaction (excluding DA gas)
+fn calculate_funding_gas_limit(to_fund: &[(Address, U256)], chain_spec: &ChainSpec) -> u64 {
+    let intrinsic_gas = chain_spec.transaction_intrinsic_gas() as u64;
+    let call = create_multicall3_call(to_fund.iter().cloned());
+    let calldata = call.abi_encode();
+    let calldata_gas = calculate_calldata_gas(&calldata, chain_spec);
+    let execution_gas = EXECUTION_OVERHEAD + EXECUTION_PER_CALL * to_fund.len() as u64;
+
+    tracing::debug!(
+        "Gas calculation: intrinsic={}, calldata_len={}, calldata_gas={}, execution_gas={}, \
+         calldata_zero_byte_gas={}, calldata_non_zero_byte_gas={}, num_calls={}",
+        intrinsic_gas,
+        calldata.len(),
+        calldata_gas,
+        execution_gas,
+        chain_spec.calldata_zero_byte_gas(),
+        chain_spec.calldata_non_zero_byte_gas(),
+        to_fund.len()
+    );
+
+    intrinsic_gas + calldata_gas + execution_gas
 }
 
 async fn estimate_da_gas<P: EvmProvider>(
