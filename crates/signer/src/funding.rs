@@ -17,6 +17,7 @@ use alloy_consensus::{SignableTransaction, TxEnvelope, TypedTransaction};
 use alloy_eips::eip2718::Encodable2718;
 use alloy_network::{EthereumWallet, TransactionBuilder, TxSigner};
 use alloy_primitives::{Address, Bytes, Signature, U256};
+use alloy_sol_types::SolCall;
 use anyhow::{Context, bail};
 use metrics::{Counter, Gauge};
 use metrics_derive::Metrics;
@@ -31,8 +32,10 @@ use crate::{
     utils,
 };
 
-const GAS_BASE: u64 = 50_000;
-const GAS_PER_CALL: u64 = 40_000;
+// Execution overhead for multicall3 (internal execution beyond intrinsic + calldata)
+const EXECUTION_OVERHEAD: u64 = 30_000;
+// Execution gas per call within multicall3 (includes CALL opcode + value transfer + overhead)
+const EXECUTION_PER_CALL: u64 = 55_000;
 const MAX_TO_FUND_IN_BATCH: usize = 128;
 
 #[derive(Clone)]
@@ -170,7 +173,7 @@ async fn funding_task_inner<P: EvmProvider>(
     )
     .await?;
 
-    let mut gas_limit = GAS_BASE + GAS_PER_CALL * to_fund.len() as u64;
+    let mut gas_limit = calculate_funding_gas_limit(&to_fund, &settings.chain_spec);
     let mut gas_fee = U256::from(gas_limit) * U256::from(max_fee_per_gas);
     let mut da_gas = 0u64;
 
@@ -191,13 +194,19 @@ async fn funding_task_inner<P: EvmProvider>(
 
     let mut total_with_gas = total + gas_fee;
 
+    // Estimate gas cost per call for partial funding calculation
+    // Each Call3Value is roughly 160 bytes of mostly nonzero data in ABI encoding
+    let estimated_calldata_per_call = 160 * settings.chain_spec.calldata_non_zero_byte_gas() as u64;
+    let estimated_gas_per_call = estimated_calldata_per_call + EXECUTION_PER_CALL;
+
     if total_with_gas > funding_balance {
         tracing::warn!(
             "Not enough funding balance. Funding balance: {funding_balance}, total to fund: {total}. Partial funding will be attempted."
         );
         while total_with_gas > funding_balance && !to_fund.is_empty() {
             let (_, amount) = to_fund.pop().unwrap();
-            total_with_gas -= amount + U256::from(GAS_PER_CALL) * U256::from(max_fee_per_gas);
+            total_with_gas -=
+                amount + U256::from(estimated_gas_per_call) * U256::from(max_fee_per_gas);
             total -= amount;
             total_to_fund -= 1;
         }
@@ -212,7 +221,8 @@ async fn funding_task_inner<P: EvmProvider>(
                 total_to_fund
             );
         }
-        gas_limit = GAS_BASE + GAS_PER_CALL * to_fund.len() as u64;
+        // Recalculate gas limit with reduced call count
+        gas_limit = calculate_funding_gas_limit(&to_fund, &settings.chain_spec);
         if settings.chain_spec.da_pre_verification_gas
             && settings.chain_spec.include_da_gas_in_gas_limit
         {
@@ -292,6 +302,45 @@ fn create_multicall3_call(
         .map(|(address, amount)| multicall3::create_call_value_only(address, amount))
         .collect::<Vec<_>>();
     multicall3::Multicall3::aggregate3ValueCall { calls }
+}
+
+/// Calculate the calldata gas cost based on chain spec parameters
+fn calculate_calldata_gas(data: &[u8], chain_spec: &ChainSpec) -> u64 {
+    let zero_byte_gas = chain_spec.calldata_zero_byte_gas() as u64;
+    let non_zero_byte_gas = chain_spec.calldata_non_zero_byte_gas() as u64;
+
+    data.iter()
+        .map(|&byte| {
+            if byte == 0 {
+                zero_byte_gas
+            } else {
+                non_zero_byte_gas
+            }
+        })
+        .sum()
+}
+
+/// Calculate the gas limit for a funding transaction (excluding DA gas)
+fn calculate_funding_gas_limit(to_fund: &[(Address, U256)], chain_spec: &ChainSpec) -> u64 {
+    let intrinsic_gas = chain_spec.transaction_intrinsic_gas() as u64;
+    let call = create_multicall3_call(to_fund.iter().cloned());
+    let calldata = call.abi_encode();
+    let calldata_gas = calculate_calldata_gas(&calldata, chain_spec);
+    let execution_gas = EXECUTION_OVERHEAD + EXECUTION_PER_CALL * to_fund.len() as u64;
+
+    tracing::debug!(
+        "Gas calculation: intrinsic={}, calldata_len={}, calldata_gas={}, execution_gas={}, \
+         calldata_zero_byte_gas={}, calldata_non_zero_byte_gas={}, num_calls={}",
+        intrinsic_gas,
+        calldata.len(),
+        calldata_gas,
+        execution_gas,
+        chain_spec.calldata_zero_byte_gas(),
+        chain_spec.calldata_non_zero_byte_gas(),
+        to_fund.len()
+    );
+
+    intrinsic_gas + calldata_gas + execution_gas
 }
 
 async fn estimate_da_gas<P: EvmProvider>(
@@ -493,7 +542,7 @@ mod tests {
         set_provider_nonce_and_fees(&mut provider);
         set_provider_balances(
             &mut provider,
-            U256::from(182000), // 90K gas per call * 2 gas price
+            U256::from(225000), // ~110K gas per call * 2 gas price + funding amount
             vec![
                 (address0, U256::from(0)),
                 (address1, U256::from(0)),
