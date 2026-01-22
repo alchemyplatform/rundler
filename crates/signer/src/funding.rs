@@ -543,7 +543,7 @@ mod tests {
         set_provider_nonce_and_fees(&mut provider);
         set_provider_balances(
             &mut provider,
-            U256::from(182000), // 90K gas per call * 2 gas price
+            U256::from(225000), // ~110K gas per call * 2 gas price + funding amount
             vec![
                 (address0, U256::from(0)),
                 (address1, U256::from(0)),
