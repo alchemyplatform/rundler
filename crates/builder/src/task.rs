@@ -291,6 +291,7 @@ where
                     UnsafeSimulator::new(
                         ep_providers.entry_point().clone(),
                         self.args.sim_settings.clone(),
+                        &ep.mempool_configs,
                     ),
                     signer_manager,
                     assigner.clone(),
@@ -349,6 +350,7 @@ where
                     UnsafeSimulator::new(
                         ep_providers.entry_point().clone(),
                         self.args.sim_settings.clone(),
+                        &ep.mempool_configs,
                     ),
                     signer_manager,
                     assigner.clone(),

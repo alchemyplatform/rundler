@@ -21,8 +21,8 @@ use async_trait::async_trait;
 use futures_util::TryFutureExt;
 use rundler_provider::{EntryPoint, EvmProvider, SimulationProvider};
 use rundler_types::{
-    Entity, EntityInfo, EntityInfos, EntityType, Opcode, StorageSlot, UserOperation,
-    ValidTimeRange, ValidationOutput, ValidationReturnInfo, ViolationOpCode,
+    Entity, EntityType, Opcode, StorageSlot, UserOperation, ValidTimeRange, ValidationOutput,
+    ValidationReturnInfo, ViolationOpCode,
     pool::{NeedsStakeInformation, SimulationViolation},
     v0_6::UserOperation as UserOperationV0_6,
     v0_7::UserOperation as UserOperationV0_7,
@@ -38,7 +38,7 @@ use crate::{
     SimulationError, SimulationResult,
     simulation::{
         Settings, Simulator,
-        mempool::{self, AllowEntity, AllowRule, MempoolConfig, MempoolMatchResult},
+        mempool::{self, MempoolConfig, MempoolMatchResult},
         v0_6::ValidationContextProvider as ValidationContextProviderV0_6,
         v0_7::ValidationContextProvider as ValidationContextProviderV0_7,
     },
@@ -127,21 +127,15 @@ where
         sim_settings: Settings,
         mempool_configs: HashMap<B256, MempoolConfig>,
     ) -> Self {
-        // Get a list of entities that are allowed to act as staked entities despite being unstaked
-        let mut allow_unstaked_addresses = HashSet::new();
-        for config in mempool_configs.values() {
-            for entry in &config.allowlist {
-                if entry.rule == AllowRule::NotStaked
-                    && let AllowEntity::Address(address) = entry.entity
-                {
-                    allow_unstaked_addresses.insert(address);
-                }
-            }
-        }
+        let allow_unstaked_addresses = mempool::allow_unstaked_addresses(&mempool_configs);
 
         Self {
             provider,
-            unsafe_sim: UnsafeSimulator::new(entry_point.clone(), sim_settings.clone()),
+            unsafe_sim: UnsafeSimulator::new(
+                entry_point.clone(),
+                sim_settings.clone(),
+                &mempool_configs,
+            ),
             entry_point,
             validation_context_provider,
             sim_settings,
@@ -526,7 +520,12 @@ where
             sender_info,
             ..
         } = entry_point_out;
-        let account_is_staked = context::is_staked(sender_info, &self.sim_settings);
+
+        let mut account_is_staked = context::is_staked(sender_info, &self.sim_settings);
+        if self.allow_unstaked_addresses.contains(&op.sender()) {
+            account_is_staked = true;
+        }
+
         let ValidationReturnInfo {
             pre_op_gas,
             valid_after,
@@ -536,7 +535,13 @@ where
         } = return_info;
 
         // Conduct any stake overrides before assigning entity_infos
-        override_infos_staked(&mut context.entity_infos, &self.allow_unstaked_addresses);
+        tracing::info!(
+            "allow unstaked addresses: {:?}",
+            self.allow_unstaked_addresses
+        );
+        tracing::info!("entity infos before override: {:?}", context.entity_infos);
+        context::override_infos_staked(&mut context.entity_infos, &self.allow_unstaked_addresses);
+        tracing::info!("entity infos after override: {:?}", context.entity_infos);
 
         Ok(SimulationResult {
             mempools,
@@ -653,24 +658,6 @@ fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Vec<StorageRestrictio
     }
 
     restrictions
-}
-
-fn override_is_staked(ei: &mut EntityInfo, allow_unstaked_addresses: &HashSet<Address>) {
-    ei.is_staked = allow_unstaked_addresses.contains(&ei.entity.address) || ei.is_staked;
-}
-
-fn override_infos_staked(eis: &mut EntityInfos, allow_unstaked_addresses: &HashSet<Address>) {
-    override_is_staked(&mut eis.sender, allow_unstaked_addresses);
-
-    if let Some(mut factory) = eis.factory {
-        override_is_staked(&mut factory, allow_unstaked_addresses);
-    }
-    if let Some(mut paymaster) = eis.paymaster {
-        override_is_staked(&mut paymaster, allow_unstaked_addresses);
-    }
-    if let Some(mut aggregator) = eis.aggregator {
-        override_is_staked(&mut aggregator, allow_unstaked_addresses);
-    }
 }
 
 #[cfg(test)]
