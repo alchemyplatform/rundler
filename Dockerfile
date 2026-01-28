@@ -1,7 +1,7 @@
 # Adapted from https://github.com/paradigmxyz/reth/blob/main/Dockerfile
 # syntax=docker/dockerfile:1.4
 
-FROM rust:1.92.0 AS chef-builder
+FROM rust:1.92.0-bookworm AS chef-builder
 
 # Install system dependencies
 RUN mkdir -p /etc/apt/keyrings
