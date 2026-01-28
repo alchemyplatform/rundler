@@ -21,7 +21,7 @@ use jsonrpsee::{
     server::{RpcServiceBuilder, ServerBuilder, middleware::http::ProxyGetRequestLayer},
 };
 use rundler_provider::{FeeEstimator, Providers as ProvidersT};
-use rundler_sim::{EstimationSettings, GasEstimatorV0_6, GasEstimatorV0_7, PrecheckSettings};
+use rundler_sim::{EstimationSettings, GasEstimatorV0_6, GasEstimatorV0_7};
 use rundler_task::{
     TaskSpawnerExt,
     server::{HealthCheck, format_socket_addr},
@@ -60,8 +60,6 @@ pub struct Args {
     pub api_namespaces: Vec<ApiNamespace>,
     /// Full node RPC URL to use.
     pub rpc_url: String,
-    /// Precheck settings.
-    pub precheck_settings: PrecheckSettings,
     /// eth_ API settings.
     pub eth_api_settings: EthApiSettings,
     /// Estimation settings.

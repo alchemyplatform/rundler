@@ -127,7 +127,6 @@ impl RpcArgs {
             host: self.host.clone(),
             rpc_url: common.node_http.clone().context("must provide node_http")?,
             api_namespaces: apis,
-            precheck_settings: common.try_into_with_spec(&chain_spec)?,
             eth_api_settings,
             estimation_settings: common.try_into_with_spec(&chain_spec)?,
             rpc_timeout: Duration::from_secs(self.timeout_seconds.parse()?),

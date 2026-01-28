@@ -11,16 +11,22 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::marker::PhantomData;
+use std::{
+    collections::{HashMap, HashSet},
+    marker::PhantomData,
+};
 
-use alloy_primitives::{Address, B256, map::HashSet};
+use alloy_primitives::{Address, B256};
 use rundler_provider::{EntryPoint, SimulationProvider};
 use rundler_types::{
     ExpectedStorage, TIME_RANGE_BUFFER, UserOperation, ValidTimeRange, pool::SimulationViolation,
 };
 
 use super::Settings;
-use crate::{SimulationError, SimulationResult, Simulator, ViolationError, simulation::context};
+use crate::{
+    MempoolConfig, SimulationError, SimulationResult, Simulator, ViolationError,
+    simulation::{context, mempool},
+};
 
 /// An unsafe simulator that can be used in place of a regular simulator
 /// to extract the information needed from simulation while avoiding the use
@@ -32,15 +38,22 @@ use crate::{SimulationError, SimulationResult, Simulator, ViolationError, simula
 pub struct UnsafeSimulator<UO, E> {
     entry_point: E,
     settings: Settings,
+    allow_unstaked_addresses: HashSet<Address>,
     _uo_type: PhantomData<UO>,
 }
 
 impl<UO, E> UnsafeSimulator<UO, E> {
     /// Creates a new unsafe simulator
-    pub fn new(entry_point: E, settings: Settings) -> Self {
+    pub fn new(
+        entry_point: E,
+        settings: Settings,
+        mempool_configs: &HashMap<B256, MempoolConfig>,
+    ) -> Self {
+        let allow_unstaked_addresses = mempool::allow_unstaked_addresses(mempool_configs);
         Self {
             entry_point,
             settings,
+            allow_unstaked_addresses,
             _uo_type: PhantomData,
         }
     }
@@ -93,13 +106,19 @@ where
             ValidTimeRange::new(validation_result.return_info.valid_after, valid_until);
         let requires_post_op = !validation_result.return_info.paymaster_context.is_empty();
 
-        let entity_infos = context::infos_from_validation_output(
+        let mut entity_infos = context::infos_from_validation_output(
             op.factory(),
             op.sender(),
             op.paymaster(),
             &validation_result,
             &self.settings,
         );
+        context::override_infos_staked(&mut entity_infos, &self.allow_unstaked_addresses);
+        let mut account_is_staked =
+            context::is_staked(validation_result.sender_info, &self.settings);
+        if self.allow_unstaked_addresses.contains(&op.sender()) {
+            account_is_staked = true;
+        }
 
         let mut violations = vec![];
 
@@ -148,10 +167,7 @@ where
                 valid_time_range,
                 requires_post_op,
                 entity_infos,
-                account_is_staked: context::is_staked(
-                    validation_result.sender_info,
-                    &self.settings,
-                ),
+                account_is_staked,
                 code_hash: B256::ZERO,
                 accessed_addresses: HashSet::new(),
                 associated_addresses: HashSet::new(),

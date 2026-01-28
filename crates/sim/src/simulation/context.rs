@@ -17,8 +17,8 @@ use alloy_primitives::{Address, U256};
 use anyhow::Context;
 use rundler_provider::BlockId;
 use rundler_types::{
-    EntityInfos, EntityType, ExpectedStorage, Opcode, StakeInfo, UserOperation, ValidationOutput,
-    pool::SimulationViolation,
+    EntityInfo, EntityInfos, EntityType, ExpectedStorage, Opcode, StakeInfo, UserOperation,
+    ValidationOutput, pool::SimulationViolation,
 };
 use serde::{Deserialize, Serialize};
 
@@ -166,6 +166,29 @@ pub(crate) fn is_staked(info: StakeInfo, sim_settings: &Settings) -> bool {
         && info.unstake_delay_sec >= sim_settings.min_unstake_delay
 }
 
+pub(crate) fn override_is_staked(ei: &mut EntityInfo, allow_unstaked_addresses: &HashSet<Address>) {
+    tracing::info!("override is staked: {:?}", ei);
+    ei.is_staked = allow_unstaked_addresses.contains(&ei.entity.address) || ei.is_staked;
+    tracing::info!("override is staked: {:?}", ei);
+}
+
+pub(crate) fn override_infos_staked(
+    eis: &mut EntityInfos,
+    allow_unstaked_addresses: &HashSet<Address>,
+) {
+    override_is_staked(&mut eis.sender, allow_unstaked_addresses);
+
+    if let Some(factory) = &mut eis.factory {
+        override_is_staked(factory, allow_unstaked_addresses);
+    }
+    if let Some(paymaster) = &mut eis.paymaster {
+        override_is_staked(paymaster, allow_unstaked_addresses);
+    }
+    if let Some(aggregator) = &mut eis.aggregator {
+        override_is_staked(aggregator, allow_unstaked_addresses);
+    }
+}
+
 pub(crate) fn parse_combined_context_str<A, B>(combined: &str) -> anyhow::Result<(A, B)>
 where
     A: std::str::FromStr,
@@ -177,4 +200,114 @@ where
         .split_once(':')
         .context("tracer combined should contain two parts")?;
     Ok((a.parse()?, b.parse()?))
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy_primitives::address;
+    use rundler_types::{Entity, EntityInfo, EntityInfos};
+
+    use super::*;
+
+    fn create_entity_info(entity: Entity, is_staked: bool) -> EntityInfo {
+        EntityInfo::new(entity, is_staked)
+    }
+
+    #[test]
+    fn test_override_is_staked_when_in_allow_list() {
+        let addr = address!("0x1111111111111111111111111111111111111111");
+        let mut entity_info = create_entity_info(Entity::account(addr), false);
+        let allow_unstaked = HashSet::from([addr]);
+
+        override_is_staked(&mut entity_info, &allow_unstaked);
+
+        assert!(entity_info.is_staked);
+    }
+
+    #[test]
+    fn test_override_is_staked_when_not_in_allow_list() {
+        let addr = address!("0x1111111111111111111111111111111111111111");
+        let other_addr = address!("0x2222222222222222222222222222222222222222");
+        let mut entity_info = create_entity_info(Entity::account(addr), false);
+        let allow_unstaked = HashSet::from([other_addr]);
+
+        override_is_staked(&mut entity_info, &allow_unstaked);
+
+        assert!(!entity_info.is_staked);
+    }
+
+    #[test]
+    fn test_override_is_staked_preserves_already_staked() {
+        let addr = address!("0x1111111111111111111111111111111111111111");
+        let mut entity_info = create_entity_info(Entity::account(addr), true);
+        let allow_unstaked = HashSet::new();
+
+        override_is_staked(&mut entity_info, &allow_unstaked);
+
+        assert!(entity_info.is_staked);
+    }
+
+    #[test]
+    fn test_override_infos_staked_sender_only() {
+        let sender_addr = address!("0x1111111111111111111111111111111111111111");
+        let mut entity_infos = EntityInfos {
+            sender: create_entity_info(Entity::account(sender_addr), false),
+            factory: None,
+            paymaster: None,
+            aggregator: None,
+        };
+        let allow_unstaked = HashSet::from([sender_addr]);
+
+        override_infos_staked(&mut entity_infos, &allow_unstaked);
+
+        assert!(entity_infos.sender.is_staked);
+    }
+
+    #[test]
+    fn test_override_infos_staked_all_entities() {
+        let sender_addr = address!("0x1111111111111111111111111111111111111111");
+        let factory_addr = address!("0x2222222222222222222222222222222222222222");
+        let paymaster_addr = address!("0x3333333333333333333333333333333333333333");
+        let aggregator_addr = address!("0x4444444444444444444444444444444444444444");
+
+        let mut entity_infos = EntityInfos {
+            sender: create_entity_info(Entity::account(sender_addr), false),
+            factory: Some(create_entity_info(Entity::factory(factory_addr), false)),
+            paymaster: Some(create_entity_info(Entity::paymaster(paymaster_addr), false)),
+            aggregator: Some(create_entity_info(
+                Entity::aggregator(aggregator_addr),
+                false,
+            )),
+        };
+
+        // Only allow sender and paymaster
+        let allow_unstaked = HashSet::from([sender_addr, paymaster_addr]);
+
+        override_infos_staked(&mut entity_infos, &allow_unstaked);
+
+        assert!(entity_infos.sender.is_staked);
+        assert!(!entity_infos.factory.unwrap().is_staked);
+        assert!(entity_infos.paymaster.unwrap().is_staked);
+        assert!(!entity_infos.aggregator.unwrap().is_staked);
+    }
+
+    #[test]
+    fn test_override_infos_staked_empty_allow_list() {
+        let sender_addr = address!("0x1111111111111111111111111111111111111111");
+        let factory_addr = address!("0x2222222222222222222222222222222222222222");
+
+        let mut entity_infos = EntityInfos {
+            sender: create_entity_info(Entity::account(sender_addr), false),
+            factory: Some(create_entity_info(Entity::factory(factory_addr), true)), // already staked
+            paymaster: None,
+            aggregator: None,
+        };
+
+        let allow_unstaked = HashSet::new();
+
+        override_infos_staked(&mut entity_infos, &allow_unstaked);
+
+        assert!(!entity_infos.sender.is_staked);
+        assert!(entity_infos.factory.unwrap().is_staked); // should remain staked
+    }
 }

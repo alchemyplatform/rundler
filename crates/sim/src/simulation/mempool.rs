@@ -11,7 +11,10 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashMap, str::FromStr};
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
+};
 
 use alloy_primitives::{Address, B256, U256};
 use rundler_types::{Entity, EntityType, Opcode, UserOperation, UserOperationVariant};
@@ -260,6 +263,22 @@ pub(crate) fn match_mempools(
         }
     }
     MempoolMatchResult::Matches(candidate_pools)
+}
+
+pub(crate) fn allow_unstaked_addresses(
+    mempool_configs: &HashMap<B256, MempoolConfig>,
+) -> HashSet<Address> {
+    let mut allow_unstaked_addresses = HashSet::new();
+    for config in mempool_configs.values() {
+        for entry in &config.allowlist {
+            if entry.rule == AllowRule::NotStaked
+                && let AllowEntity::Address(address) = entry.entity
+            {
+                allow_unstaked_addresses.insert(address);
+            }
+        }
+    }
+    allow_unstaked_addresses
 }
 
 #[cfg(test)]

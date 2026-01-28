@@ -712,6 +712,8 @@ where
                 .unique()
                 .filter(|e| e.address != pool_op.entity_infos.sender.address())
             {
+                tracing::info!("unstaked entity: {:?}", entity);
+
                 let mut ops_allowed = self.reputation.get_ops_allowed(entity.address);
                 if let Some(to_replace) = &to_replace
                     && to_replace.entities().contains(&entity)

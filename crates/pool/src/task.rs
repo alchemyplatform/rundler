@@ -204,6 +204,7 @@ where
             let simulator = UnsafeSimulator::new(
                 ep_providers.entry_point().clone(),
                 pool_config.sim_settings.clone(),
+                &pool_config.mempool_channel_configs,
             );
             self.create_mempool(
                 task_spawner,
@@ -255,6 +256,7 @@ where
             let simulator = UnsafeSimulator::new(
                 ep_providers.entry_point().clone(),
                 pool_config.sim_settings.clone(),
+                &pool_config.mempool_channel_configs,
             );
             self.create_mempool(
                 task_spawner,
