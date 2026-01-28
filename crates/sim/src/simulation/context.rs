@@ -167,9 +167,7 @@ pub(crate) fn is_staked(info: StakeInfo, sim_settings: &Settings) -> bool {
 }
 
 pub(crate) fn override_is_staked(ei: &mut EntityInfo, allow_unstaked_addresses: &HashSet<Address>) {
-    tracing::info!("override is staked: {:?}", ei);
     ei.is_staked = allow_unstaked_addresses.contains(&ei.entity.address) || ei.is_staked;
-    tracing::info!("override is staked: {:?}", ei);
 }
 
 pub(crate) fn override_infos_staked(
