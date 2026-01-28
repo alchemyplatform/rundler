@@ -535,13 +535,7 @@ where
         } = return_info;
 
         // Conduct any stake overrides before assigning entity_infos
-        tracing::info!(
-            "allow unstaked addresses: {:?}",
-            self.allow_unstaked_addresses
-        );
-        tracing::info!("entity infos before override: {:?}", context.entity_infos);
         context::override_infos_staked(&mut context.entity_infos, &self.allow_unstaked_addresses);
-        tracing::info!("entity infos after override: {:?}", context.entity_infos);
 
         Ok(SimulationResult {
             mempools,
