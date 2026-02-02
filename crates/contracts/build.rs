@@ -51,7 +51,13 @@ macro_rules! write_deployed_bytecode {
 }
 
 fn main() -> Result<(), Box<dyn error::Error>> {
-    println!("cargo:rerun-if-changed=contracts");
+    // Watch only src subdirectories to avoid triggering on cache/lock file changes
+    println!("cargo:rerun-if-changed=contracts/v0_6/src");
+    println!("cargo:rerun-if-changed=contracts/v0_7/src");
+    println!("cargo:rerun-if-changed=contracts/v0_8/src");
+    println!("cargo:rerun-if-changed=contracts/v0_9/src");
+    println!("cargo:rerun-if-changed=contracts/common/src");
+    println!("cargo:rerun-if-changed=contracts/bytecode");
     generate_v0_6_bindings()?;
     generate_v0_7_bindings()?;
     generate_v0_8_bindings()?;
