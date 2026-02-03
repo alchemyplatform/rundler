@@ -38,8 +38,8 @@ use rundler_types::{
     UserOperationVariant,
     chain::ChainSpec,
     pool::{
-        MempoolError, PaymasterMetadata, PoolOperation, PreconfInfo, Reputation, ReputationStatus,
-        StakeStatus,
+        MempoolError, PaymasterMetadata, PoolOperation, PoolOperationStatus, PreconfInfo,
+        Reputation, ReputationStatus, StakeStatus,
     },
 };
 use tonic::async_trait;
@@ -129,6 +129,18 @@ pub(crate) trait Mempool: Send + Sync {
 
     /// Turns on and off tracking errors
     fn set_tracking(&self, paymaster: bool, reputation: bool);
+
+    /// Set pending bundle info for user operations.
+    fn set_pending_bundle(
+        &self,
+        tx_hash: B256,
+        sent_at_block: u64,
+        builder_address: Address,
+        uo_hashes: Vec<B256>,
+    );
+
+    /// Get extended status for a user operation.
+    fn get_operation_status(&self, hash: B256) -> Option<PoolOperationStatus>;
 }
 
 /// Config for the mempool

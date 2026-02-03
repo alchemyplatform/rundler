@@ -29,8 +29,8 @@ use rundler_types::{
     Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, GasFees, UserOperation,
     UserOperationId, UserOperationPermissions, UserOperationVariant,
     pool::{
-        MempoolError, PaymasterMetadata, PoolOperation, PreconfInfo, Reputation, ReputationStatus,
-        StakeStatus,
+        MempoolError, PaymasterMetadata, PoolOperation, PoolOperationStatus, PreconfInfo,
+        Reputation, ReputationStatus, StakeStatus,
     },
 };
 use rundler_utils::{emit::WithEntryPoint, guard_timer::CustomTimerGuard};
@@ -462,6 +462,18 @@ where
             state
                 .pool
                 .forget_mined_operations_before_block(update.earliest_remembered_block_number);
+
+            // Clear pending bundles for mined transactions
+            let mined_tx_hashes: Vec<B256> = update
+                .address_updates
+                .iter()
+                .flat_map(|u| u.mined_tx_hashes.iter().copied())
+                .collect();
+            if !mined_tx_hashes.is_empty() {
+                state
+                    .pool
+                    .clear_pending_bundles_for_mined_txs(&mined_tx_hashes);
+            }
 
             // Remove throttled ops that are too old
             let mut to_remove = HashSet::new();
@@ -955,6 +967,25 @@ where
     fn set_tracking(&self, paymaster: bool, reputation: bool) {
         self.paymaster.set_tracking(paymaster);
         self.reputation.set_tracking(reputation);
+    }
+
+    fn set_pending_bundle(
+        &self,
+        tx_hash: B256,
+        sent_at_block: u64,
+        builder_address: Address,
+        uo_hashes: Vec<B256>,
+    ) {
+        self.state.write().pool.set_pending_bundle(
+            tx_hash,
+            sent_at_block,
+            builder_address,
+            uo_hashes,
+        );
+    }
+
+    fn get_operation_status(&self, hash: B256) -> Option<PoolOperationStatus> {
+        self.state.read().pool.get_operation_status(hash)
     }
 }
 

@@ -748,6 +748,22 @@ where
                     required_fees,
                 ));
 
+                // Notify the pool about the pending bundle
+                let uo_hashes: Vec<B256> = ops.iter().map(|(_, hash)| *hash).collect();
+                if let Err(e) = self
+                    .pool
+                    .notify_pending_bundle(
+                        self.ep_address,
+                        tx_hash,
+                        state.block_number(),
+                        self.sender_eoa,
+                        uo_hashes,
+                    )
+                    .await
+                {
+                    warn!("Failed to notify pool of pending bundle: {e:?}");
+                }
+
                 Ok(SendBundleAttemptResult::Success(ops))
             }
             Err(TransactionTrackerError::NonceTooLow) => {
@@ -1683,6 +1699,10 @@ mod tests {
             .expect_get_ops_by_hashes()
             .times(1)
             .returning(|_, _| Ok(vec![demo_pool_op()]));
+        mock_pool
+            .expect_notify_pending_bundle()
+            .times(1)
+            .returning(|_, _, _, _, _| Ok(()));
 
         // bundle with one op
         mock_proposer

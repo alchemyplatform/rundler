@@ -280,40 +280,52 @@ where
             None
         };
 
-        let receipt_futs = self.entry_point_router.entry_points().map(|ep| {
+        // Fetch mined UO + receipt from all entry points, and pool status in parallel
+        let mined_futs = self.entry_point_router.entry_points().map(|ep| {
             self.entry_point_router
-                .get_receipt(ep, uo_hash, bundle_transaction)
+                .get_mined_and_receipt(ep, uo_hash, bundle_transaction)
         });
 
-        let pending_fut = self
+        let op_status_fut = self
             .pool_server
-            .get_op_by_hash(uo_hash)
+            .get_op_status(uo_hash)
             .map_err(EthRpcError::from);
 
-        let (receipts, pending) =
-            future::try_join(future::try_join_all(receipt_futs), pending_fut).await?;
+        let (mined_results, op_status) =
+            future::try_join(future::try_join_all(mined_futs), op_status_fut).await?;
 
-        if let Some(receipt) = receipts.into_iter().find_map(|r| r) {
+        // Check for mined/preconfirmed receipt first (includes user operation)
+        if let Some((uo_by_hash, receipt)) = mined_results.into_iter().find_map(|r| r) {
             let status = match receipt.status {
                 UOStatusEnum::Mined => UserOperationStatusEnum::Mined,
                 UOStatusEnum::Preconfirmed => UserOperationStatusEnum::Preconfirmed,
             };
-            return Ok(RpcUserOperationStatus {
-                status,
-                receipt: Some(receipt),
-            });
+
+            // For preconfirmed, include pool status since op is still in pool
+            let mut rpc_status: RpcUserOperationStatus = op_status
+                .map(RpcUserOperationStatus::from)
+                .unwrap_or_default();
+
+            rpc_status.status = status;
+            rpc_status.receipt = Some(receipt);
+            rpc_status.user_operation = Some(uo_by_hash.user_operation);
+
+            return Ok(rpc_status);
         }
 
-        if pending.0.is_some() {
-            return Ok(RpcUserOperationStatus {
-                status: UserOperationStatusEnum::Pending,
-                receipt: None,
-            });
+        // If found in pool, return extended status
+        if let Some(pool_status) = op_status {
+            return Ok(pool_status.into());
         }
 
         Ok(RpcUserOperationStatus {
             status: UserOperationStatusEnum::Unknown,
             receipt: None,
+            user_operation: None,
+            added_at_block: None,
+            valid_until: None,
+            valid_after: None,
+            pending_bundle: None,
         })
     }
 

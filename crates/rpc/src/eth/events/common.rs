@@ -171,6 +171,116 @@ where
         }
         return Ok(None);
     }
+
+    #[instrument(skip_all)]
+    async fn get_mined_and_receipt(
+        &self,
+        hash: B256,
+        preconfirmed_bundle_transaction: Option<B256>,
+    ) -> anyhow::Result<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>> {
+        // Step 1: Get tx_hash (preconfirmed: passed in, non-preconfirmed: find event first)
+        let (tx_hash, event_from_logs) = if let Some(bundle_tx) = preconfirmed_bundle_transaction {
+            (bundle_tx, None)
+        } else {
+            let event = self
+                .get_event_by_hash(hash)
+                .await
+                .log_on_error("should have successfully queried for user op events by hash")?;
+
+            let Some(event) = event else {
+                return Ok(None);
+            };
+
+            let tx_hash = event
+                .transaction_hash
+                .context("tx_hash should be present")?;
+
+            (tx_hash, Some(event))
+        };
+
+        // Step 2: Fetch transaction and transaction receipt in parallel
+        let tx_fut = self.provider.get_transaction_by_hash(tx_hash);
+        let tx_receipt_fut = self.provider.get_transaction_receipt(tx_hash);
+
+        let (tx_result, tx_receipt_result) =
+            futures_util::future::join(tx_fut, tx_receipt_fut).await;
+
+        let tx = tx_result
+            .context("should have fetched tx from provider")?
+            .context("should have found tx")?;
+
+        let tx_receipt = tx_receipt_result
+            .context("should have fetched tx receipt")?
+            .context("Failed to fetch tx receipt")?;
+
+        // Step 3: Get event (preconfirmed: from tx_receipt, non-preconfirmed: already have it)
+        let event = if let Some(event) = event_from_logs {
+            event
+        } else {
+            let Some(event) = self.get_event_from_tx_receipt(hash, &tx_receipt) else {
+                return Ok(None);
+            };
+
+            if event.address() != self.entry_point_address {
+                return Ok(None);
+            }
+
+            event.clone()
+        };
+
+        // Step 4: Shared logic - build receipt and user operation
+
+        // Build receipt
+        let mut receipt = self.construct_receipt(event.clone(), tx_receipt)?;
+        if preconfirmed_bundle_transaction.is_some() {
+            receipt.status = UOStatusEnum::Preconfirmed;
+        };
+
+        // Build user operation
+        let auth_list = rundler_provider::get_auth_list_from_transaction(&tx);
+
+        // Return null if the tx isn't included in the block yet
+        if tx.block_hash.is_none() && tx.block_number.is_none() {
+            return Ok(None);
+        }
+
+        let to = tx
+            .inner
+            .to()
+            .expect("tx.to should be present on transaction containing user operation event");
+
+        let input = tx.input();
+
+        let user_operation = if self.entry_point_address == to
+            || self.chain_spec.known_proxy_addresses().contains(&to)
+        {
+            E::get_user_operations_from_tx_data(
+                self.entry_point_address,
+                input.clone(),
+                &auth_list,
+                &self.chain_spec,
+            )
+            .into_iter()
+            .find(|op| op.hash() == hash)
+            .context("matching user operation should be found in tx data")?
+        } else {
+            tracing::debug!("Unknown entrypoint {to:?}, falling back to trace");
+            self.trace_find_user_operation(tx_hash, hash, &auth_list)
+                .await
+                .context("error running trace")?
+                .context("should have found user operation in trace")?
+        };
+
+        let uo_by_hash = RpcUserOperationByHash {
+            user_operation: user_operation.into().into(),
+            entry_point: event.address().into(),
+            block_number: Some(tx.block_number.map(|n| U256::from(n)).unwrap_or_default()),
+            block_hash: Some(tx.block_hash.unwrap_or_default()),
+            transaction_hash: Some(tx_hash),
+        };
+
+        Ok(Some((uo_by_hash, receipt)))
+    }
 }
 
 impl<P, E> UserOperationEventProviderImpl<P, E>
