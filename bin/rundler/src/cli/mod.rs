@@ -26,6 +26,7 @@ use url::Url;
 
 mod admin;
 mod aggregator;
+mod backend;
 mod builder;
 mod chain_spec;
 mod json;
@@ -37,6 +38,7 @@ mod rpc;
 mod signer;
 mod tracing;
 
+use backend::BackendCliArgs;
 use builder::{BuilderCliArgs, EntryPointBuilderConfigs};
 use json::get_json_config;
 use node::NodeCliArgs;
@@ -128,6 +130,18 @@ pub async fn run() -> anyhow::Result<()> {
             // admin CLI should not wait for ctrl-c
             return Ok(());
         }
+        Command::Backend(args) => {
+            backend::spawn_tasks(
+                task_spawner.clone(),
+                cs,
+                args,
+                opt.common,
+                providers,
+                mempool_configs,
+                entry_point_builders,
+            )
+            .await?
+        }
     }
 
     // wait for ctrl-c or the task manager to panic
@@ -179,6 +193,13 @@ enum Command {
     /// Runs the admin commands
     #[command(name = "admin")]
     Admin(AdminCliArgs),
+
+    /// Backend command
+    ///
+    /// Runs both Pool and Builder in a single process with gRPC endpoints exposed.
+    /// Useful for running a single-chain backend that a gateway can connect to.
+    #[command(name = "backend")]
+    Backend(BackendCliArgs),
 }
 
 /// CLI common options
