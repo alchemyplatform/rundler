@@ -58,7 +58,7 @@ pub struct BuilderArgs {
         env = "BUILDER_PORT",
         default_value = "50051"
     )]
-    port: u16,
+    pub port: u16,
 
     /// Host to listen on for gRPC requests
     #[arg(
@@ -67,7 +67,7 @@ pub struct BuilderArgs {
         env = "BUILDER_HOST",
         default_value = "127.0.0.1"
     )]
-    host: String,
+    pub host: String,
 
     #[command(flatten)]
     signer_args: SignerArgs,
