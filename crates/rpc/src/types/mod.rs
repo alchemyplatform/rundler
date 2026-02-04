@@ -336,3 +336,27 @@ pub(crate) struct RpcUserOperationStatus {
     pub(crate) status: UserOperationStatusEnum,
     pub(crate) receipt: Option<RpcUserOperationReceipt>,
 }
+
+/// Suggested gas fees for user operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcSuggestedGasFees {
+    /// Suggested priority fee (30% above current for faster inclusion)
+    pub max_priority_fee_per_gas: U128,
+    /// Suggested max fee (1.5x baseFee + suggested priority fee)
+    pub max_fee_per_gas: U128,
+}
+
+/// Gas price information for user operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcUserOperationGasPrice {
+    /// Current required priority fee (same as rundler_maxPriorityFeePerGas)
+    pub current_priority_fee: U128,
+    /// Current base fee for next block
+    pub base_fee: U128,
+    /// Block number this estimate is based on
+    pub block_number: U64,
+    /// Suggested fees with buffer for faster inclusion
+    pub suggested: RpcSuggestedGasFees,
+}

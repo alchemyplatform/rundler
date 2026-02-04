@@ -41,7 +41,7 @@ use crate::{
     },
     health::{HealthChecker, SystemApiServer},
     rpc_metrics::{HttpMetricMiddlewareLayer, RpcMetricsMiddlewareLayer},
-    rundler::{RundlerApi, RundlerApiServer},
+    rundler::{RundlerApi, RundlerApiServer, RundlerApiSettings},
     types::ApiNamespace,
 };
 
@@ -62,6 +62,8 @@ pub struct Args {
     pub rpc_url: String,
     /// eth_ API settings.
     pub eth_api_settings: EthApiSettings,
+    /// rundler_ API settings.
+    pub rundler_api_settings: RundlerApiSettings,
     /// Estimation settings.
     pub estimation_settings: EstimationSettings,
     /// RPC timeout.
@@ -292,6 +294,7 @@ where
                     self.pool.clone(),
                     fee_estimator,
                     self.providers.evm().clone(),
+                    self.args.rundler_api_settings,
                 )
                 .into_rpc(),
             )?;
