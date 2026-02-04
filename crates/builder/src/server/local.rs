@@ -225,10 +225,11 @@ impl LocalBuilderServerRunner {
                         tracing::error!("new head stream closed");
                         panic!("new head stream closed");
                     };
-                    tracing::info!("received new head: {:?}", new_head);
-
-                    let balances = new_head.address_updates.iter().map(|update| (update.address, update.balance)).collect();
-                    self.signer_manager.update_balances(balances);
+                    if !new_head.address_updates.is_empty() {
+                        tracing::info!("received new head with address updates: {:?}", new_head);
+                        let balances = new_head.address_updates.iter().map(|update| (update.address, update.balance)).collect();
+                        self.signer_manager.update_balances(balances);
+                    }
                 }
                 Some(req) = self.req_receiver.recv() => {
                     let resp: BuilderResult<ServerResponse> = 'a:  {

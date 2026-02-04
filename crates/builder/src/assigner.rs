@@ -19,23 +19,62 @@ use std::{
 use alloy_primitives::Address;
 use metrics::Gauge;
 use metrics_derive::Metrics;
-use rundler_types::pool::{Pool, PoolOperation};
+use rundler_types::{
+    GasFees,
+    pool::{Pool, PoolOperation, PoolOperationSummary},
+};
+
+/// Information about a configured entrypoint (or virtual entrypoint with filter)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct EntrypointInfo {
+    /// Entrypoint contract address
+    pub address: Address,
+    /// Optional filter ID for pool filtering (creates "virtual" entrypoints)
+    pub filter_id: Option<String>,
+}
+
+/// Result of assigning work to a worker
+#[derive(Debug)]
+pub(crate) struct WorkAssignment {
+    /// The selected entrypoint address
+    pub entry_point: Address,
+    /// The filter ID used (needed to lookup the correct registry entry)
+    pub filter_id: Option<String>,
+    /// The assigned operations
+    pub operations: Vec<PoolOperation>,
+}
 
 // The Assigner is responsible for assigning operations to builder addresses.
 //
-// It is used to ensure that no two builders attempt to include operations from the same sender in bundles simultaneously.
+// It handles both entrypoint selection (with starvation prevention) and operation
+// assignment to ensure no two builders attempt to include operations from the same
+// sender in bundles simultaneously.
+//
+// Entrypoint Selection Strategy:
+// - Primary: Select the entrypoint with the most eligible ops (throughput-optimized)
+// - Starvation prevention: If any entrypoint hasn't been selected in (num_signers/2) cycles,
+//   force-select the most starved one. This ensures all entrypoints get attention.
 pub(crate) struct Assigner {
     pool: Box<dyn Pool>,
+    entrypoints: Vec<EntrypointInfo>,
+    num_signers: usize,
     state: Mutex<State>,
     max_pool_ops_per_request: u64,
     max_bundle_size: u64,
     metrics: GlobalMetrics,
 }
 
+/// Registry key type for entrypoint tracking: (address, filter_id)
+type RegistryKey = (Address, Option<String>);
+
 #[derive(Default)]
 struct State {
     uo_sender_to_builder_state: HashMap<Address, (Address, LockState)>,
     builder_to_uo_senders: HashMap<Address, HashSet<Address>>,
+    /// Global cycle counter incremented on each assign_work call
+    global_cycle: u64,
+    /// Tracks when each entrypoint was last selected (by cycle number)
+    entrypoint_last_selected: HashMap<RegistryKey, u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,11 +89,15 @@ enum LockState {
 impl Assigner {
     pub(crate) fn new(
         pool: Box<dyn Pool>,
+        entrypoints: Vec<EntrypointInfo>,
+        num_signers: usize,
         max_pool_ops_per_request: u64,
         max_bundle_size: u64,
     ) -> Self {
         Self {
             pool,
+            entrypoints,
+            num_signers,
             state: Mutex::new(State::default()),
             max_pool_ops_per_request,
             max_bundle_size,
@@ -62,31 +105,153 @@ impl Assigner {
         }
     }
 
-    // This method retrieves operations from the pool for the given entry point and filter id.
-    //
-    // From here, any senders that are not already assigned to another builder are assigned to the current builder.
-    // These senders enter the "assigned" state and cannot be assigned to another builder until the current builder drops or confirms them.
-    //
-    // This method is called to receive operations from the pool for a builder prior to forming a bundle.
-    pub(crate) async fn assign_operations(
+    /// Assigns work to a worker using priority-based entrypoint selection with starvation prevention.
+    ///
+    /// 1. Queries all entrypoints for pending operations
+    /// 2. Filters to only eligible ops (not assigned to other builders, simulated before max_sim_block_number)
+    /// 3. Selects an entrypoint using starvation-aware priority:
+    ///    - If any entrypoint hasn't been selected in (num_signers/2) cycles, force-select the most starved
+    ///    - Otherwise, select the entrypoint with the most eligible ops
+    /// 4. Assigns operations from that entrypoint to the worker
+    /// 5. Returns None if no work is available
+    pub(crate) async fn assign_work(
+        &self,
+        builder_address: Address,
+        max_sim_block_number: u64,
+        _base_fee: u128,
+        _required_fees: GasFees,
+    ) -> anyhow::Result<Option<WorkAssignment>> {
+        // Query each entrypoint for pending ops and count eligible ones
+        let mut candidates = Vec::new();
+        for ep in &self.entrypoints {
+            let ops = self
+                .pool
+                .get_ops_summaries(
+                    ep.address,
+                    self.max_pool_ops_per_request,
+                    ep.filter_id.clone(),
+                )
+                .await?;
+
+            // Count eligible ops (not assigned to other builders, simulated before max_sim_block_number)
+            let eligible_count =
+                self.count_eligible_ops(&ops, builder_address, max_sim_block_number);
+            if eligible_count > 0 {
+                candidates.push((ep.clone(), ops, eligible_count));
+            }
+        }
+
+        if candidates.is_empty() {
+            return Ok(None);
+        }
+
+        // Starvation threshold: each entrypoint should be selected at least once per half-cycle through signers
+        let starvation_threshold = (self.num_signers / 2).max(1) as u64;
+
+        // Select entrypoint with starvation prevention
+        let (selected_ep, ops) = {
+            let mut state = self.state.lock().unwrap();
+            state.global_cycle += 1;
+            let current_cycle = state.global_cycle;
+
+            // Find the most starved entrypoint (if any are past threshold)
+            let starved = candidates
+                .iter()
+                .filter_map(|(ep, ops, _)| {
+                    let key: RegistryKey = (ep.address, ep.filter_id.clone());
+                    let last = state
+                        .entrypoint_last_selected
+                        .get(&key)
+                        .copied()
+                        .unwrap_or(0);
+                    let gap = current_cycle.saturating_sub(last);
+                    if gap > starvation_threshold {
+                        Some((ep, ops, gap))
+                    } else {
+                        None
+                    }
+                })
+                .max_by_key(|(_, _, gap)| *gap);
+
+            let (selected_ep, ops) = if let Some((ep, ops, gap)) = starved {
+                tracing::debug!(
+                    "Force-selecting starved entrypoint {:?} (filter: {:?}) - gap: {} cycles",
+                    ep.address,
+                    ep.filter_id,
+                    gap
+                );
+                (ep.clone(), ops.clone())
+            } else {
+                // Normal: pick highest eligible count
+                candidates.sort_by(|a, b| b.2.cmp(&a.2));
+                let (ep, ops, _) = candidates.into_iter().next().unwrap();
+                (ep, ops)
+            };
+
+            // Record that we selected this entrypoint
+            let key: RegistryKey = (selected_ep.address, selected_ep.filter_id.clone());
+            state.entrypoint_last_selected.insert(key, current_cycle);
+
+            (selected_ep, ops)
+        };
+
+        // Assign operations from selected entrypoint
+        let assigned_ops = self
+            .assign_ops_internal(
+                builder_address,
+                selected_ep.address,
+                ops,
+                max_sim_block_number,
+            )
+            .await?;
+
+        if assigned_ops.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(WorkAssignment {
+            entry_point: selected_ep.address,
+            filter_id: selected_ep.filter_id,
+            operations: assigned_ops,
+        }))
+    }
+
+    /// Count ops that are eligible for assignment:
+    /// - Not assigned to another builder
+    /// - Simulated before max_sim_block_number
+    fn count_eligible_ops(
+        &self,
+        ops: &[PoolOperationSummary],
+        builder_address: Address,
+        max_sim_block_number: u64,
+    ) -> usize {
+        let state = self.state.lock().unwrap();
+        ops.iter()
+            .filter(|op| op.sim_block_number <= max_sim_block_number)
+            .filter(|op| {
+                // Check if sender is unassigned or assigned to this builder
+                match state.uo_sender_to_builder_state.get(&op.sender) {
+                    None => true,
+                    Some((locked_builder, _)) => *locked_builder == builder_address,
+                }
+            })
+            .count()
+    }
+
+    /// Internal method to assign operations from a specific entrypoint
+    async fn assign_ops_internal(
         &self,
         builder_address: Address,
         entry_point: Address,
-        filter_id: Option<String>,
+        ops: Vec<PoolOperationSummary>,
         max_sim_block_number: u64,
     ) -> anyhow::Result<Vec<PoolOperation>> {
         let per_builder_metrics =
             PerBuilderMetrics::new_with_labels(&[("builder_address", builder_address.to_string())]);
-        let ops = self
-            .pool
-            .get_ops_summaries(entry_point, self.max_pool_ops_per_request, filter_id)
-            .await?;
         let mut return_ops_summaries = Vec::new();
 
         {
             let mut state = self.state.lock().unwrap();
-            // iterate through ops that have been simulated before the max sim block number
-            // to ensure that the second simulation happens at the same or a later block than the first simulation
             for op in ops
                 .iter()
                 .filter(|op| op.sim_block_number <= max_sim_block_number)
@@ -124,7 +289,7 @@ impl Assigner {
                     })
                     .insert(op.sender);
 
-                return_ops_summaries.push(op);
+                return_ops_summaries.push(op.clone());
                 if return_ops_summaries.len() >= self.max_bundle_size as usize {
                     break;
                 }
@@ -154,9 +319,9 @@ impl Assigner {
     // This method is typically called when the builder is done forming and sending a bundle. Confirmed senders are the senders that were included in the bundle.
     //
     // PANICS:
-    // - If the confirmed_sender is not found in the state, the builder must have been assigned this sender via the assign_operations method.
-    // - If the confirmed_sender is assigned to another builder, the builder must have been assigned this sender via the assign_operations method.
-    // - If the builder_address is not found in the state, the builder must have been assigned via the assign_operations method.
+    // - If the confirmed_sender is not found in the state, the builder must have been assigned this sender via the assign_work method.
+    // - If the confirmed_sender is assigned to another builder, the builder must have been assigned this sender via the assign_work method.
+    // - If the builder_address is not found in the state, the builder must have been assigned via the assign_work method.
     // - If the builder is assigned a sender that is not found in the uo_sender_to_builder_state map, this is an internal error.
     pub(crate) fn confirm_senders_drop_unused<'a>(
         &self,
@@ -293,6 +458,8 @@ mod tests {
 
     use super::*;
 
+    const TEST_ENTRY_POINT: Address = Address::ZERO;
+
     fn create_test_ops(senders: &[Address]) -> Vec<PoolOperation> {
         senders
             .iter()
@@ -309,7 +476,7 @@ mod tests {
                 PoolOperation {
                     uo,
                     expected_code_hash: B256::ZERO,
-                    entry_point: Address::ZERO,
+                    entry_point: TEST_ENTRY_POINT,
                     sim_block_hash: B256::ZERO,
                     sim_block_number: 0,
                     account_is_staked: false,
@@ -343,34 +510,42 @@ mod tests {
             });
     }
 
+    fn test_entrypoints() -> Vec<EntrypointInfo> {
+        vec![EntrypointInfo {
+            address: TEST_ENTRY_POINT,
+            filter_id: None,
+        }]
+    }
+
     #[tokio::test]
     async fn test_no_operations() {
         let mut mock_pool = MockPool::new();
         mock_pool_get_ops(&mut mock_pool, vec![]);
-        let assigner = Assigner::new(Box::new(mock_pool), 10, 10);
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10);
 
-        // First assignment should succeed
-        let assigned_ops = assigner
-            .assign_operations(address(0), address(0), None, u64::MAX)
+        let result = assigner
+            .assign_work(address(0), u64::MAX, 0, GasFees::default())
             .await
             .unwrap();
-        assert_eq!(assigned_ops.len(), 0); // TestPool returns empty by default
+        assert!(result.is_none());
     }
 
     #[tokio::test]
-    async fn test_assign_operations() {
+    async fn test_assign_work() {
         let mut mock_pool = MockPool::new();
         let ops = create_test_ops(&[address(1), address(2)]);
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
-        let assigner = Assigner::new(Box::new(mock_pool), 10, 10);
-        let assigned_ops = assigner
-            .assign_operations(address(0), address(0), None, u64::MAX)
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10);
+        let assignment = assigner
+            .assign_work(address(0), u64::MAX, 0, GasFees::default())
             .await
-            .unwrap();
-        assert_eq!(assigned_ops.len(), 2);
-        assert_eq!(assigned_ops[0].uo.sender(), address(1));
-        assert_eq!(assigned_ops[1].uo.sender(), address(2));
+            .unwrap()
+            .expect("should have work");
+        assert_eq!(assignment.operations.len(), 2);
+        assert_eq!(assignment.operations[0].uo.sender(), address(1));
+        assert_eq!(assignment.operations[1].uo.sender(), address(2));
+        assert_eq!(assignment.entry_point, TEST_ENTRY_POINT);
     }
 
     #[tokio::test]
@@ -379,24 +554,26 @@ mod tests {
         let ops = create_test_ops(&[address(1), address(2)]);
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
-        let assigner = Assigner::new(Box::new(mock_pool), 10, 10);
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10);
         let _ = assigner
-            .assign_operations(address(0), address(0), None, u64::MAX)
+            .assign_work(address(0), u64::MAX, 0, GasFees::default())
             .await
             .unwrap();
 
         // Same builder address should assign again
-        let assigned_ops = assigner
-            .assign_operations(address(0), address(0), None, u64::MAX)
+        let assignment = assigner
+            .assign_work(address(0), u64::MAX, 0, GasFees::default())
+            .await
+            .unwrap()
+            .expect("should have work");
+        assert_eq!(assignment.operations.len(), 2);
+
+        // Different builder address should not assign (ops locked to builder 0)
+        let result = assigner
+            .assign_work(address(1), u64::MAX, 0, GasFees::default())
             .await
             .unwrap();
-        assert_eq!(assigned_ops.len(), 2);
-        // Different builder address should not assign
-        let assigned_ops = assigner
-            .assign_operations(address(1), address(0), None, u64::MAX)
-            .await
-            .unwrap();
-        assert_eq!(assigned_ops.len(), 0);
+        assert!(result.is_none());
     }
 
     #[tokio::test]
@@ -405,22 +582,23 @@ mod tests {
         let ops = create_test_ops(&[address(1), address(2)]);
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
-        let assigner = Assigner::new(Box::new(mock_pool), 10, 10);
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10);
         let _ = assigner
-            .assign_operations(address(0), address(0), None, u64::MAX)
+            .assign_work(address(0), u64::MAX, 0, GasFees::default())
             .await
             .unwrap();
 
-        // Same builder address should assign again
+        // Confirm sender 1, drop sender 2
         assigner.confirm_senders_drop_unused(address(0), &[address(1)]);
 
-        // Different builder should be able go receive address(2)
-        let assigned_ops = assigner
-            .assign_operations(address(1), address(0), None, u64::MAX)
+        // Different builder should be able to receive address(2)
+        let assignment = assigner
+            .assign_work(address(1), u64::MAX, 0, GasFees::default())
             .await
-            .unwrap();
-        assert_eq!(assigned_ops.len(), 1);
-        assert_eq!(assigned_ops[0].uo.sender(), address(2));
+            .unwrap()
+            .expect("should have work");
+        assert_eq!(assignment.operations.len(), 1);
+        assert_eq!(assignment.operations[0].uo.sender(), address(2));
     }
 
     #[tokio::test]
@@ -429,22 +607,24 @@ mod tests {
         let ops = create_test_ops(&[address(1), address(2)]);
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
-        let assigner = Assigner::new(Box::new(mock_pool), 10, 10);
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10);
         let _ = assigner
-            .assign_operations(address(0), address(0), None, u64::MAX)
+            .assign_work(address(0), u64::MAX, 0, GasFees::default())
             .await
             .unwrap();
 
-        // Same builder address should assign again
+        // Release all locks
         assigner.release_all(address(0));
 
-        let assigned_ops = assigner
-            .assign_operations(address(1), address(0), None, u64::MAX)
+        // Different builder should get all ops
+        let assignment = assigner
+            .assign_work(address(1), u64::MAX, 0, GasFees::default())
             .await
-            .unwrap();
-        assert_eq!(assigned_ops.len(), 2);
-        assert_eq!(assigned_ops[0].uo.sender(), address(1));
-        assert_eq!(assigned_ops[1].uo.sender(), address(2));
+            .unwrap()
+            .expect("should have work");
+        assert_eq!(assignment.operations.len(), 2);
+        assert_eq!(assignment.operations[0].uo.sender(), address(1));
+        assert_eq!(assignment.operations[1].uo.sender(), address(2));
     }
 
     #[tokio::test]
@@ -453,9 +633,9 @@ mod tests {
         let ops = create_test_ops(&[address(1), address(2)]);
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
-        let assigner = Assigner::new(Box::new(mock_pool), 10, 10);
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10);
         let _ = assigner
-            .assign_operations(address(0), address(0), None, u64::MAX)
+            .assign_work(address(0), u64::MAX, 0, GasFees::default())
             .await
             .unwrap();
 
@@ -464,13 +644,14 @@ mod tests {
         // this should not drop lock on address(1)
         assigner.confirm_senders_drop_unused(address(0), &[]);
 
-        // Different builder should be able go receive address(2)
-        let assigned_ops = assigner
-            .assign_operations(address(1), address(0), None, u64::MAX)
+        // Different builder should only get address(2)
+        let assignment = assigner
+            .assign_work(address(1), u64::MAX, 0, GasFees::default())
             .await
-            .unwrap();
-        assert_eq!(assigned_ops.len(), 1);
-        assert_eq!(assigned_ops[0].uo.sender(), address(2));
+            .unwrap()
+            .expect("should have work");
+        assert_eq!(assignment.operations.len(), 1);
+        assert_eq!(assignment.operations[0].uo.sender(), address(2));
     }
 
     #[tokio::test]
@@ -480,7 +661,7 @@ mod tests {
         let ops = create_test_ops(&[address(1), address(2)]);
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
-        let assigner = Assigner::new(Box::new(mock_pool), 10, 10);
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10);
         assigner.confirm_senders_drop_unused(address(0), &[address(3)]);
     }
 
@@ -488,7 +669,7 @@ mod tests {
     #[should_panic]
     async fn test_try_confirm_sender_not_assigned() {
         let mock_pool = MockPool::new();
-        let assigner = Assigner::new(Box::new(mock_pool), 10, 10);
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10);
         assigner.confirm_senders_drop_unused(address(1), &[address(1)]);
     }
 
@@ -499,9 +680,9 @@ mod tests {
         let ops = create_test_ops(&[address(1), address(2)]);
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
-        let assigner = Assigner::new(Box::new(mock_pool), 10, 10);
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10);
         let _ = assigner
-            .assign_operations(address(0), address(0), None, u64::MAX)
+            .assign_work(address(0), u64::MAX, 0, GasFees::default())
             .await
             .unwrap();
 
@@ -510,5 +691,162 @@ mod tests {
 
     fn address(i: u64) -> Address {
         Address::from([i as u8; 20])
+    }
+
+    const TEST_ENTRY_POINT_2: Address = Address::new([0x01; 20]);
+
+    fn two_entrypoints() -> Vec<EntrypointInfo> {
+        vec![
+            EntrypointInfo {
+                address: TEST_ENTRY_POINT,
+                filter_id: None,
+            },
+            EntrypointInfo {
+                address: TEST_ENTRY_POINT_2,
+                filter_id: None,
+            },
+        ]
+    }
+
+    /// Create test ops for a specific entrypoint
+    fn create_test_ops_for_entrypoint(
+        senders: &[Address],
+        entry_point: Address,
+    ) -> Vec<PoolOperation> {
+        senders
+            .iter()
+            .map(|sender| {
+                let uo = UserOperationBuilder::new(
+                    &ChainSpec::default(),
+                    UserOperationRequiredFields {
+                        sender: *sender,
+                        ..Default::default()
+                    },
+                )
+                .build()
+                .into();
+                PoolOperation {
+                    uo,
+                    expected_code_hash: B256::ZERO,
+                    entry_point,
+                    sim_block_hash: B256::ZERO,
+                    sim_block_number: 0,
+                    account_is_staked: false,
+                    valid_time_range: ValidTimeRange::default(),
+                    entity_infos: EntityInfos::default(),
+                    aggregator: None,
+                    da_gas_data: Default::default(),
+                    filter_id: None,
+                    perms: UserOperationPermissions::default(),
+                    sender_is_7702: false,
+                }
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_starvation_prevention() {
+        // EP1 always has 10 ops, EP2 always has 2 ops
+        // With num_signers=4, threshold = 4/2 = 2 cycles
+        // EP1 should be selected first (more ops), but after 2 cycles EP2 should be force-selected
+
+        let ep1_ops = create_test_ops_for_entrypoint(
+            &[
+                address(10),
+                address(11),
+                address(12),
+                address(13),
+                address(14),
+                address(15),
+                address(16),
+                address(17),
+                address(18),
+                address(19),
+            ],
+            TEST_ENTRY_POINT,
+        );
+        let ep2_ops =
+            create_test_ops_for_entrypoint(&[address(20), address(21)], TEST_ENTRY_POINT_2);
+
+        let mut mock_pool = MockPool::new();
+        let ep1_ops_clone = ep1_ops.clone();
+        let ep2_ops_clone = ep2_ops.clone();
+
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(move |ep, _, _| {
+                if ep == TEST_ENTRY_POINT {
+                    Ok(ep1_ops_clone.iter().map(|op| op.into()).collect())
+                } else {
+                    Ok(ep2_ops_clone.iter().map(|op| op.into()).collect())
+                }
+            });
+
+        let ep1_ops_for_hashes = ep1_ops.clone();
+        let ep2_ops_for_hashes = ep2_ops.clone();
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .returning(move |ep, hashes| {
+                let ops = if ep == TEST_ENTRY_POINT {
+                    &ep1_ops_for_hashes
+                } else {
+                    &ep2_ops_for_hashes
+                };
+                Ok(ops
+                    .iter()
+                    .filter(|op| hashes.contains(&op.uo.hash()))
+                    .cloned()
+                    .collect())
+            });
+
+        // 4 signers = threshold of 2 cycles
+        let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024);
+
+        // Cycle 1: EP1 should be selected (more ops)
+        let result = assigner
+            .assign_work(address(0), u64::MAX, 0, GasFees::default())
+            .await
+            .unwrap()
+            .expect("should have work");
+        assert_eq!(
+            result.entry_point, TEST_ENTRY_POINT,
+            "Cycle 1: EP1 expected"
+        );
+        assigner.release_all(address(0));
+
+        // Cycle 2: EP1 still has more ops, should still be selected
+        let result = assigner
+            .assign_work(address(0), u64::MAX, 0, GasFees::default())
+            .await
+            .unwrap()
+            .expect("should have work");
+        assert_eq!(
+            result.entry_point, TEST_ENTRY_POINT,
+            "Cycle 2: EP1 expected"
+        );
+        assigner.release_all(address(0));
+
+        // Cycle 3: EP2 hasn't been selected in 2 cycles (threshold), should be force-selected
+        let result = assigner
+            .assign_work(address(0), u64::MAX, 0, GasFees::default())
+            .await
+            .unwrap()
+            .expect("should have work");
+        assert_eq!(
+            result.entry_point, TEST_ENTRY_POINT_2,
+            "Cycle 3: EP2 expected (starvation prevention)"
+        );
+        assigner.release_all(address(0));
+
+        // Cycle 4: EP2 was just selected, back to normal - EP1 has more ops
+        let result = assigner
+            .assign_work(address(0), u64::MAX, 0, GasFees::default())
+            .await
+            .unwrap()
+            .expect("should have work");
+        assert_eq!(
+            result.entry_point, TEST_ENTRY_POINT,
+            "Cycle 4: EP1 expected"
+        );
     }
 }
