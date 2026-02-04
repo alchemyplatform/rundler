@@ -384,31 +384,7 @@ where
         _message: &str,
         revert_data: &Option<Bytes>,
     ) -> Option<HandleOpsOut> {
-        let Some(revert_data) = revert_data else {
-            return None;
-        };
-
-        if let Ok(err) = IEntryPointErrors::abi_decode(revert_data) {
-            let ret = match err {
-                IEntryPointErrors::FailedOp(FailedOp { opIndex, reason }) => {
-                    HandleOpsOut::FailedOp(opIndex.try_into().unwrap_or(usize::MAX), reason)
-                }
-                IEntryPointErrors::FailedOpWithRevert(FailedOpWithRevert {
-                    opIndex,
-                    reason,
-                    inner,
-                }) => HandleOpsOut::FailedOp(
-                    opIndex.try_into().unwrap_or(usize::MAX),
-                    format!("{}:{}", reason, inner),
-                ),
-                IEntryPointErrors::SignatureValidationFailed(failure) => {
-                    HandleOpsOut::SignatureValidationFailed(failure.aggregator)
-                }
-            };
-            Some(ret)
-        } else {
-            Some(HandleOpsOut::Revert(revert_data.clone()))
-        }
+        decode_handle_ops_revert(revert_data)
     }
 
     fn decode_ops_from_calldata(
@@ -786,6 +762,35 @@ pub fn decode_ops_from_calldata(
                 .collect()
         }
         _ => vec![],
+    }
+}
+
+/// Decode the revert data from a call to `handleOps` for v0.7+
+pub fn decode_handle_ops_revert(revert_data: &Option<Bytes>) -> Option<HandleOpsOut> {
+    let Some(revert_data) = revert_data else {
+        return None;
+    };
+
+    if let Ok(err) = IEntryPointErrors::abi_decode(revert_data) {
+        let ret = match err {
+            IEntryPointErrors::FailedOp(FailedOp { opIndex, reason }) => {
+                HandleOpsOut::FailedOp(opIndex.try_into().unwrap_or(usize::MAX), reason)
+            }
+            IEntryPointErrors::FailedOpWithRevert(FailedOpWithRevert {
+                opIndex,
+                reason,
+                inner,
+            }) => HandleOpsOut::FailedOp(
+                opIndex.try_into().unwrap_or(usize::MAX),
+                format!("{}:{}", reason, inner),
+            ),
+            IEntryPointErrors::SignatureValidationFailed(failure) => {
+                HandleOpsOut::SignatureValidationFailed(failure.aggregator)
+            }
+        };
+        Some(ret)
+    } else {
+        Some(HandleOpsOut::Revert(revert_data.clone()))
     }
 }
 

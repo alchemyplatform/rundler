@@ -240,11 +240,10 @@ where
         preconfirmed_block_number: Option<u64>,
     ) {
         if let Some(preconfirmed_block_number) = preconfirmed_block_number {
-            self.state.write().pool.preconfirm_txns(&txn_to_uos);
             self.state
                 .write()
                 .pool
-                .preconfirm_txns_at_block_number(&txn_to_uos, preconfirmed_block_number);
+                .preconfirm_txns(preconfirmed_block_number, &txn_to_uos);
         }
     }
     fn remove_out_of_date_preconfirmed_uos(&self, block_number: u64) {

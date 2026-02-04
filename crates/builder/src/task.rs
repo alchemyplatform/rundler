@@ -20,18 +20,15 @@ use std::{
 
 use alloy_primitives::{Address, B256};
 use anyhow::Context;
-use rundler_provider::{
-    AlloyNetworkConfig, EntryPoint, Providers as ProvidersT, ProvidersWithEntryPointT,
-};
+use rundler_provider::{AlloyNetworkConfig, Providers as ProvidersT, ProvidersWithEntryPointT};
 use rundler_signer::{SignerManager, SigningScheme};
 use rundler_sim::{
-    MempoolConfig, SimulationSettings, Simulator,
+    MempoolConfig, SimulationSettings,
     simulation::{self, UnsafeSimulator},
 };
 use rundler_task::TaskSpawnerExt;
 use rundler_types::{
-    EntryPointAbiVersion, EntryPointVersion, UserOperation, UserOperationVariant, chain::ChainSpec,
-    pool::Pool as PoolT,
+    EntryPointAbiVersion, EntryPointVersion, chain::ChainSpec, pool::Pool as PoolT,
 };
 use rundler_utils::emit::WithEntryPoint;
 use tokio::sync::{broadcast, mpsc};
@@ -39,9 +36,13 @@ use tracing::info;
 
 use crate::{
     assigner::Assigner,
-    bundle_proposer::{self, BundleProposerImpl, BundleProposerProviders},
+    bundle_proposer::{self, BundleProposerImpl, BundleProposerProviders, BundleProposerT},
     bundle_sender::{self, BundleSender, BundleSenderAction, BundleSenderImpl},
     emit::BuilderEvent,
+    entrypoint_registry::{
+        EntrypointEntry, EntrypointRegistry, EvmProviderAdapter, RevertHandlerV0_6,
+        RevertHandlerV0_7,
+    },
     sender::TransactionSenderArgs,
     server::{self, LocalBuilderBuilder},
     transaction_tracker::{self, TransactionTrackerImpl},
@@ -58,6 +59,8 @@ pub struct Args {
     pub unsafe_mode: bool,
     /// Signing scheme to use
     pub signing_scheme: SigningScheme,
+    /// Number of signers (workers) to use
+    pub num_signers: u64,
     /// Whether to automatically fund signers
     pub auto_fund: bool,
     /// Maximum bundle size in number of operations
@@ -124,7 +127,8 @@ pub struct EntryPointBuilderSettings {
     pub version: EntryPointVersion,
     /// Mempool configs
     pub mempool_configs: HashMap<B256, MempoolConfig>,
-    /// Builder settings
+    /// Builder configurations (filter_id, submission_proxy combinations)
+    /// Each represents a "virtual entrypoint" that workers can build for
     pub builders: Vec<BuilderSettings>,
 }
 
@@ -172,12 +176,7 @@ where
     {
         let mut bundle_sender_actions = vec![];
 
-        let num_required_signers: usize = self
-            .args
-            .entry_points
-            .iter()
-            .map(|ep| ep.builders.len())
-            .sum();
+        let num_required_signers = self.args.num_signers as usize;
 
         // wait 60 seconds for the signers to be available
         match tokio::time::timeout(
@@ -198,52 +197,120 @@ where
             }
         }
 
+        // Build entrypoint info for the assigner
+        // Each (address, filter_id) combination is a separate "virtual entrypoint"
+        let mut entrypoint_infos: Vec<crate::assigner::EntrypointInfo> = vec![];
+        for ep in &self.args.entry_points {
+            if ep.builders.is_empty() {
+                // No builders configured - create a default entry with no filter
+                entrypoint_infos.push(crate::assigner::EntrypointInfo {
+                    address: ep.address,
+                    filter_id: None,
+                });
+            } else {
+                // Create an entry for each builder configuration
+                for builder in &ep.builders {
+                    entrypoint_infos.push(crate::assigner::EntrypointInfo {
+                        address: ep.address,
+                        filter_id: builder.filter_id.clone(),
+                    });
+                }
+            }
+        }
+
         let assigner = Arc::new(Assigner::new(
             Box::new(self.pool.clone()),
+            entrypoint_infos,
+            self.args.num_signers as usize,
             self.args.assigner_max_ops_per_request,
             self.args.max_bundle_size,
         ));
 
-        let mut supported_entry_points = HashSet::new();
+        // Create and populate entrypoint registry with proposers for all entrypoints
+        // Registry is keyed by (address, filter_id) to support multiple configurations per entrypoint
+        let mut entrypoint_registry = EntrypointRegistry::new();
         for ep in &self.args.entry_points {
-            match ep.version.abi_version() {
-                EntryPointAbiVersion::V0_6 => {
-                    let actions = self
-                        .create_builders_v0_6(
-                            &task_spawner,
-                            ep,
-                            &self.signer_manager,
-                            assigner.clone(),
-                        )
-                        .await?;
-                    bundle_sender_actions.extend(actions);
-                    supported_entry_points.insert(ep.address);
+            // Create the appropriate revert handler based on entrypoint ABI version
+            let revert_handler_fn = || -> Box<dyn crate::entrypoint_registry::RevertHandler> {
+                match ep.version.abi_version() {
+                    EntryPointAbiVersion::V0_6 => Box::new(RevertHandlerV0_6),
+                    EntryPointAbiVersion::V0_7 => Box::new(RevertHandlerV0_7),
                 }
-                EntryPointAbiVersion::V0_7 => {
-                    let actions = self
-                        .create_builders_v0_7(
-                            &task_spawner,
-                            ep,
-                            &self.signer_manager,
-                            assigner.clone(),
-                        )
+            };
+
+            if ep.builders.is_empty() {
+                // No builders configured - create a default proposer with no proxy
+                let proposer = self.create_proposer_for_entrypoint(ep, None).await?;
+                let registry_key = (ep.address, None);
+                entrypoint_registry.insert(
+                    registry_key,
+                    EntrypointEntry::new(proposer, revert_handler_fn(), None),
+                );
+                info!(
+                    "Registered proposer for entrypoint {:?} (version {:?})",
+                    ep.address, ep.version
+                );
+            } else {
+                // Create a proposer for each builder configuration
+                for builder in &ep.builders {
+                    // Submission proxies are not supported for v0.9 entrypoints
+                    if builder.submission_proxy.is_some() && ep.version == EntryPointVersion::V0_9 {
+                        return Err(anyhow::anyhow!(
+                            "Submission proxies are not supported for entry point v0.9 ({:?})",
+                            ep.address
+                        ));
+                    }
+
+                    // Look up the submission proxy from chain_spec if configured
+                    let submission_proxy = builder
+                        .submission_proxy
+                        .and_then(|addr| self.args.chain_spec.get_submission_proxy(&addr).cloned());
+
+                    let proposer = self
+                        .create_proposer_for_entrypoint(ep, submission_proxy.clone())
                         .await?;
-                    bundle_sender_actions.extend(actions);
-                    supported_entry_points.insert(ep.address);
+                    let registry_key = (ep.address, builder.filter_id.clone());
+                    entrypoint_registry.insert(
+                        registry_key,
+                        EntrypointEntry::new(proposer, revert_handler_fn(), submission_proxy),
+                    );
+                    info!(
+                        "Registered proposer for entrypoint {:?} (version {:?}, filter_id: {:?}, proxy: {:?})",
+                        ep.address, ep.version, builder.filter_id, builder.submission_proxy
+                    );
                 }
             }
         }
+
+        let entrypoint_registry = Arc::new(entrypoint_registry);
+        // collect deduplicated entrypoint addresses into a vector
+        let supported_entry_points: Vec<_> = self
+            .args
+            .entry_points
+            .iter()
+            .map(|ep| ep.address)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        // Create one bundle sender per signer - each handles all entrypoints via the registry
+        let actions = self
+            .create_builders(
+                &task_spawner,
+                &self.signer_manager,
+                assigner.clone(),
+                entrypoint_registry.clone(),
+            )
+            .await?;
+        bundle_sender_actions.extend(actions);
 
         let builder_handle = self.builder_builder.get_handle();
 
         task_spawner.spawn_critical_with_graceful_shutdown_signal(
             "local builder server",
             |shutdown| {
-                self.builder_builder.run(
-                    bundle_sender_actions,
-                    supported_entry_points.into_iter().collect(),
-                    shutdown,
-                )
+                self.builder_builder
+                    .run(bundle_sender_actions, supported_entry_points, shutdown)
             },
         );
 
@@ -265,133 +332,147 @@ where
         Ok(())
     }
 
-    async fn create_builders_v0_6<T>(
+    /// Create a proposer for the given entrypoint and add it to the registry.
+    /// The submission_proxy is used when building transactions through a proxy contract.
+    async fn create_proposer_for_entrypoint(
         &self,
-        task_spawner: &T,
         ep: &EntryPointBuilderSettings,
-        signer_manager: &Arc<dyn SignerManager>,
-        assigner: Arc<Assigner>,
-    ) -> anyhow::Result<Vec<mpsc::Sender<BundleSenderAction>>>
-    where
-        T: TaskSpawnerExt,
-    {
-        info!("Mempool config for ep v0.6: {:?}", ep.mempool_configs);
-        let ep_providers = self
-            .providers
-            .ep_v0_6_providers()
-            .clone()
-            .context("entry point v0.6 not supplied")?;
-        let mut bundle_sender_actions = vec![];
-        for settings in &ep.builders {
-            let bundle_sender_action = if self.args.unsafe_mode {
-                self.create_bundle_builder(
-                    task_spawner,
-                    settings,
-                    ep_providers.clone(),
-                    UnsafeSimulator::new(
+        submission_proxy: Option<Arc<dyn rundler_types::proxy::SubmissionProxy>>,
+    ) -> anyhow::Result<Box<dyn BundleProposerT>> {
+        let proposer_settings = bundle_proposer::Settings {
+            chain_spec: self.args.chain_spec.clone(),
+            target_bundle_gas: self.args.target_bundle_gas,
+            max_bundle_gas: self.args.max_bundle_gas,
+            da_gas_tracking_enabled: self.args.da_gas_tracking_enabled,
+            max_expected_storage_slots: self.args.max_expected_storage_slots,
+            verification_gas_limit_efficiency_reject_threshold: self
+                .args
+                .verification_gas_limit_efficiency_reject_threshold,
+            submission_proxy,
+        };
+
+        let builder_tag = format!("registry:{}", ep.address);
+
+        match ep.version.abi_version() {
+            EntryPointAbiVersion::V0_6 => {
+                let ep_providers = self
+                    .providers
+                    .ep_v0_6_providers()
+                    .clone()
+                    .context("entry point v0.6 not supplied")?;
+
+                if self.args.unsafe_mode {
+                    let simulator = UnsafeSimulator::new(
                         ep_providers.entry_point().clone(),
                         self.args.sim_settings.clone(),
                         &ep.mempool_configs,
-                    ),
-                    signer_manager,
-                    assigner.clone(),
-                )
-                .await?
-            } else {
-                self.create_bundle_builder(
-                    task_spawner,
-                    settings,
-                    ep_providers.clone(),
-                    simulation::new_v0_6_simulator(
+                    );
+                    let proposer = BundleProposerImpl::new(
+                        builder_tag,
+                        ep_providers,
+                        BundleProposerProviders::new(simulator),
+                        proposer_settings,
+                        self.event_sender.clone(),
+                    );
+                    Ok(Box::new(proposer))
+                } else {
+                    let simulator = simulation::new_v0_6_simulator(
                         ep_providers.evm().clone(),
                         ep_providers.entry_point().clone(),
                         self.args.sim_settings.clone(),
                         ep.mempool_configs.clone(),
-                    ),
+                    );
+                    let proposer = BundleProposerImpl::new(
+                        builder_tag,
+                        ep_providers,
+                        BundleProposerProviders::new(simulator),
+                        proposer_settings,
+                        self.event_sender.clone(),
+                    );
+                    Ok(Box::new(proposer))
+                }
+            }
+            EntryPointAbiVersion::V0_7 => {
+                let ep_providers = self
+                    .providers
+                    .ep_v0_7_providers(ep.version)
+                    .clone()
+                    .context(format!(
+                        "entry point v0.7 abi providers not supplied for version: {:?}",
+                        ep.version
+                    ))?;
+
+                if self.args.unsafe_mode {
+                    let simulator = UnsafeSimulator::new(
+                        ep_providers.entry_point().clone(),
+                        self.args.sim_settings.clone(),
+                        &ep.mempool_configs,
+                    );
+                    let proposer = BundleProposerImpl::new(
+                        builder_tag,
+                        ep_providers,
+                        BundleProposerProviders::new(simulator),
+                        proposer_settings,
+                        self.event_sender.clone(),
+                    );
+                    Ok(Box::new(proposer))
+                } else {
+                    let simulator = simulation::new_v0_7_simulator(
+                        ep_providers.evm().clone(),
+                        ep_providers.entry_point().clone(),
+                        self.args.sim_settings.clone(),
+                        ep.mempool_configs.clone(),
+                    );
+                    let proposer = BundleProposerImpl::new(
+                        builder_tag,
+                        ep_providers,
+                        BundleProposerProviders::new(simulator),
+                        proposer_settings,
+                        self.event_sender.clone(),
+                    );
+                    Ok(Box::new(proposer))
+                }
+            }
+        }
+    }
+
+    /// Create one bundle sender per signer. Each sender handles all entrypoints
+    /// via the EntrypointRegistry.
+    async fn create_builders<T>(
+        &self,
+        task_spawner: &T,
+        signer_manager: &Arc<dyn SignerManager>,
+        assigner: Arc<Assigner>,
+        entrypoint_registry: Arc<EntrypointRegistry>,
+    ) -> anyhow::Result<Vec<mpsc::Sender<BundleSenderAction>>>
+    where
+        T: TaskSpawnerExt,
+    {
+        let mut bundle_sender_actions = vec![];
+
+        for _ in 0..self.args.num_signers {
+            let bundle_sender_action = self
+                .create_bundle_builder(
+                    task_spawner,
                     signer_manager,
                     assigner.clone(),
+                    entrypoint_registry.clone(),
                 )
-                .await?
-            };
+                .await?;
             bundle_sender_actions.push(bundle_sender_action);
         }
         Ok(bundle_sender_actions)
     }
 
-    async fn create_builders_v0_7<T>(
+    async fn create_bundle_builder<T>(
         &self,
         task_spawner: &T,
-        ep: &EntryPointBuilderSettings,
         signer_manager: &Arc<dyn SignerManager>,
         assigner: Arc<Assigner>,
-    ) -> anyhow::Result<Vec<mpsc::Sender<BundleSenderAction>>>
-    where
-        T: TaskSpawnerExt,
-    {
-        info!(
-            "Mempool config for ep {:?}: {:?}",
-            ep.version, ep.mempool_configs
-        );
-        let ep_providers = self
-            .providers
-            .ep_v0_7_providers(ep.version)
-            .clone()
-            .context(format!(
-                "entry point v0.7 abi providers not supplied for entry point version: {:?}",
-                ep.version
-            ))?;
-        let mut bundle_sender_actions = vec![];
-        for settings in &ep.builders {
-            let bundle_sender_action = if self.args.unsafe_mode {
-                self.create_bundle_builder(
-                    task_spawner,
-                    settings,
-                    ep_providers.clone(),
-                    UnsafeSimulator::new(
-                        ep_providers.entry_point().clone(),
-                        self.args.sim_settings.clone(),
-                        &ep.mempool_configs,
-                    ),
-                    signer_manager,
-                    assigner.clone(),
-                )
-                .await?
-            } else {
-                self.create_bundle_builder(
-                    task_spawner,
-                    settings,
-                    ep_providers.clone(),
-                    simulation::new_v0_7_simulator(
-                        ep_providers.evm().clone(),
-                        ep_providers.entry_point().clone(),
-                        self.args.sim_settings.clone(),
-                        ep.mempool_configs.clone(),
-                    ),
-                    signer_manager,
-                    assigner.clone(),
-                )
-                .await?
-            };
-            bundle_sender_actions.push(bundle_sender_action);
-        }
-        Ok(bundle_sender_actions)
-    }
-
-    async fn create_bundle_builder<T, UO, EP, S>(
-        &self,
-        task_spawner: &T,
-        builder_settings: &BuilderSettings,
-        ep_providers: EP,
-        simulator: S,
-        signer_manager: &Arc<dyn SignerManager>,
-        assigner: Arc<Assigner>,
+        entrypoint_registry: Arc<EntrypointRegistry>,
     ) -> anyhow::Result<mpsc::Sender<BundleSenderAction>>
     where
         T: TaskSpawnerExt,
-        UO: UserOperation + From<UserOperationVariant>,
-        UserOperationVariant: AsRef<UO>,
-        EP: ProvidersWithEntryPointT + 'static,
-        S: Simulator<UO = UO> + 'static,
     {
         let (send_bundle_tx, send_bundle_rx) = mpsc::channel(1);
 
@@ -399,31 +480,7 @@ where
             return Err(anyhow::anyhow!("No signer available"));
         };
 
-        let submission_proxy = if let Some(proxy) = &builder_settings.submission_proxy {
-            let Some(proxy) = self.args.chain_spec.get_submission_proxy(proxy) else {
-                return Err(anyhow::anyhow!(
-                    "Proxy {} is not in the known submission proxies",
-                    proxy
-                ));
-            };
-            Some(proxy)
-        } else {
-            None
-        };
-
         let sender_eoa = signer.address();
-        let proposer_settings = bundle_proposer::Settings {
-            chain_spec: self.args.chain_spec.clone(),
-            target_bundle_gas: self.args.target_bundle_gas,
-            max_bundle_gas: self.args.max_bundle_gas,
-            sender_eoa,
-            da_gas_tracking_enabled: self.args.da_gas_tracking_enabled,
-            max_expected_storage_slots: self.args.max_expected_storage_slots,
-            verification_gas_limit_efficiency_reject_threshold: self
-                .args
-                .verification_gas_limit_efficiency_reject_threshold,
-            submission_proxy: submission_proxy.cloned(),
-        };
 
         let transaction_sender = self
             .args
@@ -435,12 +492,15 @@ where
             replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,
         };
 
+        // Builder tag now uses just the sender address since workers handle all entrypoints
+        let builder_tag = format!("0x{:x}", sender_eoa);
+
         let transaction_tracker = TransactionTrackerImpl::new(
-            ep_providers.evm().clone(),
+            self.providers.evm().clone(),
             transaction_sender,
             signer,
             tracker_settings,
-            builder_settings.tag(ep_providers.entry_point().address(), &sender_eoa),
+            builder_tag.clone(),
         )
         .await?;
 
@@ -450,24 +510,19 @@ where
             max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
         };
 
-        let proposer = BundleProposerImpl::new(
-            builder_settings.tag(ep_providers.entry_point().address(), &sender_eoa),
-            ep_providers.clone(),
-            BundleProposerProviders::new(simulator),
-            proposer_settings,
-            self.event_sender.clone(),
-        );
+        // Wrap the EVM provider in the object-safe adapter
+        let evm: Arc<dyn crate::entrypoint_registry::EvmProviderLike> =
+            Arc::new(EvmProviderAdapter::new(self.providers.evm().clone()));
 
         let builder = BundleSenderImpl::new(
-            builder_settings.clone(),
+            builder_tag,
             send_bundle_rx,
             self.args.chain_spec.clone(),
             sender_eoa,
-            submission_proxy.cloned(),
-            proposer,
-            ep_providers.clone(),
+            evm,
             transaction_tracker,
             assigner,
+            entrypoint_registry,
             self.pool.clone(),
             sender_settings,
             self.event_sender.clone(),

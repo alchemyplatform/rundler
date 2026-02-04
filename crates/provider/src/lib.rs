@@ -27,10 +27,12 @@ pub use alloy::{
     entry_point::{
         v0_6::{
             EntryPointProvider as AlloyEntryPointV0_6,
+            decode_handle_ops_revert as decode_v0_6_handle_ops_revert,
             decode_ops_from_calldata as decode_v0_6_ops_from_calldata,
         },
         v0_7::{
             EntryPointProvider as AlloyEntryPointV0_7,
+            decode_handle_ops_revert as decode_v0_7_handle_ops_revert,
             decode_ops_from_calldata as decode_v0_7_ops_from_calldata,
             decode_validation_revert as decode_v0_7_validation_revert,
         },
