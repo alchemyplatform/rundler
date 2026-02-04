@@ -91,18 +91,9 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
 - `--enabled_entry_points`: Enabled entry point versions. (default: `v0.7`)
   - env: _ENABLED_ENTRY_POINTS_
   - Options: `v0.6, v0.7, v0.8, v0.9`
-- `--num_builders_v0_6`: The number of bundle builders to run on entry point v0.6 (default: `1`)
-  - env: _NUM_BUILDERS_V0_6_
-  - NOTE: ignored if `entry_point_builders_path` is set
-- `--num_builders_v0_7`: The number of bundle builders to run on entry point v0.7 (default: `1`)
-  - env: _NUM_BUILDERS_V0_7_
-  - NOTE: ignored if `entry_point_builders_path` is set
-- `--num_builders_v0_8`: The number of bundle builders to run on entry point v0.8 (default: `1`)
-  - env: _NUM_BUILDERS_V0_8_
-  - NOTE: ignored if `entry_point_builders_path` is set
-- `--num_builders_v0_9`: The number of bundle builders to run on entry point v0.9 (default: `1`)
-  - env: _NUM_BUILDERS_V0_9_
-  - NOTE: ignored if `entry_point_builders_path` is set
+- `--num_signers`: Number of signers (and workers) to use for bundle building. Each worker handles all configured entrypoints via the shared signer architecture. (default: `1`)
+  - env: _NUM_SIGNERS_
+  - NOTE: Workers share signers and dynamically select entrypoints based on mempool state. See [builder architecture](./architecture/builder.md#signer-sharing-architecture) for details.
 - `--da_gas_tracking_enabled`: Enable the DA gas tracking feature of the mempool (default: `false`)
   - env: _DA_GAS_TRACKING_ENABLED_
 - `--max_expected_storage_slots`: Optionally set the maximum number of expected storage slots to submit with a conditional transaction. (default: `None`)
@@ -254,6 +245,8 @@ List of command line options for configuring the Builder.
 - `--builder.pool_url`: If running in distributed mode, the URL of the pool server to use.
   - env: _BUILDER_POOL_URL_
   - _Only required when running in distributed mode_
+- `--builder.assigner_max_ops_per_request`: Maximum number of operations requested from the mempool per entrypoint query. (default: `1024`)
+  - env: _BUILDER_ASSIGNER_MAX_OPS_PER_REQUEST_
 
 ## Signer Options
 

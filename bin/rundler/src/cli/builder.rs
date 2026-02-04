@@ -30,7 +30,6 @@ use rundler_task::{
     server::{connect_with_retries_shutdown, format_socket_addr},
 };
 use rundler_types::{
-    EntryPointVersion,
     chain::{ChainSpec, ContractRegistry},
     proxy::SubmissionProxy,
 };
@@ -214,33 +213,26 @@ impl BuilderArgs {
         let rpc_url = common.node_http.clone().context("must provide node_http")?;
 
         let mempool_configs = mempool_configs.unwrap_or_default();
+        let entry_point_builders = entry_point_builders.unwrap_or_default();
         let mut entry_points = vec![];
-        let mut num_builders = 0;
 
         for ep in &common.enabled_entry_points {
             let ep_address = chain_spec.entry_point_address(*ep);
-            let builders = entry_point_builders
-                .as_ref()
-                .and_then(|builder_configs| {
-                    builder_configs
-                        .get_for_entry_point(ep_address)
-                        .map(|ep| ep.builders())
+
+            // Get builder configs for this entry point by address, or empty if not configured
+            let builders: Vec<BuilderSettings> = entry_point_builders
+                .get_for_entry_point(ep_address)
+                .map(|ep_config| {
+                    ep_config
+                        .builders
+                        .iter()
+                        .map(|b| BuilderSettings {
+                            filter_id: b.filter_id.clone(),
+                            submission_proxy: b.proxy,
+                        })
+                        .collect()
                 })
-                .unwrap_or_else(|| {
-                    builder_settings_from_cli(common.num_builders_for_entry_point(*ep))
-                });
-
-            // check for submission proxy on EP v0.9+ and fail
-            if *ep >= EntryPointVersion::V0_9
-                && builders.iter().any(|b| b.submission_proxy.is_some())
-            {
-                return Err(anyhow::anyhow!(
-                    "Submission proxy is not supported for entry point version: {:?}",
-                    *ep
-                ));
-            }
-
-            num_builders += builders.len();
+                .unwrap_or_default();
 
             entry_points.push(EntryPointBuilderSettings {
                 address: ep_address,
@@ -251,7 +243,9 @@ impl BuilderArgs {
         }
 
         let sender_args = self.sender_args(&chain_spec, &rpc_url)?;
-        let signing_scheme = self.signer_args.signing_scheme(Some(num_builders))?;
+        let signing_scheme = self
+            .signer_args
+            .signing_scheme(Some(common.num_signers as usize))?;
 
         let da_gas_tracking_enabled =
             super::lint_da_gas_tracking(common.da_gas_tracking_enabled, &chain_spec);
@@ -270,6 +264,7 @@ impl BuilderArgs {
         Ok(BuilderTaskArgs {
             entry_points,
             signing_scheme,
+            num_signers: common.num_signers,
             auto_fund: true,
             unsafe_mode: common.unsafe_mode,
             rpc_url,
@@ -354,14 +349,12 @@ pub(crate) struct EntryPointBuilderConfig {
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BuilderConfig {
-    // Number of builders using this config
-    pub(crate) count: u64,
+    // Filter ID to use for this builder (for pool filtering)
+    pub(crate) filter_id: Option<String>,
     // Submitter proxy to use for builders
     pub(crate) proxy: Option<Address>,
     // Type of proxy to use for builders
     pub(crate) proxy_type: Option<String>,
-    // Optional filter to apply to the builders
-    pub(crate) filter_id: Option<String>,
 }
 
 impl EntryPointBuilderConfigs {
@@ -396,28 +389,6 @@ impl EntryPointBuilderConfigs {
 
         chain_spec.set_submission_proxies(Arc::new(registry));
     }
-}
-
-impl EntryPointBuilderConfig {
-    pub fn builders(&self) -> Vec<BuilderSettings> {
-        let mut builders = vec![];
-        for builder in &self.builders {
-            builders.extend((0..builder.count).map(|_| BuilderSettings {
-                submission_proxy: builder.proxy,
-                filter_id: builder.filter_id.clone(),
-            }));
-        }
-        builders
-    }
-}
-
-fn builder_settings_from_cli(count: u64) -> Vec<BuilderSettings> {
-    (0..count)
-        .map(|_| BuilderSettings {
-            submission_proxy: None,
-            filter_id: None,
-        })
-        .collect()
 }
 
 /// CLI options for the Builder server standalone

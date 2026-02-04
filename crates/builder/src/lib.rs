@@ -22,6 +22,7 @@
 mod assigner;
 mod bundle_proposer;
 mod bundle_sender;
+mod entrypoint_registry;
 
 mod emit;
 pub use emit::{BuilderEvent, BuilderEventKind};
