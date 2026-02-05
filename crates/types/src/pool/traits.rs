@@ -41,6 +41,10 @@ pub struct PoolOperationSummary {
     pub sender: Address,
     /// Sim block number of the operation
     pub sim_block_number: u64,
+    /// Max fee per gas of the operation
+    pub max_fee_per_gas: u128,
+    /// Max priority fee per gas of the operation
+    pub max_priority_fee_per_gas: u128,
 }
 
 /// Pool server trait
@@ -185,6 +189,8 @@ impl From<&PoolOperation> for PoolOperationSummary {
             hash: op.uo.hash(),
             sender: op.uo.sender(),
             sim_block_number: op.sim_block_number,
+            max_fee_per_gas: op.uo.max_fee_per_gas(),
+            max_priority_fee_per_gas: op.uo.max_priority_fee_per_gas(),
         }
     }
 }

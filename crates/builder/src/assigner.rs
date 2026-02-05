@@ -108,7 +108,7 @@ impl Assigner {
     /// Assigns work to a worker using priority-based entrypoint selection with starvation prevention.
     ///
     /// 1. Queries all entrypoints for pending operations
-    /// 2. Filters to only eligible ops (not assigned to other builders, simulated before max_sim_block_number)
+    /// 2. Filters to only eligible ops (not assigned to other builders, simulated before max_sim_block_number, meets fee requirements)
     /// 3. Selects an entrypoint using starvation-aware priority:
     ///    - If any entrypoint hasn't been selected in (num_signers/2) cycles, force-select the most starved
     ///    - Otherwise, select the entrypoint with the most eligible ops
@@ -118,8 +118,8 @@ impl Assigner {
         &self,
         builder_address: Address,
         max_sim_block_number: u64,
-        _base_fee: u128,
-        _required_fees: GasFees,
+        base_fee: u128,
+        required_fees: GasFees,
     ) -> anyhow::Result<Option<WorkAssignment>> {
         // Query each entrypoint for pending ops and count eligible ones
         let mut candidates = Vec::new();
@@ -133,9 +133,14 @@ impl Assigner {
                 )
                 .await?;
 
-            // Count eligible ops (not assigned to other builders, simulated before max_sim_block_number)
-            let eligible_count =
-                self.count_eligible_ops(&ops, builder_address, max_sim_block_number);
+            // Count eligible ops (not assigned to other builders, simulated before max_sim_block_number, meets fee requirements)
+            let eligible_count = self.count_eligible_ops(
+                &ops,
+                builder_address,
+                max_sim_block_number,
+                base_fee,
+                &required_fees,
+            );
             if eligible_count > 0 {
                 candidates.push((ep.clone(), ops, eligible_count));
             }
@@ -202,6 +207,8 @@ impl Assigner {
                 selected_ep.address,
                 ops,
                 max_sim_block_number,
+                base_fee,
+                &required_fees,
             )
             .await?;
 
@@ -223,6 +230,8 @@ impl Assigner {
         &self,
         builder_address: Address,
         max_sim_block_number: u64,
+        base_fee: u128,
+        required_fees: GasFees,
         entry_point: Address,
         filter_id: Option<String>,
     ) -> anyhow::Result<Option<WorkAssignment>> {
@@ -235,7 +244,13 @@ impl Assigner {
             )
             .await?;
 
-        let eligible_count = self.count_eligible_ops(&ops, builder_address, max_sim_block_number);
+        let eligible_count = self.count_eligible_ops(
+            &ops,
+            builder_address,
+            max_sim_block_number,
+            base_fee,
+            &required_fees,
+        );
         if eligible_count == 0 {
             return Ok(None);
         }
@@ -249,7 +264,14 @@ impl Assigner {
         }
 
         let assigned_ops = self
-            .assign_ops_internal(builder_address, entry_point, ops, max_sim_block_number)
+            .assign_ops_internal(
+                builder_address,
+                entry_point,
+                ops,
+                max_sim_block_number,
+                base_fee,
+                &required_fees,
+            )
             .await?;
 
         if assigned_ops.is_empty() {
@@ -266,15 +288,19 @@ impl Assigner {
     /// Count ops that are eligible for assignment:
     /// - Not assigned to another builder
     /// - Simulated before max_sim_block_number
+    /// - Meets fee requirements (max_fee_per_gas >= base_fee, priority fee >= required)
     fn count_eligible_ops(
         &self,
         ops: &[PoolOperationSummary],
         builder_address: Address,
         max_sim_block_number: u64,
+        base_fee: u128,
+        required_fees: &GasFees,
     ) -> usize {
         let state = self.state.lock().unwrap();
         ops.iter()
             .filter(|op| op.sim_block_number <= max_sim_block_number)
+            .filter(|op| self.op_meets_fee_requirements(op, base_fee, required_fees))
             .filter(|op| {
                 // Check if sender is unassigned or assigned to this builder
                 match state.uo_sender_to_builder_state.get(&op.sender) {
@@ -285,6 +311,28 @@ impl Assigner {
             .count()
     }
 
+    /// Check if an operation meets the fee requirements for bundling
+    fn op_meets_fee_requirements(
+        &self,
+        op: &PoolOperationSummary,
+        base_fee: u128,
+        required_fees: &GasFees,
+    ) -> bool {
+        // Op must be able to pay the base fee
+        if op.max_fee_per_gas < base_fee {
+            return false;
+        }
+        // Op must meet the required priority fee
+        if op.max_priority_fee_per_gas < required_fees.max_priority_fee_per_gas {
+            return false;
+        }
+        // Op must meet the required max fee
+        if op.max_fee_per_gas < required_fees.max_fee_per_gas {
+            return false;
+        }
+        true
+    }
+
     /// Internal method to assign operations from a specific entrypoint
     async fn assign_ops_internal(
         &self,
@@ -292,6 +340,8 @@ impl Assigner {
         entry_point: Address,
         ops: Vec<PoolOperationSummary>,
         max_sim_block_number: u64,
+        base_fee: u128,
+        required_fees: &GasFees,
     ) -> anyhow::Result<Vec<PoolOperation>> {
         let per_builder_metrics =
             PerBuilderMetrics::new_with_labels(&[("builder_address", builder_address.to_string())]);
@@ -302,6 +352,7 @@ impl Assigner {
             for op in ops
                 .iter()
                 .filter(|op| op.sim_block_number <= max_sim_block_number)
+                .filter(|op| self.op_meets_fee_requirements(op, base_fee, required_fees))
             {
                 let (locked_builder_address, _) = state
                     .uo_sender_to_builder_state
@@ -894,6 +945,138 @@ mod tests {
         assert_eq!(
             result.entry_point, TEST_ENTRY_POINT,
             "Cycle 4: EP1 expected"
+        );
+    }
+
+    /// Create test ops with specific fees
+    fn create_test_ops_with_fees(
+        senders: &[Address],
+        max_fee_per_gas: u128,
+        max_priority_fee_per_gas: u128,
+    ) -> Vec<PoolOperation> {
+        senders
+            .iter()
+            .map(|sender| {
+                let uo = UserOperationBuilder::new(
+                    &ChainSpec::default(),
+                    UserOperationRequiredFields {
+                        sender: *sender,
+                        max_fee_per_gas,
+                        max_priority_fee_per_gas,
+                        ..Default::default()
+                    },
+                )
+                .build()
+                .into();
+                PoolOperation {
+                    uo,
+                    expected_code_hash: B256::ZERO,
+                    entry_point: TEST_ENTRY_POINT,
+                    sim_block_hash: B256::ZERO,
+                    sim_block_number: 0,
+                    account_is_staked: false,
+                    valid_time_range: ValidTimeRange::default(),
+                    entity_infos: EntityInfos::default(),
+                    aggregator: None,
+                    da_gas_data: Default::default(),
+                    filter_id: None,
+                    perms: UserOperationPermissions::default(),
+                    sender_is_7702: false,
+                }
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_fee_filtering() {
+        // Create ops with different fees:
+        // - Op 1 & 2: high fees (100, 10) - should be included
+        // - Op 3 & 4: low fees (5, 1) - should be filtered out
+        let high_fee_ops = create_test_ops_with_fees(&[address(1), address(2)], 100, 10);
+        let low_fee_ops = create_test_ops_with_fees(&[address(3), address(4)], 5, 1);
+
+        let mut all_ops = high_fee_ops.clone();
+        all_ops.extend(low_fee_ops.clone());
+
+        let mut mock_pool = MockPool::new();
+        let all_ops_for_summaries = all_ops.clone();
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(move |_, _, _| {
+                Ok(all_ops_for_summaries
+                    .iter()
+                    .map(|op| op.into())
+                    .collect::<Vec<_>>())
+            });
+
+        // Only high fee ops should be fetched by hash
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .returning(move |_, hashes| {
+                Ok(all_ops
+                    .iter()
+                    .filter(|op| hashes.contains(&op.uo.hash()))
+                    .cloned()
+                    .collect::<Vec<_>>())
+            });
+
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10);
+
+        // Request with base_fee=50, required_fees=(50, 5)
+        // Only ops with max_fee >= 50 and priority_fee >= 5 should be eligible
+        let required_fees = GasFees {
+            max_fee_per_gas: 50,
+            max_priority_fee_per_gas: 5,
+        };
+
+        let assignment = assigner
+            .assign_work(address(0), u64::MAX, 50, required_fees)
+            .await
+            .unwrap()
+            .expect("should have work");
+
+        // Should only get the high fee ops (address(1) and address(2))
+        assert_eq!(assignment.operations.len(), 2);
+        let senders: Vec<_> = assignment
+            .operations
+            .iter()
+            .map(|op| op.uo.sender())
+            .collect();
+        assert!(senders.contains(&address(1)));
+        assert!(senders.contains(&address(2)));
+        // Low fee ops should NOT be included
+        assert!(!senders.contains(&address(3)));
+        assert!(!senders.contains(&address(4)));
+    }
+
+    #[tokio::test]
+    async fn test_fee_filtering_no_eligible_ops() {
+        // All ops have fees too low
+        let low_fee_ops = create_test_ops_with_fees(&[address(1), address(2)], 10, 2);
+
+        let mut mock_pool = MockPool::new();
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(move |_, _, _| {
+                Ok(low_fee_ops.iter().map(|op| op.into()).collect::<Vec<_>>())
+            });
+
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10);
+
+        // Request with high fee requirements - no ops should be eligible
+        let required_fees = GasFees {
+            max_fee_per_gas: 100,
+            max_priority_fee_per_gas: 50,
+        };
+
+        let result = assigner
+            .assign_work(address(0), u64::MAX, 100, required_fees)
+            .await
+            .unwrap();
+
+        assert!(
+            result.is_none(),
+            "No ops should be eligible with high fee requirements"
         );
     }
 }
