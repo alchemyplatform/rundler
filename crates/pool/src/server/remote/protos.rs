@@ -729,6 +729,9 @@ impl TryFrom<PoolOperationSummary> for RundlerPoolOperationSummary {
             entry_point: from_bytes(&summary.entry_point)?,
             sender: from_bytes(&summary.sender)?,
             sim_block_number: summary.sim_block_number,
+            // Fee fields not available in proto, default to 0
+            max_fee_per_gas: 0,
+            max_priority_fee_per_gas: 0,
         })
     }
 }
