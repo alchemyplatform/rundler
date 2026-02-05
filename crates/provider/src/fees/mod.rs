@@ -18,7 +18,7 @@ use rundler_utils::{cache::LruMap, math};
 use tokio::{sync::Mutex as TokioMutex, try_join};
 use tracing::instrument;
 
-use crate::{EvmProvider, FeeEstimator};
+use crate::{EvmProvider, FeeEstimator, LatestFeeEstimate};
 
 mod oracle;
 use oracle::*;
@@ -100,10 +100,32 @@ impl<P: EvmProvider, O: FeeOracle> FeeEstimatorImpl<P, O> {
 impl<P: EvmProvider, O: FeeOracle> FeeEstimator for FeeEstimatorImpl<P, O> {
     #[instrument(skip_all)]
     async fn latest_bundle_fees(&self) -> anyhow::Result<(GasFees, u128)> {
+        let estimate = self.latest_base_fee_and_priority_fee().await?;
+        let bundle_fees = GasFees {
+            max_fee_per_gas: estimate
+                .inflated_base_fee
+                .saturating_add(estimate.priority_fee),
+            max_priority_fee_per_gas: estimate.priority_fee,
+        };
+
+        Ok((bundle_fees, estimate.inflated_base_fee))
+    }
+
+    #[instrument(skip_all)]
+    async fn latest_base_fee_and_priority_fee(&self) -> anyhow::Result<LatestFeeEstimate> {
         let (base_fee, priority_fee) =
             try_join!(self.get_pending_base_fee(), self.get_priority_fee())?;
 
-        Ok(self.calc_bundle_fees(base_fee, priority_fee, None))
+        let inflated_base_fee =
+            math::increase_by_percent(base_fee, self.bundle_base_fee_overhead_percent);
+        let inflated_priority_fee =
+            math::increase_by_percent(priority_fee, self.bundle_priority_fee_overhead_percent);
+
+        Ok(LatestFeeEstimate {
+            base_fee,
+            inflated_base_fee,
+            priority_fee: inflated_priority_fee,
+        })
     }
 
     #[instrument(skip_all)]

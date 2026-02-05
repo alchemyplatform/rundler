@@ -14,6 +14,17 @@
 use alloy_primitives::B256;
 use rundler_types::GasFees;
 
+/// Latest fee estimates for bundling.
+#[derive(Debug, Clone, Copy)]
+pub struct LatestFeeEstimate {
+    /// Current pending base fee (without bundler overhead).
+    pub base_fee: u128,
+    /// Base fee with bundler overhead applied.
+    pub inflated_base_fee: u128,
+    /// Priority fee with bundler overhead applied.
+    pub priority_fee: u128,
+}
+
 /// Trait for a fee estimator.
 #[async_trait::async_trait]
 #[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
@@ -33,6 +44,9 @@ pub trait FeeEstimator: Send + Sync {
 
     /// Returns the latest bundle fees.
     async fn latest_bundle_fees(&self) -> anyhow::Result<(GasFees, u128)>;
+
+    /// Returns the latest base fee and priority fee (with bundler overhead), fetched in parallel.
+    async fn latest_base_fee_and_priority_fee(&self) -> anyhow::Result<LatestFeeEstimate>;
 
     /// Returns the required operation fees for the given bundle fees.
     fn required_op_fees(&self, bundle_fees: GasFees) -> GasFees;

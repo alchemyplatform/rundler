@@ -184,11 +184,11 @@ This method returns gas price recommendations to help users set appropriate fees
 The response contains:
 
 - `currentPriorityFee`: The current minimum priority fee required by the bundler (same as `rundler_maxPriorityFeePerGas`).
-- `baseFee`: The current base fee for the next block.
+- `baseFee`: The current pending base fee for the next block (without bundler overhead).
 - `blockNumber`: The block number this estimate is based on.
 - `suggested`: Suggested fees with configurable buffers:
   - `maxPriorityFeePerGas`: Priority fee with buffer above current (configurable via `rpc.priority_fee_suggested_buffer_percent`, default 30%).
-  - `maxFeePerGas`: Base fee with buffer plus suggested priority fee (base fee buffer configurable via `rpc.base_fee_suggested_buffer_percent`, default 50%).
+  - `maxFeePerGas`: Bundler-inflated base fee with buffer plus suggested priority fee (base fee buffer configurable via `rpc.base_fee_suggested_buffer_percent`, default 50%).
 
 ```
 # Request

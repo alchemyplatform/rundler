@@ -341,9 +341,9 @@ pub(crate) struct RpcUserOperationStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RpcSuggestedGasFees {
-    /// Suggested priority fee (30% above current for faster inclusion)
+    /// Suggested priority fee with configurable buffer above current
     pub max_priority_fee_per_gas: U128,
-    /// Suggested max fee (1.5x baseFee + suggested priority fee)
+    /// Suggested max fee (bundler-inflated base fee with buffer + suggested priority fee)
     pub max_fee_per_gas: U128,
 }
 
@@ -353,7 +353,7 @@ pub struct RpcSuggestedGasFees {
 pub struct RpcUserOperationGasPrice {
     /// Current required priority fee (same as rundler_maxPriorityFeePerGas)
     pub current_priority_fee: U128,
-    /// Current base fee for next block
+    /// Current pending base fee for next block (without bundler overhead)
     pub base_fee: U128,
     /// Block number this estimate is based on
     pub block_number: U64,

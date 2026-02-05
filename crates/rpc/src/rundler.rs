@@ -18,7 +18,7 @@ use futures_util::{TryFutureExt, future};
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_provider::{EvmProvider, FeeEstimator};
 use rundler_types::{
-    UserOperation, UserOperationId, UserOperationVariant, chain::ChainSpec, pool::Pool,
+    GasFees, UserOperation, UserOperationId, UserOperationVariant, chain::ChainSpec, pool::Pool,
 };
 use tracing::instrument;
 
@@ -208,11 +208,17 @@ where
     }
     #[instrument(skip_all)]
     async fn max_priority_fee_per_gas(&self) -> EthResult<U128> {
-        let (bundle_fees, _) = self
+        let estimate = self
             .fee_estimator
-            .latest_bundle_fees()
+            .latest_base_fee_and_priority_fee()
             .await
             .context("should get required fees")?;
+        let bundle_fees = GasFees {
+            max_fee_per_gas: estimate
+                .inflated_base_fee
+                .saturating_add(estimate.priority_fee),
+            max_priority_fee_per_gas: estimate.priority_fee,
+        };
         Ok(U128::from(
             self.fee_estimator
                 .required_op_fees(bundle_fees)
@@ -367,24 +373,38 @@ where
 
     #[instrument(skip_all)]
     async fn get_user_operation_gas_price(&self) -> EthResult<RpcUserOperationGasPrice> {
-        // Get bundle fees and base fee
-        let (bundle_fees, base_fee) = self
+        // Get base fee and priority fee (with bundler overhead) in parallel
+        let estimate = self
             .fee_estimator
-            .latest_bundle_fees()
+            .latest_base_fee_and_priority_fee()
             .await
-            .context("should get bundle fees")?;
+            .context("should get base fee and priority fee")?;
+        let inflated_base_fee = estimate.inflated_base_fee;
+        let bundle_fees = GasFees {
+            max_fee_per_gas: estimate
+                .inflated_base_fee
+                .saturating_add(estimate.priority_fee),
+            max_priority_fee_per_gas: estimate.priority_fee,
+        };
 
         // Convert to user operation fees (current required)
         let op_fees = self.fee_estimator.required_op_fees(bundle_fees);
         let current_priority_fee = op_fees.max_priority_fee_per_gas;
 
         // Calculate suggested priority fee with configured buffer
-        let priority_multiplier = 100 + u128::from(self.settings.priority_fee_buffer_percent);
-        let suggested_priority_fee = current_priority_fee * priority_multiplier / 100;
+        let priority_multiplier =
+            100u128.saturating_add(u128::from(self.settings.priority_fee_buffer_percent));
+        let suggested_priority_fee = current_priority_fee
+            .saturating_mul(priority_multiplier)
+            .saturating_div(100);
 
         // Calculate suggested max fee with configured base fee buffer
-        let base_fee_multiplier = 100 + u128::from(self.settings.base_fee_buffer_percent);
-        let suggested_max_fee = (base_fee * base_fee_multiplier / 100) + suggested_priority_fee;
+        let base_fee_multiplier =
+            100u128.saturating_add(u128::from(self.settings.base_fee_buffer_percent));
+        let suggested_max_fee = inflated_base_fee
+            .saturating_mul(base_fee_multiplier)
+            .saturating_div(100)
+            .saturating_add(suggested_priority_fee);
 
         // Get current block number
         let block_number = self
@@ -395,7 +415,7 @@ where
 
         Ok(RpcUserOperationGasPrice {
             current_priority_fee: U128::from(current_priority_fee),
-            base_fee: U128::from(base_fee),
+            base_fee: U128::from(estimate.base_fee),
             block_number: U64::from(block_number),
             suggested: RpcSuggestedGasFees {
                 max_priority_fee_per_gas: U128::from(suggested_priority_fee),
