@@ -637,6 +637,8 @@ where
                 .assign_work_for_entrypoint(
                     self.sender_eoa,
                     state.block_number(),
+                    fees_for_assign.max_fee_per_gas,
+                    fees_for_assign,
                     entry_point,
                     filter_id,
                 )
@@ -1752,6 +1754,8 @@ mod tests {
                     sender: Address::ZERO,
                     entry_point: ENTRY_POINT_ADDRESS_V0_6,
                     sim_block_number: 0,
+                    max_fee_per_gas: 0,
+                    max_priority_fee_per_gas: 0,
                 }])
             });
         mock_pool
@@ -1828,6 +1832,8 @@ mod tests {
                     sender: Address::ZERO,
                     entry_point: ENTRY_POINT_ADDRESS_V0_6,
                     sim_block_number: 0,
+                    max_fee_per_gas: 0,
+                    max_priority_fee_per_gas: 0,
                 }])
             });
         mock_pool
@@ -1883,12 +1889,19 @@ mod tests {
         let Mocks {
             mut mock_proposer_t,
             mut mock_tracker,
-            mock_trigger,
+            mut mock_trigger,
             mock_evm,
             mut mock_pool,
         } = new_mocks();
 
         let filter_id = Some("filter-a".to_string());
+
+        // Set up trigger to return block info (only need last_block for send_bundle)
+        mock_trigger.expect_last_block().return_const(NewHead {
+            block_number: 0,
+            block_hash: B256::ZERO,
+            address_updates: vec![],
+        });
 
         mock_tracker.expect_get_state().returning(|| {
             Ok(TrackerState {
@@ -1918,6 +1931,8 @@ mod tests {
                     sender: Address::ZERO,
                     entry_point: pinned_entry_point,
                     sim_block_number: 0,
+                    max_fee_per_gas: 0,
+                    max_priority_fee_per_gas: 0,
                 }])
             });
         mock_pool
@@ -2151,6 +2166,8 @@ mod tests {
                     sender: Address::ZERO,
                     entry_point: ENTRY_POINT_ADDRESS_V0_6,
                     sim_block_number: 0,
+                    max_fee_per_gas: 0,
+                    max_priority_fee_per_gas: 0,
                 }])
             });
         mock_pool
@@ -2327,6 +2344,8 @@ mod tests {
                     sender: Address::ZERO,
                     entry_point: ENTRY_POINT_ADDRESS_V0_6,
                     sim_block_number: 0,
+                    max_fee_per_gas: 0,
+                    max_priority_fee_per_gas: 0,
                 }])
             });
         mock_pool
