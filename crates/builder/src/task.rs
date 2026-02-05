@@ -118,6 +118,16 @@ impl BuilderSettings {
     }
 }
 
+fn registry_builder_tag(
+    entry_point_address: &Address,
+    filter_id: Option<&str>,
+    submission_proxy: Option<Address>,
+) -> String {
+    let filter = filter_id.unwrap_or("any");
+    let proxy = submission_proxy.map_or_else(|| "none".to_string(), |addr| addr.to_string());
+    format!("registry:{}:{}:{}", entry_point_address, filter, proxy)
+}
+
 /// Builder settings for an entrypoint
 #[derive(Debug)]
 pub struct EntryPointBuilderSettings {
@@ -240,7 +250,10 @@ where
 
             if ep.builders.is_empty() {
                 // No builders configured - create a default proposer with no proxy
-                let proposer = self.create_proposer_for_entrypoint(ep, None).await?;
+                let builder_tag = registry_builder_tag(&ep.address, None, None);
+                let proposer = self
+                    .create_proposer_for_entrypoint(ep, None, builder_tag)
+                    .await?;
                 let registry_key = (ep.address, None);
                 entrypoint_registry.insert(
                     registry_key,
@@ -251,6 +264,26 @@ where
                     ep.address, ep.version
                 );
             } else {
+                // Enforce that a filter_id maps to a single submission proxy.
+                let mut filter_proxy: HashMap<Option<String>, Option<Address>> = HashMap::new();
+                for builder in &ep.builders {
+                    let filter_id = builder.filter_id.clone();
+                    let submission_proxy = builder.submission_proxy;
+                    if let Some(existing) = filter_proxy.get(&filter_id) {
+                        if existing != &submission_proxy {
+                            return Err(anyhow::anyhow!(
+                                "Entry point {:?} has multiple builder configs with the same filter_id {:?} but different submission proxies: {:?} vs {:?}",
+                                ep.address,
+                                filter_id,
+                                existing,
+                                submission_proxy
+                            ));
+                        }
+                    } else {
+                        filter_proxy.insert(filter_id, submission_proxy);
+                    }
+                }
+
                 // Create a proposer for each builder configuration
                 for builder in &ep.builders {
                     // Submission proxies are not supported for v0.9 entrypoints
@@ -265,9 +298,14 @@ where
                     let submission_proxy = builder
                         .submission_proxy
                         .and_then(|addr| self.args.chain_spec.get_submission_proxy(&addr).cloned());
+                    let builder_tag = registry_builder_tag(
+                        &ep.address,
+                        builder.filter_id.as_deref(),
+                        builder.submission_proxy,
+                    );
 
                     let proposer = self
-                        .create_proposer_for_entrypoint(ep, submission_proxy.clone())
+                        .create_proposer_for_entrypoint(ep, submission_proxy.clone(), builder_tag)
                         .await?;
                     let registry_key = (ep.address, builder.filter_id.clone());
                     entrypoint_registry.insert(
@@ -338,6 +376,7 @@ where
         &self,
         ep: &EntryPointBuilderSettings,
         submission_proxy: Option<Arc<dyn rundler_types::proxy::SubmissionProxy>>,
+        builder_tag: String,
     ) -> anyhow::Result<Box<dyn BundleProposerT>> {
         let proposer_settings = bundle_proposer::Settings {
             chain_spec: self.args.chain_spec.clone(),
@@ -350,8 +389,6 @@ where
                 .verification_gas_limit_efficiency_reject_threshold,
             submission_proxy,
         };
-
-        let builder_tag = format!("registry:{}", ep.address);
 
         match ep.version.abi_version() {
             EntryPointAbiVersion::V0_6 => {

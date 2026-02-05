@@ -352,7 +352,7 @@ pub(crate) struct EntryPointBuilderConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct BuilderConfig {
     // Filter ID to use for this builder (for pool filtering)
     pub(crate) filter_id: Option<String>,
