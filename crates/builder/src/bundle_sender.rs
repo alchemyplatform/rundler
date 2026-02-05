@@ -621,19 +621,38 @@ where
             balance,
         } = state.transaction_tracker.get_state()?;
 
-        // Use assign_work() to get work from any entrypoint with priority-based selection
-        // Note: assign_work takes GasFees for future fee-based filtering, use defaults if not available
+        let has_pending_tx = state.transaction_tracker.num_pending_transactions() > 0;
+        let should_pin_entrypoint =
+            fee_increase_count > 0 || required_fees.is_some() || has_pending_tx;
+
+        // Use assign_work() to get work from any entrypoint with priority-based selection.
+        // For replacements, force the entrypoint to match the last bundle key.
+        // Note: assign_work takes GasFees for future fee-based filtering, use defaults if not available.
         let fees_for_assign = required_fees.unwrap_or_default();
-        let Some(assignment) = self
-            .assigner
-            .assign_work(
-                self.sender_eoa,
-                state.block_number(),
-                fees_for_assign.max_fee_per_gas,
-                fees_for_assign,
-            )
-            .await?
-        else {
+        let assignment = if should_pin_entrypoint {
+            let Some((entry_point, filter_id)) = self.last_bundle_key.clone() else {
+                bail!("replacement attempt requires a pinned entrypoint, but none is set");
+            };
+            self.assigner
+                .assign_work_for_entrypoint(
+                    self.sender_eoa,
+                    state.block_number(),
+                    entry_point,
+                    filter_id,
+                )
+                .await?
+        } else {
+            self.assigner
+                .assign_work(
+                    self.sender_eoa,
+                    state.block_number(),
+                    fees_for_assign.max_fee_per_gas,
+                    fees_for_assign,
+                )
+                .await?
+        };
+
+        let Some(assignment) = assignment else {
             // No work available from any entrypoint
             self.assigner.release_all(self.sender_eoa);
             return Ok(SendBundleAttemptResult::NoOperationsInitially);
@@ -657,8 +676,8 @@ where
         })?;
 
         // Build bundle using the type-erased proposer
-        // Pass condition_not_met flag and reset it after use
-        let condition_not_met = std::mem::take(&mut self.condition_not_met);
+        // Only clear condition_not_met after a successful make_bundle attempt.
+        let condition_not_met = self.condition_not_met;
         let bundle_data = match entry
             .proposer
             .make_bundle(
@@ -673,8 +692,12 @@ where
             )
             .await
         {
-            Ok(bundle) => bundle,
+            Ok(bundle) => {
+                self.condition_not_met = false;
+                bundle
+            }
             Err(BundleProposerError::NoOperationsAfterFeeFilter) => {
+                self.condition_not_met = false;
                 self.assigner.release_all(self.sender_eoa);
                 return Ok(SendBundleAttemptResult::NoOperationsAfterFeeFilter);
             }
@@ -699,7 +722,7 @@ where
                 self.assigner.release_all(self.sender_eoa);
             }
             _ => {
-                if state.transaction_tracker.num_pending_transactions() == 0 {
+                if !has_pending_tx {
                     self.assigner.release_all(self.sender_eoa);
                 } else {
                     self.assigner
@@ -1682,11 +1705,14 @@ mod tests {
         assigner::EntrypointInfo,
         bundle_proposer::{BundleData, MockBundleProposerT},
         bundle_sender::{BundleSenderImpl, MockTrigger},
-        entrypoint_registry::{EntrypointEntry, MockEvmProviderLike, RevertHandlerV0_6},
+        entrypoint_registry::{
+            EntrypointEntry, EntrypointRegistry, MockEvmProviderLike, RevertHandlerV0_6,
+        },
         transaction_tracker::MockTransactionTracker,
     };
 
     const ENTRY_POINT_ADDRESS_V0_6: Address = address!("5FF137D4b0FDCD49DcA30c7CF57E578a026d2789");
+    const ENTRY_POINT_ADDRESS_V0_7: Address = address!("0000000000000000000000000000000000000007");
 
     #[tokio::test]
     async fn test_empty_send() {
@@ -1710,6 +1736,9 @@ mod tests {
             })
         });
         mock_tracker.expect_address().return_const(Address::ZERO);
+        mock_tracker
+            .expect_num_pending_transactions()
+            .return_const(0_usize);
         mock_tracker
             .expect_num_pending_transactions()
             .return_const(0_usize);
@@ -1786,6 +1815,9 @@ mod tests {
             })
         });
         mock_tracker.expect_address().return_const(Address::ZERO);
+        mock_tracker
+            .expect_num_pending_transactions()
+            .return_const(0_usize);
 
         mock_pool
             .expect_get_ops_summaries()
@@ -1843,6 +1875,103 @@ mod tests {
                 until: 3, // block 0 + wait 3 blocks
                 ..
             })
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_replacement_pins_entrypoint() {
+        let Mocks {
+            mut mock_proposer_t,
+            mut mock_tracker,
+            mock_trigger,
+            mock_evm,
+            mut mock_pool,
+        } = new_mocks();
+
+        let filter_id = Some("filter-a".to_string());
+
+        mock_tracker.expect_get_state().returning(|| {
+            Ok(TrackerState {
+                nonce: 1,
+                balance: U256::ZERO,
+                required_fees: None,
+            })
+        });
+        mock_tracker
+            .expect_num_pending_transactions()
+            .return_const(0_usize);
+
+        let pinned_entry_point = ENTRY_POINT_ADDRESS_V0_6;
+        let other_entry_point = ENTRY_POINT_ADDRESS_V0_7;
+        let expected_filter = filter_id.clone();
+
+        mock_pool
+            .expect_get_ops_summaries()
+            .withf(move |entry_point, _, filter| {
+                *entry_point == pinned_entry_point
+                    && filter.as_deref() == expected_filter.as_deref()
+            })
+            .times(1)
+            .returning(move |_, _, _| {
+                Ok(vec![PoolOperationSummary {
+                    hash: B256::ZERO,
+                    sender: Address::ZERO,
+                    entry_point: pinned_entry_point,
+                    sim_block_number: 0,
+                }])
+            });
+        mock_pool
+            .expect_get_ops_summaries()
+            .withf(move |entry_point, _, _| *entry_point == other_entry_point)
+            .times(0);
+
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .times(1)
+            .returning(|_, _| Ok(vec![demo_pool_op()]));
+
+        mock_proposer_t
+            .expect_make_bundle()
+            .times(1)
+            .returning(|_, _, _, _, _, _, _, _| {
+                Box::pin(async {
+                    Ok(BundleData {
+                        tx: rundler_provider::TransactionRequest::default(),
+                        gas_fees: GasFees::default(),
+                        expected_storage: Default::default(),
+                        ops: vec![],
+                        rejected_op_hashes: vec![],
+                        entity_updates: vec![],
+                    })
+                })
+            });
+
+        let mut registry = EntrypointRegistry::new();
+        registry.insert(
+            (pinned_entry_point, filter_id.clone()),
+            EntrypointEntry::new(Box::new(mock_proposer_t), Box::new(RevertHandlerV0_6), None),
+        );
+
+        let entrypoints = vec![
+            EntrypointInfo {
+                address: pinned_entry_point,
+                filter_id: filter_id.clone(),
+            },
+            EntrypointInfo {
+                address: other_entry_point,
+                filter_id: None,
+            },
+        ];
+
+        let mut sender = new_sender_with_entrypoints(mock_evm, mock_pool, entrypoints, registry);
+        sender.last_bundle_key = Some((pinned_entry_point, filter_id));
+
+        let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
+
+        let result = sender.send_bundle(&mut state, 1).await.unwrap();
+        assert!(matches!(
+            result,
+            SendBundleAttemptResult::NoOperationsAfterSimulation
         ));
     }
 
@@ -2423,6 +2552,39 @@ mod tests {
             address: ep_address,
             filter_id: None,
         }];
+
+        BundleSenderImpl::new(
+            "test-builder".to_string(),
+            mpsc::channel(1000).1,
+            ChainSpec::default(),
+            Address::default(),
+            Arc::new(mock_evm),
+            MockTransactionTracker::new(),
+            Arc::new(Assigner::new(
+                Box::new(pool.clone()),
+                entrypoints,
+                4, // num_signers
+                1024,
+                1024,
+            )),
+            Arc::new(registry),
+            pool,
+            Settings {
+                max_cancellation_fee_increases: 3,
+                max_blocks_to_wait_for_mine: 3,
+                max_replacement_underpriced_blocks: 3,
+            },
+            broadcast::channel(1000).0,
+        )
+    }
+
+    fn new_sender_with_entrypoints(
+        mock_evm: MockEvmProviderLike,
+        mock_pool: MockPool,
+        entrypoints: Vec<EntrypointInfo>,
+        registry: EntrypointRegistry,
+    ) -> BundleSenderImpl<MockTransactionTracker, Arc<MockPool>> {
+        let pool = Arc::new(mock_pool);
 
         BundleSenderImpl::new(
             "test-builder".to_string(),

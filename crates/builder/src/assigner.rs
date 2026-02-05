@@ -216,6 +216,53 @@ impl Assigner {
         }))
     }
 
+    /// Assigns work to a worker for a specific entrypoint configuration.
+    ///
+    /// This is used for replacement attempts to ensure the entrypoint does not change.
+    pub(crate) async fn assign_work_for_entrypoint(
+        &self,
+        builder_address: Address,
+        max_sim_block_number: u64,
+        entry_point: Address,
+        filter_id: Option<String>,
+    ) -> anyhow::Result<Option<WorkAssignment>> {
+        let ops = self
+            .pool
+            .get_ops_summaries(
+                entry_point,
+                self.max_pool_ops_per_request,
+                filter_id.clone(),
+            )
+            .await?;
+
+        let eligible_count = self.count_eligible_ops(&ops, builder_address, max_sim_block_number);
+        if eligible_count == 0 {
+            return Ok(None);
+        }
+
+        {
+            let mut state = self.state.lock().unwrap();
+            state.global_cycle += 1;
+            let global_cycle = state.global_cycle;
+            let key: RegistryKey = (entry_point, filter_id.clone());
+            state.entrypoint_last_selected.insert(key, global_cycle);
+        }
+
+        let assigned_ops = self
+            .assign_ops_internal(builder_address, entry_point, ops, max_sim_block_number)
+            .await?;
+
+        if assigned_ops.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(WorkAssignment {
+            entry_point,
+            filter_id,
+            operations: assigned_ops,
+        }))
+    }
+
     /// Count ops that are eligible for assignment:
     /// - Not assigned to another builder
     /// - Simulated before max_sim_block_number
