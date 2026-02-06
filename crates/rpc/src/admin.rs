@@ -14,10 +14,10 @@
 use alloy_primitives::Address;
 use anyhow::Context;
 use async_trait::async_trait;
-use jsonrpsee::{core::RpcResult, proc_macros::rpc};
-use rundler_types::pool::Pool;
+use jsonrpsee::{Extensions, core::RpcResult, proc_macros::rpc};
 
 use crate::{
+    chain_resolver::ChainResolver,
     types::{RpcAdminClearState, RpcAdminSetTracking},
     utils::{self, InternalRpcResult},
 };
@@ -26,11 +26,11 @@ use crate::{
 #[rpc(client, server, namespace = "admin")]
 pub trait AdminApi {
     /// Clears the state of the mempool field if name is true
-    #[method(name = "clearState")]
+    #[method(name = "clearState", with_extensions)]
     async fn clear_state(&self, clear_params: RpcAdminClearState) -> RpcResult<String>;
 
     /// Sets the tracking state for the paymaster and reputation pool modules
-    #[method(name = "setTracking")]
+    #[method(name = "setTracking", with_extensions)]
     async fn set_tracking(
         &self,
         entry_point: Address,
@@ -38,72 +38,77 @@ pub trait AdminApi {
     ) -> RpcResult<String>;
 }
 
-pub(crate) struct AdminApi<P> {
-    pool: P,
+pub(crate) struct AdminApi<R> {
+    resolver: R,
 }
 
-impl<P> AdminApi<P> {
-    pub(crate) fn new(pool: P) -> Self {
-        Self { pool }
+impl<R> AdminApi<R> {
+    pub(crate) fn new(resolver: R) -> Self {
+        Self { resolver }
     }
 }
 
 #[async_trait]
-impl<P> AdminApiServer for AdminApi<P>
+impl<R> AdminApiServer for AdminApi<R>
 where
-    P: Pool + 'static,
+    R: ChainResolver,
 {
-    async fn clear_state(&self, clear_params: RpcAdminClearState) -> RpcResult<String> {
+    async fn clear_state(
+        &self,
+        ext: &Extensions,
+        clear_params: RpcAdminClearState,
+    ) -> RpcResult<String> {
+        let chain = self.resolver.resolve(ext)?;
         utils::safe_call_rpc_handler(
             "admin_clearState",
-            AdminApi::clear_state(self, clear_params),
+            Self::clear_state_inner(chain.pool, clear_params),
         )
         .await
     }
 
     async fn set_tracking(
         &self,
+        ext: &Extensions,
         entry_point: Address,
         tracking_params: RpcAdminSetTracking,
     ) -> RpcResult<String> {
+        let chain = self.resolver.resolve(ext)?;
         utils::safe_call_rpc_handler(
             "admin_setTracking",
-            AdminApi::set_tracking(self, entry_point, tracking_params),
+            Self::set_tracking_inner(chain.pool, entry_point, tracking_params),
         )
         .await
     }
 }
 
-impl<P> AdminApi<P>
-where
-    P: Pool,
-{
-    async fn clear_state(&self, clear_params: RpcAdminClearState) -> InternalRpcResult<String> {
-        self.pool
-            .debug_clear_state(
-                clear_params.clear_mempool.unwrap_or(false),
-                clear_params.clear_paymaster.unwrap_or(false),
-                clear_params.clear_reputation.unwrap_or(false),
-            )
-            .await
-            .context("should clear state")?;
+impl<R> AdminApi<R> {
+    async fn clear_state_inner(
+        pool: &dyn rundler_types::pool::Pool,
+        clear_params: RpcAdminClearState,
+    ) -> InternalRpcResult<String> {
+        pool.debug_clear_state(
+            clear_params.clear_mempool.unwrap_or(false),
+            clear_params.clear_paymaster.unwrap_or(false),
+            clear_params.clear_reputation.unwrap_or(false),
+        )
+        .await
+        .context("should clear state")?;
 
         Ok("ok".to_string())
     }
 
-    async fn set_tracking(
-        &self,
+    async fn set_tracking_inner(
+        pool: &dyn rundler_types::pool::Pool,
         entry_point: Address,
         tracking_params: RpcAdminSetTracking,
     ) -> InternalRpcResult<String> {
-        self.pool
-            .admin_set_tracking(
-                entry_point,
-                tracking_params.paymaster_tracking,
-                tracking_params.reputation_tracking,
-            )
-            .await
-            .context("should set tracking")?;
+        pool.admin_set_tracking(
+            entry_point,
+            tracking_params.paymaster_tracking,
+            tracking_params.reputation_tracking,
+        )
+        .await
+        .context("should set tracking")?;
 
         Ok("ok".to_string())
     }

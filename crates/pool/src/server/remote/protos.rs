@@ -19,7 +19,7 @@ use rundler_types::{
     BundlerSponsorship as RundlerBundlerSponsorship, Entity as RundlerEntity, EntityInfos,
     EntityType as RundlerEntityType, EntityUpdate as RundlerEntityUpdate,
     EntityUpdateType as RundlerEntityUpdateType, EntryPointVersion as RundlerEntryPointVersion,
-    StakeInfo as RundlerStakeInfo, UserOperation as _,
+    StakeInfo as RundlerStakeInfo, UserOperation as _, UserOperationOptionalGas,
     UserOperationPermissions as RundlerUserOperationPermissions, UserOperationVariant,
     ValidTimeRange,
     authorization::Eip7702Auth,
@@ -29,12 +29,14 @@ use rundler_types::{
         NitroDAGasData as RundlerNitroDAGasData,
     },
     pool::{
-        AddressUpdate as PoolAddressUpdate, NewHead as PoolNewHead,
-        PaymasterMetadata as PoolPaymasterMetadata, PendingBundleInfo as RundlerPendingBundleInfo,
-        PoolOperation, PoolOperationStatus as RundlerPoolOperationStatus,
+        AddressUpdate as PoolAddressUpdate, MinedUserOperation as RundlerMinedUserOperation,
+        NewHead as PoolNewHead, PaymasterMetadata as PoolPaymasterMetadata,
+        PendingBundleInfo as RundlerPendingBundleInfo, PoolOperation,
+        PoolOperationStatus as RundlerPoolOperationStatus,
         PoolOperationSummary as RundlerPoolOperationSummary, PreconfInfo as RundlerPreconfInfo,
         Reputation as PoolReputation, ReputationStatus as PoolReputationStatus,
         StakeStatus as RundlerStakeStatus,
+        UserOperationReceiptData as RundlerUserOperationReceiptData,
     },
     v0_6, v0_7,
 };
@@ -49,6 +51,78 @@ impl From<&UserOperationVariant> for UserOperation {
         match op {
             UserOperationVariant::V0_6(op) => op.into(),
             UserOperationVariant::V0_7(op) => op.into(),
+        }
+    }
+}
+
+impl From<&UserOperationOptionalGas> for UserOperation {
+    fn from(op: &UserOperationOptionalGas) -> Self {
+        match op {
+            UserOperationOptionalGas::V0_6(op) => {
+                let uo = UserOperationV06 {
+                    sender: op.sender.to_proto_bytes(),
+                    nonce: op.nonce.to_proto_bytes(),
+                    init_code: op.init_code.to_vec(),
+                    call_data: op.call_data.to_vec(),
+                    call_gas_limit: op.call_gas_limit.unwrap_or(0).to_proto_bytes(),
+                    verification_gas_limit: op.verification_gas_limit.unwrap_or(0).to_proto_bytes(),
+                    pre_verification_gas: op.pre_verification_gas.unwrap_or(0).to_proto_bytes(),
+                    max_fee_per_gas: op.max_fee_per_gas.unwrap_or(0).to_proto_bytes(),
+                    max_priority_fee_per_gas: op
+                        .max_priority_fee_per_gas
+                        .unwrap_or(0)
+                        .to_proto_bytes(),
+                    paymaster_and_data: op.paymaster_and_data.to_vec(),
+                    signature: op.signature.to_vec(),
+                    authorization_tuple: None,
+                    aggregator: op
+                        .aggregator
+                        .map(|a| a.to_proto_bytes())
+                        .unwrap_or_default(),
+                };
+                UserOperation {
+                    uo: Some(user_operation::Uo::V06(uo)),
+                }
+            }
+            UserOperationOptionalGas::V0_7(op) => {
+                let uo = UserOperationV07 {
+                    sender: op.sender.to_proto_bytes(),
+                    nonce: op.nonce.to_proto_bytes(),
+                    call_data: op.call_data.to_vec(),
+                    call_gas_limit: op.call_gas_limit.unwrap_or(0).to_proto_bytes(),
+                    verification_gas_limit: op.verification_gas_limit.unwrap_or(0).to_proto_bytes(),
+                    pre_verification_gas: op.pre_verification_gas.unwrap_or(0).to_proto_bytes(),
+                    max_fee_per_gas: op.max_fee_per_gas.unwrap_or(0).to_proto_bytes(),
+                    max_priority_fee_per_gas: op
+                        .max_priority_fee_per_gas
+                        .unwrap_or(0)
+                        .to_proto_bytes(),
+                    signature: op.signature.to_vec(),
+                    paymaster: op.paymaster.map(|p| p.to_proto_bytes()).unwrap_or_default(),
+                    paymaster_data: op.paymaster_data.to_vec(),
+                    paymaster_verification_gas_limit: op
+                        .paymaster_verification_gas_limit
+                        .unwrap_or(0)
+                        .to_proto_bytes(),
+                    paymaster_post_op_gas_limit: op
+                        .paymaster_post_op_gas_limit
+                        .unwrap_or(0)
+                        .to_proto_bytes(),
+                    factory: op.factory.map(|f| f.to_proto_bytes()).unwrap_or_default(),
+                    factory_data: op.factory_data.to_vec(),
+                    entry_point: vec![],
+                    chain_id: 0,
+                    authorization_tuple: None,
+                    aggregator: op
+                        .aggregator
+                        .map(|a| a.to_proto_bytes())
+                        .unwrap_or_default(),
+                    entry_point_version: EntryPointVersion::from(op.entry_point_version).into(),
+                };
+                UserOperation {
+                    uo: Some(user_operation::Uo::V07(uo)),
+                }
+            }
         }
     }
 }
@@ -828,6 +902,68 @@ impl TryUoFromProto<PoolOperationStatus> for RundlerPoolOperationStatus {
             ),
             pending_bundle,
             preconf_info,
+        })
+    }
+}
+
+impl MinedUserOperationProto {
+    pub fn from_domain(m: &RundlerMinedUserOperation) -> Self {
+        MinedUserOperationProto {
+            user_operation: Some(UserOperation::from(&m.user_operation)),
+            entry_point: m.entry_point.to_proto_bytes(),
+            block_number: m.block_number.to_proto_bytes(),
+            block_hash: m.block_hash.to_proto_bytes(),
+            transaction_hash: m.transaction_hash.to_proto_bytes(),
+        }
+    }
+
+    pub fn into_domain(self, chain_spec: &ChainSpec) -> anyhow::Result<RundlerMinedUserOperation> {
+        let uo = UserOperationVariant::try_uo_from_proto(
+            self.user_operation.context("should have user operation")?,
+            chain_spec,
+        )?;
+        Ok(RundlerMinedUserOperation {
+            user_operation: uo,
+            entry_point: from_bytes(&self.entry_point)?,
+            block_number: from_bytes(&self.block_number)?,
+            block_hash: from_bytes(&self.block_hash)?,
+            transaction_hash: from_bytes(&self.transaction_hash)?,
+        })
+    }
+}
+
+impl UserOperationReceiptProto {
+    pub fn from_domain(d: &RundlerUserOperationReceiptData) -> Self {
+        UserOperationReceiptProto {
+            user_op_hash: d.user_op_hash.to_proto_bytes(),
+            entry_point: d.entry_point.to_proto_bytes(),
+            sender: d.sender.to_proto_bytes(),
+            nonce: d.nonce.to_proto_bytes(),
+            paymaster: d.paymaster.to_proto_bytes(),
+            actual_gas_cost: d.actual_gas_cost.to_proto_bytes(),
+            actual_gas_used: d.actual_gas_used.to_proto_bytes(),
+            success: d.success,
+            reason: d.reason.clone(),
+            logs_json: d.logs_json.clone(),
+            receipt_json: d.receipt_json.clone(),
+            is_preconfirmed: d.is_preconfirmed,
+        }
+    }
+
+    pub fn into_domain(self) -> anyhow::Result<RundlerUserOperationReceiptData> {
+        Ok(RundlerUserOperationReceiptData {
+            user_op_hash: from_bytes(&self.user_op_hash)?,
+            entry_point: from_bytes(&self.entry_point)?,
+            sender: from_bytes(&self.sender)?,
+            nonce: from_bytes(&self.nonce)?,
+            paymaster: from_bytes(&self.paymaster)?,
+            actual_gas_cost: from_bytes(&self.actual_gas_cost)?,
+            actual_gas_used: from_bytes(&self.actual_gas_used)?,
+            success: self.success,
+            reason: self.reason,
+            logs_json: self.logs_json,
+            receipt_json: self.receipt_json,
+            is_preconfirmed: self.is_preconfirmed,
         })
     }
 }

@@ -13,6 +13,7 @@
 
 mod local;
 pub use local::{LocalPoolBuilder, LocalPoolHandle};
+pub(crate) use local::{PoolEntryPointServices, PoolFeeEstimator};
 
 mod remote;
 pub use remote::RemotePoolClient;

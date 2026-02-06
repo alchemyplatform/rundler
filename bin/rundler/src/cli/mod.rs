@@ -29,6 +29,7 @@ mod aggregator;
 mod backend;
 mod builder;
 mod chain_spec;
+mod gateway;
 mod json;
 mod metrics;
 mod node;
@@ -40,6 +41,7 @@ mod tracing;
 
 use backend::BackendCliArgs;
 use builder::{BuilderCliArgs, EntryPointBuilderConfigs};
+use gateway::GatewayCliArgs;
 use json::get_json_config;
 use node::NodeCliArgs;
 use pool::PoolCliArgs;
@@ -119,11 +121,12 @@ pub async fn run() -> anyhow::Result<()> {
             )
             .await?
         }
-        Command::Rpc(args) => {
-            rpc::spawn_tasks(task_spawner.clone(), cs, args, opt.common, providers).await?
-        }
+        Command::Rpc(args) => rpc::spawn_tasks(task_spawner.clone(), cs, args, opt.common).await?,
         Command::Builder(args) => {
             builder::spawn_tasks(task_spawner.clone(), cs, args, opt.common, providers).await?
+        }
+        Command::Gateway(args) => {
+            gateway::spawn_tasks(task_spawner.clone(), args, opt.common).await?
         }
         Command::Admin(args) => {
             admin::run(args, cs, providers, task_spawner).await?;
@@ -187,6 +190,12 @@ enum Command {
     /// Runs the Builder server
     #[command(name = "builder")]
     Builder(BuilderCliArgs),
+
+    /// Gateway command
+    ///
+    /// Runs the multi-chain RPC gateway server
+    #[command(name = "gateway")]
+    Gateway(GatewayCliArgs),
 
     /// Admin command
     ///

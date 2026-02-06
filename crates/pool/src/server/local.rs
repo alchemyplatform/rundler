@@ -31,12 +31,12 @@ use rundler_task::{
     server::{HealthCheck, ServerStatus},
 };
 use rundler_types::{
-    EntityUpdate, EntryPointAbiVersion, UserOperation, UserOperationId, UserOperationPermissions,
-    UserOperationVariant,
+    EntityUpdate, EntryPointAbiVersion, GasEstimate, GasFees, UserOperation, UserOperationId,
+    UserOperationOptionalGas, UserOperationPermissions, UserOperationVariant,
     pool::{
-        MempoolError, NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation,
-        PoolOperationStatus, PoolOperationSummary, PoolResult, Reputation, ReputationStatus,
-        StakeStatus,
+        FeeEstimate, MempoolError, MinedUserOperation, NewHead, PaymasterMetadata, Pool, PoolError,
+        PoolOperation, PoolOperationStatus, PoolOperationSummary, PoolResult, Reputation,
+        ReputationStatus, StakeStatus, UserOperationReceiptData,
     },
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -46,6 +46,49 @@ use crate::{
     chain::{ChainSubscriber, UpdateType},
     mempool::{Mempool, OperationOrigin},
 };
+
+/// Services that the pool server needs per entry point for gas estimation, signature checking,
+/// and event lookups. Implemented separately per entry point version.
+#[async_trait]
+pub(crate) trait PoolEntryPointServices: Send + Sync {
+    /// Estimate gas for a user operation
+    async fn estimate_gas(
+        &self,
+        op: UserOperationOptionalGas,
+        state_override_json: Option<Vec<u8>>,
+    ) -> Result<GasEstimate, PoolError>;
+
+    /// Check whether a user operation has a valid signature
+    async fn check_signature(&self, op: UserOperationVariant) -> Result<bool, PoolError>;
+
+    /// Get a mined user operation by its hash
+    async fn get_mined_by_hash(&self, hash: B256) -> Result<Option<MinedUserOperation>, PoolError>;
+
+    /// Get a user operation receipt by its hash
+    async fn get_receipt(
+        &self,
+        hash: B256,
+        bundle_transaction: Option<B256>,
+    ) -> Result<Option<UserOperationReceiptData>, PoolError>;
+
+    /// Get a mined user operation and its receipt from a specific transaction
+    async fn get_mined_from_tx(
+        &self,
+        uo_hash: B256,
+        tx_hash: B256,
+    ) -> Result<Option<(MinedUserOperation, UserOperationReceiptData)>, PoolError>;
+}
+
+/// Fee estimation service for the pool server
+#[async_trait]
+pub(crate) trait PoolFeeEstimator: Send + Sync {
+    /// Get the maximum priority fee per gas required by the bundler
+    async fn get_max_priority_fee_per_gas(&self) -> Result<u128, PoolError>;
+    /// Get the latest fee estimate
+    async fn get_fee_estimate(&self) -> Result<FeeEstimate, PoolError>;
+    /// Get the required operation fees for the given bundle fees
+    fn get_required_op_fees(&self, bundle_fees: GasFees) -> GasFees;
+}
 
 #[derive(Metrics, Clone)]
 #[metrics(scope = "op_pool_internal")]
@@ -87,6 +130,8 @@ impl LocalPoolBuilder {
         self,
         task_spawner: Box<dyn TaskSpawner>,
         mempools: HashMap<Address, Arc<dyn Mempool>>,
+        ep_services: HashMap<Address, Arc<dyn PoolEntryPointServices>>,
+        fee_estimator: Arc<dyn PoolFeeEstimator>,
         chain_subscriber: ChainSubscriber,
         shutdown: GracefulShutdown,
     ) -> BoxFuture<'static, ()> {
@@ -94,6 +139,8 @@ impl LocalPoolBuilder {
             self.req_receiver,
             self.block_sender,
             mempools,
+            ep_services,
+            fee_estimator,
             chain_subscriber,
             task_spawner,
         );
@@ -114,6 +161,8 @@ struct LocalPoolServerRunner {
     req_receiver: mpsc::UnboundedReceiver<ServerRequest>,
     block_sender: broadcast::Sender<NewHead>,
     mempools: HashMap<Address, Arc<dyn Mempool>>,
+    ep_services: HashMap<Address, Arc<dyn PoolEntryPointServices>>,
+    fee_estimator: Arc<dyn PoolFeeEstimator>,
     chain_subscriber: ChainSubscriber,
     task_spawner: Box<dyn TaskSpawner>,
 }
@@ -457,6 +506,107 @@ impl Pool for LocalPoolHandle {
             _ => Err(PoolError::UnexpectedResponse),
         }
     }
+
+    async fn estimate_user_operation_gas(
+        &self,
+        entry_point: Address,
+        op: UserOperationOptionalGas,
+        state_override_json: Option<Vec<u8>>,
+    ) -> PoolResult<GasEstimate> {
+        let req = ServerRequestKind::EstimateUserOperationGas {
+            entry_point,
+            op,
+            state_override_json,
+        };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::EstimateUserOperationGas { estimate } => Ok(estimate),
+            _ => Err(PoolError::UnexpectedResponse),
+        }
+    }
+
+    async fn get_max_priority_fee_per_gas(&self) -> PoolResult<u128> {
+        let req = ServerRequestKind::GetMaxPriorityFeePerGas;
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::GetMaxPriorityFeePerGas { fee } => Ok(fee),
+            _ => Err(PoolError::UnexpectedResponse),
+        }
+    }
+
+    async fn get_fee_estimate(&self) -> PoolResult<FeeEstimate> {
+        let req = ServerRequestKind::GetFeeEstimate;
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::GetFeeEstimate(resp) => resp,
+            _ => Err(PoolError::UnexpectedResponse),
+        }
+    }
+
+    async fn get_required_op_fees(&self, bundle_fees: GasFees) -> PoolResult<GasFees> {
+        let req = ServerRequestKind::GetRequiredOpFees { bundle_fees };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::GetRequiredOpFees(resp) => resp,
+            _ => Err(PoolError::UnexpectedResponse),
+        }
+    }
+
+    async fn check_signature(
+        &self,
+        entry_point: Address,
+        op: UserOperationVariant,
+    ) -> PoolResult<bool> {
+        let req = ServerRequestKind::CheckSignature { entry_point, op };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::CheckSignature { valid } => Ok(valid),
+            _ => Err(PoolError::UnexpectedResponse),
+        }
+    }
+
+    async fn get_mined_by_hash(&self, hash: B256) -> PoolResult<Option<MinedUserOperation>> {
+        let req = ServerRequestKind::GetMinedByHash { hash };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::GetMinedByHash { mined } => Ok(mined),
+            _ => Err(PoolError::UnexpectedResponse),
+        }
+    }
+
+    async fn get_user_operation_receipt(
+        &self,
+        hash: B256,
+        bundle_transaction: Option<B256>,
+    ) -> PoolResult<Option<UserOperationReceiptData>> {
+        let req = ServerRequestKind::GetUserOperationReceipt {
+            hash,
+            bundle_transaction,
+        };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::GetUserOperationReceipt { receipt } => Ok(receipt),
+            _ => Err(PoolError::UnexpectedResponse),
+        }
+    }
+
+    async fn get_mined_user_operation(
+        &self,
+        uo_hash: B256,
+        tx_hash: B256,
+        entry_point: Address,
+    ) -> PoolResult<Option<(MinedUserOperation, UserOperationReceiptData)>> {
+        let req = ServerRequestKind::GetMinedUserOperation {
+            uo_hash,
+            tx_hash,
+            entry_point,
+        };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::GetMinedUserOperation { result } => Ok(result),
+            _ => Err(PoolError::UnexpectedResponse),
+        }
+    }
 }
 
 #[async_trait]
@@ -486,6 +636,8 @@ impl LocalPoolServerRunner {
         req_receiver: mpsc::UnboundedReceiver<ServerRequest>,
         block_sender: broadcast::Sender<NewHead>,
         mempools: HashMap<Address, Arc<dyn Mempool>>,
+        ep_services: HashMap<Address, Arc<dyn PoolEntryPointServices>>,
+        fee_estimator: Arc<dyn PoolFeeEstimator>,
         chain_subscriber: ChainSubscriber,
         task_spawner: Box<dyn TaskSpawner>,
     ) -> Self {
@@ -493,9 +645,20 @@ impl LocalPoolServerRunner {
             req_receiver,
             block_sender,
             mempools,
+            ep_services,
+            fee_estimator,
             chain_subscriber,
             task_spawner,
         }
+    }
+
+    fn get_ep_services(
+        &self,
+        entry_point: Address,
+    ) -> PoolResult<&Arc<dyn PoolEntryPointServices>> {
+        self.ep_services
+            .get(&entry_point)
+            .ok_or_else(|| PoolError::MempoolError(MempoolError::UnknownEntryPoint(entry_point)))
     }
 
     fn get_pool(&self, entry_point: Address) -> PoolResult<&Arc<dyn Mempool>> {
@@ -787,6 +950,145 @@ impl LocalPoolServerRunner {
                             self.get_pool_and_spawn(entry_point, req.response, fut);
                             continue;
                         },
+                        ServerRequestKind::EstimateUserOperationGas { entry_point, op, state_override_json } => {
+                            match self.get_ep_services(entry_point) {
+                                Ok(services) => {
+                                    let services = Arc::clone(services);
+                                    let response = req.response;
+                                    self.task_spawner.spawn(Box::pin(async move {
+                                        let resp = match services.estimate_gas(op, state_override_json).await {
+                                            Ok(estimate) => Ok(ServerResponse::EstimateUserOperationGas { estimate }),
+                                            Err(e) => Err(e),
+                                        };
+                                        if let Err(e) = response.send(resp) {
+                                            tracing::error!("Failed to send response: {:?}", e);
+                                        }
+                                    }));
+                                }
+                                Err(e) => {
+                                    if let Err(e) = req.response.send(Err(e)) {
+                                        tracing::error!("Failed to send response: {:?}", e);
+                                    }
+                                }
+                            }
+                            continue;
+                        },
+                        ServerRequestKind::GetMaxPriorityFeePerGas => {
+                            let fee_estimator = Arc::clone(&self.fee_estimator);
+                            let response = req.response;
+                            self.task_spawner.spawn(Box::pin(async move {
+                                let resp = match fee_estimator.get_max_priority_fee_per_gas().await {
+                                    Ok(fee) => Ok(ServerResponse::GetMaxPriorityFeePerGas { fee }),
+                                    Err(e) => Err(e),
+                                };
+                                if let Err(e) = response.send(resp) {
+                                    tracing::error!("Failed to send response: {:?}", e);
+                                }
+                            }));
+                            continue;
+                        },
+                        ServerRequestKind::GetFeeEstimate => {
+                            let fee_estimator = Arc::clone(&self.fee_estimator);
+                            let tx = req.response;
+                            tokio::spawn(async move {
+                                let resp = match fee_estimator.get_fee_estimate().await {
+                                    Ok(estimate) => ServerResponse::GetFeeEstimate(Ok(estimate)),
+                                    Err(e) => ServerResponse::GetFeeEstimate(Err(e)),
+                                };
+                                if tx.send(Ok(resp)).is_err() {
+                                    tracing::error!("response receiver dropped");
+                                }
+                            });
+                            continue;
+                        },
+                        ServerRequestKind::GetRequiredOpFees { bundle_fees } => {
+                            let fee_estimator = Arc::clone(&self.fee_estimator);
+                            let tx = req.response;
+                            let resp = ServerResponse::GetRequiredOpFees(Ok(fee_estimator.get_required_op_fees(bundle_fees)));
+                            if tx.send(Ok(resp)).is_err() {
+                                tracing::error!("response receiver dropped");
+                            }
+                            continue;
+                        },
+                        ServerRequestKind::CheckSignature { entry_point, op } => {
+                            match self.get_ep_services(entry_point) {
+                                Ok(services) => {
+                                    let services = Arc::clone(services);
+                                    let response = req.response;
+                                    self.task_spawner.spawn(Box::pin(async move {
+                                        let resp = match services.check_signature(op).await {
+                                            Ok(valid) => Ok(ServerResponse::CheckSignature { valid }),
+                                            Err(e) => Err(e),
+                                        };
+                                        if let Err(e) = response.send(resp) {
+                                            tracing::error!("Failed to send response: {:?}", e);
+                                        }
+                                    }));
+                                }
+                                Err(e) => {
+                                    if let Err(e) = req.response.send(Err(e)) {
+                                        tracing::error!("Failed to send response: {:?}", e);
+                                    }
+                                }
+                            }
+                            continue;
+                        },
+                        ServerRequestKind::GetMinedByHash { hash } => {
+                            // Search all EP services for the mined operation
+                            let services: Vec<_> = self.ep_services.values().map(Arc::clone).collect();
+                            let response = req.response;
+                            self.task_spawner.spawn(Box::pin(async move {
+                                let mut result = None;
+                                for svc in services {
+                                    match svc.get_mined_by_hash(hash).await {
+                                        Ok(Some(m)) => { result = Some(m); break; }
+                                        Ok(None) => {}
+                                        Err(e) => { let _ = response.send(Err(e)); return; }
+                                    }
+                                }
+                                let _ = response.send(Ok(ServerResponse::GetMinedByHash { mined: result }));
+                            }));
+                            continue;
+                        },
+                        ServerRequestKind::GetUserOperationReceipt { hash, bundle_transaction } => {
+                            let services: Vec<_> = self.ep_services.values().map(Arc::clone).collect();
+                            let response = req.response;
+                            self.task_spawner.spawn(Box::pin(async move {
+                                let mut result = None;
+                                for svc in services {
+                                    match svc.get_receipt(hash, bundle_transaction).await {
+                                        Ok(Some(r)) => { result = Some(r); break; }
+                                        Ok(None) => {}
+                                        Err(e) => { let _ = response.send(Err(e)); return; }
+                                    }
+                                }
+                                let _ = response.send(Ok(ServerResponse::GetUserOperationReceipt { receipt: result }));
+                            }));
+                            continue;
+                        },
+                        ServerRequestKind::GetMinedUserOperation { uo_hash, tx_hash, entry_point } => {
+                            match self.get_ep_services(entry_point) {
+                                Ok(services) => {
+                                    let services = Arc::clone(services);
+                                    let response = req.response;
+                                    self.task_spawner.spawn(Box::pin(async move {
+                                        let resp = match services.get_mined_from_tx(uo_hash, tx_hash).await {
+                                            Ok(r) => Ok(ServerResponse::GetMinedUserOperation { result: r }),
+                                            Err(e) => Err(e),
+                                        };
+                                        if let Err(e) = response.send(resp) {
+                                            tracing::error!("Failed to send response: {:?}", e);
+                                        }
+                                    }));
+                                }
+                                Err(e) => {
+                                    if let Err(e) = req.response.send(Err(e)) {
+                                        tracing::error!("Failed to send response: {:?}", e);
+                                    }
+                                }
+                            }
+                            continue;
+                        },
 
                         // Sync methods
                         // Responses are sent in the main loop below
@@ -1003,6 +1305,32 @@ enum ServerRequestKind {
     GetOpStatus {
         hash: B256,
     },
+    EstimateUserOperationGas {
+        entry_point: Address,
+        op: UserOperationOptionalGas,
+        state_override_json: Option<Vec<u8>>,
+    },
+    GetMaxPriorityFeePerGas,
+    GetFeeEstimate,
+    GetRequiredOpFees {
+        bundle_fees: GasFees,
+    },
+    CheckSignature {
+        entry_point: Address,
+        op: UserOperationVariant,
+    },
+    GetMinedByHash {
+        hash: B256,
+    },
+    GetUserOperationReceipt {
+        hash: B256,
+        bundle_transaction: Option<B256>,
+    },
+    GetMinedUserOperation {
+        uo_hash: B256,
+        tx_hash: B256,
+        entry_point: Address,
+    },
 }
 
 #[derive(Debug)]
@@ -1058,6 +1386,26 @@ enum ServerResponse {
     NotifyPendingBundle,
     GetOpStatus {
         status: Option<PoolOperationStatus>,
+    },
+    EstimateUserOperationGas {
+        estimate: GasEstimate,
+    },
+    GetMaxPriorityFeePerGas {
+        fee: u128,
+    },
+    GetFeeEstimate(Result<FeeEstimate, PoolError>),
+    GetRequiredOpFees(Result<GasFees, PoolError>),
+    CheckSignature {
+        valid: bool,
+    },
+    GetMinedByHash {
+        mined: Option<MinedUserOperation>,
+    },
+    GetUserOperationReceipt {
+        receipt: Option<UserOperationReceiptData>,
+    },
+    GetMinedUserOperation {
+        result: Option<(MinedUserOperation, UserOperationReceiptData)>,
     },
 }
 
@@ -1193,6 +1541,26 @@ mod tests {
         );
     }
 
+    struct NoopFeeEstimator;
+
+    #[async_trait]
+    impl PoolFeeEstimator for NoopFeeEstimator {
+        async fn get_max_priority_fee_per_gas(&self) -> Result<u128, PoolError> {
+            Ok(0)
+        }
+        async fn get_fee_estimate(&self) -> Result<FeeEstimate, PoolError> {
+            Ok(FeeEstimate {
+                block_number: 0,
+                base_fee: 0,
+                required_base_fee: 0,
+                required_priority_fee: 0,
+            })
+        }
+        fn get_required_op_fees(&self, _bundle_fees: GasFees) -> GasFees {
+            GasFees::default()
+        }
+    }
+
     struct State {
         handle: LocalPoolHandle,
         chain_update_tx: Arc<broadcast::Sender<Arc<ChainUpdate>>>,
@@ -1212,8 +1580,19 @@ mod tests {
             to_track: Arc::new(RwLock::new(HashSet::new())),
         };
 
+        // Create empty ep_services and a no-op fee estimator for tests
+        let ep_services: HashMap<Address, Arc<dyn PoolEntryPointServices>> = HashMap::new();
+        let fee_estimator: Arc<dyn PoolFeeEstimator> = Arc::new(NoopFeeEstimator);
+
         ts.spawn_critical_with_graceful_shutdown_signal("test pool", |shutdown| {
-            builder.run(ts_box, pools, chain_subscriber, shutdown)
+            builder.run(
+                ts_box,
+                pools,
+                ep_services,
+                fee_estimator,
+                chain_subscriber,
+                shutdown,
+            )
         });
 
         State {

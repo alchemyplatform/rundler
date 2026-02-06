@@ -13,15 +13,26 @@
 
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
+use alloy_primitives::{Address, B256};
 use anyhow::Context;
+use async_trait::async_trait;
 use futures::FutureExt;
-use rundler_provider::{EntryPoint, Providers, ProvidersWithEntryPointT};
+use rundler_provider::{
+    EntryPoint, FeeEstimator, Providers, ProvidersWithEntryPointT, SimulationProvider,
+    StateOverride,
+};
 use rundler_sim::{
-    PrecheckerImpl, Simulator,
+    EstimationSettings, GasEstimator, GasEstimatorV0_6, GasEstimatorV0_7, PrecheckerImpl,
+    Simulator,
     simulation::{self, UnsafeSimulator},
 };
 use rundler_task::TaskSpawnerExt;
-use rundler_types::{EntryPointAbiVersion, UserOperation, UserOperationVariant, chain::ChainSpec};
+use rundler_types::{
+    EntryPointAbiVersion, GasEstimate, GasFees, UserOperation, UserOperationOptionalGas,
+    UserOperationVariant,
+    chain::ChainSpec,
+    pool::{FeeEstimate, MinedUserOperation, PoolError, UserOperationReceiptData},
+};
 use rundler_utils::emit::WithEntryPoint;
 use tokio::sync::broadcast;
 
@@ -29,11 +40,14 @@ use super::mempool::PoolConfig;
 use crate::{
     chain::{self, Chain},
     emit::OpPoolEvent,
+    events::{
+        UserOperationEventProvider, UserOperationEventProviderV0_6, UserOperationEventProviderV0_7,
+    },
     mempool::{
         AddressReputation, Mempool, PaymasterConfig, PaymasterTracker, ReputationParams, UoPool,
         UoPoolProviders,
     },
-    server::{self, LocalPoolBuilder},
+    server::{self, LocalPoolBuilder, PoolEntryPointServices, PoolFeeEstimator},
 };
 
 /// Arguments for the pool task.
@@ -56,6 +70,12 @@ pub struct Args {
     pub remote_address: Option<SocketAddr>,
     /// Channel capacity for the chain update channel.
     pub chain_update_channel_capacity: usize,
+    /// Gas estimation settings.
+    pub estimation_settings: EstimationSettings,
+    /// Maximum block distance to search for user operation events.
+    pub event_block_distance: Option<u64>,
+    /// Fallback block distance to search for user operation events.
+    pub event_block_distance_fallback: Option<u64>,
 }
 
 /// Mempool task.
@@ -118,8 +138,9 @@ where
             chain.watch(shutdown)
         });
 
-        // create mempools
+        // create mempools and entry point services
         let mut mempools = HashMap::new();
+        let mut ep_services: HashMap<Address, Arc<dyn PoolEntryPointServices>> = HashMap::new();
         for pool_config in &self.args.pool_configs {
             match pool_config.entry_point_version.abi_version() {
                 EntryPointAbiVersion::V0_6 => {
@@ -134,6 +155,11 @@ where
                         .context("should have created mempool")?;
 
                     mempools.insert(pool_config.entry_point, pool);
+
+                    let services = self
+                        .create_ep_services_v0_6(pool_config)
+                        .context("should have created v0.6 entry point services")?;
+                    ep_services.insert(pool_config.entry_point, services);
                 }
                 EntryPointAbiVersion::V0_7 => {
                     let pool = self
@@ -147,9 +173,19 @@ where
                         .context("should have created mempool")?;
 
                     mempools.insert(pool_config.entry_point, pool);
+
+                    let services = self
+                        .create_ep_services_v0_7(pool_config)
+                        .context("should have created v0.7 entry point services")?;
+                    ep_services.insert(pool_config.entry_point, services);
                 }
             }
         }
+
+        // create fee estimator
+        let fee_estimator: Arc<dyn PoolFeeEstimator> = Arc::new(PoolFeeEstimatorImpl {
+            fee_estimator: self.providers.fee_estimator().clone(),
+        });
 
         let pool_handle = self.pool_builder.get_handle();
 
@@ -157,8 +193,14 @@ where
         task_spawner.spawn_critical_with_graceful_shutdown_signal(
             "local pool server",
             |shutdown| {
-                self.pool_builder
-                    .run(ts_box, mempools, chain_subscriber, shutdown)
+                self.pool_builder.run(
+                    ts_box,
+                    mempools,
+                    ep_services,
+                    fee_estimator,
+                    chain_subscriber,
+                    shutdown,
+                )
             },
         );
 
@@ -284,6 +326,75 @@ where
         }
     }
 
+    fn create_ep_services_v0_6(
+        &self,
+        _pool_config: &PoolConfig,
+    ) -> anyhow::Result<Arc<dyn PoolEntryPointServices>> {
+        let ep_providers = self
+            .providers
+            .ep_v0_6_providers()
+            .clone()
+            .context("entry point v0.6 not supplied")?;
+
+        let gas_estimator = GasEstimatorV0_6::new(
+            self.args.chain_spec.clone(),
+            ep_providers.evm().clone(),
+            ep_providers.entry_point().clone(),
+            self.args.estimation_settings,
+            ep_providers.fee_estimator().clone(),
+        );
+
+        let event_provider = UserOperationEventProviderV0_6::new(
+            self.args.chain_spec.clone(),
+            *ep_providers.entry_point().address(),
+            ep_providers.evm().clone(),
+            self.args.event_block_distance,
+            self.args.event_block_distance_fallback,
+        );
+
+        Ok(Arc::new(PoolEntryPointServicesImpl {
+            gas_estimator,
+            entry_point: ep_providers.entry_point().clone(),
+            event_provider: Box::new(event_provider),
+        }))
+    }
+
+    fn create_ep_services_v0_7(
+        &self,
+        pool_config: &PoolConfig,
+    ) -> anyhow::Result<Arc<dyn PoolEntryPointServices>> {
+        let ep_providers = self
+            .providers
+            .ep_v0_7_providers(pool_config.entry_point_version)
+            .clone()
+            .context(format!(
+                "entry point v0.7 not supplied for entry point version: {:?}",
+                pool_config.entry_point_version
+            ))?;
+
+        let gas_estimator = GasEstimatorV0_7::new(
+            self.args.chain_spec.clone(),
+            ep_providers.evm().clone(),
+            ep_providers.entry_point().clone(),
+            self.args.estimation_settings,
+            ep_providers.fee_estimator().clone(),
+        );
+
+        let event_provider = UserOperationEventProviderV0_7::new(
+            self.args.chain_spec.clone(),
+            *ep_providers.entry_point().address(),
+            ep_providers.evm().clone(),
+            self.args.event_block_distance,
+            self.args.event_block_distance_fallback,
+        );
+
+        Ok(Arc::new(PoolEntryPointServicesImpl {
+            gas_estimator,
+            entry_point: ep_providers.entry_point().clone(),
+            event_provider: Box::new(event_provider),
+        }))
+    }
+
     fn create_mempool<T, UO, EP, S>(
         &self,
         task_spawner: &T,
@@ -350,5 +461,148 @@ where
         );
 
         Ok(Arc::new(uo_pool))
+    }
+}
+
+/// Concrete implementation of `PoolEntryPointServices` that wraps a `GasEstimator`,
+/// an `EntryPoint` (as `SimulationProvider` for signature checking), and an event
+/// provider for looking up mined user operations and receipts.
+struct PoolEntryPointServicesImpl<G, E> {
+    gas_estimator: G,
+    entry_point: E,
+    event_provider: Box<dyn UserOperationEventProvider>,
+}
+
+#[async_trait]
+impl<UO, G, E> PoolEntryPointServices for PoolEntryPointServicesImpl<G, E>
+where
+    UO: UserOperation + From<UserOperationVariant>,
+    G: GasEstimator + 'static,
+    G::UserOperationOptionalGas: From<UserOperationOptionalGas>,
+    E: SimulationProvider<UO = UO> + 'static,
+{
+    async fn estimate_gas(
+        &self,
+        op: UserOperationOptionalGas,
+        state_override_json: Option<Vec<u8>>,
+    ) -> Result<GasEstimate, PoolError> {
+        let state_override: StateOverride = match state_override_json {
+            Some(json) => serde_json::from_slice(&json)
+                .map_err(|e| PoolError::Other(anyhow::anyhow!("Invalid state override: {e}")))?,
+            None => StateOverride::default(),
+        };
+
+        self.gas_estimator
+            .estimate_op_gas(op.into(), state_override)
+            .await
+            .map_err(|e| PoolError::GasEstimation(e.to_string()))
+    }
+
+    async fn check_signature(&self, op: UserOperationVariant) -> Result<bool, PoolError> {
+        let output = self
+            .entry_point
+            .simulate_validation(op.into(), None)
+            .await
+            .map_err(|e| PoolError::Other(anyhow::anyhow!("Simulation error: {e}")))?
+            .map_err(|e| PoolError::Other(anyhow::anyhow!("Validation revert: {e}")))?;
+
+        Ok(!output.return_info.account_sig_failed)
+    }
+
+    async fn get_mined_by_hash(&self, hash: B256) -> Result<Option<MinedUserOperation>, PoolError> {
+        self.event_provider
+            .get_mined_by_hash(hash)
+            .await
+            .map_err(PoolError::Other)
+    }
+
+    async fn get_receipt(
+        &self,
+        hash: B256,
+        bundle_transaction: Option<B256>,
+    ) -> Result<Option<UserOperationReceiptData>, PoolError> {
+        match bundle_transaction {
+            Some(tx_hash) => self
+                .event_provider
+                .get_receipt_from_tx_hash(hash, tx_hash)
+                .await
+                .map_err(PoolError::Other),
+            None => self
+                .event_provider
+                .get_receipt(hash)
+                .await
+                .map_err(PoolError::Other),
+        }
+    }
+
+    async fn get_mined_from_tx(
+        &self,
+        uo_hash: B256,
+        tx_hash: B256,
+    ) -> Result<Option<(MinedUserOperation, UserOperationReceiptData)>, PoolError> {
+        // First get the tx receipt
+        let mined = self
+            .event_provider
+            .get_mined_by_hash(uo_hash)
+            .await
+            .map_err(PoolError::Other)?;
+
+        let Some(mined) = mined else {
+            return Ok(None);
+        };
+
+        // Only return if the mined operation matches the expected tx hash
+        if mined.transaction_hash != tx_hash {
+            return Ok(None);
+        }
+
+        let receipt = self
+            .event_provider
+            .get_receipt_from_tx_hash(uo_hash, tx_hash)
+            .await
+            .map_err(PoolError::Other)?;
+
+        match receipt {
+            Some(receipt) => Ok(Some((mined, receipt))),
+            None => Ok(None),
+        }
+    }
+}
+
+/// Concrete implementation of `PoolFeeEstimator` that wraps a `FeeEstimator`.
+struct PoolFeeEstimatorImpl<F> {
+    fee_estimator: F,
+}
+
+#[async_trait]
+impl<F: FeeEstimator> PoolFeeEstimator for PoolFeeEstimatorImpl<F> {
+    async fn get_max_priority_fee_per_gas(&self) -> Result<u128, PoolError> {
+        let (bundle_fees, _) = self
+            .fee_estimator
+            .latest_bundle_fees()
+            .await
+            .map_err(PoolError::Other)?;
+        Ok(self
+            .fee_estimator
+            .required_op_fees(bundle_fees)
+            .max_priority_fee_per_gas)
+    }
+
+    async fn get_fee_estimate(&self) -> Result<FeeEstimate, PoolError> {
+        let estimate = self
+            .fee_estimator
+            .latest_fee_estimate()
+            .await
+            .map_err(PoolError::Other)?;
+        Ok(FeeEstimate {
+            block_number: estimate.block_number,
+            base_fee: estimate.base_fee,
+            required_base_fee: estimate.required_base_fee,
+            required_priority_fee: estimate.required_priority_fee,
+        })
+    }
+
+    fn get_required_op_fees(&self, bundle_fees: GasFees) -> GasFees {
+        self.fee_estimator.required_op_fees(bundle_fees)
     }
 }

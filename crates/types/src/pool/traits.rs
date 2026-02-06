@@ -19,12 +19,13 @@ use futures_util::Stream;
 use super::{
     error::PoolError,
     types::{
-        NewHead, PaymasterMetadata, PoolOperation, PoolOperationStatus, Reputation,
-        ReputationStatus, StakeStatus,
+        FeeEstimate, MinedUserOperation, NewHead, PaymasterMetadata, PoolOperation,
+        PoolOperationStatus, Reputation, ReputationStatus, StakeStatus, UserOperationReceiptData,
     },
 };
 use crate::{
-    EntityUpdate, UserOperation, UserOperationId, UserOperationPermissions, UserOperationVariant,
+    EntityUpdate, GasEstimate, GasFees, UserOperation, UserOperationId, UserOperationOptionalGas,
+    UserOperationPermissions, UserOperationVariant,
 };
 
 /// Result type for pool server operations.
@@ -176,6 +177,48 @@ pub trait Pool: Send + Sync {
         paymaster: bool,
         reputation: bool,
     ) -> PoolResult<()>;
+
+    /// Estimate gas for a user operation
+    async fn estimate_user_operation_gas(
+        &self,
+        entry_point: Address,
+        op: UserOperationOptionalGas,
+        state_override_json: Option<Vec<u8>>,
+    ) -> PoolResult<GasEstimate>;
+
+    /// Get the maximum priority fee per gas required by the bundler
+    async fn get_max_priority_fee_per_gas(&self) -> PoolResult<u128>;
+
+    /// Get the latest fee estimate for bundling
+    async fn get_fee_estimate(&self) -> PoolResult<FeeEstimate>;
+
+    /// Get the required operation fees for the given bundle fees
+    async fn get_required_op_fees(&self, bundle_fees: GasFees) -> PoolResult<GasFees>;
+
+    /// Check whether a user operation has a valid signature
+    async fn check_signature(
+        &self,
+        entry_point: Address,
+        op: UserOperationVariant,
+    ) -> PoolResult<bool>;
+
+    /// Get a mined user operation by its hash, searching on-chain events
+    async fn get_mined_by_hash(&self, hash: B256) -> PoolResult<Option<MinedUserOperation>>;
+
+    /// Get the receipt for a mined user operation
+    async fn get_user_operation_receipt(
+        &self,
+        hash: B256,
+        bundle_transaction: Option<B256>,
+    ) -> PoolResult<Option<UserOperationReceiptData>>;
+
+    /// Get a mined user operation and its receipt from a specific transaction
+    async fn get_mined_user_operation(
+        &self,
+        uo_hash: B256,
+        tx_hash: B256,
+        entry_point: Address,
+    ) -> PoolResult<Option<(MinedUserOperation, UserOperationReceiptData)>>;
 }
 
 impl From<&PoolOperation> for PoolOperationSummary {
@@ -277,5 +320,34 @@ mockall::mock! {
             uo_hashes: Vec<B256>,
         ) -> PoolResult<()>;
         async fn get_op_status(&self, hash: B256) -> PoolResult<Option<PoolOperationStatus>>;
+        async fn estimate_user_operation_gas(
+            &self,
+            entry_point: Address,
+            op: UserOperationOptionalGas,
+            state_override_json: Option<Vec<u8>>,
+        ) -> PoolResult<GasEstimate>;
+        async fn get_max_priority_fee_per_gas(&self) -> PoolResult<u128>;
+        async fn get_fee_estimate(&self) -> PoolResult<FeeEstimate>;
+        async fn get_required_op_fees(&self, bundle_fees: GasFees) -> PoolResult<GasFees>;
+        async fn check_signature(
+            &self,
+            entry_point: Address,
+            op: UserOperationVariant,
+        ) -> PoolResult<bool>;
+        async fn get_mined_by_hash(
+            &self,
+            hash: B256,
+        ) -> PoolResult<Option<MinedUserOperation>>;
+        async fn get_user_operation_receipt(
+            &self,
+            hash: B256,
+            bundle_transaction: Option<B256>,
+        ) -> PoolResult<Option<UserOperationReceiptData>>;
+        async fn get_mined_user_operation(
+            &self,
+            uo_hash: B256,
+            tx_hash: B256,
+            entry_point: Address,
+        ) -> PoolResult<Option<(MinedUserOperation, UserOperationReceiptData)>>;
     }
 }

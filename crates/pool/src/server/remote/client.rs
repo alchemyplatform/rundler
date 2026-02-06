@@ -22,11 +22,13 @@ use rundler_task::{
     server::{HealthCheck, ServerStatus},
 };
 use rundler_types::{
-    EntityUpdate, UserOperationId, UserOperationPermissions, UserOperationVariant,
+    EntityUpdate, GasEstimate, GasFees, UserOperationId, UserOperationOptionalGas,
+    UserOperationPermissions, UserOperationVariant,
     chain::ChainSpec,
     pool::{
-        NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation, PoolOperationStatus,
-        PoolOperationSummary, PoolResult, Reputation, ReputationStatus, StakeStatus,
+        FeeEstimate, MinedUserOperation, NewHead, PaymasterMetadata, Pool, PoolError,
+        PoolOperation, PoolOperationStatus, PoolOperationSummary, PoolResult, Reputation,
+        ReputationStatus, StakeStatus, UserOperationReceiptData,
     },
 };
 use rundler_utils::retry::{self, UnlimitedRetryOpts};
@@ -42,17 +44,22 @@ use tonic_health::{
 };
 
 use super::protos::{
-    self, AddOpRequest, AdminSetTrackingRequest, DebugClearStateRequest, DebugDumpMempoolRequest,
-    DebugDumpPaymasterBalancesRequest, DebugDumpReputationRequest, DebugSetReputationRequest,
-    GetOpByIdRequest, GetOpsRequest, GetReputationStatusRequest, GetStakeStatusRequest,
-    RemoveOpsRequest, ReputationStatus as ProtoReputationStatus, SubscribeNewHeadsRequest,
-    SubscribeNewHeadsResponse, TryUoFromProto, UpdateEntitiesRequest, add_op_response,
-    admin_set_tracking_response, debug_clear_state_response, debug_dump_mempool_response,
-    debug_dump_paymaster_balances_response, debug_dump_reputation_response,
-    debug_set_reputation_response, get_op_by_hash_response, get_op_by_id_response,
-    get_ops_by_hashes_response, get_ops_response, get_ops_summaries_response,
-    get_reputation_status_response, get_stake_status_response, op_pool_client::OpPoolClient,
-    remove_op_by_id_response, remove_ops_response, update_entities_response,
+    self, AddOpRequest, AdminSetTrackingRequest, CheckSignatureRequest, DebugClearStateRequest,
+    DebugDumpMempoolRequest, DebugDumpPaymasterBalancesRequest, DebugDumpReputationRequest,
+    DebugSetReputationRequest, EstimateUserOperationGasRequest, GetFeeEstimateRequest,
+    GetMaxPriorityFeePerGasRequest, GetOpByIdRequest, GetOpsRequest, GetReputationStatusRequest,
+    GetRequiredOpFeesRequest, GetStakeStatusRequest, RemoveOpsRequest,
+    ReputationStatus as ProtoReputationStatus, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse,
+    TryUoFromProto, UpdateEntitiesRequest, UserOperation, add_op_response,
+    admin_set_tracking_response, check_signature_response, debug_clear_state_response,
+    debug_dump_mempool_response, debug_dump_paymaster_balances_response,
+    debug_dump_reputation_response, debug_set_reputation_response,
+    estimate_user_operation_gas_response, get_max_priority_fee_per_gas_response,
+    get_mined_by_hash_response, get_mined_user_operation_response, get_op_by_hash_response,
+    get_op_by_id_response, get_ops_by_hashes_response, get_ops_response,
+    get_ops_summaries_response, get_reputation_status_response, get_stake_status_response,
+    get_user_operation_receipt_response, op_pool_client::OpPoolClient, remove_op_by_id_response,
+    remove_ops_response, update_entities_response,
 };
 
 /// Remote pool client
@@ -672,6 +679,162 @@ impl Pool for RemotePoolClient {
         }
     }
 
+    async fn estimate_user_operation_gas(
+        &self,
+        entry_point: Address,
+        op: UserOperationOptionalGas,
+        state_override_json: Option<Vec<u8>>,
+    ) -> PoolResult<GasEstimate> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .estimate_user_operation_gas(EstimateUserOperationGasRequest {
+                entry_point: entry_point.to_vec(),
+                op: Some(UserOperation::from(&op)),
+                state_override_json: state_override_json.unwrap_or_default(),
+            })
+            .await
+            .map_err(anyhow::Error::from)?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(estimate_user_operation_gas_response::Result::Success(s)) => {
+                let parse_u128 = |bytes: Vec<u8>, name: &str| -> PoolResult<u128> {
+                    let arr: [u8; 16] = bytes
+                        .try_into()
+                        .map_err(|_| PoolError::Other(anyhow::anyhow!("Invalid {name} bytes")))?;
+                    Ok(u128::from_be_bytes(arr))
+                };
+
+                Ok(GasEstimate {
+                    pre_verification_gas: parse_u128(
+                        s.pre_verification_gas,
+                        "pre_verification_gas",
+                    )?,
+                    call_gas_limit: parse_u128(s.call_gas_limit, "call_gas_limit")?,
+                    verification_gas_limit: parse_u128(
+                        s.verification_gas_limit,
+                        "verification_gas_limit",
+                    )?,
+                    paymaster_verification_gas_limit: s
+                        .paymaster_verification_gas_limit
+                        .map(|v| parse_u128(v, "paymaster_verification_gas_limit"))
+                        .transpose()?,
+                })
+            }
+            Some(estimate_user_operation_gas_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(PoolError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
+    async fn get_max_priority_fee_per_gas(&self) -> PoolResult<u128> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .get_max_priority_fee_per_gas(GetMaxPriorityFeePerGasRequest {})
+            .await
+            .map_err(anyhow::Error::from)?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(get_max_priority_fee_per_gas_response::Result::Success(s)) => {
+                let arr: [u8; 16] = s.max_priority_fee_per_gas.try_into().map_err(|_| {
+                    PoolError::Other(anyhow::anyhow!("Invalid max_priority_fee_per_gas bytes"))
+                })?;
+                Ok(u128::from_be_bytes(arr))
+            }
+            Some(get_max_priority_fee_per_gas_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(PoolError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
+    async fn get_fee_estimate(&self) -> PoolResult<FeeEstimate> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .get_fee_estimate(GetFeeEstimateRequest {})
+            .await
+            .map_err(anyhow::Error::from)?
+            .into_inner();
+
+        let parse_u128 = |bytes: Vec<u8>, name: &str| -> PoolResult<u128> {
+            let arr: [u8; 16] = bytes
+                .try_into()
+                .map_err(|_| PoolError::Other(anyhow::anyhow!("Invalid {name} bytes")))?;
+            Ok(u128::from_be_bytes(arr))
+        };
+
+        Ok(FeeEstimate {
+            block_number: res.block_number,
+            base_fee: parse_u128(res.base_fee, "base_fee")?,
+            required_base_fee: parse_u128(res.required_base_fee, "required_base_fee")?,
+            required_priority_fee: parse_u128(res.required_priority_fee, "required_priority_fee")?,
+        })
+    }
+
+    async fn get_required_op_fees(&self, bundle_fees: GasFees) -> PoolResult<GasFees> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .get_required_op_fees(GetRequiredOpFeesRequest {
+                max_fee_per_gas: bundle_fees.max_fee_per_gas.to_be_bytes().to_vec(),
+                max_priority_fee_per_gas: bundle_fees
+                    .max_priority_fee_per_gas
+                    .to_be_bytes()
+                    .to_vec(),
+            })
+            .await
+            .map_err(anyhow::Error::from)?
+            .into_inner();
+
+        let parse_u128 = |bytes: Vec<u8>, name: &str| -> PoolResult<u128> {
+            let arr: [u8; 16] = bytes
+                .try_into()
+                .map_err(|_| PoolError::Other(anyhow::anyhow!("Invalid {name} bytes")))?;
+            Ok(u128::from_be_bytes(arr))
+        };
+
+        Ok(GasFees {
+            max_fee_per_gas: parse_u128(res.max_fee_per_gas, "max_fee_per_gas")?,
+            max_priority_fee_per_gas: parse_u128(
+                res.max_priority_fee_per_gas,
+                "max_priority_fee_per_gas",
+            )?,
+        })
+    }
+
+    async fn check_signature(
+        &self,
+        entry_point: Address,
+        op: UserOperationVariant,
+    ) -> PoolResult<bool> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .check_signature(CheckSignatureRequest {
+                entry_point: entry_point.to_vec(),
+                op: Some(UserOperation::from(&op)),
+            })
+            .await
+            .map_err(anyhow::Error::from)?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(check_signature_response::Result::Success(s)) => Ok(s.valid),
+            Some(check_signature_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(PoolError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
     async fn subscribe_new_heads(
         &self,
         to_track: Vec<Address>,
@@ -740,6 +903,96 @@ impl Pool for RemotePoolClient {
                 })
                 .transpose(),
             Some(protos::get_op_status_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(PoolError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
+    async fn get_mined_by_hash(&self, hash: B256) -> PoolResult<Option<MinedUserOperation>> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .get_mined_by_hash(protos::GetMinedByHashRequest {
+                hash: hash.to_vec(),
+            })
+            .await
+            .map_err(anyhow::Error::from)?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(get_mined_by_hash_response::Result::Success(s)) => s
+                .mined
+                .map(|m| m.into_domain(&self.chain_spec).map_err(PoolError::from))
+                .transpose(),
+            Some(get_mined_by_hash_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(PoolError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
+    async fn get_user_operation_receipt(
+        &self,
+        hash: B256,
+        bundle_transaction: Option<B256>,
+    ) -> PoolResult<Option<UserOperationReceiptData>> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .get_user_operation_receipt(protos::GetUserOperationReceiptRequest {
+                hash: hash.to_vec(),
+                bundle_transaction: bundle_transaction.map(|t| t.to_vec()).unwrap_or_default(),
+            })
+            .await
+            .map_err(anyhow::Error::from)?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(get_user_operation_receipt_response::Result::Success(s)) => s
+                .receipt
+                .map(|r| r.into_domain().map_err(PoolError::from))
+                .transpose(),
+            Some(get_user_operation_receipt_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(PoolError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
+    async fn get_mined_user_operation(
+        &self,
+        uo_hash: B256,
+        tx_hash: B256,
+        entry_point: Address,
+    ) -> PoolResult<Option<(MinedUserOperation, UserOperationReceiptData)>> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .get_mined_user_operation(protos::GetMinedUserOperationRequest {
+                uo_hash: uo_hash.to_vec(),
+                tx_hash: tx_hash.to_vec(),
+                entry_point: entry_point.to_vec(),
+            })
+            .await
+            .map_err(anyhow::Error::from)?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(get_mined_user_operation_response::Result::Success(s)) => {
+                match (s.mined, s.receipt) {
+                    (Some(m), Some(r)) => {
+                        let mined = m.into_domain(&self.chain_spec).map_err(PoolError::from)?;
+                        let receipt = r.into_domain().map_err(PoolError::from)?;
+                        Ok(Some((mined, receipt)))
+                    }
+                    _ => Ok(None),
+                }
+            }
+            Some(get_mined_user_operation_response::Result::Failure(f)) => Err(f.try_into()?),
             None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,

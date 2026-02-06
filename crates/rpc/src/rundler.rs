@@ -12,21 +12,19 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_primitives::{Address, B256, U64, U128, U256};
-use anyhow::Context;
 use async_trait::async_trait;
-use futures_util::future;
-use jsonrpsee::{core::RpcResult, proc_macros::rpc};
-use rundler_provider::{EvmProvider, FeeEstimator};
+use jsonrpsee::{Extensions, core::RpcResult, proc_macros::rpc};
 use rundler_types::{
     GasFees, UserOperation, UserOperationId, UserOperationVariant, chain::ChainSpec, pool::Pool,
 };
 use tracing::instrument;
 
 use crate::{
-    eth::{EntryPointRouter, EthResult, EthRpcError},
+    chain_resolver::ChainResolver,
+    eth::{EthResult, EthRpcError},
     types::{
         RpcMinedUserOperation, RpcSuggestedGasFees, RpcUserOperation, RpcUserOperationGasPrice,
-        RpcUserOperationStatus, UOStatusEnum, UserOperationStatusEnum,
+        RpcUserOperationReceipt, RpcUserOperationStatus, UOStatusEnum, UserOperationStatusEnum,
     },
     utils::{self, TryIntoRundlerType},
 };
@@ -52,26 +50,19 @@ impl Default for RundlerApiSettings {
 #[rpc(client, server, namespace = "rundler")]
 pub trait RundlerApi {
     /// Returns the maximum priority fee per gas required by Rundler
-    #[method(name = "maxPriorityFeePerGas")]
+    #[method(name = "maxPriorityFeePerGas", with_extensions)]
     async fn max_priority_fee_per_gas(&self) -> RpcResult<U128>;
 
     /// Drops a user operation from the local mempool.
-    ///
-    /// Requirements:
-    ///   - The user operation must contain a sender/nonce pair this is present in the local mempool.
-    ///   - The user operation must pass entrypoint.simulateValidation. I.e. it must have a valid signature and verificationGasLimit
-    ///   - The user operation must have zero values for: preVerificationGas, callGasLimit, calldata, and maxFeePerGas
-    ///
-    /// Returns none if no user operation was found, otherwise returns the hash of the removed user operation.
-    #[method(name = "dropLocalUserOperation")]
+    #[method(name = "dropLocalUserOperation", with_extensions)]
     async fn drop_local_user_operation(
         &self,
         uo: RpcUserOperation,
         entry_point: Address,
     ) -> RpcResult<Option<B256>>;
 
-    /// Gets information about a mined user operation by user operation hash, transaction hash, and entrypoint address
-    #[method(name = "getMinedUserOperation")]
+    /// Gets information about a mined user operation
+    #[method(name = "getMinedUserOperation", with_extensions)]
     async fn get_mined_user_operation(
         &self,
         uo_hash: B256,
@@ -80,11 +71,11 @@ pub trait RundlerApi {
     ) -> RpcResult<Option<RpcMinedUserOperation>>;
 
     /// Gets the status of a user operation by user operation hash
-    #[method(name = "getUserOperationStatus")]
+    #[method(name = "getUserOperationStatus", with_extensions)]
     async fn get_user_operation_status(&self, uo_hash: B256) -> RpcResult<RpcUserOperationStatus>;
 
     /// Gets the required fees for a sender nonce
-    #[method(name = "getPendingUserOperationBySenderNonce")]
+    #[method(name = "getPendingUserOperationBySenderNonce", with_extensions)]
     async fn get_pending_user_operation_by_sender_nonce(
         &self,
         sender: Address,
@@ -92,31 +83,26 @@ pub trait RundlerApi {
     ) -> RpcResult<Option<RpcUserOperation>>;
 
     /// Returns suggested gas prices for user operations
-    #[method(name = "getUserOperationGasPrice")]
+    #[method(name = "getUserOperationGasPrice", with_extensions)]
     async fn get_user_operation_gas_price(&self) -> RpcResult<RpcUserOperationGasPrice>;
 }
 
-pub(crate) struct RundlerApi<P, F, E> {
-    chain_spec: ChainSpec,
-    fee_estimator: F,
-    pool_server: P,
-    entry_point_router: EntryPointRouter,
-    evm_provider: E,
+pub(crate) struct RundlerApi<R> {
+    resolver: R,
     settings: RundlerApiSettings,
 }
 
 #[async_trait]
-impl<P, F, E> RundlerApiServer for RundlerApi<P, F, E>
+impl<R> RundlerApiServer for RundlerApi<R>
 where
-    P: Pool + 'static,
-    F: FeeEstimator + 'static,
-    E: EvmProvider + 'static,
+    R: ChainResolver,
 {
     #[instrument(skip_all, fields(rpc_method = "rundler_maxPriorityFeePerGas"))]
-    async fn max_priority_fee_per_gas(&self) -> RpcResult<U128> {
+    async fn max_priority_fee_per_gas(&self, ext: &Extensions) -> RpcResult<U128> {
+        let chain = self.resolver.resolve(ext)?;
         utils::safe_call_rpc_handler(
             "rundler_maxPriorityFeePerGas",
-            RundlerApi::max_priority_fee_per_gas(self),
+            Self::max_priority_fee_per_gas_inner(chain.pool),
         )
         .await
     }
@@ -124,12 +110,19 @@ where
     #[instrument(skip_all, fields(rpc_method = "rundler_dropLocalUserOperation"))]
     async fn drop_local_user_operation(
         &self,
+        ext: &Extensions,
         user_op: RpcUserOperation,
         entry_point: Address,
     ) -> RpcResult<Option<B256>> {
+        let chain = self.resolver.resolve(ext)?;
         utils::safe_call_rpc_handler(
             "rundler_dropLocalUserOperation",
-            RundlerApi::drop_local_user_operation(self, user_op, entry_point),
+            Self::drop_local_user_operation_inner(
+                chain.chain_spec,
+                chain.pool,
+                user_op,
+                entry_point,
+            ),
         )
         .await
     }
@@ -137,22 +130,29 @@ where
     #[instrument(skip_all, fields(rpc_method = "rundler_getMinedUserOperation"))]
     async fn get_mined_user_operation(
         &self,
+        ext: &Extensions,
         uo_hash: B256,
         tx_hash: B256,
         entry_point: Address,
     ) -> RpcResult<Option<RpcMinedUserOperation>> {
+        let chain = self.resolver.resolve(ext)?;
         utils::safe_call_rpc_handler(
             "rundler_getMinedUserOperation",
-            RundlerApi::get_mined_user_operation(self, uo_hash, tx_hash, entry_point),
+            Self::get_mined_user_operation_inner(chain.pool, uo_hash, tx_hash, entry_point),
         )
         .await
     }
 
     #[instrument(skip_all, fields(rpc_method = "rundler_getUserOperationStatus"))]
-    async fn get_user_operation_status(&self, uo_hash: B256) -> RpcResult<RpcUserOperationStatus> {
+    async fn get_user_operation_status(
+        &self,
+        ext: &Extensions,
+        uo_hash: B256,
+    ) -> RpcResult<RpcUserOperationStatus> {
+        let chain = self.resolver.resolve(ext)?;
         utils::safe_call_rpc_handler(
             "rundler_getUserOperationStatus",
-            RundlerApi::get_user_operation_status(self, uo_hash),
+            Self::get_user_operation_status_inner(chain.chain_spec, chain.pool, uo_hash),
         )
         .await
     }
@@ -163,83 +163,61 @@ where
     )]
     async fn get_pending_user_operation_by_sender_nonce(
         &self,
+        ext: &Extensions,
         sender: Address,
         nonce: U256,
     ) -> RpcResult<Option<RpcUserOperation>> {
+        let chain = self.resolver.resolve(ext)?;
         utils::safe_call_rpc_handler(
             "rundler_getPendingUserOperationBySenderNonce",
-            RundlerApi::get_pending_user_operation_by_sender_nonce(self, sender, nonce),
+            Self::get_pending_user_operation_by_sender_nonce_inner(chain.pool, sender, nonce),
         )
         .await
     }
 
     #[instrument(skip_all, fields(rpc_method = "rundler_getUserOperationGasPrice"))]
-    async fn get_user_operation_gas_price(&self) -> RpcResult<RpcUserOperationGasPrice> {
+    async fn get_user_operation_gas_price(
+        &self,
+        ext: &Extensions,
+    ) -> RpcResult<RpcUserOperationGasPrice> {
+        let chain = self.resolver.resolve(ext)?;
+        let settings = self.settings;
         utils::safe_call_rpc_handler(
             "rundler_getUserOperationGasPrice",
-            RundlerApi::get_user_operation_gas_price(self),
+            Self::get_user_operation_gas_price_inner(chain.pool, settings),
         )
         .await
     }
 }
 
-impl<P, F, E> RundlerApi<P, F, E>
-where
-    P: Pool,
-    F: FeeEstimator,
-    E: EvmProvider,
-{
-    pub(crate) fn new(
-        chain_spec: &ChainSpec,
-        entry_point_router: EntryPointRouter,
-        pool_server: P,
-        fee_estimator: F,
-        evm_provider: E,
-        settings: RundlerApiSettings,
-    ) -> Self {
-        Self {
-            chain_spec: chain_spec.clone(),
-            entry_point_router,
-            pool_server,
-            fee_estimator,
-            evm_provider,
-            settings,
-        }
-    }
-    #[instrument(skip_all)]
-    async fn max_priority_fee_per_gas(&self) -> EthResult<U128> {
-        let estimate = self
-            .fee_estimator
-            .latest_fee_estimate()
-            .await
-            .context("should get required fees")?;
-        let bundle_fees = GasFees {
-            max_fee_per_gas: estimate
-                .required_base_fee
-                .saturating_add(estimate.required_priority_fee),
-            max_priority_fee_per_gas: estimate.required_priority_fee,
-        };
-        Ok(U128::from(
-            self.fee_estimator
-                .required_op_fees(bundle_fees)
-                .max_priority_fee_per_gas,
-        ))
+impl<R> RundlerApi<R> {
+    pub(crate) fn new(resolver: R, settings: RundlerApiSettings) -> Self {
+        Self { resolver, settings }
     }
 
-    async fn drop_local_user_operation(
-        &self,
+    #[instrument(skip_all)]
+    async fn max_priority_fee_per_gas_inner(pool: &dyn Pool) -> EthResult<U128> {
+        let fee = pool
+            .get_max_priority_fee_per_gas()
+            .await
+            .map_err(EthRpcError::from)?;
+        Ok(U128::from(fee))
+    }
+
+    async fn drop_local_user_operation_inner(
+        chain_spec: &ChainSpec,
+        pool: &dyn Pool,
         user_op: RpcUserOperation,
         entry_point: Address,
     ) -> EthResult<Option<B256>> {
-        let Some(ep_version) = self.chain_spec.entry_point_version(entry_point) else {
+        let Some(ep_version) = chain_spec.entry_point_version(entry_point) else {
             Err(EthRpcError::InvalidParams(format!(
                 "Unsupported entry point: {:?}",
                 entry_point
             )))?
         };
 
-        let uo: UserOperationVariant =
-            user_op.try_into_rundler_type(&self.chain_spec, ep_version)?;
+        let uo: UserOperationVariant = user_op.try_into_rundler_type(chain_spec, ep_version)?;
         let id = uo.id();
 
         if uo.pre_verification_gas() != 0
@@ -250,76 +228,63 @@ where
             Err(EthRpcError::InvalidParams("Invalid user operation for drop: preVerificationGas, callGasLimit, callData, and maxFeePerGas must be zero".to_string()))?;
         }
 
-        let valid = self
-            .entry_point_router
-            .check_signature(&entry_point, uo)
-            .await?;
+        let valid = pool
+            .check_signature(entry_point, uo)
+            .await
+            .map_err(EthRpcError::from)?;
         if !valid {
             Err(EthRpcError::InvalidParams(
                 "Invalid user operation for drop: invalid signature".to_string(),
             ))?;
         }
 
-        // remove the op from the pool
-        let ret = self
-            .pool_server
-            .remove_op_by_id(entry_point, id)
-            .await
-            .map_err(|e| {
-                tracing::info!("Error dropping user operation: {}", e);
-                EthRpcError::from(e)
-            })?;
+        let ret = pool.remove_op_by_id(entry_point, id).await.map_err(|e| {
+            tracing::info!("Error dropping user operation: {}", e);
+            EthRpcError::from(e)
+        })?;
 
         Ok(ret)
     }
 
-    async fn get_mined_user_operation(
-        &self,
+    async fn get_mined_user_operation_inner(
+        pool: &dyn Pool,
         uo_hash: B256,
         tx_hash: B256,
         entry_point: Address,
     ) -> EthResult<Option<RpcMinedUserOperation>> {
-        let tx_receipt = self
-            .evm_provider
-            .get_transaction_receipt(tx_hash)
+        let result = pool
+            .get_mined_user_operation(uo_hash, tx_hash, entry_point)
             .await
-            .context("should have fetched tx receipt")?
-            .context("Failed to fetch tx receipt")?;
+            .map_err(EthRpcError::from)?;
 
-        let receipt_fut = self.entry_point_router.get_receipt_from_tx_receipt(
-            &entry_point,
-            uo_hash,
-            tx_receipt.clone(),
-        );
-        let uo_fut =
-            self.entry_point_router
-                .get_mined_from_tx_receipt(&entry_point, uo_hash, tx_receipt);
-
-        let (uo, receipt) = future::try_join(uo_fut, receipt_fut).await?;
-
-        match (uo, receipt) {
-            (Some(uo), Some(mut receipt)) => {
-                // clear out the outer transaction logs from the receipt to avoid sending
-                // extra data in the response. OOF - this type is a mess.
+        match result {
+            Some((mined, receipt_data)) => {
+                let receipt = Self::receipt_data_to_rpc(receipt_data)?;
+                // Clear outer transaction logs to avoid extra data
+                let mut receipt = receipt;
                 receipt.receipt.inner.inner.inner.receipt.logs.clear();
+
                 Ok(Some(RpcMinedUserOperation {
-                    user_operation: uo.user_operation,
+                    user_operation: mined.user_operation.into(),
                     receipt,
                 }))
             }
-            _ => Ok(None),
+            None => Ok(None),
         }
     }
 
-    async fn get_user_operation_status(&self, uo_hash: B256) -> EthResult<RpcUserOperationStatus> {
+    async fn get_user_operation_status_inner(
+        chain_spec: &ChainSpec,
+        pool: &dyn Pool,
+        uo_hash: B256,
+    ) -> EthResult<RpcUserOperationStatus> {
         // Fetch pool status first to get preconf info for the mined query
-        let op_status = self
-            .pool_server
+        let op_status = pool
             .get_op_status(uo_hash)
             .await
             .map_err(EthRpcError::from)?;
 
-        let preconf_transaction: Option<B256> = if self.chain_spec.flashblocks_enabled {
+        let preconf_transaction: Option<B256> = if chain_spec.flashblocks_enabled {
             op_status
                 .as_ref()
                 .and_then(|s| s.preconf_info.as_ref())
@@ -328,16 +293,14 @@ where
             None
         };
 
-        // Fetch mined UO + receipt from all entry points
-        let mined_futs = self.entry_point_router.entry_points().map(|ep| {
-            self.entry_point_router
-                .get_mined_and_receipt(ep, uo_hash, preconf_transaction)
-        });
+        // Check receipt
+        let receipt_data = pool
+            .get_user_operation_receipt(uo_hash, preconf_transaction)
+            .await
+            .map_err(EthRpcError::from)?;
 
-        let mined_results = future::try_join_all(mined_futs).await?;
-
-        // Check for mined/preconfirmed receipt first (includes user operation)
-        if let Some((uo_by_hash, receipt)) = mined_results.into_iter().find_map(|r| r) {
+        if let Some(data) = receipt_data {
+            let receipt = Self::receipt_data_to_rpc(data)?;
             let status = match receipt.status {
                 UOStatusEnum::Mined => UserOperationStatusEnum::Mined,
                 UOStatusEnum::Preconfirmed => UserOperationStatusEnum::Preconfirmed,
@@ -350,7 +313,6 @@ where
 
             rpc_status.status = status;
             rpc_status.receipt = Some(receipt);
-            rpc_status.user_operation = Some(uo_by_hash.user_operation);
 
             return Ok(rpc_status);
         }
@@ -371,13 +333,12 @@ where
         })
     }
 
-    async fn get_pending_user_operation_by_sender_nonce(
-        &self,
+    async fn get_pending_user_operation_by_sender_nonce_inner(
+        pool: &dyn Pool,
         sender: Address,
         nonce: U256,
     ) -> EthResult<Option<RpcUserOperation>> {
-        let uo = self
-            .pool_server
+        let uo = pool
             .get_op_by_id(UserOperationId { sender, nonce })
             .await
             .map_err(EthRpcError::from)?;
@@ -385,36 +346,36 @@ where
         Ok(uo.map(|uo| uo.uo.into()))
     }
 
-    #[instrument(skip_all)]
-    async fn get_user_operation_gas_price(&self) -> EthResult<RpcUserOperationGasPrice> {
-        // Get base fee, priority fee (with bundler overhead), and block number
-        let estimate = self
-            .fee_estimator
-            .latest_fee_estimate()
-            .await
-            .context("should get fee estimate")?;
+    async fn get_user_operation_gas_price_inner(
+        pool: &dyn Pool,
+        settings: RundlerApiSettings,
+    ) -> EthResult<RpcUserOperationGasPrice> {
+        let fee_estimate = pool.get_fee_estimate().await.map_err(EthRpcError::from)?;
+
         let bundle_fees = GasFees {
-            max_fee_per_gas: estimate
+            max_fee_per_gas: fee_estimate
                 .required_base_fee
-                .saturating_add(estimate.required_priority_fee),
-            max_priority_fee_per_gas: estimate.required_priority_fee,
+                .saturating_add(fee_estimate.required_priority_fee),
+            max_priority_fee_per_gas: fee_estimate.required_priority_fee,
         };
 
-        // Convert to user operation fees (current required)
-        let op_fees = self.fee_estimator.required_op_fees(bundle_fees);
+        let op_fees = pool
+            .get_required_op_fees(bundle_fees)
+            .await
+            .map_err(EthRpcError::from)?;
         let priority_fee = op_fees.max_priority_fee_per_gas;
 
         // Calculate suggested priority fee with configured buffer
         let priority_multiplier =
-            100u128.saturating_add(u128::from(self.settings.priority_fee_buffer_percent));
+            100u128.saturating_add(u128::from(settings.priority_fee_buffer_percent));
         let suggested_priority_fee = priority_fee
             .saturating_mul(priority_multiplier)
             .saturating_div(100);
 
         // Calculate suggested max fee with configured base fee buffer
         let base_fee_multiplier =
-            100u128.saturating_add(u128::from(self.settings.base_fee_buffer_percent));
-        let suggested_max_fee = estimate
+            100u128.saturating_add(u128::from(settings.base_fee_buffer_percent));
+        let suggested_max_fee = fee_estimate
             .required_base_fee
             .saturating_mul(base_fee_multiplier)
             .saturating_div(100)
@@ -422,11 +383,44 @@ where
 
         Ok(RpcUserOperationGasPrice {
             priority_fee: U128::from(priority_fee),
-            base_fee: U128::from(estimate.base_fee),
-            block_number: U64::from(estimate.block_number),
+            base_fee: U128::from(fee_estimate.base_fee),
+            block_number: U64::from(fee_estimate.block_number),
             suggested: RpcSuggestedGasFees {
                 max_priority_fee_per_gas: U128::from(suggested_priority_fee),
                 max_fee_per_gas: U128::from(suggested_max_fee),
+            },
+        })
+    }
+
+    fn receipt_data_to_rpc(
+        data: rundler_types::pool::UserOperationReceiptData,
+    ) -> EthResult<RpcUserOperationReceipt> {
+        let logs: Vec<rundler_provider::Log> =
+            serde_json::from_slice(&data.logs_json).map_err(|e| {
+                EthRpcError::Internal(anyhow::anyhow!("Failed to deserialize logs: {e}"))
+            })?;
+
+        let receipt: rundler_provider::TransactionReceipt =
+            serde_json::from_slice(&data.receipt_json).map_err(|e| {
+                EthRpcError::Internal(anyhow::anyhow!("Failed to deserialize receipt: {e}"))
+            })?;
+
+        Ok(RpcUserOperationReceipt {
+            user_op_hash: data.user_op_hash,
+            entry_point: data.entry_point.into(),
+            sender: data.sender.into(),
+            nonce: data.nonce,
+            paymaster: data.paymaster.into(),
+            actual_gas_cost: data.actual_gas_cost,
+            actual_gas_used: data.actual_gas_used,
+            success: data.success,
+            reason: data.reason,
+            logs,
+            receipt,
+            status: if data.is_preconfirmed {
+                UOStatusEnum::Preconfirmed
+            } else {
+                UOStatusEnum::Mined
             },
         })
     }

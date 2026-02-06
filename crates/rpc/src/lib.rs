@@ -19,25 +19,45 @@
 ))]
 //! JSON-RPC server for the Rundler.
 
+mod chain_resolver;
+pub use chain_resolver::{ChainResolver, ResolvedChain};
+
+/// Multi-chain gateway infrastructure.
+pub mod gateway;
+pub use gateway::{
+    ChainBackend, ChainConfig, ChainId, ChainRouter, ChainRoutingLayer, ChainRoutingMiddleware,
+    GatewayConfig,
+};
+
 mod debug;
-pub use debug::DebugApiClient;
+pub use debug::{DebugApiClient, DebugApiServer};
 
 mod admin;
-pub use admin::AdminApiClient;
+pub use admin::{AdminApiClient, AdminApiServer};
 
 mod error;
 
 mod eth;
-pub use eth::{EthApiClient, EthApiSettings};
+pub use eth::{EthApiClient, EthApiServer};
 
 mod health;
 
 mod rundler;
-pub use rundler::{RundlerApiClient, RundlerApiSettings};
+pub use rundler::{RundlerApiClient, RundlerApiServer, RundlerApiSettings};
 
 mod task;
-pub use task::{Args as RpcTaskArgs, RpcTask};
+pub use task::{Args as RpcTaskArgs, RpcTask, build_rpc_module};
 
 mod rpc_metrics;
 mod types;
+pub use types::{
+    ApiNamespace, RpcAdminClearState, RpcAdminSetTracking, RpcBundlerSponsorship,
+    RpcDebugPaymasterBalance, RpcGasEstimate, RpcGasEstimateV0_6, RpcGasEstimateV0_7,
+    RpcMinedUserOperation, RpcReputationInput, RpcReputationOutput, RpcStakeInfo, RpcStakeStatus,
+    RpcUserOperation, RpcUserOperationByHash, RpcUserOperationOptionalGas,
+    RpcUserOperationOptionalGasV0_6, RpcUserOperationOptionalGasV0_7, RpcUserOperationPermissions,
+    RpcUserOperationReceipt, RpcUserOperationV0_6, RpcUserOperationV0_7, convert_permissions,
+    convert_user_operation, convert_user_operation_optional_gas, parse_user_operation,
+    parse_user_operation_permissions, user_operation_to_json,
+};
 mod utils;

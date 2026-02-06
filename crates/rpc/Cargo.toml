@@ -8,28 +8,24 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-alloy-consensus.workspace = true
-
 alloy-contract.workspace = true
 alloy-json-rpc.workspace = true
 alloy-primitives.workspace = true
-alloy-sol-types.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
 futures-util.workspace = true
 http.workspace = true
-itertools.workspace = true
 jsonrpsee = { workspace = true, features = ["client", "macros", "server"] }
 metrics.workspace = true
 metrics-derive.workspace = true
-rundler-contracts.workspace = true
 rundler-provider.workspace = true
 rundler-sim.workspace = true
 rundler-task.workspace = true
 rundler-types.workspace = true
 rundler-utils.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 strum.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
@@ -39,8 +35,6 @@ tower-http = { workspace = true, features = ["cors"] }
 tracing.workspace = true
 
 [dev-dependencies]
-alloy-consensus.workspace = true
-alloy-rpc-types-eth.workspace = true
 mockall.workspace = true
 rundler-provider = { workspace = true, features = ["test-utils"] }
 rundler-sim = { workspace = true, features = ["test-utils"] }

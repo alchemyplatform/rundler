@@ -31,7 +31,7 @@ use crate::{
 /// User operation definition for RPC
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RpcUserOperation {
+pub struct RpcUserOperation {
     sender: RpcAddress,
     nonce: U256,
     init_code: Bytes,
@@ -112,9 +112,10 @@ impl TryFromRpcType<RpcUserOperation> for UserOperation {
     }
 }
 
+/// v0.6 user operation with optional gas fields for estimation
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RpcUserOperationOptionalGas {
+pub struct RpcUserOperationOptionalGas {
     sender: Address,
     nonce: U256,
     init_code: Bytes,
@@ -154,9 +155,10 @@ impl FromRpcType<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
     }
 }
 
+/// v0.6 gas estimate for a user operation
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RpcGasEstimate {
+pub struct RpcGasEstimate {
     pre_verification_gas: U128,
     call_gas_limit: U128,
     verification_gas_limit: U128,
