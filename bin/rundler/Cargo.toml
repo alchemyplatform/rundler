@@ -54,8 +54,9 @@ serde.workspace = true
 serde_json.workspace = true
 sscanf = "0.4.2"
 strum = { workspace = true, features = ["derive"] }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync"] }
+tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "signal", "sync"] }
 tokio-metrics = "0.4.0"
+toml.workspace = true
 tonic.workspace = true
 tracing.workspace = true
 tracing-appender = "0.2.3"

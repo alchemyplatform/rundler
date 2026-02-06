@@ -29,7 +29,7 @@ use rundler_task::{
     grpc::{grpc_metrics::GrpcMetricsLayer, protos::from_bytes},
 };
 use rundler_types::{
-    EntityUpdate, UserOperationId, UserOperationVariant,
+    EntityUpdate, GasFees, UserOperationId, UserOperationVariant,
     chain::ChainSpec,
     pool::{Pool, Reputation},
 };
@@ -39,29 +39,40 @@ use tonic::{Request, Response, Result, Status, transport::Server};
 
 use super::protos::{
     AddOpRequest, AddOpResponse, AddOpSuccess, AdminSetTrackingRequest, AdminSetTrackingResponse,
-    AdminSetTrackingSuccess, DebugClearStateRequest, DebugClearStateResponse,
-    DebugClearStateSuccess, DebugDumpMempoolRequest, DebugDumpMempoolResponse,
-    DebugDumpMempoolSuccess, DebugDumpPaymasterBalancesRequest, DebugDumpPaymasterBalancesResponse,
+    AdminSetTrackingSuccess, CheckSignatureRequest, CheckSignatureResponse, CheckSignatureSuccess,
+    DebugClearStateRequest, DebugClearStateResponse, DebugClearStateSuccess,
+    DebugDumpMempoolRequest, DebugDumpMempoolResponse, DebugDumpMempoolSuccess,
+    DebugDumpPaymasterBalancesRequest, DebugDumpPaymasterBalancesResponse,
     DebugDumpPaymasterBalancesSuccess, DebugDumpReputationRequest, DebugDumpReputationResponse,
     DebugDumpReputationSuccess, DebugSetReputationRequest, DebugSetReputationResponse,
-    DebugSetReputationSuccess, GetOpByHashRequest, GetOpByHashResponse, GetOpByHashSuccess,
+    DebugSetReputationSuccess, EstimateUserOperationGasRequest, EstimateUserOperationGasResponse,
+    GasEstimateSuccess, GetFeeEstimateRequest, GetFeeEstimateResponse,
+    GetMaxPriorityFeePerGasRequest, GetMaxPriorityFeePerGasResponse,
+    GetMaxPriorityFeePerGasSuccess, GetMinedByHashRequest, GetMinedByHashResponse,
+    GetMinedByHashSuccess, GetMinedUserOperationRequest, GetMinedUserOperationResponse,
+    GetMinedUserOperationSuccess, GetOpByHashRequest, GetOpByHashResponse, GetOpByHashSuccess,
     GetOpByIdRequest, GetOpByIdResponse, GetOpByIdSuccess, GetOpStatusRequest, GetOpStatusResponse,
     GetOpStatusSuccess, GetOpsByHashesRequest, GetOpsByHashesResponse, GetOpsByHashesSuccess,
     GetOpsRequest, GetOpsResponse, GetOpsSuccess, GetOpsSummariesRequest, GetOpsSummariesResponse,
     GetOpsSummariesSuccess, GetReputationStatusRequest, GetReputationStatusResponse,
-    GetReputationStatusSuccess, GetStakeStatusRequest, GetStakeStatusResponse,
-    GetStakeStatusSuccess, GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse,
-    MempoolOp, NotifyPendingBundleRequest, NotifyPendingBundleResponse, NotifyPendingBundleSuccess,
-    OP_POOL_FILE_DESCRIPTOR_SET, PoolOperationStatus, PoolOperationSummary, RemoveOpByIdRequest,
-    RemoveOpByIdResponse, RemoveOpByIdSuccess, RemoveOpsRequest, RemoveOpsResponse,
-    RemoveOpsSuccess, ReputationStatus, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse,
-    TryUoFromProto, UpdateEntitiesRequest, UpdateEntitiesResponse, UpdateEntitiesSuccess,
-    add_op_response, admin_set_tracking_response, debug_clear_state_response,
+    GetReputationStatusSuccess, GetRequiredOpFeesRequest, GetRequiredOpFeesResponse,
+    GetStakeStatusRequest, GetStakeStatusResponse, GetStakeStatusSuccess,
+    GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse,
+    GetUserOperationReceiptRequest, GetUserOperationReceiptResponse,
+    GetUserOperationReceiptSuccess, MempoolOp, MinedUserOperationProto, NotifyPendingBundleRequest,
+    NotifyPendingBundleResponse, NotifyPendingBundleSuccess, OP_POOL_FILE_DESCRIPTOR_SET,
+    PoolOperationStatus, PoolOperationSummary, RemoveOpByIdRequest, RemoveOpByIdResponse,
+    RemoveOpByIdSuccess, RemoveOpsRequest, RemoveOpsResponse, RemoveOpsSuccess, ReputationStatus,
+    SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, TryUoFromProto, UpdateEntitiesRequest,
+    UpdateEntitiesResponse, UpdateEntitiesSuccess, UserOperationReceiptProto, add_op_response,
+    admin_set_tracking_response, check_signature_response, debug_clear_state_response,
     debug_dump_mempool_response, debug_dump_paymaster_balances_response,
-    debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
+    debug_dump_reputation_response, debug_set_reputation_response,
+    estimate_user_operation_gas_response, get_max_priority_fee_per_gas_response,
+    get_mined_by_hash_response, get_mined_user_operation_response, get_op_by_hash_response,
     get_op_by_id_response, get_op_status_response, get_ops_by_hashes_response, get_ops_response,
     get_ops_summaries_response, get_reputation_status_response, get_stake_status_response,
-    notify_pending_bundle_response,
+    get_user_operation_receipt_response, notify_pending_bundle_response,
     op_pool_server::{OpPool, OpPoolServer},
     remove_op_by_id_response, remove_ops_response, update_entities_response,
 };
@@ -761,6 +772,254 @@ impl OpPool for OpPoolImpl {
             },
             Err(error) => GetOpStatusResponse {
                 result: Some(get_op_status_response::Result::Failure(error.into())),
+            },
+        };
+
+        Ok(Response::new(resp))
+    }
+
+    async fn estimate_user_operation_gas(
+        &self,
+        request: Request<EstimateUserOperationGasRequest>,
+    ) -> Result<Response<EstimateUserOperationGasResponse>> {
+        let req = request.into_inner();
+        let ep = self.get_entry_point(&req.entry_point)?;
+
+        let op = UserOperationVariant::try_uo_from_proto(
+            req.op
+                .ok_or_else(|| Status::invalid_argument("Operation is required"))?,
+            &self.chain_spec,
+        )
+        .map_err(|e| Status::invalid_argument(format!("Failed to convert UserOperation: {e}")))?;
+
+        let state_override_json = if req.state_override_json.is_empty() {
+            None
+        } else {
+            Some(req.state_override_json)
+        };
+
+        let resp = match self
+            .local_pool
+            .estimate_user_operation_gas(ep, op.into(), state_override_json)
+            .await
+        {
+            Ok(estimate) => EstimateUserOperationGasResponse {
+                result: Some(estimate_user_operation_gas_response::Result::Success(
+                    GasEstimateSuccess {
+                        pre_verification_gas: estimate.pre_verification_gas.to_be_bytes().to_vec(),
+                        call_gas_limit: estimate.call_gas_limit.to_be_bytes().to_vec(),
+                        verification_gas_limit: estimate
+                            .verification_gas_limit
+                            .to_be_bytes()
+                            .to_vec(),
+                        paymaster_verification_gas_limit: estimate
+                            .paymaster_verification_gas_limit
+                            .map(|v| v.to_be_bytes().to_vec()),
+                    },
+                )),
+            },
+            Err(error) => EstimateUserOperationGasResponse {
+                result: Some(estimate_user_operation_gas_response::Result::Failure(
+                    error.into(),
+                )),
+            },
+        };
+
+        Ok(Response::new(resp))
+    }
+
+    async fn get_max_priority_fee_per_gas(
+        &self,
+        _request: Request<GetMaxPriorityFeePerGasRequest>,
+    ) -> Result<Response<GetMaxPriorityFeePerGasResponse>> {
+        let resp = match self.local_pool.get_max_priority_fee_per_gas().await {
+            Ok(fee) => GetMaxPriorityFeePerGasResponse {
+                result: Some(get_max_priority_fee_per_gas_response::Result::Success(
+                    GetMaxPriorityFeePerGasSuccess {
+                        max_priority_fee_per_gas: fee.to_be_bytes().to_vec(),
+                    },
+                )),
+            },
+            Err(error) => GetMaxPriorityFeePerGasResponse {
+                result: Some(get_max_priority_fee_per_gas_response::Result::Failure(
+                    error.into(),
+                )),
+            },
+        };
+
+        Ok(Response::new(resp))
+    }
+
+    async fn get_fee_estimate(
+        &self,
+        _request: Request<GetFeeEstimateRequest>,
+    ) -> tonic::Result<Response<GetFeeEstimateResponse>> {
+        let resp = self
+            .local_pool
+            .get_fee_estimate()
+            .await
+            .map_err(|e| tonic::Status::internal(format!("Failed to get fee estimate: {e}")))?;
+        Ok(Response::new(GetFeeEstimateResponse {
+            block_number: resp.block_number,
+            base_fee: resp.base_fee.to_be_bytes().to_vec(),
+            required_base_fee: resp.required_base_fee.to_be_bytes().to_vec(),
+            required_priority_fee: resp.required_priority_fee.to_be_bytes().to_vec(),
+        }))
+    }
+
+    async fn get_required_op_fees(
+        &self,
+        request: Request<GetRequiredOpFeesRequest>,
+    ) -> tonic::Result<Response<GetRequiredOpFeesResponse>> {
+        let req = request.into_inner();
+
+        let parse_u128 = |bytes: Vec<u8>, name: &str| -> tonic::Result<u128> {
+            let arr: [u8; 16] = bytes
+                .try_into()
+                .map_err(|_| Status::invalid_argument(format!("Invalid {name} bytes")))?;
+            Ok(u128::from_be_bytes(arr))
+        };
+
+        let bundle_fees = GasFees {
+            max_fee_per_gas: parse_u128(req.max_fee_per_gas, "max_fee_per_gas")?,
+            max_priority_fee_per_gas: parse_u128(
+                req.max_priority_fee_per_gas,
+                "max_priority_fee_per_gas",
+            )?,
+        };
+        let resp = self
+            .local_pool
+            .get_required_op_fees(bundle_fees)
+            .await
+            .map_err(|e| tonic::Status::internal(format!("Failed to get required op fees: {e}")))?;
+        Ok(Response::new(GetRequiredOpFeesResponse {
+            max_fee_per_gas: resp.max_fee_per_gas.to_be_bytes().to_vec(),
+            max_priority_fee_per_gas: resp.max_priority_fee_per_gas.to_be_bytes().to_vec(),
+        }))
+    }
+
+    async fn check_signature(
+        &self,
+        request: Request<CheckSignatureRequest>,
+    ) -> Result<Response<CheckSignatureResponse>> {
+        let req = request.into_inner();
+        let ep = self.get_entry_point(&req.entry_point)?;
+
+        let op = UserOperationVariant::try_uo_from_proto(
+            req.op
+                .ok_or_else(|| Status::invalid_argument("Operation is required"))?,
+            &self.chain_spec,
+        )
+        .map_err(|e| Status::invalid_argument(format!("Failed to convert UserOperation: {e}")))?;
+
+        let resp = match self.local_pool.check_signature(ep, op).await {
+            Ok(valid) => CheckSignatureResponse {
+                result: Some(check_signature_response::Result::Success(
+                    CheckSignatureSuccess { valid },
+                )),
+            },
+            Err(error) => CheckSignatureResponse {
+                result: Some(check_signature_response::Result::Failure(error.into())),
+            },
+        };
+
+        Ok(Response::new(resp))
+    }
+
+    async fn get_mined_by_hash(
+        &self,
+        request: Request<GetMinedByHashRequest>,
+    ) -> Result<Response<GetMinedByHashResponse>> {
+        let req = request.into_inner();
+        let hash = from_bytes(&req.hash)
+            .map_err(|e| Status::invalid_argument(format!("Invalid hash: {e}")))?;
+
+        let resp = match self.local_pool.get_mined_by_hash(hash).await {
+            Ok(mined) => GetMinedByHashResponse {
+                result: Some(get_mined_by_hash_response::Result::Success(
+                    GetMinedByHashSuccess {
+                        mined: mined.as_ref().map(MinedUserOperationProto::from_domain),
+                    },
+                )),
+            },
+            Err(error) => GetMinedByHashResponse {
+                result: Some(get_mined_by_hash_response::Result::Failure(error.into())),
+            },
+        };
+
+        Ok(Response::new(resp))
+    }
+
+    async fn get_user_operation_receipt(
+        &self,
+        request: Request<GetUserOperationReceiptRequest>,
+    ) -> Result<Response<GetUserOperationReceiptResponse>> {
+        let req = request.into_inner();
+        let hash = from_bytes(&req.hash)
+            .map_err(|e| Status::invalid_argument(format!("Invalid hash: {e}")))?;
+        let bundle_transaction = if req.bundle_transaction.is_empty() {
+            None
+        } else {
+            Some(
+                from_bytes(&req.bundle_transaction)
+                    .map_err(|e| Status::invalid_argument(format!("Invalid tx hash: {e}")))?,
+            )
+        };
+
+        let resp = match self
+            .local_pool
+            .get_user_operation_receipt(hash, bundle_transaction)
+            .await
+        {
+            Ok(receipt) => GetUserOperationReceiptResponse {
+                result: Some(get_user_operation_receipt_response::Result::Success(
+                    GetUserOperationReceiptSuccess {
+                        receipt: receipt.as_ref().map(UserOperationReceiptProto::from_domain),
+                    },
+                )),
+            },
+            Err(error) => GetUserOperationReceiptResponse {
+                result: Some(get_user_operation_receipt_response::Result::Failure(
+                    error.into(),
+                )),
+            },
+        };
+
+        Ok(Response::new(resp))
+    }
+
+    async fn get_mined_user_operation(
+        &self,
+        request: Request<GetMinedUserOperationRequest>,
+    ) -> Result<Response<GetMinedUserOperationResponse>> {
+        let req = request.into_inner();
+        let uo_hash = from_bytes(&req.uo_hash)
+            .map_err(|e| Status::invalid_argument(format!("Invalid uo_hash: {e}")))?;
+        let tx_hash = from_bytes(&req.tx_hash)
+            .map_err(|e| Status::invalid_argument(format!("Invalid tx_hash: {e}")))?;
+        let entry_point = self.get_entry_point(&req.entry_point)?;
+
+        let resp = match self
+            .local_pool
+            .get_mined_user_operation(uo_hash, tx_hash, entry_point)
+            .await
+        {
+            Ok(result) => GetMinedUserOperationResponse {
+                result: Some(get_mined_user_operation_response::Result::Success(
+                    GetMinedUserOperationSuccess {
+                        mined: result
+                            .as_ref()
+                            .map(|(m, _)| MinedUserOperationProto::from_domain(m)),
+                        receipt: result
+                            .as_ref()
+                            .map(|(_, r)| UserOperationReceiptProto::from_domain(r)),
+                    },
+                )),
+            },
+            Err(error) => GetMinedUserOperationResponse {
+                result: Some(get_mined_user_operation_response::Result::Failure(
+                    error.into(),
+                )),
             },
         };
 

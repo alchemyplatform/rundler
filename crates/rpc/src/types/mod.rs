@@ -26,15 +26,15 @@ use crate::{
 };
 
 mod permissions;
-pub(crate) use permissions::RpcUserOperationPermissions;
+pub use permissions::{RpcBundlerSponsorship, RpcUserOperationPermissions};
 
 mod v0_6;
-pub(crate) use v0_6::{
+pub use v0_6::{
     RpcGasEstimate as RpcGasEstimateV0_6, RpcUserOperation as RpcUserOperationV0_6,
     RpcUserOperationOptionalGas as RpcUserOperationOptionalGasV0_6,
 };
 mod v0_7;
-pub(crate) use v0_7::{
+pub use v0_7::{
     RpcGasEstimate as RpcGasEstimateV0_7, RpcUserOperation as RpcUserOperationV0_7,
     RpcUserOperationOptionalGas as RpcUserOperationOptionalGasV0_7,
 };
@@ -43,9 +43,13 @@ pub(crate) use v0_7::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, strum::EnumString)]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum ApiNamespace {
+    /// Eth namespace
     Eth,
+    /// Debug namespace
     Debug,
+    /// Rundler namespace
     Rundler,
+    /// Admin namespace
     Admin,
 }
 
@@ -86,23 +90,32 @@ impl From<Address> for RpcAddress {
 /// Stake info definition for RPC
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RpcStakeStatus {
-    pub(crate) is_staked: bool,
-    pub(crate) stake_info: RpcStakeInfo,
+pub struct RpcStakeStatus {
+    /// Whether the entity is staked
+    pub is_staked: bool,
+    /// Stake info
+    pub stake_info: RpcStakeInfo,
 }
 
+/// Stake info for RPC
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RpcStakeInfo {
-    pub(crate) addr: Address,
-    pub(crate) stake: u128,
-    pub(crate) unstake_delay_sec: u32,
+pub struct RpcStakeInfo {
+    /// Entity address
+    pub addr: Address,
+    /// Stake amount
+    pub stake: u128,
+    /// Unstake delay in seconds
+    pub unstake_delay_sec: u32,
 }
 
+/// User operation in RPC wire format
 #[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(untagged)]
-pub(crate) enum RpcUserOperation {
+pub enum RpcUserOperation {
+    /// v0.6 user operation
     V0_6(RpcUserOperationV0_6),
+    /// v0.7 user operation
     V0_7(RpcUserOperationV0_7),
 }
 
@@ -135,24 +148,27 @@ impl TryFromRpcType<RpcUserOperation> for UserOperationVariant {
 /// User operation with additional metadata
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RpcUserOperationByHash {
+pub struct RpcUserOperationByHash {
     /// The full user operation
-    pub(crate) user_operation: RpcUserOperation,
+    pub user_operation: RpcUserOperation,
     /// The entry point address this operation was sent to
-    pub(crate) entry_point: RpcAddress,
+    pub entry_point: RpcAddress,
     /// The number of the block this operation was included in
-    pub(crate) block_number: Option<U256>,
+    pub block_number: Option<U256>,
     /// The hash of the block this operation was included in
-    pub(crate) block_hash: Option<B256>,
+    pub block_hash: Option<B256>,
     /// The hash of the transaction this operation was included in
-    pub(crate) transaction_hash: Option<B256>,
+    pub transaction_hash: Option<B256>,
 }
 
+/// User operation with optional gas fields for estimation
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 #[allow(clippy::large_enum_variant)]
-pub(crate) enum RpcUserOperationOptionalGas {
+pub enum RpcUserOperationOptionalGas {
+    /// v0.6 user operation with optional gas
     V0_6(RpcUserOperationOptionalGasV0_6),
+    /// v0.7 user operation with optional gas
     V0_7(RpcUserOperationOptionalGasV0_7),
 }
 
@@ -173,10 +189,13 @@ impl FromRpcType<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
     }
 }
 
+/// Gas estimate for a user operation
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
-pub(crate) enum RpcGasEstimate {
+pub enum RpcGasEstimate {
+    /// v0.6 gas estimate
     V0_6(RpcGasEstimateV0_6),
+    /// v0.7 gas estimate
     V0_7(RpcGasEstimateV0_7),
 }
 
@@ -198,6 +217,7 @@ pub enum UOStatusEnum {
     Mined,
     Preconfirmed,
 }
+
 /// User operation receipt
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -315,46 +335,59 @@ pub struct RpcDebugPaymasterBalance {
 /// A user operation that has been mined
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RpcMinedUserOperation {
-    pub(crate) user_operation: RpcUserOperation,
-    pub(crate) receipt: RpcUserOperationReceipt,
+pub struct RpcMinedUserOperation {
+    /// The user operation
+    pub user_operation: RpcUserOperation,
+    /// The receipt
+    pub receipt: RpcUserOperationReceipt,
 }
 
 /// User operation status value
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) enum UserOperationStatusEnum {
+pub enum UserOperationStatusEnum {
     #[default]
     Unknown,
+    /// Pending in the mempool
     Pending,
+    /// Pending in a bundle
     PendingBundle,
+    /// Mined in a block
     Mined,
+    /// Preconfirmed
     Preconfirmed,
 }
 
 /// Information about a pending bundle containing a user operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RpcPendingBundleInfo {
+pub struct RpcPendingBundleInfo {
     /// The transaction hash of the pending bundle
-    pub(crate) tx_hash: B256,
+    pub tx_hash: B256,
     /// The block number at which the bundle was sent
-    pub(crate) sent_at_block: U64,
+    pub sent_at_block: U64,
     /// The address of the bundler that sent the bundle
-    pub(crate) bundler_address: Address,
+    pub bundler_address: Address,
 }
 
 /// User operation status
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RpcUserOperationStatus {
-    pub(crate) status: UserOperationStatusEnum,
-    pub(crate) receipt: Option<RpcUserOperationReceipt>,
-    pub(crate) user_operation: Option<RpcUserOperation>,
-    pub(crate) added_at_block: Option<U64>,
-    pub(crate) valid_until: Option<U64>,
-    pub(crate) valid_after: Option<U64>,
-    pub(crate) pending_bundle: Option<RpcPendingBundleInfo>,
+pub struct RpcUserOperationStatus {
+    /// The status of the user operation
+    pub status: UserOperationStatusEnum,
+    /// Receipt (present when mined or preconfirmed)
+    pub receipt: Option<RpcUserOperationReceipt>,
+    /// The user operation (present when in pool)
+    pub user_operation: Option<RpcUserOperation>,
+    /// Block at which the operation was added to the pool
+    pub added_at_block: Option<U64>,
+    /// Timestamp until which the operation is valid
+    pub valid_until: Option<U64>,
+    /// Timestamp after which the operation becomes valid
+    pub valid_after: Option<U64>,
+    /// Information about a pending bundle containing this operation
+    pub pending_bundle: Option<RpcPendingBundleInfo>,
 }
 
 impl From<PendingBundleInfo> for RpcPendingBundleInfo {
@@ -414,4 +447,104 @@ pub struct RpcUserOperationGasPrice {
     pub block_number: U64,
     /// Suggested fees with buffer for faster inclusion
     pub suggested: RpcSuggestedGasFees,
+}
+
+// --- Public gateway conversion functions ---
+// These allow the gateway crate to convert from JSON-RPC wire format to internal
+// types without exposing all the internal RPC type definitions.
+
+/// Parse a JSON-RPC user operation from a [`serde_json::Value`] and convert it to
+/// a [`UserOperationVariant`].
+pub fn parse_user_operation(
+    value: serde_json::Value,
+    chain_spec: &ChainSpec,
+    entry_point: Address,
+) -> Result<UserOperationVariant, String> {
+    let ep_version = chain_spec
+        .entry_point_version(entry_point)
+        .ok_or_else(|| format!("Unsupported entry point: {:?}", entry_point))?;
+
+    let rpc_uo: RpcUserOperation =
+        serde_json::from_value(value).map_err(|e| format!("Invalid user operation: {e}"))?;
+
+    UserOperationVariant::try_from_rpc_type(rpc_uo, chain_spec, ep_version)
+        .map_err(|e| format!("Invalid user operation: {e}"))
+}
+
+/// Parse JSON-RPC user operation permissions from a [`serde_json::Value`] and convert
+/// to [`UserOperationPermissions`].
+pub fn parse_user_operation_permissions(
+    value: serde_json::Value,
+    chain_spec: &ChainSpec,
+    entry_point: Address,
+) -> Result<rundler_types::UserOperationPermissions, String> {
+    let ep_version = chain_spec
+        .entry_point_version(entry_point)
+        .ok_or_else(|| format!("Unsupported entry point: {:?}", entry_point))?;
+
+    let rpc_perms: RpcUserOperationPermissions =
+        serde_json::from_value(value).map_err(|e| format!("Invalid permissions: {e}"))?;
+
+    Ok(rundler_types::UserOperationPermissions {
+        trusted: rpc_perms.trusted,
+        max_allowed_in_pool_for_sender: rpc_perms
+            .max_allowed_in_pool_for_sender
+            .map(|c| c.to::<usize>()),
+        underpriced_accept_pct: rpc_perms.underpriced_accept_pct.map(|c| c.to::<u32>()),
+        underpriced_bundle_pct: rpc_perms.underpriced_bundle_pct.map(|c| c.to::<u32>()),
+        bundler_sponsorship: rpc_perms.bundler_sponsorship.map(|c| {
+            <rundler_types::BundlerSponsorship as FromRpcType<RpcBundlerSponsorship>>::from_rpc_type(
+                c,
+                chain_spec,
+                ep_version,
+            )
+        }),
+        eip7702_disabled: rpc_perms.eip7702_disabled.unwrap_or(false),
+    })
+}
+
+/// Convert a [`UserOperationVariant`] to its JSON-RPC wire format as a [`serde_json::Value`].
+pub fn user_operation_to_json(op: UserOperationVariant) -> serde_json::Value {
+    let rpc_uo: RpcUserOperation = op.into();
+    serde_json::to_value(rpc_uo).expect("RpcUserOperation should always serialize")
+}
+
+/// Convert an [`RpcUserOperation`] to a [`UserOperationVariant`].
+pub fn convert_user_operation(
+    op: RpcUserOperation,
+    chain_spec: &ChainSpec,
+    entry_point: Address,
+) -> Result<UserOperationVariant, String> {
+    let ep_version = chain_spec
+        .entry_point_version(entry_point)
+        .ok_or_else(|| format!("Unsupported entry point: {:?}", entry_point))?;
+
+    UserOperationVariant::try_from_rpc_type(op, chain_spec, ep_version)
+        .map_err(|e| format!("Invalid user operation: {e}"))
+}
+
+/// Convert [`RpcUserOperationOptionalGas`] to [`UserOperationOptionalGas`].
+pub fn convert_user_operation_optional_gas(
+    op: RpcUserOperationOptionalGas,
+    chain_spec: &ChainSpec,
+    entry_point: Address,
+) -> Result<UserOperationOptionalGas, String> {
+    let ep_version = chain_spec
+        .entry_point_version(entry_point)
+        .ok_or_else(|| format!("Unsupported entry point: {:?}", entry_point))?;
+
+    Ok(op.into_rundler_type(chain_spec, ep_version))
+}
+
+/// Convert [`RpcUserOperationPermissions`] to [`rundler_types::UserOperationPermissions`].
+pub fn convert_permissions(
+    perms: RpcUserOperationPermissions,
+    chain_spec: &ChainSpec,
+    entry_point: Address,
+) -> Result<rundler_types::UserOperationPermissions, String> {
+    let ep_version = chain_spec
+        .entry_point_version(entry_point)
+        .ok_or_else(|| format!("Unsupported entry point: {:?}", entry_point))?;
+
+    Ok(perms.into_rundler_type(chain_spec, ep_version))
 }

@@ -22,34 +22,35 @@ use crate::utils::{FromRpcType, IntoRundlerType};
 /// User operation permissions
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RpcUserOperationPermissions {
+pub struct RpcUserOperationPermissions {
     /// Whether the user operation is trusted, allowing the bundler to skip untrusted simulation
     #[serde(default)]
-    pub(crate) trusted: bool,
+    pub trusted: bool,
     /// The maximum sender allowed in the pool
     #[serde(default)]
-    pub(crate) max_allowed_in_pool_for_sender: Option<U64>,
+    pub max_allowed_in_pool_for_sender: Option<U64>,
     /// The allowed percentage of underpriced fees that is accepted into the pool
     #[serde(default)]
-    pub(crate) underpriced_accept_pct: Option<U64>,
+    pub underpriced_accept_pct: Option<U64>,
     /// The allowed percentage of fees underpriced that is bundled
     #[serde(default)]
-    pub(crate) underpriced_bundle_pct: Option<U64>,
+    pub underpriced_bundle_pct: Option<U64>,
     /// Bundler sponsorship settings
     #[serde(default)]
-    pub(crate) bundler_sponsorship: Option<RpcBundlerSponsorship>,
+    pub bundler_sponsorship: Option<RpcBundlerSponsorship>,
     /// Disable EIP-7702
     #[serde(default)]
-    pub(crate) eip7702_disabled: Option<bool>,
+    pub eip7702_disabled: Option<bool>,
 }
 
+/// Bundler sponsorship settings for RPC
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RpcBundlerSponsorship {
+pub struct RpcBundlerSponsorship {
     /// The maximum cost the bundler is willing to pay for the user operation
-    pub(crate) max_cost: U256,
+    pub max_cost: U256,
     /// The valid until timestamp of the sponsorship
-    pub(crate) valid_until: U64,
+    pub valid_until: U64,
 }
 
 impl FromRpcType<RpcUserOperationPermissions> for UserOperationPermissions {

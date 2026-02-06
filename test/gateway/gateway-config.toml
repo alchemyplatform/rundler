@@ -1,0 +1,34 @@
+# Gateway configuration for multi-chain routing
+#
+# This file specifies per-chain connection info. Global settings like
+# PROVIDER_RATE_LIMIT_RETRY_ENABLED are passed via environment variables
+# to the backend services, not the gateway.
+#
+# Each chain entry must specify:
+#   - chain_id: The numeric chain ID (overrides base chain spec's ID)
+#   - name: Human-readable name (for logging/metrics)
+#   - base: Base chain spec to inherit from (e.g., "dev", "ethereum")
+#   - node_http: Ethereum node RPC URL
+#   - pool_url: gRPC URL for the pool backend
+#   - builder_url: gRPC URL for the builder backend
+#
+# Optional per-chain overrides:
+#   - chain_name: Override the chain spec name
+#   - enabled_entry_points: Override default entry points (default: ["v0.7"])
+
+[[chains]]
+chain_id = 1337
+name = "dev-1337"
+base = "dev"
+node_http = "http://geth-1337:8545"
+pool_url = "http://backend-1337:50051"
+builder_url = "http://backend-1337:50052"
+
+[[chains]]
+chain_id = 31337
+name = "dev-31337"
+base = "dev"
+chain_name = "Ethereum Devnet 31337"
+node_http = "http://geth-31337:8545"
+pool_url = "http://backend-31337:50051"
+builder_url = "http://backend-31337:50052"

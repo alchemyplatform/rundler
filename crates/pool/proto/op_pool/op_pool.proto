@@ -312,6 +312,30 @@ service OpPool {
 
   // Get extended status for a user operation
   rpc GetOpStatus(GetOpStatusRequest) returns (GetOpStatusResponse);
+
+  // Estimate gas for a user operation
+  rpc EstimateUserOperationGas (EstimateUserOperationGasRequest) returns (EstimateUserOperationGasResponse);
+
+  // Get the maximum priority fee per gas required by the bundler
+  rpc GetMaxPriorityFeePerGas (GetMaxPriorityFeePerGasRequest) returns (GetMaxPriorityFeePerGasResponse);
+
+  // Check whether a user operation has a valid signature
+  rpc CheckSignature (CheckSignatureRequest) returns (CheckSignatureResponse);
+
+  // Get a mined user operation by its hash
+  rpc GetMinedByHash (GetMinedByHashRequest) returns (GetMinedByHashResponse);
+
+  // Get a user operation receipt
+  rpc GetUserOperationReceipt (GetUserOperationReceiptRequest) returns (GetUserOperationReceiptResponse);
+
+  // Get a mined user operation and its receipt from a specific transaction
+  rpc GetMinedUserOperation (GetMinedUserOperationRequest) returns (GetMinedUserOperationResponse);
+
+  // Get the current fee estimate for user operations
+  rpc GetFeeEstimate(GetFeeEstimateRequest) returns (GetFeeEstimateResponse);
+
+  // Get the required operation fees for the given bundle fees
+  rpc GetRequiredOpFees(GetRequiredOpFeesRequest) returns (GetRequiredOpFeesResponse);
 }
 
 message GetSupportedEntryPointsRequest {}
@@ -1062,4 +1086,140 @@ message AccessedUnsupportedContractType {
 message AggregatorMismatch {
   bytes expected = 1;
   bytes actual = 2;
+}
+
+// Estimate user operation gas
+message EstimateUserOperationGasRequest {
+  bytes entry_point = 1;
+  UserOperation op = 2;
+  bytes state_override_json = 3;
+}
+message EstimateUserOperationGasResponse {
+  oneof result {
+    GasEstimateSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message GasEstimateSuccess {
+  bytes pre_verification_gas = 1;
+  bytes call_gas_limit = 2;
+  bytes verification_gas_limit = 3;
+  optional bytes paymaster_verification_gas_limit = 4;
+}
+
+// Get max priority fee per gas
+message GetMaxPriorityFeePerGasRequest {}
+message GetMaxPriorityFeePerGasResponse {
+  oneof result {
+    GetMaxPriorityFeePerGasSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message GetMaxPriorityFeePerGasSuccess {
+  bytes max_priority_fee_per_gas = 1;
+}
+
+// Check signature
+message CheckSignatureRequest {
+  bytes entry_point = 1;
+  UserOperation op = 2;
+}
+message CheckSignatureResponse {
+  oneof result {
+    CheckSignatureSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message CheckSignatureSuccess {
+  bool valid = 1;
+}
+
+// Mined user operation
+message MinedUserOperationProto {
+  UserOperation user_operation = 1;
+  bytes entry_point = 2;
+  bytes block_number = 3;
+  bytes block_hash = 4;
+  bytes transaction_hash = 5;
+}
+
+// User operation receipt data
+message UserOperationReceiptProto {
+  bytes user_op_hash = 1;
+  bytes entry_point = 2;
+  bytes sender = 3;
+  bytes nonce = 4;
+  bytes paymaster = 5;
+  bytes actual_gas_cost = 6;
+  bytes actual_gas_used = 7;
+  bool success = 8;
+  string reason = 9;
+  bytes logs_json = 10;
+  bytes receipt_json = 11;
+  bool is_preconfirmed = 12;
+}
+
+// Get mined by hash
+message GetMinedByHashRequest {
+  bytes hash = 1;
+}
+message GetMinedByHashResponse {
+  oneof result {
+    GetMinedByHashSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message GetMinedByHashSuccess {
+  MinedUserOperationProto mined = 1;
+}
+
+// Get user operation receipt
+message GetUserOperationReceiptRequest {
+  bytes hash = 1;
+  bytes bundle_transaction = 2;
+}
+message GetUserOperationReceiptResponse {
+  oneof result {
+    GetUserOperationReceiptSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message GetUserOperationReceiptSuccess {
+  UserOperationReceiptProto receipt = 1;
+}
+
+// Get mined user operation (with receipt from specific tx)
+message GetMinedUserOperationRequest {
+  bytes uo_hash = 1;
+  bytes tx_hash = 2;
+  bytes entry_point = 3;
+}
+message GetMinedUserOperationResponse {
+  oneof result {
+    GetMinedUserOperationSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message GetMinedUserOperationSuccess {
+  MinedUserOperationProto mined = 1;
+  UserOperationReceiptProto receipt = 2;
+}
+
+// Get fee estimate
+message GetFeeEstimateRequest {}
+message GetFeeEstimateResponse {
+  uint64 block_number = 1;
+  bytes base_fee = 2;
+  bytes required_base_fee = 3;
+  bytes required_priority_fee = 4;
+}
+
+// Get required op fees
+message GetRequiredOpFeesRequest {
+  bytes max_fee_per_gas = 1;
+  bytes max_priority_fee_per_gas = 2;
+}
+message GetRequiredOpFeesResponse {
+  bytes max_fee_per_gas = 1;
+  bytes max_priority_fee_per_gas = 2;
 }

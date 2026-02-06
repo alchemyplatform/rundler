@@ -11,16 +11,14 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
-use anyhow::Context;
 use clap::Args;
 use rundler_builder::RemoteBuilderClient;
 use rundler_pool::RemotePoolClient;
-use rundler_provider::Providers;
-use rundler_rpc::{EthApiSettings, RpcTask, RpcTaskArgs, RundlerApiSettings};
+use rundler_rpc::{ChainBackend, ChainRouter, RpcTask, RpcTaskArgs, RundlerApiSettings};
 use rundler_task::{TaskSpawnerExt, server::connect_with_retries_shutdown};
-use rundler_types::chain::{ChainSpec, TryIntoWithSpec};
+use rundler_types::chain::ChainSpec;
 
 use super::CommonArgs;
 
@@ -123,23 +121,12 @@ pub struct RpcArgs {
 impl RpcArgs {
     /// Convert the CLI arguments into the arguments for the RPC server combining
     /// common and rpc specific arguments.
-    pub fn to_args(
-        &self,
-        chain_spec: ChainSpec,
-        common: &CommonArgs,
-    ) -> anyhow::Result<RpcTaskArgs> {
+    pub fn to_args(&self, chain_spec: &ChainSpec) -> anyhow::Result<RpcTaskArgs> {
         let apis = self
             .api
             .iter()
             .map(|api| api.parse())
             .collect::<Result<Vec<_>, _>>()?;
-
-        let eth_api_settings = EthApiSettings {
-            permissions_enabled: self.permissions_enabled,
-            user_operation_event_block_distance: common.user_operation_event_block_distance,
-            user_operation_event_block_distance_fallback: common
-                .user_operation_event_block_distance_fallback,
-        };
 
         let rundler_api_settings = RundlerApiSettings {
             priority_fee_buffer_percent: self.priority_fee_suggested_buffer_percent,
@@ -147,19 +134,18 @@ impl RpcArgs {
         };
 
         Ok(RpcTaskArgs {
-            unsafe_mode: common.unsafe_mode,
             port: self.port,
             host: self.host.clone(),
-            rpc_url: common.node_http.clone().context("must provide node_http")?,
             api_namespaces: apis,
-            eth_api_settings,
+            permissions_enabled: self.permissions_enabled,
             rundler_api_settings,
-            estimation_settings: common.try_into_with_spec(&chain_spec)?,
             rpc_timeout: Duration::from_secs(self.timeout_seconds.parse()?),
             max_connections: self.max_connections,
-            enabled_entry_points: common.enabled_entry_points.clone(),
+            max_request_body_size: (chain_spec.max_transaction_size_bytes * 2)
+                .try_into()
+                .expect("max_transaction_size_bytes * 2 overflowed u32"),
             corsdomain: self.corsdomain.clone(),
-            chain_spec,
+            chain_routing: None,
         })
     }
 }
@@ -194,7 +180,6 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     chain_spec: ChainSpec,
     rpc_args: RpcCliArgs,
     common_args: CommonArgs,
-    providers: impl Providers + 'static,
 ) -> anyhow::Result<()> {
     let RpcCliArgs {
         rpc: rpc_args,
@@ -202,7 +187,7 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
         builder_url,
     } = rpc_args;
 
-    let task_args = rpc_args.to_args(chain_spec.clone(), &common_args)?;
+    let task_args = rpc_args.to_args(&chain_spec)?;
 
     let pool = connect_with_retries_shutdown(
         "op pool from rpc",
@@ -220,9 +205,19 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     )
     .await?;
 
-    RpcTask::new(task_args, pool, builder, providers)
-        .spawn(task_spawner)
-        .await?;
+    let entry_points = common_args.enabled_entry_points.clone();
+    let backend = ChainBackend::new(
+        chain_spec,
+        Box::new(pool.clone()),
+        Box::new(builder.clone()),
+        Box::new(pool),
+        Box::new(builder),
+        entry_points,
+    );
+    let mut router = ChainRouter::new();
+    router.add_chain(Arc::new(backend));
+
+    RpcTask::new(task_args, router).spawn(task_spawner).await?;
 
     Ok(())
 }

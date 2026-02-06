@@ -17,10 +17,12 @@ use rundler_contracts::v0_7::IEntryPoint::{
     BeforeExecution, UserOperationEvent, UserOperationRevertReason,
 };
 use rundler_provider::{Log, TransactionReceipt};
-use rundler_types::{authorization::Eip7702Auth, chain::ChainSpec, v0_7::UserOperation};
+use rundler_types::{
+    authorization::Eip7702Auth, chain::ChainSpec, pool::UserOperationReceiptData,
+    v0_7::UserOperation,
+};
 
 use super::common::{EntryPointEvents, UserOperationEventProviderImpl};
-use crate::types::{RpcUserOperationReceipt, UOStatusEnum};
 
 pub(crate) type UserOperationEventProviderV0_7<P> =
     UserOperationEventProviderImpl<P, EntryPointFiltersV0_7>;
@@ -37,8 +39,7 @@ impl EntryPointEvents for EntryPointFiltersV0_7 {
         entry_point: Address,
         logs: Vec<Log>,
         tx_receipt: TransactionReceipt,
-    ) -> RpcUserOperationReceipt {
-        // get failure reason
+    ) -> UserOperationReceiptData {
         let reason: String = if event.success {
             "".to_owned()
         } else {
@@ -57,19 +58,23 @@ impl EntryPointEvents for EntryPointFiltersV0_7 {
                 .unwrap_or_default()
         };
 
-        RpcUserOperationReceipt {
+        let logs_json = serde_json::to_vec(&logs).expect("logs should serialize to JSON");
+        let receipt_json =
+            serde_json::to_vec(&tx_receipt).expect("receipt should serialize to JSON");
+
+        UserOperationReceiptData {
             user_op_hash: event.userOpHash,
-            entry_point: entry_point.into(),
-            sender: event.sender.into(),
+            entry_point,
+            sender: event.sender,
             nonce: event.nonce,
-            paymaster: event.paymaster.into(),
+            paymaster: event.paymaster,
             actual_gas_cost: event.actualGasCost,
             actual_gas_used: U128::uint_try_from(event.actualGasUsed).unwrap_or(U128::MAX),
             success: event.success,
-            logs,
-            receipt: tx_receipt,
             reason,
-            status: UOStatusEnum::Mined,
+            logs_json,
+            receipt_json,
+            is_preconfirmed: false,
         }
     }
 

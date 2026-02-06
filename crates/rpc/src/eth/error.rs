@@ -281,6 +281,9 @@ impl From<PoolError> for EthRpcError {
             PoolError::UnexpectedResponse => {
                 Self::Internal(anyhow::anyhow!("unexpected response from pool server"))
             }
+            PoolError::GasEstimation(msg) => {
+                Self::Internal(anyhow::anyhow!("Gas estimation error: {msg}"))
+            }
             PoolError::Other(e) => Self::Internal(e),
         }
     }
@@ -452,6 +455,16 @@ impl From<EthRpcError> for ErrorObjectOwned {
             }
             EthRpcError::OperationRejected(_) => rpc_err(INVALID_PARAMS_CODE, msg),
         }
+    }
+}
+
+impl From<ErrorObjectOwned> for EthRpcError {
+    fn from(err: ErrorObjectOwned) -> Self {
+        Self::Internal(anyhow::anyhow!(
+            "RPC error: {} (code: {})",
+            err.message(),
+            err.code()
+        ))
     }
 }
 

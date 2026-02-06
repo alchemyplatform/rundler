@@ -12,13 +12,14 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_primitives::{Address, B256, U64};
-use jsonrpsee::core::RpcResult;
+use jsonrpsee::{Extensions, core::RpcResult};
 use rundler_provider::StateOverride;
-use rundler_types::{BlockTag, UserOperationPermissions, pool::Pool};
+use rundler_types::{BlockTag, UserOperationPermissions};
 use tracing::instrument;
 
 use super::{EthApiServer, api::EthApi};
 use crate::{
+    chain_resolver::ChainResolver,
     eth::EthRpcError,
     types::{
         RpcGasEstimate, RpcUserOperation, RpcUserOperationByHash, RpcUserOperationOptionalGas,
@@ -28,18 +29,21 @@ use crate::{
 };
 
 #[async_trait::async_trait]
-impl<P> EthApiServer for EthApi<P>
+impl<R> EthApiServer for EthApi<R>
 where
-    P: Pool + 'static,
+    R: ChainResolver,
 {
     #[instrument(skip_all, fields(rpc_method = "eth_sendUserOperation"))]
     async fn send_user_operation(
         &self,
+        ext: &Extensions,
         op: RpcUserOperation,
         entry_point: Address,
         permissions: Option<RpcUserOperationPermissions>,
     ) -> RpcResult<B256> {
-        let Some(ep_version) = self.chain_spec.entry_point_version(entry_point) else {
+        let chain = self.resolve(ext)?;
+
+        let Some(ep_version) = chain.chain_spec.entry_point_version(entry_point) else {
             Err(EthRpcError::InvalidParams(format!(
                 "Unsupported entry point: {:?}",
                 entry_point
@@ -49,7 +53,7 @@ where
         // if permissions are not enabled, default them
         let mut permissions = if self.permissions_enabled {
             permissions
-                .map(|p| p.into_rundler_type(&self.chain_spec, ep_version))
+                .map(|p| p.into_rundler_type(chain.chain_spec, ep_version))
                 .unwrap_or_default()
         } else {
             UserOperationPermissions::default()
@@ -63,7 +67,10 @@ where
             "eth_sendUserOperation",
             EthApi::send_user_operation(
                 self,
-                op.try_into_rundler_type(&self.chain_spec, ep_version)?,
+                chain.chain_spec,
+                chain.pool,
+                chain.entry_points,
+                op.try_into_rundler_type(chain.chain_spec, ep_version)?,
                 entry_point,
                 permissions,
             ),
@@ -74,11 +81,14 @@ where
     #[instrument(skip_all, fields(rpc_method = "eth_estimateUserOperationGas"))]
     async fn estimate_user_operation_gas(
         &self,
+        ext: &Extensions,
         op: RpcUserOperationOptionalGas,
         entry_point: Address,
         state_override: Option<StateOverride>,
     ) -> RpcResult<RpcGasEstimate> {
-        let Some(ep_version) = self.chain_spec.entry_point_version(entry_point) else {
+        let chain = self.resolve(ext)?;
+
+        let Some(ep_version) = chain.chain_spec.entry_point_version(entry_point) else {
             Err(EthRpcError::InvalidParams(format!(
                 "Unsupported entry point: {:?}",
                 entry_point
@@ -89,7 +99,9 @@ where
             "eth_estimateUserOperationGas",
             EthApi::estimate_user_operation_gas(
                 self,
-                op.into_rundler_type(&self.chain_spec, ep_version),
+                chain.chain_spec,
+                chain.pool,
+                op.into_rundler_type(chain.chain_spec, ep_version),
                 entry_point,
                 state_override,
             ),
@@ -100,11 +112,13 @@ where
     #[instrument(skip_all, fields(rpc_method = "eth_getUserOperationByHash"))]
     async fn get_user_operation_by_hash(
         &self,
+        ext: &Extensions,
         hash: B256,
     ) -> RpcResult<Option<RpcUserOperationByHash>> {
+        let chain = self.resolve(ext)?;
         utils::safe_call_rpc_handler(
             "eth_getUserOperationByHash",
-            EthApi::get_user_operation_by_hash(self, hash),
+            EthApi::<R>::get_user_operation_by_hash(chain.pool, hash),
         )
         .await
     }
@@ -112,27 +126,33 @@ where
     #[instrument(skip_all, fields(rpc_method = "eth_getUserOperationReceipt"))]
     async fn get_user_operation_receipt(
         &self,
+        ext: &Extensions,
         hash: B256,
         tag: Option<BlockTag>,
     ) -> RpcResult<Option<RpcUserOperationReceipt>> {
+        let chain = self.resolve(ext)?;
         utils::safe_call_rpc_handler(
             "eth_getUserOperationReceipt",
-            EthApi::get_user_operation_receipt(self, hash, tag),
+            EthApi::<R>::get_user_operation_receipt(chain.chain_spec, chain.pool, hash, tag),
         )
         .await
     }
 
     #[instrument(skip_all, fields(rpc_method = "eth_supportedEntryPoints"))]
-    async fn supported_entry_points(&self) -> RpcResult<Vec<String>> {
-        utils::safe_call_rpc_handler(
-            "eth_supportedEntryPoints",
-            EthApi::supported_entry_points(self),
-        )
+    async fn supported_entry_points(&self, ext: &Extensions) -> RpcResult<Vec<String>> {
+        let chain = self.resolve(ext)?;
+        utils::safe_call_rpc_handler("eth_supportedEntryPoints", async {
+            EthApi::<R>::supported_entry_points(chain.chain_spec, chain.entry_points)
+        })
         .await
     }
 
     #[instrument(skip_all, fields(rpc_method = "eth_chainId"))]
-    async fn chain_id(&self) -> RpcResult<U64> {
-        utils::safe_call_rpc_handler("eth_chainId", EthApi::chain_id(self)).await
+    async fn chain_id(&self, ext: &Extensions) -> RpcResult<U64> {
+        let chain = self.resolve(ext)?;
+        utils::safe_call_rpc_handler("eth_chainId", async {
+            EthApi::<R>::chain_id(chain.chain_spec)
+        })
+        .await
     }
 }

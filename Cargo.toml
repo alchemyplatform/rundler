@@ -97,6 +97,7 @@ reqwest = { version = "0.12.8", default-features = false, features = ["rustls-tl
 thiserror = "1.0.64"
 tokio = { version = "1.44.2", default-features = false, features = ["rt", "sync", "time"] }
 tokio-util = "0.7.12"
+toml = "0.8"
 tonic = "0.12.3"
 tonic-build = "0.12.3"
 tonic-health = "0.12.3"

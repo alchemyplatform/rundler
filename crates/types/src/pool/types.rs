@@ -11,12 +11,25 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, B256, U128, U256};
 
 use crate::{
     Entity, EntityType, StakeInfo, UserOperation, UserOperationPermissions, UserOperationVariant,
     ValidTimeRange, da::DAGasData, entity::EntityInfos,
 };
+
+/// Fee estimate for user operations
+#[derive(Debug, Clone, Copy)]
+pub struct FeeEstimate {
+    /// Block number this estimate is based on
+    pub block_number: u64,
+    /// Current pending base fee (without bundler overhead)
+    pub base_fee: u128,
+    /// Base fee with bundler overhead applied
+    pub required_base_fee: u128,
+    /// Priority fee with bundler overhead applied
+    pub required_priority_fee: u128,
+}
 
 /// Information about a pending bundle containing a user operation
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -184,4 +197,51 @@ impl PoolOperation {
     pub fn mem_size(&self) -> usize {
         std::mem::size_of::<Self>() + self.uo.heap_size()
     }
+}
+
+/// A mined user operation with block metadata
+#[derive(Debug, Clone)]
+pub struct MinedUserOperation {
+    /// The user operation
+    pub user_operation: UserOperationVariant,
+    /// The entry point address
+    pub entry_point: Address,
+    /// Block number the operation was included in
+    pub block_number: U256,
+    /// Block hash the operation was included in
+    pub block_hash: B256,
+    /// Transaction hash the operation was included in
+    pub transaction_hash: B256,
+}
+
+/// Receipt data for a mined user operation.
+///
+/// Uses JSON-encoded bytes for `logs_json` and `receipt_json` to avoid
+/// pulling alloy-rpc-types into rundler_types.
+#[derive(Debug, Clone)]
+pub struct UserOperationReceiptData {
+    /// The user operation hash
+    pub user_op_hash: B256,
+    /// The entry point address
+    pub entry_point: Address,
+    /// The sender address
+    pub sender: Address,
+    /// The nonce
+    pub nonce: U256,
+    /// The paymaster address
+    pub paymaster: Address,
+    /// The actual gas cost
+    pub actual_gas_cost: U256,
+    /// The actual gas used
+    pub actual_gas_used: U128,
+    /// Whether the operation succeeded
+    pub success: bool,
+    /// Revert reason if failed
+    pub reason: String,
+    /// JSON-encoded Vec<Log>
+    pub logs_json: Vec<u8>,
+    /// JSON-encoded TransactionReceipt
+    pub receipt_json: Vec<u8>,
+    /// Whether this was preconfirmed
+    pub is_preconfirmed: bool,
 }

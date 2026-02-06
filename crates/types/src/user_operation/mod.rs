@@ -849,6 +849,53 @@ impl UserOperationOptionalGas {
     }
 }
 
+impl From<UserOperationVariant> for UserOperationOptionalGas {
+    fn from(op: UserOperationVariant) -> Self {
+        match op {
+            UserOperationVariant::V0_6(op) => {
+                UserOperationOptionalGas::V0_6(v0_6::UserOperationOptionalGas {
+                    sender: op.sender(),
+                    nonce: op.nonce(),
+                    init_code: op.init_code().clone(),
+                    call_data: op.call_data().clone(),
+                    call_gas_limit: Some(op.call_gas_limit()),
+                    verification_gas_limit: Some(op.verification_gas_limit()),
+                    pre_verification_gas: Some(op.pre_verification_gas()),
+                    max_fee_per_gas: Some(op.max_fee_per_gas()),
+                    max_priority_fee_per_gas: Some(op.max_priority_fee_per_gas()),
+                    paymaster_and_data: op.paymaster_and_data().clone(),
+                    signature: op.signature().clone(),
+                    eip7702_auth_address: op.authorization_tuple().map(|a| a.address),
+                    aggregator: op.aggregator(),
+                })
+            }
+            UserOperationVariant::V0_7(op) => {
+                UserOperationOptionalGas::V0_7(v0_7::UserOperationOptionalGas {
+                    sender: op.sender(),
+                    nonce: op.nonce(),
+                    call_data: op.call_data().clone(),
+                    signature: op.signature().clone(),
+                    entry_point_version: op.entry_point_version(),
+                    call_gas_limit: Some(op.call_gas_limit()),
+                    verification_gas_limit: Some(op.verification_gas_limit()),
+                    pre_verification_gas: Some(op.pre_verification_gas()),
+                    max_priority_fee_per_gas: Some(op.max_priority_fee_per_gas()),
+                    max_fee_per_gas: Some(op.max_fee_per_gas()),
+                    factory: op.factory(),
+                    factory_data: op.factory_data().clone(),
+                    paymaster: op.paymaster(),
+                    paymaster_verification_gas_limit: Some(op.paymaster_verification_gas_limit()),
+                    paymaster_post_op_gas_limit: Some(op.paymaster_post_op_gas_limit()),
+                    paymaster_data: op.paymaster_data().clone(),
+                    eip7702_auth_address: op.authorization_tuple().map(|a| a.address),
+                    aggregator: op.aggregator(),
+                    paymaster_signature: None,
+                })
+            }
+        }
+    }
+}
+
 /// Gas estimate
 #[derive(Debug, Clone)]
 pub struct GasEstimate {

@@ -244,7 +244,7 @@ impl PoolArgs {
         }
 
         Ok(PoolTaskArgs {
-            chain_spec,
+            chain_spec: chain_spec.clone(),
             unsafe_mode: common.unsafe_mode,
             http_url: common.node_http.clone().context("must provide node_http")?,
             chain_poll_interval: Duration::from_millis(self.chain_poll_interval_millis),
@@ -252,6 +252,9 @@ impl PoolArgs {
             pool_configs,
             remote_address,
             chain_update_channel_capacity: self.chain_update_channel_capacity.unwrap_or(1024),
+            estimation_settings: common.try_into_with_spec(&chain_spec)?,
+            event_block_distance: common.user_operation_event_block_distance,
+            event_block_distance_fallback: common.user_operation_event_block_distance_fallback,
         })
     }
 }

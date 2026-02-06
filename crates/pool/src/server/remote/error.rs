@@ -67,6 +67,9 @@ impl From<PoolError> for ProtoMempoolError {
             PoolError::Other(e) => ProtoMempoolError {
                 error: Some(mempool_error::Error::Internal(e.to_string())),
             },
+            PoolError::GasEstimation(msg) => ProtoMempoolError {
+                error: Some(mempool_error::Error::Internal(msg)),
+            },
         }
     }
 }

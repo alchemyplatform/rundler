@@ -17,7 +17,7 @@ use clap::Args;
 use rundler_builder::{BuilderEvent, BuilderTask, LocalBuilderBuilder};
 use rundler_pool::{LocalPoolBuilder, PoolEvent, PoolTask};
 use rundler_provider::Providers;
-use rundler_rpc::RpcTask;
+use rundler_rpc::{ChainBackend, ChainRouter, RpcTask};
 use rundler_sim::MempoolConfigs;
 use rundler_task::TaskSpawnerExt;
 use rundler_types::chain::ChainSpec;
@@ -82,7 +82,7 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
             entry_point_builders,
         )
         .await?;
-    let rpc_task_args = rpc_args.to_args(chain_spec.clone(), &common_args)?;
+    let rpc_task_args = rpc_args.to_args(&chain_spec)?;
 
     let (event_sender, event_rx) =
         broadcast::channel::<WithEntryPoint<Event>>(EVENT_CHANNEL_CAPACITY);
@@ -156,7 +156,19 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     .spawn(task_spawner.clone())
     .await?;
 
-    RpcTask::new(rpc_task_args, pool_handle, builder_handle, providers)
+    let entry_points = common_args.enabled_entry_points.clone();
+    let backend = ChainBackend::new(
+        chain_spec,
+        Box::new(pool_handle.clone()),
+        Box::new(builder_handle.clone()),
+        Box::new(pool_handle),
+        Box::new(builder_handle),
+        entry_points,
+    );
+    let mut router = ChainRouter::new();
+    router.add_chain(Arc::new(backend));
+
+    RpcTask::new(rpc_task_args, router)
         .spawn(task_spawner)
         .await?;
 

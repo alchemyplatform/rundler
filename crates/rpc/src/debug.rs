@@ -17,13 +17,14 @@ use alloy_primitives::{Address, B256, U64};
 use anyhow::Context;
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use jsonrpsee::{core::RpcResult, proc_macros::rpc};
+use jsonrpsee::{Extensions, core::RpcResult, proc_macros::rpc};
 use rundler_types::{
     builder::{Builder, BuilderError, BundlingMode},
     pool::Pool,
 };
 
 use crate::{
+    chain_resolver::ChainResolver,
     types::{
         RpcDebugPaymasterBalance, RpcReputationInput, RpcReputationOutput, RpcStakeInfo,
         RpcStakeStatus, RpcUserOperation,
@@ -35,29 +36,29 @@ use crate::{
 #[rpc(client, server, namespace = "debug")]
 pub trait DebugApi {
     /// Clears the state of the pool.
-    #[method(name = "bundler_clearState")]
+    #[method(name = "bundler_clearState", with_extensions)]
     async fn bundler_clear_state(&self) -> RpcResult<String>;
 
     /// Clears the state of the mempool without affect reputations.
-    #[method(name = "bundler_clearMempool")]
+    #[method(name = "bundler_clearMempool", with_extensions)]
     async fn bundler_clear_mempool(&self) -> RpcResult<String>;
 
     /// Dumps the mempool.
-    #[method(name = "bundler_dumpMempool")]
+    #[method(name = "bundler_dumpMempool", with_extensions)]
     async fn bundler_dump_mempool(&self, entry_point: Address) -> RpcResult<Vec<RpcUserOperation>>;
 
     /// Triggers the builder to send a bundle now
     ///
     /// Note that the bundling mode must be set to `Manual` else this will fail.
-    #[method(name = "bundler_sendBundleNow")]
+    #[method(name = "bundler_sendBundleNow", with_extensions)]
     async fn bundler_send_bundle_now(&self) -> RpcResult<B256>;
 
     /// Sets the bundling mode.
-    #[method(name = "bundler_setBundlingMode")]
+    #[method(name = "bundler_setBundlingMode", with_extensions)]
     async fn bundler_set_bundling_mode(&self, mode: BundlingMode) -> RpcResult<String>;
 
     /// Sets the reputations of entities on the given entry point.
-    #[method(name = "bundler_setReputation")]
+    #[method(name = "bundler_setReputation", with_extensions)]
     async fn bundler_set_reputation(
         &self,
         reputations: Vec<RpcReputationInput>,
@@ -65,14 +66,14 @@ pub trait DebugApi {
     ) -> RpcResult<String>;
 
     /// Dumps the reputations of entities from the given entry point.
-    #[method(name = "bundler_dumpReputation")]
+    #[method(name = "bundler_dumpReputation", with_extensions)]
     async fn bundler_dump_reputation(
         &self,
         entry_point: Address,
     ) -> RpcResult<Vec<RpcReputationOutput>>;
 
     /// Returns stake status given an address and entrypoint
-    #[method(name = "bundler_getStakeStatus")]
+    #[method(name = "bundler_getStakeStatus", with_extensions)]
     async fn bundler_get_stake_status(
         &self,
         address: Address,
@@ -80,155 +81,171 @@ pub trait DebugApi {
     ) -> RpcResult<RpcStakeStatus>;
 
     /// Dumps the paymaster balance cache
-    #[method(name = "bundler_dumpPaymasterBalances")]
+    #[method(name = "bundler_dumpPaymasterBalances", with_extensions)]
     async fn bundler_dump_paymaster_balances(
         &self,
         entry_point: Address,
     ) -> RpcResult<Vec<RpcDebugPaymasterBalance>>;
 
     /// Clear the reputations of pool.
-    #[method(name = "bundler_clearReputation")]
+    #[method(name = "bundler_clearReputation", with_extensions)]
     async fn bundler_clear_reputation(&self) -> RpcResult<String>;
 }
 
-pub(crate) struct DebugApi<P, B> {
-    pool: P,
-    builder: B,
+pub(crate) struct DebugApi<R> {
+    resolver: R,
 }
 
-impl<P, B> DebugApi<P, B> {
-    pub(crate) fn new(pool: P, builder: B) -> Self {
-        Self { pool, builder }
+impl<R> DebugApi<R> {
+    pub(crate) fn new(resolver: R) -> Self {
+        Self { resolver }
     }
 }
 
 #[async_trait]
-impl<P, B> DebugApiServer for DebugApi<P, B>
+impl<R> DebugApiServer for DebugApi<R>
 where
-    P: Pool + 'static,
-    B: Builder + 'static,
+    R: ChainResolver,
 {
-    async fn bundler_clear_state(&self) -> RpcResult<String> {
-        utils::safe_call_rpc_handler("bundler_clearState", DebugApi::bundler_clear_state(self))
-            .await
+    async fn bundler_clear_state(&self, ext: &Extensions) -> RpcResult<String> {
+        let chain = self.resolver.resolve(ext)?;
+        utils::safe_call_rpc_handler(
+            "bundler_clearState",
+            Self::bundler_clear_state_inner(chain.pool),
+        )
+        .await
     }
 
-    async fn bundler_clear_mempool(&self) -> RpcResult<String> {
+    async fn bundler_clear_mempool(&self, ext: &Extensions) -> RpcResult<String> {
+        let chain = self.resolver.resolve(ext)?;
         utils::safe_call_rpc_handler(
             "bundler_clearMempool",
-            DebugApi::bundler_clear_mempool(self),
+            Self::bundler_clear_mempool_inner(chain.pool),
         )
         .await
     }
 
-    async fn bundler_dump_mempool(&self, entry_point: Address) -> RpcResult<Vec<RpcUserOperation>> {
+    async fn bundler_dump_mempool(
+        &self,
+        ext: &Extensions,
+        entry_point: Address,
+    ) -> RpcResult<Vec<RpcUserOperation>> {
+        let chain = self.resolver.resolve(ext)?;
         utils::safe_call_rpc_handler(
             "bundler_dumpMempool",
-            DebugApi::bundler_dump_mempool(self, entry_point),
+            Self::bundler_dump_mempool_inner(chain.pool, entry_point),
         )
         .await
     }
 
-    async fn bundler_send_bundle_now(&self) -> RpcResult<B256> {
+    async fn bundler_send_bundle_now(&self, ext: &Extensions) -> RpcResult<B256> {
+        let chain = self.resolver.resolve(ext)?;
         utils::safe_call_rpc_handler(
             "bundler_sendBundleNow",
-            DebugApi::bundler_send_bundle_now(self),
+            Self::bundler_send_bundle_now_inner(chain.pool, chain.builder),
         )
         .await
     }
 
-    async fn bundler_set_bundling_mode(&self, mode: BundlingMode) -> RpcResult<String> {
+    async fn bundler_set_bundling_mode(
+        &self,
+        ext: &Extensions,
+        mode: BundlingMode,
+    ) -> RpcResult<String> {
+        let chain = self.resolver.resolve(ext)?;
         utils::safe_call_rpc_handler(
             "bundler_setBundlingMode",
-            DebugApi::bundler_set_bundling_mode(self, mode),
+            Self::bundler_set_bundling_mode_inner(chain.builder, mode),
         )
         .await
     }
 
     async fn bundler_set_reputation(
         &self,
+        ext: &Extensions,
         reputations: Vec<RpcReputationInput>,
         entry_point: Address,
     ) -> RpcResult<String> {
+        let chain = self.resolver.resolve(ext)?;
         utils::safe_call_rpc_handler(
             "bundler_setReputation",
-            DebugApi::bundler_set_reputation(self, reputations, entry_point),
+            Self::bundler_set_reputation_inner(chain.pool, reputations, entry_point),
         )
         .await
     }
 
     async fn bundler_dump_reputation(
         &self,
+        ext: &Extensions,
         entry_point: Address,
     ) -> RpcResult<Vec<RpcReputationOutput>> {
+        let chain = self.resolver.resolve(ext)?;
         utils::safe_call_rpc_handler(
             "bundler_dumpReputation",
-            DebugApi::bundler_dump_reputation(self, entry_point),
+            Self::bundler_dump_reputation_inner(chain.pool, entry_point),
         )
         .await
     }
 
     async fn bundler_get_stake_status(
         &self,
+        ext: &Extensions,
         address: Address,
         entry_point: Address,
     ) -> RpcResult<RpcStakeStatus> {
+        let chain = self.resolver.resolve(ext)?;
         utils::safe_call_rpc_handler(
             "bundler_getStakeStatus",
-            DebugApi::bundler_get_stake_status(self, address, entry_point),
+            Self::bundler_get_stake_status_inner(chain.pool, address, entry_point),
         )
         .await
     }
 
     async fn bundler_dump_paymaster_balances(
         &self,
+        ext: &Extensions,
         entry_point: Address,
     ) -> RpcResult<Vec<RpcDebugPaymasterBalance>> {
+        let chain = self.resolver.resolve(ext)?;
         utils::safe_call_rpc_handler(
             "bundler_dumpPaymasterBalances",
-            DebugApi::bundler_dump_paymaster_balances(self, entry_point),
+            Self::bundler_dump_paymaster_balances_inner(chain.pool, entry_point),
         )
         .await
     }
 
-    async fn bundler_clear_reputation(&self) -> RpcResult<String> {
+    async fn bundler_clear_reputation(&self, ext: &Extensions) -> RpcResult<String> {
+        let chain = self.resolver.resolve(ext)?;
         utils::safe_call_rpc_handler(
             "bundler_clearReputation",
-            DebugApi::bundler_clear_reputation(self),
+            Self::bundler_clear_reputation_inner(chain.pool),
         )
         .await
     }
 }
 
-impl<P, B> DebugApi<P, B>
-where
-    P: Pool,
-    B: Builder,
-{
-    async fn bundler_clear_state(&self) -> InternalRpcResult<String> {
-        self.pool
-            .debug_clear_state(true, true, true)
+impl<R> DebugApi<R> {
+    async fn bundler_clear_state_inner(pool: &dyn Pool) -> InternalRpcResult<String> {
+        pool.debug_clear_state(true, true, true)
             .await
             .context("should clear state")?;
 
         Ok("ok".to_string())
     }
 
-    async fn bundler_clear_mempool(&self) -> InternalRpcResult<String> {
-        self.pool
-            .debug_clear_state(true, true, false)
+    async fn bundler_clear_mempool_inner(pool: &dyn Pool) -> InternalRpcResult<String> {
+        pool.debug_clear_state(true, true, false)
             .await
             .context("should clear mempool")?;
 
         Ok("ok".to_string())
     }
 
-    async fn bundler_dump_mempool(
-        &self,
+    async fn bundler_dump_mempool_inner(
+        pool: &dyn Pool,
         entry_point: Address,
     ) -> InternalRpcResult<Vec<RpcUserOperation>> {
-        Ok(self
-            .pool
+        Ok(pool
             .debug_dump_mempool(entry_point)
             .await
             .context("should dump mempool")?
@@ -237,11 +254,13 @@ where
             .collect::<Vec<RpcUserOperation>>())
     }
 
-    async fn bundler_send_bundle_now(&self) -> InternalRpcResult<B256> {
+    async fn bundler_send_bundle_now_inner(
+        pool: &dyn Pool,
+        builder: &dyn Builder,
+    ) -> InternalRpcResult<B256> {
         tracing::debug!("Sending bundle");
 
-        let mut new_heads = self
-            .pool
+        let mut new_heads = pool
             .subscribe_new_heads(vec![])
             .await
             .context("should subscribe new heads")?;
@@ -250,7 +269,7 @@ where
         let (tx, block_number) = {
             let mut out = None;
             for _ in 0..3 {
-                match self.builder.debug_send_bundle_now().await {
+                match builder.debug_send_bundle_now().await {
                     Ok((tx, block_number)) => {
                         out = Some((tx, block_number));
                         break;
@@ -274,10 +293,6 @@ where
 
         tracing::debug!("Waiting for block number {block_number}");
 
-        // After the bundle is sent, we need to make sure that the mempool
-        // has processes the same block that the transaction was mined on.
-        // This removes the potential for an incorrect response from `debug_bundler_dumpMempool`
-        // method.
         loop {
             match new_heads.next().await {
                 Some(b) => {
@@ -294,10 +309,13 @@ where
         Ok(tx)
     }
 
-    async fn bundler_set_bundling_mode(&self, mode: BundlingMode) -> InternalRpcResult<String> {
+    async fn bundler_set_bundling_mode_inner(
+        builder: &dyn Builder,
+        mode: BundlingMode,
+    ) -> InternalRpcResult<String> {
         tracing::debug!("Setting bundling mode to {:?}", mode);
 
-        self.builder
+        builder
             .debug_set_bundling_mode(mode)
             .await
             .context("should set bundling mode")?;
@@ -305,13 +323,12 @@ where
         Ok("ok".to_string())
     }
 
-    async fn bundler_set_reputation(
-        &self,
+    async fn bundler_set_reputation_inner(
+        pool: &dyn Pool,
         reputations: Vec<RpcReputationInput>,
         entry_point: Address,
     ) -> InternalRpcResult<String> {
-        let _ = self
-            .pool
+        let _ = pool
             .debug_set_reputations(
                 entry_point,
                 reputations.into_iter().map(Into::into).collect(),
@@ -321,20 +338,18 @@ where
         Ok("ok".to_string())
     }
 
-    async fn bundler_dump_reputation(
-        &self,
+    async fn bundler_dump_reputation_inner(
+        pool: &dyn Pool,
         entry_point: Address,
     ) -> InternalRpcResult<Vec<RpcReputationOutput>> {
-        let result = self
-            .pool
+        let result = pool
             .debug_dump_reputation(entry_point)
             .await
             .context("should dump reputation")?;
 
         let mut results = Vec::new();
         for r in result {
-            let status = self
-                .pool
+            let status = pool
                 .get_reputation_status(entry_point, r.address)
                 .await
                 .context("should get reputation status")?;
@@ -352,13 +367,12 @@ where
         Ok(results)
     }
 
-    async fn bundler_get_stake_status(
-        &self,
+    async fn bundler_get_stake_status_inner(
+        pool: &dyn Pool,
         address: Address,
         entry_point: Address,
     ) -> InternalRpcResult<RpcStakeStatus> {
-        let result = self
-            .pool
+        let result = pool
             .get_stake_status(entry_point, address)
             .await
             .context("should get stake status")?;
@@ -377,12 +391,11 @@ where
         })
     }
 
-    async fn bundler_dump_paymaster_balances(
-        &self,
+    async fn bundler_dump_paymaster_balances_inner(
+        pool: &dyn Pool,
         entry_point: Address,
     ) -> InternalRpcResult<Vec<RpcDebugPaymasterBalance>> {
-        let result = self
-            .pool
+        let result = pool
             .debug_dump_paymaster_balances(entry_point)
             .await
             .context("should dump paymaster balances")?;
@@ -401,9 +414,8 @@ where
         Ok(results)
     }
 
-    async fn bundler_clear_reputation(&self) -> InternalRpcResult<String> {
-        self.pool
-            .debug_clear_state(false, false, true)
+    async fn bundler_clear_reputation_inner(pool: &dyn Pool) -> InternalRpcResult<String> {
+        pool.debug_clear_state(false, false, true)
             .await
             .context("should clear reputation")?;
 

@@ -14,13 +14,8 @@
 mod api;
 pub(crate) use api::EthApi;
 
-mod router;
-pub(crate) use router::*;
-
 mod error;
 pub(crate) use error::{EthResult, EthRpcError};
-mod events;
-pub(crate) use events::{UserOperationEventProviderV0_6, UserOperationEventProviderV0_7};
 mod server;
 
 use alloy_primitives::{Address, B256, U64};
@@ -38,7 +33,7 @@ use crate::types::{
 #[cfg_attr(test, automock)]
 pub trait EthApi {
     /// Sends a user operation to the pool.
-    #[method(name = "sendUserOperation")]
+    #[method(name = "sendUserOperation", with_extensions)]
     async fn send_user_operation(
         &self,
         op: RpcUserOperation,
@@ -47,7 +42,7 @@ pub trait EthApi {
     ) -> RpcResult<B256>;
 
     /// Estimates the gas fields for a user operation.
-    #[method(name = "estimateUserOperationGas")]
+    #[method(name = "estimateUserOperationGas", with_extensions)]
     async fn estimate_user_operation_gas(
         &self,
         op: RpcUserOperationOptionalGas,
@@ -56,14 +51,14 @@ pub trait EthApi {
     ) -> RpcResult<RpcGasEstimate>;
 
     /// Returns the user operation with the given hash.
-    #[method(name = "getUserOperationByHash")]
+    #[method(name = "getUserOperationByHash", with_extensions)]
     async fn get_user_operation_by_hash(
         &self,
         hash: B256,
     ) -> RpcResult<Option<RpcUserOperationByHash>>;
 
     /// Returns the user operation receipt with the given hash.
-    #[method(name = "getUserOperationReceipt")]
+    #[method(name = "getUserOperationReceipt", with_extensions)]
     async fn get_user_operation_receipt(
         &self,
         hash: B256,
@@ -71,21 +66,10 @@ pub trait EthApi {
     ) -> RpcResult<Option<RpcUserOperationReceipt>>;
 
     /// Returns the supported entry points addresses
-    #[method(name = "supportedEntryPoints")]
+    #[method(name = "supportedEntryPoints", with_extensions)]
     async fn supported_entry_points(&self) -> RpcResult<Vec<String>>;
 
     /// Returns the chain ID
-    #[method(name = "chainId")]
+    #[method(name = "chainId", with_extensions)]
     async fn chain_id(&self) -> RpcResult<U64>;
-}
-
-/// Settings for the `eth_` API
-#[derive(Copy, Clone, Debug)]
-pub struct EthApiSettings {
-    /// The number of blocks to look back for user operation events
-    pub user_operation_event_block_distance: Option<u64>,
-    /// The number of blocks to look back for user operation events during a fallback
-    pub user_operation_event_block_distance_fallback: Option<u64>,
-    /// If external permissions are allowed
-    pub permissions_enabled: bool,
 }

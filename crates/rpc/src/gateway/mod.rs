@@ -11,26 +11,15 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-#![warn(missing_docs, unreachable_pub, unused_crate_dependencies)]
-#![deny(unused_must_use, rust_2018_idioms)]
-#![doc(test(
-    no_crate_inject,
-    attr(deny(warnings, rust_2018_idioms), allow(dead_code, unused_variables))
-))]
-//! Mempool implementation for the Rundler.
+//! Multi-chain RPC gateway infrastructure.
 
 mod chain;
+pub use chain::{ChainBackend, ChainConfig, GatewayConfig};
 
-pub(crate) mod events;
+mod error;
 
-mod emit;
-pub use emit::OpPoolEvent as PoolEvent;
+mod middleware;
+pub use middleware::{ChainId, ChainRoutingLayer, ChainRoutingMiddleware};
 
-mod mempool;
-pub use mempool::PoolConfig;
-
-mod server;
-pub use server::{LocalPoolBuilder, LocalPoolHandle, RemotePoolClient};
-
-mod task;
-pub use task::{Args as PoolTaskArgs, PoolTask};
+mod router;
+pub use router::ChainRouter;

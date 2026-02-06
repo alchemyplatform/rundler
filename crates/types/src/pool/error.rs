@@ -24,6 +24,9 @@ pub enum PoolError {
     /// Mempool error occurred
     #[error(transparent)]
     MempoolError(MempoolError),
+    /// Gas estimation error
+    #[error("Gas estimation error: {0}")]
+    GasEstimation(String),
     /// Unexpected response from PoolServer
     #[error("Unexpected response from PoolServer")]
     UnexpectedResponse,

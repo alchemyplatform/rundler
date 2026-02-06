@@ -1,0 +1,165 @@
+# Docker Compose setup for testing the multi-chain RPC gateway
+#
+# Usage:
+#   docker compose up --build
+#
+#   # Test chain 1337
+#   curl -X POST http://localhost:3000/v1/1337/ \
+#     -H "Content-Type: application/json" \
+#     -d '{"jsonrpc":"2.0","method":"system_health","params":[],"id":1}'
+
+services:
+  # ============================================================================
+  # Ethereum Dev Nodes
+  # ============================================================================
+
+  geth-1337:
+    image: ethereum/client-go:v1.14.8
+    ports:
+      - "8545:8545"
+    command:
+      - --verbosity=1
+      - --http.vhosts=*,localhost,host.docker.internal
+      - --http
+      - --http.api=eth,net,web3,debug
+      - --http.corsdomain=*
+      - --http.addr=0.0.0.0
+      - --dev
+      - --dev.period=1
+      - --allow-insecure-unlock
+      - --rpc.allow-unprotected-txs
+      - --rpc.txfeecap=0
+      - --dev.gaslimit=30000000
+      - --networkid=1337
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8545"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  geth-31337:
+    image: ethereum/client-go:v1.14.8
+    ports:
+      - "8546:8545"
+    command:
+      - --verbosity=1
+      - --http.vhosts=*,localhost,host.docker.internal
+      - --http
+      - --http.api=eth,net,web3,debug
+      - --http.corsdomain=*
+      - --http.addr=0.0.0.0
+      - --dev
+      - --dev.period=1
+      - --allow-insecure-unlock
+      - --rpc.allow-unprotected-txs
+      - --rpc.txfeecap=0
+      - --dev.gaslimit=30000000
+      - --networkid=31337
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8545"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ============================================================================
+  # Rundler Backends (Pool + Builder with gRPC)
+  # ============================================================================
+
+  backend-1337:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    depends_on:
+      geth-1337:
+        condition: service_healthy
+    ports:
+      - "50051:50051"  # Pool gRPC
+      - "50052:50052"  # Builder gRPC
+      - "8081:8080"    # Metrics
+    command:
+      - backend
+      - --network=dev
+      - --node_http=http://geth-1337:8545
+      - --pool.host=0.0.0.0
+      - --pool.port=50051
+      - --builder.host=0.0.0.0
+      - --builder.port=50052
+      - --signer.private_keys=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+      - --metrics.port=8080
+      - --unsafe
+      - --enabled_entry_points=v0.7
+    environment:
+      - RUST_LOG=info,rundler=debug
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  backend-31337:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    depends_on:
+      geth-31337:
+        condition: service_healthy
+    ports:
+      - "50053:50051"
+      - "50054:50052"
+      - "8082:8080"
+    command:
+      - backend
+      - --network=dev
+      - --node_http=http://geth-31337:8545
+      - --pool.host=0.0.0.0
+      - --pool.port=50051
+      - --builder.host=0.0.0.0
+      - --builder.port=50052
+      - --signer.private_keys=0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
+      - --metrics.port=8080
+      - --unsafe
+      - --enabled_entry_points=v0.7
+    environment:
+      - RUST_LOG=info,rundler=debug
+      # Override chain spec fields from dev base
+      - CHAIN_ID=31337
+      - CHAIN_NAME=Ethereum Devnet 31337
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  # ============================================================================
+  # Multi-Chain RPC Gateway
+  # ============================================================================
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    depends_on:
+      backend-1337:
+        condition: service_healthy
+      backend-31337:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+      - "8083:8080"
+    volumes:
+      - ./gateway-config.toml:/app/gateway-config.toml:ro
+    command:
+      - gateway
+      - --gateway.config=/app/gateway-config.toml
+      - --gateway.port=3000
+      - --gateway.host=0.0.0.0
+      - --metrics.port=8080
+    environment:
+      - RUST_LOG=info,rundler_rpc=debug
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-X", "POST", "-H", "Content-Type: application/json", "-d", "{\"jsonrpc\":\"2.0\",\"method\":\"system_health\",\"params\":[],\"id\":1}", "http://localhost:3000/v1/1337/"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
