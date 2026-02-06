@@ -178,7 +178,7 @@ where
         hash: B256,
         preconfirmed_bundle_transaction: Option<B256>,
     ) -> anyhow::Result<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>> {
-        // Step 1: Get tx_hash (preconfirmed: passed in, non-preconfirmed: find event first)
+        // Step 1: Get tx_hash (preconfirmed: passed in, pending: find event first)
         let (tx_hash, event_from_logs) = if let Some(bundle_tx) = preconfirmed_bundle_transaction {
             (bundle_tx, None)
         } else {
@@ -213,25 +213,21 @@ where
             .context("should have fetched tx receipt")?
             .context("Failed to fetch tx receipt")?;
 
-        // Step 3: Get event (preconfirmed: from tx_receipt, non-preconfirmed: already have it)
+        // Step 3: Get event (preconfirmed: from tx_receipt, pending: already have it)
         let event = if let Some(event) = event_from_logs {
             event
         } else {
-            let Some(event) = self.get_event_from_tx_receipt(hash, &tx_receipt) else {
-                return Ok(None);
-            };
-
-            if event.address() != self.entry_point_address {
-                return Ok(None);
-            }
-
+            let event = self
+                .get_event_from_tx_receipt(hash, &tx_receipt)
+                .context("should have found uo event in preconfirmed tx receipt")?;
             event.clone()
         };
 
         // Step 4: Shared logic - build receipt and user operation
 
         // Build receipt
-        let mut receipt = self.construct_receipt(event.clone(), tx_receipt)?;
+        let event_ep_address = event.address();
+        let mut receipt = self.construct_receipt(event, tx_receipt)?;
         if preconfirmed_bundle_transaction.is_some() {
             receipt.status = UOStatusEnum::Preconfirmed;
         };
@@ -273,7 +269,7 @@ where
 
         let uo_by_hash = RpcUserOperationByHash {
             user_operation: user_operation.into().into(),
-            entry_point: event.address().into(),
+            entry_point: event_ep_address.into(),
             block_number: Some(tx.block_number.map(|n| U256::from(n)).unwrap_or_default()),
             block_hash: Some(tx.block_hash.unwrap_or_default()),
             transaction_hash: Some(tx_hash),

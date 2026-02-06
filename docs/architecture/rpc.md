@@ -287,7 +287,7 @@ The `pendingBundle` object contains:
 
 - `txHash`: The transaction hash of the pending bundle.
 - `sentAtBlock`: The block number at which the bundle was sent.
-- `builderAddress`: The address of the builder that sent the bundle.
+- `bundlerAddress`: The address of the bundler that sent the bundle.
 
 ```
 # Request

@@ -340,8 +340,8 @@ pub(crate) struct RpcPendingBundleInfo {
     pub(crate) tx_hash: B256,
     /// The block number at which the bundle was sent
     pub(crate) sent_at_block: U64,
-    /// The address of the builder that sent the bundle
-    pub(crate) builder_address: Address,
+    /// The address of the bundler that sent the bundle
+    pub(crate) bundler_address: Address,
 }
 
 /// User operation status
@@ -362,7 +362,7 @@ impl From<PendingBundleInfo> for RpcPendingBundleInfo {
         RpcPendingBundleInfo {
             tx_hash: info.tx_hash,
             sent_at_block: U64::from(info.sent_at_block),
-            builder_address: info.builder_address,
+            bundler_address: info.builder_address,
         }
     }
 }

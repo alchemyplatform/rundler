@@ -38,8 +38,8 @@ use rundler_types::{
     UserOperationVariant,
     chain::ChainSpec,
     pool::{
-        MempoolError, PaymasterMetadata, PoolOperation, PoolOperationStatus, PreconfInfo,
-        Reputation, ReputationStatus, StakeStatus,
+        MempoolError, PaymasterMetadata, PoolOperation, PoolOperationStatus, Reputation,
+        ReputationStatus, StakeStatus,
     },
 };
 use tonic::async_trait;
@@ -97,10 +97,7 @@ pub(crate) trait Mempool: Send + Sync {
     fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation>>;
 
     /// Looks up a user operation by hash, returns None if not found
-    fn get_user_operation_by_hash(
-        &self,
-        hash: B256,
-    ) -> (Option<Arc<PoolOperation>>, Option<PreconfInfo>);
+    fn get_user_operation_by_hash(&self, hash: B256) -> Option<Arc<PoolOperation>>;
 
     /// Looks up a user operation by id, returns None if not found
     fn get_op_by_id(&self, id: &UserOperationId) -> Option<Arc<PoolOperation>>;

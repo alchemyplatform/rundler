@@ -404,7 +404,6 @@ message GetOpByHashResponse {
 }
 message GetOpByHashSuccess {
   MempoolOp op = 1;
-  optional PreconfInfo preconf_info = 2;
 }
 
 message PreconfInfo {
@@ -664,6 +663,7 @@ message PoolOperationStatus {
   uint64 valid_after = 4;
   uint64 valid_until = 5;
   PendingBundleInfo pending_bundle = 6;
+  optional PreconfInfo preconf_info = 7;
 }
 
 message Reputation {

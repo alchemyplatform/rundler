@@ -52,15 +52,14 @@ use super::protos::{
     GetReputationStatusSuccess, GetStakeStatusRequest, GetStakeStatusResponse,
     GetStakeStatusSuccess, GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse,
     MempoolOp, NotifyPendingBundleRequest, NotifyPendingBundleResponse, NotifyPendingBundleSuccess,
-    OP_POOL_FILE_DESCRIPTOR_SET, PoolOperationStatus, PoolOperationSummary, PreconfInfo,
-    RemoveOpByIdRequest, RemoveOpByIdResponse, RemoveOpByIdSuccess, RemoveOpsRequest,
-    RemoveOpsResponse, RemoveOpsSuccess, ReputationStatus, SubscribeNewHeadsRequest,
-    SubscribeNewHeadsResponse, TryUoFromProto, UpdateEntitiesRequest, UpdateEntitiesResponse,
-    UpdateEntitiesSuccess, add_op_response, admin_set_tracking_response,
-    debug_clear_state_response, debug_dump_mempool_response,
-    debug_dump_paymaster_balances_response, debug_dump_reputation_response,
-    debug_set_reputation_response, get_op_by_hash_response, get_op_by_id_response,
-    get_op_status_response, get_ops_by_hashes_response, get_ops_response,
+    OP_POOL_FILE_DESCRIPTOR_SET, PoolOperationStatus, PoolOperationSummary, RemoveOpByIdRequest,
+    RemoveOpByIdResponse, RemoveOpByIdSuccess, RemoveOpsRequest, RemoveOpsResponse,
+    RemoveOpsSuccess, ReputationStatus, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse,
+    TryUoFromProto, UpdateEntitiesRequest, UpdateEntitiesResponse, UpdateEntitiesSuccess,
+    add_op_response, admin_set_tracking_response, debug_clear_state_response,
+    debug_dump_mempool_response, debug_dump_paymaster_balances_response,
+    debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
+    get_op_by_id_response, get_op_status_response, get_ops_by_hashes_response, get_ops_response,
     get_ops_summaries_response, get_reputation_status_response, get_stake_status_response,
     notify_pending_bundle_response,
     op_pool_server::{OpPool, OpPoolServer},
@@ -291,12 +290,10 @@ impl OpPool for OpPoolImpl {
         })?;
 
         let resp = match self.local_pool.get_op_by_hash(hash).await {
-            Ok((op, preconf_info)) => GetOpByHashResponse {
+            Ok(op) => GetOpByHashResponse {
                 result: Some(get_op_by_hash_response::Result::Success(
                     GetOpByHashSuccess {
                         op: op.map(|op| MempoolOp::from(&op)),
-                        preconf_info: preconf_info
-                            .map(|preconf_info| PreconfInfo::from(&preconf_info)),
                     },
                 )),
             },

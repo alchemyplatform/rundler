@@ -791,6 +791,7 @@ impl From<&RundlerPoolOperationStatus> for PoolOperationStatus {
             valid_after: status.valid_time_range.valid_after.seconds_since_epoch(),
             valid_until: status.valid_time_range.valid_until.seconds_since_epoch(),
             pending_bundle: status.pending_bundle.as_ref().map(PendingBundleInfo::from),
+            preconf_info: status.preconf_info.as_ref().map(PreconfInfo::from),
         }
     }
 }
@@ -812,6 +813,11 @@ impl TryUoFromProto<PoolOperationStatus> for RundlerPoolOperationStatus {
             .map(RundlerPendingBundleInfo::try_from)
             .transpose()?;
 
+        let preconf_info = status
+            .preconf_info
+            .map(RundlerPreconfInfo::try_from)
+            .transpose()?;
+
         Ok(RundlerPoolOperationStatus {
             uo,
             entry_point: from_bytes(&status.entry_point)?,
@@ -821,6 +827,7 @@ impl TryUoFromProto<PoolOperationStatus> for RundlerPoolOperationStatus {
                 status.valid_until.into(),
             ),
             pending_bundle,
+            preconf_info,
         })
     }
 }

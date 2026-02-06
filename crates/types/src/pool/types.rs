@@ -42,6 +42,8 @@ pub struct PoolOperationStatus {
     pub valid_time_range: ValidTimeRange,
     /// Information about the pending bundle, if any
     pub pending_bundle: Option<PendingBundleInfo>,
+    /// Information about the preconfirmation, if any
+    pub preconf_info: Option<PreconfInfo>,
 }
 
 /// The new head of the chain, as viewed by the pool

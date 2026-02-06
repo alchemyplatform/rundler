@@ -171,9 +171,15 @@ where
                         "Unsupported feature: preconfirmation".to_string(),
                     ));
                 }
-                let txn_hash = self.pool.get_op_by_hash(hash).await;
+                let op_status = self
+                    .pool
+                    .get_op_status(hash)
+                    .await
+                    .map_err(EthRpcError::from)?;
 
-                txn_hash.unwrap_or((None, None)).1.map(|x| x.tx_hash)
+                op_status
+                    .and_then(|s| s.preconf_info)
+                    .map(|info| info.tx_hash)
             }
             BlockTag::Latest => None,
         };
@@ -205,13 +211,13 @@ where
         &self,
         hash: B256,
     ) -> EthResult<Option<RpcUserOperationByHash>> {
-        let res = self
+        let op = self
             .pool
             .get_op_by_hash(hash)
             .await
             .map_err(EthRpcError::from)?;
 
-        Ok(res.0.map(|op| RpcUserOperationByHash {
+        Ok(op.map(|op| RpcUserOperationByHash {
             user_operation: op.uo.into(),
             entry_point: op.entry_point.into(),
             block_number: None,
@@ -276,7 +282,7 @@ mod tests {
         pool.expect_get_op_by_hash()
             .with(eq(hash))
             .times(1)
-            .returning(move |_| Ok((Some(po.clone()), None)));
+            .returning(move |_| Ok(Some(po.clone())));
 
         let mut provider = MockEvmProvider::default();
         provider.expect_get_logs().returning(move |_| Ok(vec![]));
@@ -318,7 +324,7 @@ mod tests {
         let mut pool = MockPool::default();
         pool.expect_get_op_by_hash()
             .with(eq(hash))
-            .returning(move |_| Ok((None, None)));
+            .returning(move |_| Ok(None));
 
         let mut provider = MockEvmProvider::default();
         provider.expect_get_block_number().returning(|| Ok(1000));
@@ -401,7 +407,7 @@ mod tests {
         pool.expect_get_op_by_hash()
             .with(eq(hash))
             .times(1)
-            .returning(move |_| Ok((None, None)));
+            .returning(move |_| Ok(None));
 
         let mut provider = MockEvmProvider::default();
         provider.expect_get_logs().returning(move |_| Ok(vec![]));

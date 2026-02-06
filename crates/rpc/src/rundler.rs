@@ -14,7 +14,7 @@
 use alloy_primitives::{Address, B256, U128, U256};
 use anyhow::Context;
 use async_trait::async_trait;
-use futures_util::{TryFutureExt, future};
+use futures_util::future;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_provider::{EvmProvider, FeeEstimator};
 use rundler_types::{
@@ -272,27 +272,29 @@ where
     }
 
     async fn get_user_operation_status(&self, uo_hash: B256) -> EthResult<RpcUserOperationStatus> {
-        let bundle_transaction: Option<B256> = if self.chain_spec.flashblocks_enabled {
-            let txn_hash = self.pool_server.get_op_by_hash(uo_hash).await;
+        // Fetch pool status first to get preconf info for the mined query
+        let op_status = self
+            .pool_server
+            .get_op_status(uo_hash)
+            .await
+            .map_err(EthRpcError::from)?;
 
-            txn_hash.unwrap_or((None, None)).1.map(|x| x.tx_hash)
+        let bundle_transaction: Option<B256> = if self.chain_spec.flashblocks_enabled {
+            op_status
+                .as_ref()
+                .and_then(|s| s.preconf_info.as_ref())
+                .map(|info| info.tx_hash)
         } else {
             None
         };
 
-        // Fetch mined UO + receipt from all entry points, and pool status in parallel
+        // Fetch mined UO + receipt from all entry points
         let mined_futs = self.entry_point_router.entry_points().map(|ep| {
             self.entry_point_router
                 .get_mined_and_receipt(ep, uo_hash, bundle_transaction)
         });
 
-        let op_status_fut = self
-            .pool_server
-            .get_op_status(uo_hash)
-            .map_err(EthRpcError::from);
-
-        let (mined_results, op_status) =
-            future::try_join(future::try_join_all(mined_futs), op_status_fut).await?;
+        let mined_results = future::try_join_all(mined_futs).await?;
 
         // Check for mined/preconfirmed receipt first (includes user operation)
         if let Some((uo_by_hash, receipt)) = mined_results.into_iter().find_map(|r| r) {

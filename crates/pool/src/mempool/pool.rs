@@ -28,7 +28,7 @@ use rundler_types::{
     Entity, EntityType, GasFees, Timestamp, UserOperation, UserOperationId, UserOperationVariant,
     chain::ChainSpec,
     da::DAGasBlockData,
-    pool::{MempoolError, PendingBundleInfo, PoolOperation, PoolOperationStatus},
+    pool::{MempoolError, PendingBundleInfo, PoolOperation, PoolOperationStatus, PreconfInfo},
 };
 use rundler_utils::{emit::WithEntryPoint, math};
 use tokio::sync::broadcast;
@@ -678,6 +678,11 @@ where
     pub(crate) fn get_operation_status(&self, hash: B256) -> Option<PoolOperationStatus> {
         let op = self.by_hash.get(&hash)?;
         let pending_bundle = self.pending_bundles_by_uo.get(&hash).cloned();
+        let preconf_info = self
+            .get_pre_confirmed_uo(hash)
+            .map(|bundle_hash| PreconfInfo {
+                tx_hash: bundle_hash,
+            });
 
         Some(PoolOperationStatus {
             uo: op.uo().clone(),
@@ -685,6 +690,7 @@ where
             added_at_block: op.added_at_block,
             valid_time_range: op.po.valid_time_range,
             pending_bundle,
+            preconf_info,
         })
     }
 
