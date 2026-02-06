@@ -148,6 +148,7 @@ Rundler specific methods that are not specified by the ERC-4337 spec. This names
 | Method                                                                                          | Supported |
 | ----------------------------------------------------------------------------------------------- | :-------: |
 | [`rundler_maxPriorityFeePerGas`](#rundler_maxpriorityfeepergas)                                 |    ✅     |
+| [`rundler_getUserOperationGasPrice`](#rundler_getuseroperationgasprice)                         |    ✅     |
 | [`rundler_dropLocalUserOperation`](#rundler_droplocaluseroperation)                             |    ✅     |
 | [`rundler_getMinedUserOperation`](#rundler_getmineduseroperation)                               |    ✅     |
 | [`rundler_getUserOperationStatus`](#rundler_getuseroperationstatus)                             |    ✅     |
@@ -173,6 +174,44 @@ Users of this method should typically increase their priority fee values by a bu
   "jsonrpc": "2.0",
   "id": 1,
   "result": ["0x..."] // uint256
+}
+```
+
+#### `rundler_getUserOperationGasPrice`
+
+This method returns gas price recommendations to help users set appropriate fees in their user operations. It includes both the current required fees and suggested fees with buffers for faster inclusion.
+
+The response contains:
+
+- `currentPriorityFee`: The current minimum priority fee required by the bundler (same as `rundler_maxPriorityFeePerGas`).
+- `baseFee`: The current pending base fee for the next block (without bundler overhead).
+- `blockNumber`: The block number this estimate is based on.
+- `suggested`: Suggested fees with configurable buffers:
+  - `maxPriorityFeePerGas`: Priority fee with buffer above current (configurable via `rpc.priority_fee_suggested_buffer_percent`, default 30%).
+  - `maxFeePerGas`: Bundler-inflated base fee with buffer plus suggested priority fee (base fee buffer configurable via `rpc.base_fee_suggested_buffer_percent`, default 50%).
+
+```
+# Request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "rundler_getUserOperationGasPrice",
+  "params": []
+}
+
+# Response
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "currentPriorityFee": "0x59682f00",
+    "baseFee": "0x165a0bc00",
+    "blockNumber": "0x12a3b4c",
+    "suggested": {
+      "maxPriorityFeePerGas": "0x746a5280",
+      "maxFeePerGas": "0x1dcd65000"
+    }
+  }
 }
 ```
 

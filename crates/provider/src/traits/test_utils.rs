@@ -32,8 +32,9 @@ use super::error::ProviderResult;
 use crate::{
     AggregatorOut, Block, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasOracleSync,
     DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider, EvmCall,
-    EvmProvider as EvmProviderTrait, ExecutionResult, FeeEstimator, HandleOpsOut, RpcRecv, RpcSend,
-    SignatureAggregator, SimulationProvider, Transaction, TransactionReceipt, TransactionRequest,
+    EvmProvider as EvmProviderTrait, ExecutionResult, FeeEstimator, HandleOpsOut,
+    LatestFeeEstimate, RpcRecv, RpcSend, SignatureAggregator, SimulationProvider, Transaction,
+    TransactionReceipt, TransactionRequest,
 };
 
 mockall::mock! {
@@ -392,6 +393,7 @@ mockall::mock! {
             min_fees: Option<GasFees>,
         ) -> anyhow::Result<(GasFees, u128)>;
         async fn latest_bundle_fees(&self) -> anyhow::Result<(GasFees, u128)>;
+        async fn latest_fee_estimate(&self) -> anyhow::Result<LatestFeeEstimate>;
         fn required_op_fees(&self, bundle_fees: GasFees) -> GasFees;
     }
 }

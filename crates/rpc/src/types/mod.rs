@@ -391,3 +391,27 @@ impl From<PoolOperationStatus> for RpcUserOperationStatus {
         }
     }
 }
+
+/// Suggested gas fees for user operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcSuggestedGasFees {
+    /// Suggested priority fee with configurable buffer above current
+    pub max_priority_fee_per_gas: U128,
+    /// Suggested max fee (bundler-inflated base fee with buffer + suggested priority fee)
+    pub max_fee_per_gas: U128,
+}
+
+/// Gas price information for user operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcUserOperationGasPrice {
+    /// Required priority fee (same as rundler_maxPriorityFeePerGas)
+    pub priority_fee: U128,
+    /// Current pending base fee for next block (without bundler overhead)
+    pub base_fee: U128,
+    /// Block number this estimate is based on
+    pub block_number: U64,
+    /// Suggested fees with buffer for faster inclusion
+    pub suggested: RpcSuggestedGasFees,
+}

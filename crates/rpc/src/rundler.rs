@@ -11,25 +11,43 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, B256, U128, U256};
+use alloy_primitives::{Address, B256, U64, U128, U256};
 use anyhow::Context;
 use async_trait::async_trait;
 use futures_util::future;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_provider::{EvmProvider, FeeEstimator};
 use rundler_types::{
-    UserOperation, UserOperationId, UserOperationVariant, chain::ChainSpec, pool::Pool,
+    GasFees, UserOperation, UserOperationId, UserOperationVariant, chain::ChainSpec, pool::Pool,
 };
 use tracing::instrument;
 
 use crate::{
     eth::{EntryPointRouter, EthResult, EthRpcError},
     types::{
-        RpcMinedUserOperation, RpcUserOperation, RpcUserOperationStatus, UOStatusEnum,
-        UserOperationStatusEnum,
+        RpcMinedUserOperation, RpcSuggestedGasFees, RpcUserOperation, RpcUserOperationGasPrice,
+        RpcUserOperationStatus, UOStatusEnum, UserOperationStatusEnum,
     },
     utils::{self, TryIntoRundlerType},
 };
+
+/// Settings for the rundler API
+#[derive(Clone, Copy, Debug)]
+pub struct RundlerApiSettings {
+    /// Priority fee buffer percent for gas price suggestions (e.g., 30 for 30% above current)
+    pub priority_fee_buffer_percent: u64,
+    /// Base fee buffer percent for gas price suggestions (e.g., 50 for 1.5x base fee)
+    pub base_fee_buffer_percent: u64,
+}
+
+impl Default for RundlerApiSettings {
+    fn default() -> Self {
+        Self {
+            priority_fee_buffer_percent: 30,
+            base_fee_buffer_percent: 50,
+        }
+    }
+}
 
 #[rpc(client, server, namespace = "rundler")]
 pub trait RundlerApi {
@@ -72,6 +90,10 @@ pub trait RundlerApi {
         sender: Address,
         nonce: U256,
     ) -> RpcResult<Option<RpcUserOperation>>;
+
+    /// Returns suggested gas prices for user operations
+    #[method(name = "getUserOperationGasPrice")]
+    async fn get_user_operation_gas_price(&self) -> RpcResult<RpcUserOperationGasPrice>;
 }
 
 pub(crate) struct RundlerApi<P, F, E> {
@@ -80,6 +102,7 @@ pub(crate) struct RundlerApi<P, F, E> {
     pool_server: P,
     entry_point_router: EntryPointRouter,
     evm_provider: E,
+    settings: RundlerApiSettings,
 }
 
 #[async_trait]
@@ -149,6 +172,15 @@ where
         )
         .await
     }
+
+    #[instrument(skip_all, fields(rpc_method = "rundler_getUserOperationGasPrice"))]
+    async fn get_user_operation_gas_price(&self) -> RpcResult<RpcUserOperationGasPrice> {
+        utils::safe_call_rpc_handler(
+            "rundler_getUserOperationGasPrice",
+            RundlerApi::get_user_operation_gas_price(self),
+        )
+        .await
+    }
 }
 
 impl<P, F, E> RundlerApi<P, F, E>
@@ -163,6 +195,7 @@ where
         pool_server: P,
         fee_estimator: F,
         evm_provider: E,
+        settings: RundlerApiSettings,
     ) -> Self {
         Self {
             chain_spec: chain_spec.clone(),
@@ -170,15 +203,22 @@ where
             pool_server,
             fee_estimator,
             evm_provider,
+            settings,
         }
     }
     #[instrument(skip_all)]
     async fn max_priority_fee_per_gas(&self) -> EthResult<U128> {
-        let (bundle_fees, _) = self
+        let estimate = self
             .fee_estimator
-            .latest_bundle_fees()
+            .latest_fee_estimate()
             .await
             .context("should get required fees")?;
+        let bundle_fees = GasFees {
+            max_fee_per_gas: estimate
+                .required_base_fee
+                .saturating_add(estimate.required_priority_fee),
+            max_priority_fee_per_gas: estimate.required_priority_fee,
+        };
         Ok(U128::from(
             self.fee_estimator
                 .required_op_fees(bundle_fees)
@@ -343,5 +383,51 @@ where
             .map_err(EthRpcError::from)?;
 
         Ok(uo.map(|uo| uo.uo.into()))
+    }
+
+    #[instrument(skip_all)]
+    async fn get_user_operation_gas_price(&self) -> EthResult<RpcUserOperationGasPrice> {
+        // Get base fee, priority fee (with bundler overhead), and block number
+        let estimate = self
+            .fee_estimator
+            .latest_fee_estimate()
+            .await
+            .context("should get fee estimate")?;
+        let bundle_fees = GasFees {
+            max_fee_per_gas: estimate
+                .required_base_fee
+                .saturating_add(estimate.required_priority_fee),
+            max_priority_fee_per_gas: estimate.required_priority_fee,
+        };
+
+        // Convert to user operation fees (current required)
+        let op_fees = self.fee_estimator.required_op_fees(bundle_fees);
+        let priority_fee = op_fees.max_priority_fee_per_gas;
+
+        // Calculate suggested priority fee with configured buffer
+        let priority_multiplier =
+            100u128.saturating_add(u128::from(self.settings.priority_fee_buffer_percent));
+        let suggested_priority_fee = priority_fee
+            .saturating_mul(priority_multiplier)
+            .saturating_div(100);
+
+        // Calculate suggested max fee with configured base fee buffer
+        let base_fee_multiplier =
+            100u128.saturating_add(u128::from(self.settings.base_fee_buffer_percent));
+        let suggested_max_fee = estimate
+            .required_base_fee
+            .saturating_mul(base_fee_multiplier)
+            .saturating_div(100)
+            .saturating_add(suggested_priority_fee);
+
+        Ok(RpcUserOperationGasPrice {
+            priority_fee: U128::from(priority_fee),
+            base_fee: U128::from(estimate.base_fee),
+            block_number: U64::from(estimate.block_number),
+            suggested: RpcSuggestedGasFees {
+                max_priority_fee_per_gas: U128::from(suggested_priority_fee),
+                max_fee_per_gas: U128::from(suggested_max_fee),
+            },
+        })
     }
 }

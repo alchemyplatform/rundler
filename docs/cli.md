@@ -173,8 +173,12 @@ List of command line options for configuring the RPC API.
   - env: _RPC_BUILDER_URL_
   - _Only required when running in distributed mode_
 - `--rpc.permissions_enabled`: True if user operation permissions are enabled on the RPC API (default: `false`)
-  - env: \*RPC_PERMISSIONS_ENABLED
+  - env: _RPC_PERMISSIONS_ENABLED_
   - **NOTE: Do not enable this on a public API - for internal, trusted connections only.**
+- `--rpc.priority_fee_suggested_buffer_percent`: Priority fee buffer percent for gas price suggestions. The suggested priority fee will be this percent above the current required priority fee. (default: `30`)
+  - env: _RPC_PRIORITY_FEE_SUGGESTED_BUFFER_PERCENT_
+- `--rpc.base_fee_suggested_buffer_percent`: Base fee buffer percent for gas price suggestions. The suggested max fee will use a base fee multiplied by (100 + this value) / 100. (default: `50`)
+  - env: _RPC_BASE_FEE_SUGGESTED_BUFFER_PERCENT_
 
 ## Pool Options
 
