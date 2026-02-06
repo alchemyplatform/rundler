@@ -18,6 +18,34 @@ use crate::{
     ValidTimeRange, da::DAGasData, entity::EntityInfos,
 };
 
+/// Information about a pending bundle containing a user operation
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PendingBundleInfo {
+    /// The transaction hash of the pending bundle
+    pub tx_hash: B256,
+    /// The block number at which the bundle was sent
+    pub sent_at_block: u64,
+    /// The address of the builder that sent the bundle
+    pub builder_address: Address,
+}
+
+/// Extended status for a user operation in the pool
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PoolOperationStatus {
+    /// The user operation
+    pub uo: UserOperationVariant,
+    /// The entry point address for this operation
+    pub entry_point: Address,
+    /// The block number at which the operation was added to the pool
+    pub added_at_block: u64,
+    /// The valid time range for this operation
+    pub valid_time_range: ValidTimeRange,
+    /// Information about the pending bundle, if any
+    pub pending_bundle: Option<PendingBundleInfo>,
+    /// Information about the preconfirmation, if any
+    pub preconf_info: Option<PreconfInfo>,
+}
+
 /// The new head of the chain, as viewed by the pool
 #[derive(Clone, Debug, Default)]
 pub struct NewHead {

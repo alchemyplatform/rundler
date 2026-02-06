@@ -29,8 +29,8 @@ use rundler_types::{
     Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, GasFees, UserOperation,
     UserOperationId, UserOperationPermissions, UserOperationVariant,
     pool::{
-        MempoolError, PaymasterMetadata, PoolOperation, PreconfInfo, Reputation, ReputationStatus,
-        StakeStatus,
+        MempoolError, PaymasterMetadata, PoolOperation, PoolOperationStatus, Reputation,
+        ReputationStatus, StakeStatus,
     },
 };
 use rundler_utils::{emit::WithEntryPoint, guard_timer::CustomTimerGuard};
@@ -463,6 +463,18 @@ where
                 .pool
                 .forget_mined_operations_before_block(update.earliest_remembered_block_number);
 
+            // Clear pending bundles for mined transactions
+            let mined_tx_hashes: Vec<B256> = update
+                .address_updates
+                .iter()
+                .flat_map(|u| u.mined_tx_hashes.iter().copied())
+                .collect();
+            if !mined_tx_hashes.is_empty() {
+                state
+                    .pool
+                    .clear_pending_bundles_for_mined_txs(&mined_tx_hashes);
+            }
+
             // Remove throttled ops that are too old
             let mut to_remove = HashSet::new();
             for hash in state.throttled_ops.iter() {
@@ -894,19 +906,8 @@ where
         self.state.read().pool.all_operations().take(max).collect()
     }
 
-    fn get_user_operation_by_hash(
-        &self,
-        hash: B256,
-    ) -> (Option<Arc<PoolOperation>>, Option<PreconfInfo>) {
-        let state = self.state.read();
-        let preconf_info = state
-            .pool
-            .get_pre_confirmed_uo(hash)
-            .map(|bundle_hash| PreconfInfo {
-                tx_hash: bundle_hash,
-            });
-        let op = state.pool.get_operation_by_hash(hash);
-        (op, preconf_info)
+    fn get_user_operation_by_hash(&self, hash: B256) -> Option<Arc<PoolOperation>> {
+        self.state.read().pool.get_operation_by_hash(hash)
     }
 
     // DEBUG METHODS
@@ -955,6 +956,25 @@ where
     fn set_tracking(&self, paymaster: bool, reputation: bool) {
         self.paymaster.set_tracking(paymaster);
         self.reputation.set_tracking(reputation);
+    }
+
+    fn set_pending_bundle(
+        &self,
+        tx_hash: B256,
+        sent_at_block: u64,
+        builder_address: Address,
+        uo_hashes: Vec<B256>,
+    ) {
+        self.state.write().pool.set_pending_bundle(
+            tx_hash,
+            sent_at_block,
+            builder_address,
+            uo_hashes,
+        );
+    }
+
+    fn get_operation_status(&self, hash: B256) -> Option<PoolOperationStatus> {
+        self.state.read().pool.get_operation_status(hash)
     }
 }
 
@@ -1884,7 +1904,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (pool_op, _) = pool.get_user_operation_by_hash(hash);
+        let pool_op = pool.get_user_operation_by_hash(hash);
         assert_eq!(pool_op.unwrap().uo, op.op);
     }
 
@@ -1956,7 +1976,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (pool_op, _) = pool.get_user_operation_by_hash(B256::random());
+        let pool_op = pool.get_user_operation_by_hash(B256::random());
         assert_eq!(pool_op, None);
     }
 
@@ -2199,7 +2219,7 @@ mod tests {
             .await
             .unwrap();
 
-        let pool_op = pool.get_user_operation_by_hash(hash).0.unwrap();
+        let pool_op = pool.get_user_operation_by_hash(hash).unwrap();
 
         if let UserOperationVariant::V0_6(uo) = &pool_op.uo {
             assert_eq!(*uo.signature(), agg_sig);

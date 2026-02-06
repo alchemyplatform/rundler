@@ -49,6 +49,14 @@ pub(crate) trait UserOperationEventProvider: Send + Sync {
         uo_hash: B256,
         tx_receipt: TransactionReceipt,
     ) -> anyhow::Result<Option<RpcUserOperationReceipt>>;
+
+    /// Get both the mined user operation and receipt in a single call,
+    /// sharing the logs RPC call between both operations.
+    async fn get_mined_and_receipt(
+        &self,
+        hash: B256,
+        bundle_transaction: Option<B256>,
+    ) -> anyhow::Result<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>>;
 }
 
 // This method takes a user operation event and a transaction receipt and filters out all the logs

@@ -14,8 +14,9 @@
 use alloy_primitives::{Address, B256, U64, U128, U256};
 use rundler_provider::{Log, TransactionReceipt};
 use rundler_types::{
-    EntryPointVersion, UserOperationOptionalGas, UserOperationVariant, chain::ChainSpec,
-    pool::Reputation,
+    EntryPointVersion, UserOperationOptionalGas, UserOperationVariant,
+    chain::ChainSpec,
+    pool::{PendingBundleInfo, PoolOperationStatus, Reputation},
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -320,19 +321,73 @@ pub(crate) struct RpcMinedUserOperation {
 }
 
 /// User operation status value
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum UserOperationStatusEnum {
+    #[default]
     Unknown,
     Pending,
+    PendingBundle,
     Mined,
     Preconfirmed,
 }
 
-/// User operation status
+/// Information about a pending bundle containing a user operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RpcPendingBundleInfo {
+    /// The transaction hash of the pending bundle
+    pub(crate) tx_hash: B256,
+    /// The block number at which the bundle was sent
+    pub(crate) sent_at_block: U64,
+    /// The address of the bundler that sent the bundle
+    pub(crate) bundler_address: Address,
+}
+
+/// User operation status
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RpcUserOperationStatus {
     pub(crate) status: UserOperationStatusEnum,
     pub(crate) receipt: Option<RpcUserOperationReceipt>,
+    pub(crate) user_operation: Option<RpcUserOperation>,
+    pub(crate) added_at_block: Option<U64>,
+    pub(crate) valid_until: Option<U64>,
+    pub(crate) valid_after: Option<U64>,
+    pub(crate) pending_bundle: Option<RpcPendingBundleInfo>,
+}
+
+impl From<PendingBundleInfo> for RpcPendingBundleInfo {
+    fn from(info: PendingBundleInfo) -> Self {
+        RpcPendingBundleInfo {
+            tx_hash: info.tx_hash,
+            sent_at_block: U64::from(info.sent_at_block),
+            bundler_address: info.builder_address,
+        }
+    }
+}
+
+impl From<PoolOperationStatus> for RpcUserOperationStatus {
+    fn from(status: PoolOperationStatus) -> Self {
+        let pending_bundle = status.pending_bundle.map(RpcPendingBundleInfo::from);
+        let op_status = if pending_bundle.is_some() {
+            UserOperationStatusEnum::PendingBundle
+        } else {
+            UserOperationStatusEnum::Pending
+        };
+
+        RpcUserOperationStatus {
+            status: op_status,
+            receipt: None,
+            user_operation: Some(status.uo.into()),
+            added_at_block: Some(U64::from(status.added_at_block)),
+            valid_until: Some(U64::from(
+                status.valid_time_range.valid_until.seconds_since_epoch(),
+            )),
+            valid_after: Some(U64::from(
+                status.valid_time_range.valid_after.seconds_since_epoch(),
+            )),
+            pending_bundle,
+        }
+    }
 }

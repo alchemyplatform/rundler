@@ -14,7 +14,7 @@
 use alloy_primitives::{Address, B256, U128, U256};
 use anyhow::Context;
 use async_trait::async_trait;
-use futures_util::{TryFutureExt, future};
+use futures_util::future;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_provider::{EvmProvider, FeeEstimator};
 use rundler_types::{
@@ -272,48 +272,62 @@ where
     }
 
     async fn get_user_operation_status(&self, uo_hash: B256) -> EthResult<RpcUserOperationStatus> {
-        let bundle_transaction: Option<B256> = if self.chain_spec.flashblocks_enabled {
-            let txn_hash = self.pool_server.get_op_by_hash(uo_hash).await;
+        // Fetch pool status first to get preconf info for the mined query
+        let op_status = self
+            .pool_server
+            .get_op_status(uo_hash)
+            .await
+            .map_err(EthRpcError::from)?;
 
-            txn_hash.unwrap_or((None, None)).1.map(|x| x.tx_hash)
+        let preconf_transaction: Option<B256> = if self.chain_spec.flashblocks_enabled {
+            op_status
+                .as_ref()
+                .and_then(|s| s.preconf_info.as_ref())
+                .map(|info| info.tx_hash)
         } else {
             None
         };
 
-        let receipt_futs = self.entry_point_router.entry_points().map(|ep| {
+        // Fetch mined UO + receipt from all entry points
+        let mined_futs = self.entry_point_router.entry_points().map(|ep| {
             self.entry_point_router
-                .get_receipt(ep, uo_hash, bundle_transaction)
+                .get_mined_and_receipt(ep, uo_hash, preconf_transaction)
         });
 
-        let pending_fut = self
-            .pool_server
-            .get_op_by_hash(uo_hash)
-            .map_err(EthRpcError::from);
+        let mined_results = future::try_join_all(mined_futs).await?;
 
-        let (receipts, pending) =
-            future::try_join(future::try_join_all(receipt_futs), pending_fut).await?;
-
-        if let Some(receipt) = receipts.into_iter().find_map(|r| r) {
+        // Check for mined/preconfirmed receipt first (includes user operation)
+        if let Some((uo_by_hash, receipt)) = mined_results.into_iter().find_map(|r| r) {
             let status = match receipt.status {
                 UOStatusEnum::Mined => UserOperationStatusEnum::Mined,
                 UOStatusEnum::Preconfirmed => UserOperationStatusEnum::Preconfirmed,
             };
-            return Ok(RpcUserOperationStatus {
-                status,
-                receipt: Some(receipt),
-            });
+
+            // For preconfirmed, include pool status since op is still in pool
+            let mut rpc_status: RpcUserOperationStatus = op_status
+                .map(RpcUserOperationStatus::from)
+                .unwrap_or_default();
+
+            rpc_status.status = status;
+            rpc_status.receipt = Some(receipt);
+            rpc_status.user_operation = Some(uo_by_hash.user_operation);
+
+            return Ok(rpc_status);
         }
 
-        if pending.0.is_some() {
-            return Ok(RpcUserOperationStatus {
-                status: UserOperationStatusEnum::Pending,
-                receipt: None,
-            });
+        // If found in pool, return extended status
+        if let Some(pool_status) = op_status {
+            return Ok(pool_status.into());
         }
 
         Ok(RpcUserOperationStatus {
             status: UserOperationStatusEnum::Unknown,
             receipt: None,
+            user_operation: None,
+            added_at_block: None,
+            valid_until: None,
+            valid_after: None,
+            pending_bundle: None,
         })
     }
 

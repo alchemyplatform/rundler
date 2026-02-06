@@ -306,6 +306,12 @@ service OpPool {
 
   // Clears the bundler mempool and reputation data of paymasters/accounts/factories/aggregators
   rpc AdminSetTracking(AdminSetTrackingRequest) returns (AdminSetTrackingResponse);
+
+  // Notify the pool about a pending bundle transaction
+  rpc NotifyPendingBundle(NotifyPendingBundleRequest) returns (NotifyPendingBundleResponse);
+
+  // Get extended status for a user operation
+  rpc GetOpStatus(GetOpStatusRequest) returns (GetOpStatusResponse);
 }
 
 message GetSupportedEntryPointsRequest {}
@@ -398,7 +404,6 @@ message GetOpByHashResponse {
 }
 message GetOpByHashSuccess {
   MempoolOp op = 1;
-  optional PreconfInfo preconf_info = 2;
 }
 
 message PreconfInfo {
@@ -616,6 +621,50 @@ message AdminSetTrackingResponse {
   }
 }
 message AdminSetTrackingSuccess {}
+
+message NotifyPendingBundleRequest {
+  bytes entry_point = 1;
+  bytes tx_hash = 2;
+  uint64 sent_at_block = 3;
+  bytes builder_address = 4;
+  repeated bytes uo_hashes = 5;
+}
+message NotifyPendingBundleResponse {
+  oneof result {
+    NotifyPendingBundleSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message NotifyPendingBundleSuccess {}
+
+message GetOpStatusRequest {
+  bytes hash = 1;
+}
+message GetOpStatusResponse {
+  oneof result {
+    GetOpStatusSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message GetOpStatusSuccess {
+  PoolOperationStatus status = 1;
+}
+
+message PendingBundleInfo {
+  bytes tx_hash = 1;
+  uint64 sent_at_block = 2;
+  bytes builder_address = 3;
+}
+
+message PoolOperationStatus {
+  UserOperation uo = 1;
+  bytes entry_point = 2;
+  uint64 added_at_block = 3;
+  uint64 valid_after = 4;
+  uint64 valid_until = 5;
+  optional PendingBundleInfo pending_bundle = 6;
+  optional PreconfInfo preconf_info = 7;
+}
 
 message Reputation {
   // The (serialized) address to set the reputation for

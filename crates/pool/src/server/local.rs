@@ -35,7 +35,8 @@ use rundler_types::{
     UserOperationVariant,
     pool::{
         MempoolError, NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation,
-        PoolOperationSummary, PoolResult, PreconfInfo, Reputation, ReputationStatus, StakeStatus,
+        PoolOperationStatus, PoolOperationSummary, PoolResult, Reputation, ReputationStatus,
+        StakeStatus,
     },
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -231,14 +232,11 @@ impl Pool for LocalPoolHandle {
         }
     }
 
-    async fn get_op_by_hash(
-        &self,
-        hash: B256,
-    ) -> PoolResult<(Option<PoolOperation>, Option<PreconfInfo>)> {
+    async fn get_op_by_hash(&self, hash: B256) -> PoolResult<Option<PoolOperation>> {
         let req = ServerRequestKind::GetOpByHash { hash };
         let resp = self.send(req).await?;
         match resp {
-            ServerResponse::GetOpByHash { op, preconf_info } => Ok((op, preconf_info)),
+            ServerResponse::GetOpByHash { op } => Ok(op),
             _ => Err(PoolError::UnexpectedResponse),
         }
     }
@@ -428,6 +426,37 @@ impl Pool for LocalPoolHandle {
             _ => Err(PoolError::UnexpectedResponse),
         }
     }
+
+    async fn notify_pending_bundle(
+        &self,
+        entry_point: Address,
+        tx_hash: B256,
+        sent_at_block: u64,
+        builder_address: Address,
+        uo_hashes: Vec<B256>,
+    ) -> PoolResult<()> {
+        let req = ServerRequestKind::NotifyPendingBundle {
+            entry_point,
+            tx_hash,
+            sent_at_block,
+            builder_address,
+            uo_hashes,
+        };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::NotifyPendingBundle => Ok(()),
+            _ => Err(PoolError::UnexpectedResponse),
+        }
+    }
+
+    async fn get_op_status(&self, hash: B256) -> PoolResult<Option<PoolOperationStatus>> {
+        let req = ServerRequestKind::GetOpStatus { hash };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::GetOpStatus { status } => Ok(status),
+            _ => Err(PoolError::UnexpectedResponse),
+        }
+    }
 }
 
 #[async_trait]
@@ -514,22 +543,18 @@ impl LocalPoolServerRunner {
             .filter_map(|hash| {
                 mempool
                     .get_user_operation_by_hash(*hash)
-                    .0
                     .map(|op| (*op).clone())
             })
             .collect())
     }
 
-    fn get_op_by_hash(
-        &self,
-        hash: B256,
-    ) -> PoolResult<(Option<PoolOperation>, Option<PreconfInfo>)> {
+    fn get_op_by_hash(&self, hash: B256) -> PoolResult<Option<PoolOperation>> {
         for mempool in self.mempools.values() {
-            if let (Some(op), preconf_info) = mempool.get_user_operation_by_hash(hash) {
-                return Ok((Some((*op).clone()), preconf_info));
+            if let Some(op) = mempool.get_user_operation_by_hash(hash) {
+                return Ok(Some((*op).clone()));
             }
         }
-        Ok((None, None))
+        Ok(None)
     }
 
     fn get_op_by_id(&self, id: &UserOperationId) -> PoolResult<Option<PoolOperation>> {
@@ -634,6 +659,28 @@ impl LocalPoolServerRunner {
     ) -> PoolResult<ReputationStatus> {
         let mempool = self.get_pool(entry_point)?;
         Ok(mempool.get_reputation_status(address))
+    }
+
+    fn notify_pending_bundle(
+        &self,
+        entry_point: Address,
+        tx_hash: B256,
+        sent_at_block: u64,
+        builder_address: Address,
+        uo_hashes: Vec<B256>,
+    ) -> PoolResult<()> {
+        let mempool = self.get_pool(entry_point)?;
+        mempool.set_pending_bundle(tx_hash, sent_at_block, builder_address, uo_hashes);
+        Ok(())
+    }
+
+    fn get_op_status(&self, hash: B256) -> PoolResult<Option<PoolOperationStatus>> {
+        for mempool in self.mempools.values() {
+            if let Some(status) = mempool.get_operation_status(hash) {
+                return Ok(Some(status));
+            }
+        }
+        Ok(None)
     }
 
     fn get_pool_and_spawn<F, Fut>(
@@ -768,7 +815,7 @@ impl LocalPoolServerRunner {
                         },
                         ServerRequestKind::GetOpByHash { hash } => {
                             match self.get_op_by_hash(hash) {
-                                Ok((op, preconf_info)) => Ok(ServerResponse::GetOpByHash { op, preconf_info }),
+                                Ok(op) => Ok(ServerResponse::GetOpByHash { op }),
                                 Err(e) => Err(e),
                             }
                         }
@@ -841,6 +888,18 @@ impl LocalPoolServerRunner {
                         ServerRequestKind::SubscribeNewHeads { to_track } => {
                             self.chain_subscriber.track_addresses(to_track);
                             Ok(ServerResponse::SubscribeNewHeads { new_heads: self.block_sender.subscribe() } )
+                        },
+                        ServerRequestKind::NotifyPendingBundle { entry_point, tx_hash, sent_at_block, builder_address, uo_hashes } => {
+                            match self.notify_pending_bundle(entry_point, tx_hash, sent_at_block, builder_address, uo_hashes) {
+                                Ok(_) => Ok(ServerResponse::NotifyPendingBundle),
+                                Err(e) => Err(e),
+                            }
+                        },
+                        ServerRequestKind::GetOpStatus { hash } => {
+                            match self.get_op_status(hash) {
+                                Ok(status) => Ok(ServerResponse::GetOpStatus { status }),
+                                Err(e) => Err(e),
+                            }
                         }
                     };
                     if let Err(e) = req.response.send(resp) {
@@ -934,6 +993,16 @@ enum ServerRequestKind {
     SubscribeNewHeads {
         to_track: Vec<Address>,
     },
+    NotifyPendingBundle {
+        entry_point: Address,
+        tx_hash: B256,
+        sent_at_block: u64,
+        builder_address: Address,
+        uo_hashes: Vec<B256>,
+    },
+    GetOpStatus {
+        hash: B256,
+    },
 }
 
 #[derive(Debug)]
@@ -956,7 +1025,6 @@ enum ServerResponse {
     },
     GetOpByHash {
         op: Option<PoolOperation>,
-        preconf_info: Option<PreconfInfo>,
     },
     GetOpById {
         op: Option<PoolOperation>,
@@ -986,6 +1054,10 @@ enum ServerResponse {
     },
     SubscribeNewHeads {
         new_heads: broadcast::Receiver<NewHead>,
+    },
+    NotifyPendingBundle,
+    GetOpStatus {
+        status: Option<PoolOperationStatus>,
     },
 }
 

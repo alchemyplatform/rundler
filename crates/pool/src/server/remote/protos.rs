@@ -30,7 +30,8 @@ use rundler_types::{
     },
     pool::{
         AddressUpdate as PoolAddressUpdate, NewHead as PoolNewHead,
-        PaymasterMetadata as PoolPaymasterMetadata, PoolOperation,
+        PaymasterMetadata as PoolPaymasterMetadata, PendingBundleInfo as RundlerPendingBundleInfo,
+        PoolOperation, PoolOperationStatus as RundlerPoolOperationStatus,
         PoolOperationSummary as RundlerPoolOperationSummary, PreconfInfo as RundlerPreconfInfo,
         Reputation as PoolReputation, ReputationStatus as PoolReputationStatus,
         StakeStatus as RundlerStakeStatus,
@@ -756,5 +757,77 @@ impl TryFrom<EntryPointVersion> for RundlerEntryPointVersion {
                 Err(ConversionError::InvalidEnumValue(version as i32))
             }
         }
+    }
+}
+
+impl From<&RundlerPendingBundleInfo> for PendingBundleInfo {
+    fn from(info: &RundlerPendingBundleInfo) -> Self {
+        PendingBundleInfo {
+            tx_hash: info.tx_hash.to_proto_bytes(),
+            sent_at_block: info.sent_at_block,
+            builder_address: info.builder_address.to_proto_bytes(),
+        }
+    }
+}
+
+impl TryFrom<PendingBundleInfo> for RundlerPendingBundleInfo {
+    type Error = ConversionError;
+
+    fn try_from(info: PendingBundleInfo) -> Result<Self, Self::Error> {
+        Ok(RundlerPendingBundleInfo {
+            tx_hash: from_bytes(&info.tx_hash)?,
+            sent_at_block: info.sent_at_block,
+            builder_address: from_bytes(&info.builder_address)?,
+        })
+    }
+}
+
+impl From<&RundlerPoolOperationStatus> for PoolOperationStatus {
+    fn from(status: &RundlerPoolOperationStatus) -> Self {
+        PoolOperationStatus {
+            uo: Some(UserOperation::from(&status.uo)),
+            entry_point: status.entry_point.to_proto_bytes(),
+            added_at_block: status.added_at_block,
+            valid_after: status.valid_time_range.valid_after.seconds_since_epoch(),
+            valid_until: status.valid_time_range.valid_until.seconds_since_epoch(),
+            pending_bundle: status.pending_bundle.as_ref().map(PendingBundleInfo::from),
+            preconf_info: status.preconf_info.as_ref().map(PreconfInfo::from),
+        }
+    }
+}
+
+impl TryUoFromProto<PoolOperationStatus> for RundlerPoolOperationStatus {
+    fn try_uo_from_proto(
+        status: PoolOperationStatus,
+        chain_spec: &ChainSpec,
+    ) -> Result<Self, ConversionError> {
+        let uo = UserOperationVariant::try_uo_from_proto(
+            status
+                .uo
+                .context("Pool operation status should contain user operation")?,
+            chain_spec,
+        )?;
+
+        let pending_bundle = status
+            .pending_bundle
+            .map(RundlerPendingBundleInfo::try_from)
+            .transpose()?;
+
+        let preconf_info = status
+            .preconf_info
+            .map(RundlerPreconfInfo::try_from)
+            .transpose()?;
+
+        Ok(RundlerPoolOperationStatus {
+            uo,
+            entry_point: from_bytes(&status.entry_point)?,
+            added_at_block: status.added_at_block,
+            valid_time_range: ValidTimeRange::new(
+                status.valid_after.into(),
+                status.valid_until.into(),
+            ),
+            pending_bundle,
+            preconf_info,
+        })
     }
 }

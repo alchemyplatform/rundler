@@ -267,9 +267,27 @@ Gets the status of a user operation by hash. Intended for use cases where the us
 
 Possible statuses:
 
-- "unknown": the user operation is not mined or pending in the mempool. `receipt` is `null`.
-- "pending": the user operation is pending in the mempool and has not been mined. `receipt` is `null`.
-- "mined": the user operation is mined, the `receipt` field will be populated with the user operation receipt.
+- "unknown": the user operation is not mined or pending in the mempool.
+- "pending": the user operation is pending in the mempool and has not been mined or added to a pending bundle.
+- "pendingBundle": the user operation is pending in the mempool and has been added to a pending bundle transaction.
+- "mined": the user operation is mined onchain.
+- "preconfirmed": the user operation has been preconfirmed but not yet finalized onchain.
+
+Response fields:
+
+- `status`: One of the status values above.
+- `receipt`: The user operation receipt, populated when status is "mined" or "preconfirmed".
+- `userOperation`: The user operation object, populated when the operation is found.
+- `addedAtBlock`: The block number at which the operation was added to the pool.
+- `validUntil`: Unix timestamp (seconds) until which the operation is valid.
+- `validAfter`: Unix timestamp (seconds) after which the operation becomes valid.
+- `pendingBundle`: Information about the pending bundle if status is "pendingBundle".
+
+The `pendingBundle` object contains:
+
+- `txHash`: The transaction hash of the pending bundle.
+- `sentAtBlock`: The block number at which the bundle was sent.
+- `bundlerAddress`: The address of the bundler that sent the bundle.
 
 ```
 # Request
@@ -287,9 +305,20 @@ Possible statuses:
   "jsonrpc": "2.0",
   "id": 1,
   "result": {
-    status: "unknown" | "pending" | "mined"
+    status: "unknown" | "pending" | "pendingBundle" | "mined" | "preconfirmed",
     receipt: null | {
-      ... // User operation receipt if "mined"
+      ... // User operation receipt if "mined" or "preconfirmed"
+    },
+    userOperation: null | {
+      ... // User operation object
+    },
+    addedAtBlock: null | "0x...",   // uint64, block number when added to pool
+    validUntil: null | "0x...",     // uint64, valid until timestamp (seconds)
+    validAfter: null | "0x...",     // uint64, valid after timestamp (seconds)
+    pendingBundle: null | {
+      txHash: "0x...",              // bytes32, pending bundle tx hash
+      sentAtBlock: "0x...",         // uint64, block number when bundle was sent
+      bundlerAddress: "0x..."       // address, bundler that sent the bundle
     }
   }
 }

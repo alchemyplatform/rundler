@@ -153,6 +153,20 @@ impl EntryPointRouter {
             .map_err(Into::into)
     }
 
+    /// Get both the mined user operation and receipt in a single call,
+    /// sharing the logs RPC call between both operations.
+    pub(crate) async fn get_mined_and_receipt(
+        &self,
+        entry_point: &Address,
+        hash: B256,
+        bundle_transaction: Option<B256>,
+    ) -> EthResult<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>> {
+        self.get_route(entry_point)?
+            .get_mined_and_receipt(hash, bundle_transaction)
+            .await
+            .map_err(Into::into)
+    }
+
     pub(crate) async fn estimate_gas(
         &self,
         entry_point: &Address,
@@ -234,6 +248,14 @@ pub(crate) trait EntryPointRoute: Send + Sync {
         tx_receipt: TransactionReceipt,
     ) -> anyhow::Result<Option<RpcUserOperationReceipt>>;
 
+    /// Get both the mined user operation and receipt in a single call,
+    /// sharing the logs RPC call between both operations.
+    async fn get_mined_and_receipt(
+        &self,
+        hash: B256,
+        bundle_transaction: Option<B256>,
+    ) -> anyhow::Result<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>>;
+
     async fn estimate_gas(
         &self,
         uo: UserOperationOptionalGas,
@@ -306,6 +328,16 @@ where
     ) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
         self.event_provider
             .get_receipt_from_tx_receipt(uo_hash, tx_receipt)
+            .await
+    }
+
+    async fn get_mined_and_receipt(
+        &self,
+        hash: B256,
+        bundle_transaction: Option<B256>,
+    ) -> anyhow::Result<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>> {
+        self.event_provider
+            .get_mined_and_receipt(hash, bundle_transaction)
             .await
     }
 

@@ -18,11 +18,13 @@ use futures_util::Stream;
 
 use super::{
     error::PoolError,
-    types::{NewHead, PaymasterMetadata, PoolOperation, Reputation, ReputationStatus, StakeStatus},
+    types::{
+        NewHead, PaymasterMetadata, PoolOperation, PoolOperationStatus, Reputation,
+        ReputationStatus, StakeStatus,
+    },
 };
 use crate::{
     EntityUpdate, UserOperation, UserOperationId, UserOperationPermissions, UserOperationVariant,
-    pool::PreconfInfo,
 };
 
 /// Result type for pool server operations.
@@ -81,10 +83,7 @@ pub trait Pool: Send + Sync {
     /// Get an operation from the pool by hash
     /// Checks each entry point in order until the operation is found
     /// Returns None if the operation is not found
-    async fn get_op_by_hash(
-        &self,
-        hash: B256,
-    ) -> PoolResult<(Option<PoolOperation>, Option<PreconfInfo>)>;
+    async fn get_op_by_hash(&self, hash: B256) -> PoolResult<Option<PoolOperation>>;
 
     /// Get an operation from the pool by id
     async fn get_op_by_id(&self, id: UserOperationId) -> PoolResult<Option<PoolOperation>>;
@@ -98,6 +97,9 @@ pub trait Pool: Send + Sync {
         entry_point: Address,
         id: UserOperationId,
     ) -> PoolResult<Option<B256>>;
+
+    /// Get extended status for a user operation
+    async fn get_op_status(&self, hash: B256) -> PoolResult<Option<PoolOperationStatus>>;
 
     /// Update operations associated with entities from the pool
     async fn update_entities(
@@ -114,6 +116,17 @@ pub trait Pool: Send + Sync {
         &self,
         to_track: Vec<Address>,
     ) -> PoolResult<Pin<Box<dyn Stream<Item = NewHead> + Send>>>;
+
+    /// Notify the pool about a pending bundle transaction.
+    /// Automatically replaces any existing pending bundle for the same builder.
+    async fn notify_pending_bundle(
+        &self,
+        entry_point: Address,
+        tx_hash: B256,
+        sent_at_block: u64,
+        builder_address: Address,
+        uo_hashes: Vec<B256>,
+    ) -> PoolResult<()>;
 
     /// Get reputation status given entrypoint and address
     async fn get_reputation_status(
@@ -205,7 +218,7 @@ mockall::mock! {
             entry_point: Address,
             hashes: Vec<B256>,
         ) -> PoolResult<Vec<PoolOperation>>;
-        async fn get_op_by_hash(&self, hash: B256) -> PoolResult<(Option<PoolOperation>, Option<PreconfInfo>)>;
+        async fn get_op_by_hash(&self, hash: B256) -> PoolResult<Option<PoolOperation>>;
         async fn get_op_by_id(&self, id: UserOperationId) -> PoolResult<Option<PoolOperation>>;
         async fn remove_ops(&self, entry_point: Address, ops: Vec<B256>) -> PoolResult<()>;
         async fn remove_op_by_id(
@@ -255,5 +268,14 @@ mockall::mock! {
             &self,
             entry_point: Address,
         ) -> PoolResult<Vec<PaymasterMetadata>>;
+        async fn notify_pending_bundle(
+            &self,
+            entry_point: Address,
+            tx_hash: B256,
+            sent_at_block: u64,
+            builder_address: Address,
+            uo_hashes: Vec<B256>,
+        ) -> PoolResult<()>;
+        async fn get_op_status(&self, hash: B256) -> PoolResult<Option<PoolOperationStatus>>;
     }
 }
