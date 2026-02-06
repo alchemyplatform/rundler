@@ -279,7 +279,7 @@ where
             .await
             .map_err(EthRpcError::from)?;
 
-        let bundle_transaction: Option<B256> = if self.chain_spec.flashblocks_enabled {
+        let preconf_transaction: Option<B256> = if self.chain_spec.flashblocks_enabled {
             op_status
                 .as_ref()
                 .and_then(|s| s.preconf_info.as_ref())
@@ -291,7 +291,7 @@ where
         // Fetch mined UO + receipt from all entry points
         let mined_futs = self.entry_point_router.entry_points().map(|ep| {
             self.entry_point_router
-                .get_mined_and_receipt(ep, uo_hash, bundle_transaction)
+                .get_mined_and_receipt(ep, uo_hash, preconf_transaction)
         });
 
         let mined_results = future::try_join_all(mined_futs).await?;

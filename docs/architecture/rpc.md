@@ -318,7 +318,7 @@ The `pendingBundle` object contains:
     pendingBundle: null | {
       txHash: "0x...",              // bytes32, pending bundle tx hash
       sentAtBlock: "0x...",         // uint64, block number when bundle was sent
-      builderAddress: "0x..."       // address, builder that sent the bundle
+      bundlerAddress: "0x..."       // address, bundler that sent the bundle
     }
   }
 }

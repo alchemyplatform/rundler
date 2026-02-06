@@ -662,7 +662,7 @@ message PoolOperationStatus {
   uint64 added_at_block = 3;
   uint64 valid_after = 4;
   uint64 valid_until = 5;
-  PendingBundleInfo pending_bundle = 6;
+  optional PendingBundleInfo pending_bundle = 6;
   optional PreconfInfo preconf_info = 7;
 }
 
