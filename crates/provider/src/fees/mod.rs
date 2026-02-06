@@ -12,6 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_primitives::B256;
+use alloy_rpc_types_eth::BlockNumberOrTag;
 use anyhow::Context;
 use rundler_types::{GasFees, PriorityFeeMode, chain::ChainSpec};
 use rundler_utils::{cache::LruMap, math};
@@ -83,8 +84,15 @@ impl<P: EvmProvider, O: FeeOracle> FeeEstimatorImpl<P, O> {
     }
 
     #[instrument(skip_all)]
-    async fn get_pending_base_fee(&self) -> anyhow::Result<u128> {
-        Ok(self.provider.get_pending_base_fee().await?)
+    async fn get_pending_base_fee_and_block_number(&self) -> anyhow::Result<(u128, u64)> {
+        let fee_history = self
+            .provider
+            .fee_history(1, BlockNumberOrTag::Latest, &[])
+            .await?;
+        let base_fee = fee_history
+            .next_block_base_fee()
+            .context("should have a next block base fee")?;
+        Ok((base_fee, fee_history.oldest_block))
     }
 
     #[instrument(skip_all)]
@@ -100,31 +108,34 @@ impl<P: EvmProvider, O: FeeOracle> FeeEstimatorImpl<P, O> {
 impl<P: EvmProvider, O: FeeOracle> FeeEstimator for FeeEstimatorImpl<P, O> {
     #[instrument(skip_all)]
     async fn latest_bundle_fees(&self) -> anyhow::Result<(GasFees, u128)> {
-        let estimate = self.latest_base_fee_and_priority_fee().await?;
+        let estimate = self.latest_fee_estimate().await?;
         let bundle_fees = GasFees {
             max_fee_per_gas: estimate
-                .inflated_base_fee
-                .saturating_add(estimate.priority_fee),
-            max_priority_fee_per_gas: estimate.priority_fee,
+                .required_base_fee
+                .saturating_add(estimate.required_priority_fee),
+            max_priority_fee_per_gas: estimate.required_priority_fee,
         };
 
-        Ok((bundle_fees, estimate.inflated_base_fee))
+        Ok((bundle_fees, estimate.required_base_fee))
     }
 
     #[instrument(skip_all)]
-    async fn latest_base_fee_and_priority_fee(&self) -> anyhow::Result<LatestFeeEstimate> {
-        let (base_fee, priority_fee) =
-            try_join!(self.get_pending_base_fee(), self.get_priority_fee())?;
+    async fn latest_fee_estimate(&self) -> anyhow::Result<LatestFeeEstimate> {
+        let ((base_fee, block_number), priority_fee) = try_join!(
+            self.get_pending_base_fee_and_block_number(),
+            self.get_priority_fee()
+        )?;
 
-        let inflated_base_fee =
+        let required_base_fee =
             math::increase_by_percent(base_fee, self.bundle_base_fee_overhead_percent);
-        let inflated_priority_fee =
+        let required_priority_fee =
             math::increase_by_percent(priority_fee, self.bundle_priority_fee_overhead_percent);
 
         Ok(LatestFeeEstimate {
+            block_number,
             base_fee,
-            inflated_base_fee,
-            priority_fee: inflated_priority_fee,
+            required_base_fee,
+            required_priority_fee,
         })
     }
 
@@ -138,8 +149,10 @@ impl<P: EvmProvider, O: FeeOracle> FeeEstimator for FeeEstimatorImpl<P, O> {
         let entry = match cache.get(&block_hash) {
             Some(entry) => *entry,
             None => {
-                let (base_fee, priority_fee) =
-                    try_join!(self.get_pending_base_fee(), self.get_priority_fee())?;
+                let ((base_fee, _), priority_fee) = try_join!(
+                    self.get_pending_base_fee_and_block_number(),
+                    self.get_priority_fee()
+                )?;
 
                 let entry = CacheEntry {
                     base_fee,

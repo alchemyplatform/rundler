@@ -351,8 +351,8 @@ pub struct RpcSuggestedGasFees {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RpcUserOperationGasPrice {
-    /// Current required priority fee (same as rundler_maxPriorityFeePerGas)
-    pub current_priority_fee: U128,
+    /// Required priority fee (same as rundler_maxPriorityFeePerGas)
+    pub priority_fee: U128,
     /// Current pending base fee for next block (without bundler overhead)
     pub base_fee: U128,
     /// Block number this estimate is based on

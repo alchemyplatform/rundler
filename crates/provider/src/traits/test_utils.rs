@@ -393,7 +393,7 @@ mockall::mock! {
             min_fees: Option<GasFees>,
         ) -> anyhow::Result<(GasFees, u128)>;
         async fn latest_bundle_fees(&self) -> anyhow::Result<(GasFees, u128)>;
-        async fn latest_base_fee_and_priority_fee(&self) -> anyhow::Result<LatestFeeEstimate>;
+        async fn latest_fee_estimate(&self) -> anyhow::Result<LatestFeeEstimate>;
         fn required_op_fees(&self, bundle_fees: GasFees) -> GasFees;
     }
 }
