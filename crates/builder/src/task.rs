@@ -297,7 +297,19 @@ where
                     // Look up the submission proxy from chain_spec if configured
                     let submission_proxy = builder
                         .submission_proxy
-                        .and_then(|addr| self.args.chain_spec.get_submission_proxy(&addr).cloned());
+                        .map(|proxy_address| {
+                            self.args
+                                .chain_spec
+                                .get_submission_proxy(&proxy_address)
+                                .cloned()
+                                .with_context(|| {
+                                    format!(
+                                        "Submission proxy {:?} configured for entry point {:?} (filter_id {:?}) was not found in chain_spec registry",
+                                        proxy_address, ep.address, builder.filter_id
+                                    )
+                                })
+                        })
+                        .transpose()?;
                     let builder_tag = registry_builder_tag(
                         &ep.address,
                         builder.filter_id.as_deref(),

@@ -716,6 +716,8 @@ impl From<RundlerPoolOperationSummary> for PoolOperationSummary {
             entry_point: summary.entry_point.to_proto_bytes(),
             sender: summary.sender.to_proto_bytes(),
             sim_block_number: summary.sim_block_number,
+            max_fee_per_gas: summary.max_fee_per_gas.to_proto_bytes(),
+            max_priority_fee_per_gas: summary.max_priority_fee_per_gas.to_proto_bytes(),
         }
     }
 }
@@ -729,9 +731,18 @@ impl TryFrom<PoolOperationSummary> for RundlerPoolOperationSummary {
             entry_point: from_bytes(&summary.entry_point)?,
             sender: from_bytes(&summary.sender)?,
             sim_block_number: summary.sim_block_number,
-            // Fee fields not available in proto, default to 0
-            max_fee_per_gas: 0,
-            max_priority_fee_per_gas: 0,
+            // Keep compatibility with older pool servers that don't send these fields.
+            max_fee_per_gas: if summary.max_fee_per_gas.is_empty() {
+                0
+            } else {
+                from_bytes(&summary.max_fee_per_gas)?
+            },
+            // Keep compatibility with older pool servers that don't send these fields.
+            max_priority_fee_per_gas: if summary.max_priority_fee_per_gas.is_empty() {
+                0
+            } else {
+                from_bytes(&summary.max_priority_fee_per_gas)?
+            },
         })
     }
 }
@@ -832,5 +843,53 @@ impl TryUoFromProto<PoolOperationStatus> for RundlerPoolOperationStatus {
             pending_bundle,
             preconf_info,
         })
+    }
+}
+#[cfg(test)]
+mod tests {
+    use alloy_primitives::{Address, B256};
+    use rundler_task::grpc::protos::ToProtoBytes;
+
+    use super::{PoolOperationSummary, RundlerPoolOperationSummary};
+
+    #[test]
+    fn pool_operation_summary_roundtrip_preserves_fee_fields() {
+        let summary = RundlerPoolOperationSummary {
+            hash: B256::from([1u8; 32]),
+            entry_point: Address::from([2u8; 20]),
+            sender: Address::from([3u8; 20]),
+            sim_block_number: 42,
+            max_fee_per_gas: 1234,
+            max_priority_fee_per_gas: 56,
+        };
+
+        let proto = PoolOperationSummary::from(summary.clone());
+        let converted = RundlerPoolOperationSummary::try_from(proto).unwrap();
+
+        assert_eq!(converted.hash, summary.hash);
+        assert_eq!(converted.entry_point, summary.entry_point);
+        assert_eq!(converted.sender, summary.sender);
+        assert_eq!(converted.sim_block_number, summary.sim_block_number);
+        assert_eq!(converted.max_fee_per_gas, summary.max_fee_per_gas);
+        assert_eq!(
+            converted.max_priority_fee_per_gas,
+            summary.max_priority_fee_per_gas
+        );
+    }
+
+    #[test]
+    fn pool_operation_summary_missing_fee_fields_defaults_to_zero() {
+        let proto = PoolOperationSummary {
+            hash: B256::from([4u8; 32]).to_proto_bytes(),
+            entry_point: Address::from([5u8; 20]).to_proto_bytes(),
+            sender: Address::from([6u8; 20]).to_proto_bytes(),
+            sim_block_number: 9,
+            max_fee_per_gas: vec![],
+            max_priority_fee_per_gas: vec![],
+        };
+
+        let converted = RundlerPoolOperationSummary::try_from(proto).unwrap();
+        assert_eq!(converted.max_fee_per_gas, 0);
+        assert_eq!(converted.max_priority_fee_per_gas, 0);
     }
 }
