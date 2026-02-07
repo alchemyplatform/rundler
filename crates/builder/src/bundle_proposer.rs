@@ -196,11 +196,7 @@ where
         condition_not_met: bool,
     ) -> BundleProposerResult<Bundle<EP::UO>> {
         let timer = Instant::now();
-        let (bundle_fees, base_fee) = self
-            .ep_providers
-            .fee_estimator()
-            .required_bundle_fees(block_hash, min_gas_fees)
-            .await?;
+        let (bundle_fees, base_fee) = self.estimate_gas_fees(block_hash, min_gas_fees).await?;
 
         // (0) Determine fees required for ops to be included in a bundle
         // if replacing, just require bundle fees increase chances of unsticking

@@ -44,8 +44,6 @@ Once a candidate bundle is constructed, each UO is re-simulated and validation r
 
 After 2nd simulation the entire bundle is validated via an `eth_call`, and ops that fail validation are again removed from the bundle. This process is repeated until the entire bundle passes validation.
 
-NOTE: This procedure implements an old version of the spec and will be updated to conform soon. See [here](https://eips.ethereum.org/EIPS/eip-4337#bundling) for more details on the new implementation.
-
 ## Transaction Signers
 
 The bundle builder supports a signer interface used for transaction signing. There are currently 2 implementations:
@@ -89,7 +87,7 @@ The Assigner component is responsible for coordinating work distribution among w
 
 1. **Entrypoint Selection**: Uses a priority-based strategy with starvation prevention
    - Primary: Select the entrypoint with the most eligible operations (throughput-optimized)
-   - Starvation prevention: If any entrypoint hasn't been selected in (num_signers/2) cycles, force-select the most starved one
+   - Starvation prevention: If any entrypoint hasn't been selected in `num_signers * starvation_ratio` cycles (configurable, default 0.50), force-select the most starved one
 
 2. **Operation Assignment**: Ensures no two workers attempt to bundle operations from the same sender simultaneously
    - Tracks sender-to-worker assignments
@@ -98,13 +96,9 @@ The Assigner component is responsible for coordinating work distribution among w
 
 3. **Virtual Entrypoints**: Supports multiple configurations per entry point address via `filter_id`, creating "virtual entrypoints" that workers can build for independently
 
-### Entrypoint Registry
+### Proposers
 
-The EntrypointRegistry holds all entrypoint-specific resources, keyed by `(address, filter_id)`:
-
-- **Bundle Proposer**: Constructs bundles for this entrypoint configuration
-- **Revert Handler**: Processes reverts using version-specific ABI decoding (v0.6 vs v0.7+)
-- **Submission Proxy**: Optional proxy contract for bundle submission
+Proposers are stored in a shared `HashMap<(Address, Option<String>), BundleProposerT>` keyed by `(entrypoint address, filter_id)`. Each proposer handles bundle construction, fee estimation, and revert processing for its entrypoint configuration. Workers look up the appropriate proposer after the Assigner selects an entrypoint.
 
 ## Sender State Machine
 
@@ -171,7 +165,7 @@ stateDiagram-v2
 
 Rundler supports running multiple builder workers per node. To configure the number of workers, set `--num_signers` to the desired count. Ensure that you have provisioned enough private or KMS keys for the configured number of workers.
 
-NOTE: Workers share signers from a common pool. The assigner ensures no two workers attempt to bundle operations from the same sender simultaneously.
+Each worker is paired 1:1 with a leased signer. The Assigner coordinates which entrypoint each worker builds for on each cycle, ensuring no two workers attempt to bundle operations from the same sender simultaneously.
 
 ### Custom
 

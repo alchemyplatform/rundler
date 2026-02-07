@@ -197,6 +197,15 @@ pub struct BuilderArgs {
         default_value = "1024"
     )]
     assigner_max_ops_per_request: u64,
+
+    /// Starvation ratio for the assigner (fraction of signers before force-selecting a starved entrypoint)
+    #[arg(
+        long = "builder.assigner_starvation_ratio",
+        name = "builder.assigner_starvation_ratio",
+        env = "BUILDER_ASSIGNER_STARVATION_RATIO",
+        default_value = "0.50"
+    )]
+    assigner_starvation_ratio: f64,
 }
 
 impl BuilderArgs {
@@ -285,6 +294,7 @@ impl BuilderArgs {
                 .verification_gas_limit_efficiency_reject_threshold,
             chain_spec,
             assigner_max_ops_per_request: self.assigner_max_ops_per_request,
+            assigner_starvation_ratio: self.assigner_starvation_ratio,
         })
     }
 
