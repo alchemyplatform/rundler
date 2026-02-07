@@ -39,6 +39,7 @@ use tokio::{
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
+    ProposerKey,
     assigner::Assigner,
     bundle_proposer::{BundleData, BundleProposerError, BundleProposerT},
     emit::{BuilderEvent, BundleTxDetails},
@@ -46,10 +47,6 @@ use crate::{
         TrackerState, TrackerUpdate, TransactionTracker, TransactionTrackerError,
     },
 };
-
-/// Key for looking up a proposer: (entrypoint address, filter_id)
-/// This allows multiple configurations per entrypoint address (virtual entrypoints)
-pub(crate) type ProposerKey = (Address, Option<String>);
 
 #[async_trait]
 pub(crate) trait BundleSender: Send + Sync {
@@ -702,36 +699,25 @@ where
             balance,
         } = state.transaction_tracker.get_state()?;
 
-        let has_pending_tx = state.transaction_tracker.num_pending_transactions() > 0;
-        let should_pin_entrypoint =
-            fee_increase_count > 0 || required_fees.is_some() || has_pending_tx;
-
         // Use assign_work() to get work from any entrypoint with priority-based selection.
-        // For replacements, force the entrypoint to match the last bundle key.
-        // Note: assign_work takes GasFees for future fee-based filtering, use defaults if not available.
+        // If we have a last_bundle_key, pin to that entrypoint for replacement.
+        // Note: assign_work takes GasFees for fee-based filtering, use defaults if not available.
         let fees_for_assign = required_fees.unwrap_or_default();
-        let assignment = if should_pin_entrypoint {
-            let Some((entry_point, filter_id)) = state.last_bundle_key.clone() else {
-                bail!("replacement attempt requires a pinned entrypoint, but none is set");
-            };
+        let assignment = if let Some((entry_point, filter_id)) = state.last_bundle_key.clone() {
+            // Pinned: use the same entrypoint for replacement
             self.assigner
                 .assign_work_for_entrypoint(
                     self.sender_eoa,
                     state.block_number(),
-                    fees_for_assign.max_fee_per_gas,
                     fees_for_assign,
                     entry_point,
                     filter_id,
                 )
                 .await?
         } else {
+            // Fresh: let assigner pick best entrypoint
             self.assigner
-                .assign_work(
-                    self.sender_eoa,
-                    state.block_number(),
-                    fees_for_assign.max_fee_per_gas,
-                    fees_for_assign,
-                )
+                .assign_work(self.sender_eoa, state.block_number(), fees_for_assign)
                 .await?
         };
 
@@ -804,7 +790,7 @@ where
                 self.assigner.release_all(self.sender_eoa);
             }
             _ => {
-                if !has_pending_tx {
+                if state.transaction_tracker.num_pending_transactions() == 0 {
                     self.assigner.release_all(self.sender_eoa);
                 } else {
                     self.assigner
@@ -1595,6 +1581,8 @@ mod tests {
                     sim_block_number: 0,
                     max_fee_per_gas: 0,
                     max_priority_fee_per_gas: 0,
+                    gas_limit: 0,
+                    bundler_sponsorship_max_cost: None,
                 }])
             });
         mock_pool
@@ -1672,6 +1660,8 @@ mod tests {
                     sim_block_number: 0,
                     max_fee_per_gas: 0,
                     max_priority_fee_per_gas: 0,
+                    gas_limit: 0,
+                    bundler_sponsorship_max_cost: None,
                 }])
             });
         mock_pool
@@ -1770,6 +1760,8 @@ mod tests {
                     sim_block_number: 0,
                     max_fee_per_gas: 0,
                     max_priority_fee_per_gas: 0,
+                    gas_limit: 0,
+                    bundler_sponsorship_max_cost: None,
                 }])
             });
         mock_pool
@@ -2006,6 +1998,8 @@ mod tests {
                     sim_block_number: 0,
                     max_fee_per_gas: 0,
                     max_priority_fee_per_gas: 0,
+                    gas_limit: 0,
+                    bundler_sponsorship_max_cost: None,
                 }])
             });
         mock_pool
@@ -2186,6 +2180,8 @@ mod tests {
                     sim_block_number: 0,
                     max_fee_per_gas: 0,
                     max_priority_fee_per_gas: 0,
+                    gas_limit: 0,
+                    bundler_sponsorship_max_cost: None,
                 }])
             });
         mock_pool
@@ -2392,6 +2388,7 @@ mod tests {
                 4, // num_signers
                 1024,
                 1024,
+                0.50,
             )),
             Arc::new(proposers),
             pool,
@@ -2423,6 +2420,7 @@ mod tests {
                 4, // num_signers
                 1024,
                 1024,
+                0.50,
             )),
             Arc::new(proposers),
             pool,

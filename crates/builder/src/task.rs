@@ -35,9 +35,10 @@ use tokio::sync::{broadcast, mpsc};
 use tracing::info;
 
 use crate::{
+    ProposerKey,
     assigner::Assigner,
     bundle_proposer::{self, BundleProposerImpl, BundleProposerProviders, BundleProposerT},
-    bundle_sender::{self, BundleSender, BundleSenderAction, BundleSenderImpl, ProposerKey},
+    bundle_sender::{self, BundleSender, BundleSenderAction, BundleSenderImpl},
     emit::BuilderEvent,
     sender::TransactionSenderArgs,
     server::{self, LocalBuilderBuilder},
@@ -91,6 +92,8 @@ pub struct Args {
     pub verification_gas_limit_efficiency_reject_threshold: f64,
     /// Maximum ops requested from mempool
     pub assigner_max_ops_per_request: u64,
+    /// Starvation ratio for the assigner (fraction of signers before force-selecting a starved entrypoint)
+    pub assigner_starvation_ratio: f64,
 }
 
 /// Builder settings
@@ -114,14 +117,14 @@ impl BuilderSettings {
     }
 }
 
-fn registry_builder_tag(
+fn proposer_tag(
     entry_point_address: &Address,
     filter_id: Option<&str>,
     submission_proxy: Option<Address>,
 ) -> String {
     let filter = filter_id.unwrap_or("any");
     let proxy = submission_proxy.map_or_else(|| "none".to_string(), |addr| addr.to_string());
-    format!("registry:{}:{}:{}", entry_point_address, filter, proxy)
+    format!("proposer:{}:{}:{}", entry_point_address, filter, proxy)
 }
 
 /// Builder settings for an entrypoint
@@ -214,7 +217,7 @@ where
                     address: ep.address,
                     filter_id: None,
                 });
-                let builder_tag = registry_builder_tag(&ep.address, None, None);
+                let builder_tag = proposer_tag(&ep.address, None, None);
                 let proposer = self
                     .create_proposer_for_entrypoint(ep, None, builder_tag)
                     .await?;
@@ -267,7 +270,7 @@ where
                                 })
                         })
                         .transpose()?;
-                    let builder_tag = registry_builder_tag(
+                    let builder_tag = proposer_tag(
                         &ep.address,
                         builder.filter_id.as_deref(),
                         builder.submission_proxy,
@@ -291,6 +294,7 @@ where
             self.args.num_signers as usize,
             self.args.assigner_max_ops_per_request,
             self.args.max_bundle_size,
+            self.args.assigner_starvation_ratio,
         ));
 
         let proposers = Arc::new(proposers);
