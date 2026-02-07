@@ -75,11 +75,11 @@ Rundler supports running multiple bundle sender workers with a shared pool of si
 
 ### Workers and Signers
 
-Workers (bundle senders) share a common pool of signers rather than having a dedicated 1:1 signer-to-worker mapping. This allows:
+Each worker (bundle sender) is paired 1:1 with a signer. However, each worker handles ALL configured entry points rather than being dedicated to a single one. The Assigner dynamically selects which entrypoint a worker builds for on each cycle based on mempool state. This means:
 
-- Multiple workers to service different entry points or filter configurations
-- Efficient signer utilization when some entry points have more traffic than others
-- Dynamic work assignment based on mempool state
+- Every worker can service any configured entry point or filter configuration
+- Work is distributed across workers based on which entrypoints have the most pending operations
+- Starvation prevention ensures all entrypoints get serviced even under uneven load
 
 The number of workers is controlled via `--num_signers`.
 

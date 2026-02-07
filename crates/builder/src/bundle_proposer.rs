@@ -179,7 +179,7 @@ where
     BP: BundleProposerProvidersT,
 {
     #[allow(clippy::too_many_arguments)]
-    async fn make_bundle_internal(
+    async fn propose_typed_bundle(
         &self,
         sender_eoa: Address,
         ops: Vec<PoolOperation>,
@@ -365,9 +365,9 @@ where
         is_replacement: bool,
         condition_not_met: bool,
     ) -> BundleProposerResult<BundleData> {
-        // Call the internal make_bundle
+        // Build typed bundle, then erase types into BundleData
         let bundle = self
-            .make_bundle_internal(
+            .propose_typed_bundle(
                 sender_eoa,
                 ops,
                 block_hash,
@@ -4409,7 +4409,7 @@ mod tests {
         );
 
         proposer
-            .make_bundle_internal(
+            .propose_typed_bundle(
                 sender_eoa,
                 ops,
                 current_block_hash,

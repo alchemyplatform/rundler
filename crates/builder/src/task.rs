@@ -207,37 +207,9 @@ where
             }
         }
 
-        // Build entrypoint info for the assigner
-        // Each (address, filter_id) combination is a separate "virtual entrypoint"
+        // Build entrypoint info (for assigner) and registry (for proposers) in a single pass.
+        // Each (address, filter_id) combination is a separate "virtual entrypoint".
         let mut entrypoint_infos: Vec<crate::assigner::EntrypointInfo> = vec![];
-        for ep in &self.args.entry_points {
-            if ep.builders.is_empty() {
-                // No builders configured - create a default entry with no filter
-                entrypoint_infos.push(crate::assigner::EntrypointInfo {
-                    address: ep.address,
-                    filter_id: None,
-                });
-            } else {
-                // Create an entry for each builder configuration
-                for builder in &ep.builders {
-                    entrypoint_infos.push(crate::assigner::EntrypointInfo {
-                        address: ep.address,
-                        filter_id: builder.filter_id.clone(),
-                    });
-                }
-            }
-        }
-
-        let assigner = Arc::new(Assigner::new(
-            Box::new(self.pool.clone()),
-            entrypoint_infos,
-            self.args.num_signers as usize,
-            self.args.assigner_max_ops_per_request,
-            self.args.max_bundle_size,
-        ));
-
-        // Create and populate entrypoint registry with proposers for all entrypoints
-        // Registry is keyed by (address, filter_id) to support multiple configurations per entrypoint
         let mut entrypoint_registry = EntrypointRegistry::new();
         for ep in &self.args.entry_points {
             // Create the appropriate revert handler based on entrypoint ABI version
@@ -249,14 +221,17 @@ where
             };
 
             if ep.builders.is_empty() {
-                // No builders configured - create a default proposer with no proxy
+                // No builders configured - create a default entry with no filter/proxy
+                entrypoint_infos.push(crate::assigner::EntrypointInfo {
+                    address: ep.address,
+                    filter_id: None,
+                });
                 let builder_tag = registry_builder_tag(&ep.address, None, None);
                 let proposer = self
                     .create_proposer_for_entrypoint(ep, None, builder_tag)
                     .await?;
-                let registry_key = (ep.address, None);
                 entrypoint_registry.insert(
-                    registry_key,
+                    (ep.address, None),
                     EntrypointEntry::new(proposer, revert_handler_fn(), None),
                 );
                 info!(
@@ -264,27 +239,19 @@ where
                     ep.address, ep.version
                 );
             } else {
-                // Enforce that a filter_id maps to a single submission proxy.
-                let mut filter_proxy: HashMap<Option<String>, Option<Address>> = HashMap::new();
+                // Enforce unique filter_ids per entrypoint
+                let mut seen_filter_ids: HashSet<Option<String>> = HashSet::new();
                 for builder in &ep.builders {
-                    let filter_id = builder.filter_id.clone();
-                    let submission_proxy = builder.submission_proxy;
-                    if let Some(existing) = filter_proxy.get(&filter_id) {
-                        if existing != &submission_proxy {
-                            return Err(anyhow::anyhow!(
-                                "Entry point {:?} has multiple builder configs with the same filter_id {:?} but different submission proxies: {:?} vs {:?}",
-                                ep.address,
-                                filter_id,
-                                existing,
-                                submission_proxy
-                            ));
-                        }
-                    } else {
-                        filter_proxy.insert(filter_id, submission_proxy);
+                    if !seen_filter_ids.insert(builder.filter_id.clone()) {
+                        return Err(anyhow::anyhow!(
+                            "Entry point {:?} has duplicate builder config for filter_id {:?}",
+                            ep.address,
+                            builder.filter_id
+                        ));
                     }
                 }
 
-                // Create a proposer for each builder configuration
+                // Create an assigner entry and proposer for each builder configuration
                 for builder in &ep.builders {
                     // Submission proxies are not supported for v0.9 entrypoints
                     if builder.submission_proxy.is_some() && ep.version == EntryPointVersion::V0_9 {
@@ -293,6 +260,11 @@ where
                             ep.address
                         ));
                     }
+
+                    entrypoint_infos.push(crate::assigner::EntrypointInfo {
+                        address: ep.address,
+                        filter_id: builder.filter_id.clone(),
+                    });
 
                     // Look up the submission proxy from chain_spec if configured
                     let submission_proxy = builder
@@ -319,9 +291,8 @@ where
                     let proposer = self
                         .create_proposer_for_entrypoint(ep, submission_proxy.clone(), builder_tag)
                         .await?;
-                    let registry_key = (ep.address, builder.filter_id.clone());
                     entrypoint_registry.insert(
-                        registry_key,
+                        (ep.address, builder.filter_id.clone()),
                         EntrypointEntry::new(proposer, revert_handler_fn(), submission_proxy),
                     );
                     info!(
@@ -332,16 +303,17 @@ where
             }
         }
 
+        let assigner = Arc::new(Assigner::new(
+            Box::new(self.pool.clone()),
+            entrypoint_infos,
+            self.args.num_signers as usize,
+            self.args.assigner_max_ops_per_request,
+            self.args.max_bundle_size,
+        ));
+
         let entrypoint_registry = Arc::new(entrypoint_registry);
-        // collect deduplicated entrypoint addresses into a vector
-        let supported_entry_points: Vec<_> = self
-            .args
-            .entry_points
-            .iter()
-            .map(|ep| ep.address)
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
+        let supported_entry_points: Vec<_> =
+            self.args.entry_points.iter().map(|ep| ep.address).collect();
 
         // Create one bundle sender per signer - each handles all entrypoints via the registry
         let actions = self
