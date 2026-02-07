@@ -24,11 +24,11 @@ use metrics_derive::Metrics;
 use mockall::automock;
 use rundler_provider::{
     GethDebugBuiltInTracerType, GethDebugTracerCallConfig, GethDebugTracerType,
-    GethDebugTracingOptions, HandleOpsOut,
+    GethDebugTracingOptions,
 };
 use rundler_task::TaskSpawner;
 use rundler_types::{
-    GasFees, UserOperation,
+    GasFees,
     authorization::Eip7702Auth,
     builder::BundlingMode,
     chain::ChainSpec,
@@ -1041,72 +1041,15 @@ where
             .try_into_call_frame()
             .context("trace is not a call tracer")?;
 
-        // Use the revert handler from the registry to decode ops
-        let ops = entry.revert_handler.decode_ops_from_calldata(
-            &self.chain_spec,
-            ep_address,
-            &frame.input,
-            &auth_list,
-        );
-
-        let Some(revert_data) = frame.output else {
-            tracing::error!("revert has not output, removing all ops from bundle from pool");
-            let to_remove = ops
-                .iter()
-                .flat_map(|ops| ops.user_ops.iter().map(|op| op.hash()))
-                .collect();
-            return self
-                .remove_ops_from_pool_by_hash(ep_address, to_remove)
-                .await;
-        };
-        tracing::warn!("Onchain revert data for {tx_hash:?}: {revert_data:?}");
-
-        // If we have a submission proxy for this entry, use it to process the revert first
-        if let Some(proxy) = &entry.submission_proxy {
-            let to_remove = proxy.process_revert(&revert_data, &ops).await;
-            if !to_remove.is_empty() {
-                return self
-                    .remove_ops_from_pool_by_hash(ep_address, to_remove)
-                    .await;
-            }
-        }
-
-        // Use the revert handler from the registry to decode the revert
-        let handle_ops_out = entry
-            .revert_handler
-            .decode_handle_ops_revert(frame.error.as_ref().map_or("", |e| e), &Some(revert_data));
-        tracing::warn!(
-            "reverted transaction {tx_hash:?} decoded handle ops out: {handle_ops_out:?}"
-        );
-
-        let to_remove = match handle_ops_out {
-            Some(HandleOpsOut::Success) => {
-                bail!("handle ops returned success");
-            }
-            Some(HandleOpsOut::FailedOp(index, _)) => {
-                tracing::warn!("removing op from pool for reverted bundle op index {index:?}",);
-                ops.iter()
-                    .flat_map(|ops| ops.user_ops.iter())
-                    .nth(index)
-                    .map(|op| vec![op.hash()])
-                    .unwrap_or_default()
-            }
-            Some(HandleOpsOut::SignatureValidationFailed(aggregator)) => {
-                tracing::warn!(
-                    "removing all ops from pool for reverted bundle for aggregator {aggregator:?}",
-                );
-                ops.iter()
-                    .find(|op| op.aggregator == aggregator)
-                    .map(|ops| ops.user_ops.iter().map(|op| op.hash()).collect())
-                    .unwrap_or_default()
-            }
-            None | Some(HandleOpsOut::Revert(_)) | Some(HandleOpsOut::PostOpRevert) => {
-                tracing::warn!("removing all ops from pool for reverted bundle");
-                ops.iter()
-                    .flat_map(|ops| ops.user_ops.iter().map(|op| op.hash()))
-                    .collect()
-            }
-        };
+        let to_remove = entry
+            .proposer
+            .process_revert(
+                &frame.input,
+                &auth_list,
+                frame.error.as_ref().map_or("", |e| e),
+                &frame.output,
+            )
+            .await?;
 
         self.remove_ops_from_pool_by_hash(ep_address, to_remove)
             .await
@@ -1707,9 +1650,7 @@ mod tests {
         assigner::EntrypointInfo,
         bundle_proposer::{BundleData, MockBundleProposerT},
         bundle_sender::{BundleSenderImpl, MockTrigger},
-        entrypoint_registry::{
-            EntrypointEntry, EntrypointRegistry, MockEvmProviderLike, RevertHandlerV0_6,
-        },
+        entrypoint_registry::{EntrypointEntry, EntrypointRegistry, MockEvmProviderLike},
         transaction_tracker::MockTransactionTracker,
     };
 
@@ -1964,7 +1905,7 @@ mod tests {
         let mut registry = EntrypointRegistry::new();
         registry.insert(
             (pinned_entry_point, filter_id.clone()),
-            EntrypointEntry::new(Box::new(mock_proposer_t), Box::new(RevertHandlerV0_6), None),
+            EntrypointEntry::new(Box::new(mock_proposer_t)),
         );
 
         let entrypoints = vec![
@@ -2408,7 +2349,7 @@ mod tests {
     #[tokio::test]
     async fn test_revert_remove() {
         let Mocks {
-            mock_proposer_t,
+            mut mock_proposer_t,
             mut mock_tracker,
             mut mock_trigger,
             mut mock_evm,
@@ -2464,7 +2405,6 @@ mod tests {
         });
 
         // Create test data for revert handling
-        // Note: With real RevertHandlerV0_6, we need valid calldata that decodes to ops
         // For this test, we'll use empty input which will return empty ops
         let input = bytes!("");
         let output = bytes!("5678");
@@ -2488,15 +2428,13 @@ mod tests {
             .expect_get_transaction_by_hash()
             .returning(move |_| Box::pin(async { Ok(None) }));
 
-        // Note: With the real RevertHandlerV0_6, decode functions will be called directly
-        // Empty/invalid calldata will result in empty ops, so no ops will be removed
-        // The test verifies that process_revert completes without error
+        // Mock the proposer's process_revert to return empty (no ops to remove)
+        mock_proposer_t
+            .expect_process_revert()
+            .returning(|_, _, _, _| Box::pin(async { Ok(vec![]) }));
 
-        // With empty calldata, the decoder returns empty ops, which leads to removing all ops
-        // (the "no ops to remove" case in process_revert)
         mock_pool.expect_remove_ops().returning(|_, _| Ok(()));
 
-        // Set last_bundle_key via sending a successful bundle first
         let mut sender = new_sender(mock_proposer_t, mock_evm, mock_pool);
         sender.last_bundle_key = Some((ENTRY_POINT_ADDRESS_V0_6, None));
 
@@ -2563,7 +2501,7 @@ mod tests {
         let mut registry = EntrypointRegistry::new();
         registry.insert(
             (ep_address, None),
-            EntrypointEntry::new(Box::new(mock_proposer_t), Box::new(RevertHandlerV0_6), None),
+            EntrypointEntry::new(Box::new(mock_proposer_t)),
         );
 
         // Create assigner with entrypoint info
