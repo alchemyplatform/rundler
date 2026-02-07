@@ -26,7 +26,7 @@ use rundler_types::{
     UserOperationVariant,
 };
 
-use super::events::UserOperationEventProvider;
+use super::events::{EventProviderError, EventProviderResult, UserOperationEventProvider};
 use crate::{
     eth::{EthRpcError, error::EthResult},
     types::{
@@ -110,11 +110,10 @@ impl EntryPointRouter {
         &self,
         entry_point: &Address,
         hash: B256,
-    ) -> EthResult<Option<RpcUserOperationByHash>> {
-        self.get_route(entry_point)?
+    ) -> Result<Option<RpcUserOperationByHash>, EventProviderError> {
+        self.get_event_route(entry_point)?
             .get_mined_by_hash(hash)
             .await
-            .map_err(Into::into)
     }
 
     pub(crate) async fn get_mined_from_tx_receipt(
@@ -122,11 +121,10 @@ impl EntryPointRouter {
         entry_point: &Address,
         uo_hash: B256,
         tx_receipt: TransactionReceipt,
-    ) -> EthResult<Option<RpcUserOperationByHash>> {
-        self.get_route(entry_point)?
+    ) -> Result<Option<RpcUserOperationByHash>, EventProviderError> {
+        self.get_event_route(entry_point)?
             .get_mined_from_tx_receipt(uo_hash, tx_receipt)
             .await
-            .map_err(Into::into)
     }
 
     pub(crate) async fn get_receipt(
@@ -134,11 +132,10 @@ impl EntryPointRouter {
         entry_point: &Address,
         hash: B256,
         bundle_transaction: Option<B256>,
-    ) -> EthResult<Option<RpcUserOperationReceipt>> {
-        self.get_route(entry_point)?
+    ) -> Result<Option<RpcUserOperationReceipt>, EventProviderError> {
+        self.get_event_route(entry_point)?
             .get_receipt(hash, bundle_transaction)
             .await
-            .map_err(Into::into)
     }
 
     pub(crate) async fn get_receipt_from_tx_receipt(
@@ -146,11 +143,10 @@ impl EntryPointRouter {
         entry_point: &Address,
         uo_hash: B256,
         tx_receipt: TransactionReceipt,
-    ) -> EthResult<Option<RpcUserOperationReceipt>> {
-        self.get_route(entry_point)?
+    ) -> Result<Option<RpcUserOperationReceipt>, EventProviderError> {
+        self.get_event_route(entry_point)?
             .get_receipt_from_tx_receipt(uo_hash, tx_receipt)
             .await
-            .map_err(Into::into)
     }
 
     /// Get both the mined user operation and receipt in a single call,
@@ -160,11 +156,10 @@ impl EntryPointRouter {
         entry_point: &Address,
         hash: B256,
         bundle_transaction: Option<B256>,
-    ) -> EthResult<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>> {
-        self.get_route(entry_point)?
+    ) -> Result<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>, EventProviderError> {
+        self.get_event_route(entry_point)?
             .get_mined_and_receipt(hash, bundle_transaction)
             .await
-            .map_err(Into::into)
     }
 
     pub(crate) async fn estimate_gas(
@@ -220,6 +215,15 @@ impl EntryPointRouter {
             )))?;
         Ok(route)
     }
+
+    fn get_event_route(
+        &self,
+        entry_point: &Address,
+    ) -> Result<&Arc<dyn EntryPointRoute>, EventProviderError> {
+        self.get_route(entry_point).map_err(|e| {
+            EventProviderError::Provider(rundler_provider::ProviderError::Other(e.into()))
+        })
+    }
 }
 
 #[async_trait::async_trait]
@@ -227,26 +231,28 @@ pub(crate) trait EntryPointRoute: Send + Sync {
     fn version(&self) -> EntryPointVersion;
     fn address(&self) -> Address;
 
-    async fn get_mined_by_hash(&self, hash: B256)
-    -> anyhow::Result<Option<RpcUserOperationByHash>>;
+    async fn get_mined_by_hash(
+        &self,
+        hash: B256,
+    ) -> EventProviderResult<Option<RpcUserOperationByHash>>;
 
     async fn get_mined_from_tx_receipt(
         &self,
         uo_hash: B256,
         tx_receipt: TransactionReceipt,
-    ) -> anyhow::Result<Option<RpcUserOperationByHash>>;
+    ) -> EventProviderResult<Option<RpcUserOperationByHash>>;
 
     async fn get_receipt(
         &self,
         hash: B256,
         bundle_transaction: Option<B256>,
-    ) -> anyhow::Result<Option<RpcUserOperationReceipt>>;
+    ) -> EventProviderResult<Option<RpcUserOperationReceipt>>;
 
     async fn get_receipt_from_tx_receipt(
         &self,
         uo_hash: B256,
         tx_receipt: TransactionReceipt,
-    ) -> anyhow::Result<Option<RpcUserOperationReceipt>>;
+    ) -> EventProviderResult<Option<RpcUserOperationReceipt>>;
 
     /// Get both the mined user operation and receipt in a single call,
     /// sharing the logs RPC call between both operations.
@@ -254,7 +260,7 @@ pub(crate) trait EntryPointRoute: Send + Sync {
         &self,
         hash: B256,
         bundle_transaction: Option<B256>,
-    ) -> anyhow::Result<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>>;
+    ) -> EventProviderResult<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>>;
 
     async fn estimate_gas(
         &self,
@@ -293,7 +299,7 @@ where
     async fn get_mined_by_hash(
         &self,
         hash: B256,
-    ) -> anyhow::Result<Option<RpcUserOperationByHash>> {
+    ) -> EventProviderResult<Option<RpcUserOperationByHash>> {
         self.event_provider.get_mined_by_hash(hash).await
     }
 
@@ -301,7 +307,7 @@ where
         &self,
         uo_hash: B256,
         tx_receipt: TransactionReceipt,
-    ) -> anyhow::Result<Option<RpcUserOperationByHash>> {
+    ) -> EventProviderResult<Option<RpcUserOperationByHash>> {
         self.event_provider
             .get_mined_from_tx_receipt(uo_hash, tx_receipt)
             .await
@@ -311,7 +317,7 @@ where
         &self,
         hash: B256,
         bundle_transaction: Option<B256>,
-    ) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
+    ) -> EventProviderResult<Option<RpcUserOperationReceipt>> {
         if let Some(bundle_transaction) = bundle_transaction {
             self.event_provider
                 .get_receipt_from_tx_hash(hash, bundle_transaction)
@@ -325,7 +331,7 @@ where
         &self,
         uo_hash: B256,
         tx_receipt: TransactionReceipt,
-    ) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
+    ) -> EventProviderResult<Option<RpcUserOperationReceipt>> {
         self.event_provider
             .get_receipt_from_tx_receipt(uo_hash, tx_receipt)
             .await
@@ -335,7 +341,7 @@ where
         &self,
         hash: B256,
         bundle_transaction: Option<B256>,
-    ) -> anyhow::Result<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>> {
+    ) -> EventProviderResult<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>> {
         self.event_provider
             .get_mined_and_receipt(hash, bundle_transaction)
             .await
