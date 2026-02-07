@@ -39,10 +39,7 @@ use crate::{
     bundle_proposer::{self, BundleProposerImpl, BundleProposerProviders, BundleProposerT},
     bundle_sender::{self, BundleSender, BundleSenderAction, BundleSenderImpl},
     emit::BuilderEvent,
-    entrypoint_registry::{
-        EntrypointEntry, EntrypointRegistry, EvmProviderAdapter, RevertHandlerV0_6,
-        RevertHandlerV0_7,
-    },
+    entrypoint_registry::{EntrypointEntry, EntrypointRegistry, EvmProviderAdapter},
     sender::TransactionSenderArgs,
     server::{self, LocalBuilderBuilder},
     transaction_tracker::{self, TransactionTrackerImpl},
@@ -212,14 +209,6 @@ where
         let mut entrypoint_infos: Vec<crate::assigner::EntrypointInfo> = vec![];
         let mut entrypoint_registry = EntrypointRegistry::new();
         for ep in &self.args.entry_points {
-            // Create the appropriate revert handler based on entrypoint ABI version
-            let revert_handler_fn = || -> Box<dyn crate::entrypoint_registry::RevertHandler> {
-                match ep.version.abi_version() {
-                    EntryPointAbiVersion::V0_6 => Box::new(RevertHandlerV0_6),
-                    EntryPointAbiVersion::V0_7 => Box::new(RevertHandlerV0_7),
-                }
-            };
-
             if ep.builders.is_empty() {
                 // No builders configured - create a default entry with no filter/proxy
                 entrypoint_infos.push(crate::assigner::EntrypointInfo {
@@ -230,10 +219,7 @@ where
                 let proposer = self
                     .create_proposer_for_entrypoint(ep, None, builder_tag)
                     .await?;
-                entrypoint_registry.insert(
-                    (ep.address, None),
-                    EntrypointEntry::new(proposer, revert_handler_fn(), None),
-                );
+                entrypoint_registry.insert((ep.address, None), EntrypointEntry::new(proposer));
                 info!(
                     "Registered proposer for entrypoint {:?} (version {:?})",
                     ep.address, ep.version
@@ -289,11 +275,11 @@ where
                     );
 
                     let proposer = self
-                        .create_proposer_for_entrypoint(ep, submission_proxy.clone(), builder_tag)
+                        .create_proposer_for_entrypoint(ep, submission_proxy, builder_tag)
                         .await?;
                     entrypoint_registry.insert(
                         (ep.address, builder.filter_id.clone()),
-                        EntrypointEntry::new(proposer, revert_handler_fn(), submission_proxy),
+                        EntrypointEntry::new(proposer),
                     );
                     info!(
                         "Registered proposer for entrypoint {:?} (version {:?}, filter_id: {:?}, proxy: {:?})",
