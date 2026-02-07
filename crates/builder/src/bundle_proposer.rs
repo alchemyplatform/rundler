@@ -106,10 +106,10 @@ pub(crate) enum BundleProposerError {
 pub(crate) struct BundleData {
     /// The transaction to send
     pub tx: rundler_provider::TransactionRequest,
-    /// Gas fees for the bundle
-    pub gas_fees: GasFees,
     /// Expected storage for conditional submission
     pub expected_storage: ExpectedStorage,
+    /// Gas fees used for this bundle
+    pub gas_fees: GasFees,
     /// Hashes of operations in the bundle (sender, hash) pairs
     pub ops: Vec<(Address, B256)>,
     /// Hashes of rejected operations to remove from pool
@@ -155,14 +155,8 @@ pub(crate) trait BundleProposerT: Send + Sync {
     ) -> BundleProposerResult<(GasFees, u128)>;
 
     /// Process a reverted bundle transaction and return op hashes to remove from pool.
-    /// Takes the calldata, auth_list, and optional revert output from the traced tx.
-    async fn process_revert(
-        &self,
-        calldata: &Bytes,
-        auth_list: &[Eip7702Auth],
-        revert_message: &str,
-        revert_data: &Option<Bytes>,
-    ) -> anyhow::Result<Vec<B256>>;
+    /// Fetches the trace and transaction internally, then decodes and processes the revert.
+    async fn process_revert(&self, tx_hash: B256) -> anyhow::Result<Vec<B256>>;
 }
 
 pub(crate) struct BundleProposerImpl<EP, BP> {
@@ -414,23 +408,46 @@ where
 
         Ok(BundleData {
             tx,
-            gas_fees: bundle.gas_fees,
             expected_storage: bundle.expected_storage,
+            gas_fees: bundle.gas_fees,
             ops,
             rejected_op_hashes,
             entity_updates: bundle.entity_updates,
         })
     }
 
-    async fn process_revert(
-        &self,
-        calldata: &Bytes,
-        auth_list: &[Eip7702Auth],
-        revert_message: &str,
-        revert_data: &Option<Bytes>,
-    ) -> anyhow::Result<Vec<B256>> {
+    async fn process_revert(&self, tx_hash: B256) -> anyhow::Result<Vec<B256>> {
+        use rundler_provider::{
+            GethDebugBuiltInTracerType, GethDebugTracerCallConfig, GethDebugTracerType,
+            GethDebugTracingOptions, get_auth_list_from_transaction,
+        };
+
         let address = *self.ep_providers.entry_point().address();
         let chain_spec = &self.settings.chain_spec;
+
+        // Fetch trace and transaction from provider
+        let trace_options = GethDebugTracingOptions::new_tracer(
+            GethDebugTracerType::BuiltInTracer(GethDebugBuiltInTracerType::CallTracer),
+        )
+        .with_call_config(GethDebugTracerCallConfig::default().only_top_call());
+
+        let evm = self.ep_providers.evm();
+        let trace_fut = evm.debug_trace_transaction(tx_hash, trace_options);
+        let get_fut = evm.get_transaction_by_hash(tx_hash);
+        let (trace, tx) = tokio::try_join!(trace_fut, get_fut)
+            .context("should have fetched trace and tx from provider")?;
+
+        let auth_list: Vec<Eip7702Auth> = tx
+            .map(|tx| get_auth_list_from_transaction(&tx))
+            .unwrap_or_default();
+
+        let frame = trace
+            .try_into_call_frame()
+            .context("trace is not a call tracer")?;
+
+        let calldata = &frame.input;
+        let revert_message = frame.error.as_ref().map_or("", |e| e);
+        let revert_data = &frame.output;
 
         // Decode ops from calldata using version-specific decoding
         let ops: Vec<UserOpsPerAggregator<UserOperationVariant>> =
@@ -442,7 +459,7 @@ where
                         .collect()
                 }
                 EntryPointAbiVersion::V0_7 => {
-                    decode_v0_7_ops_from_calldata(chain_spec, address, calldata, auth_list)
+                    decode_v0_7_ops_from_calldata(chain_spec, address, calldata, &auth_list)
                         .into_iter()
                         .map(|ops| ops.into_uo_variants())
                         .collect()
