@@ -716,6 +716,13 @@ impl From<RundlerPoolOperationSummary> for PoolOperationSummary {
             entry_point: summary.entry_point.to_proto_bytes(),
             sender: summary.sender.to_proto_bytes(),
             sim_block_number: summary.sim_block_number,
+            max_fee_per_gas: summary.max_fee_per_gas.to_proto_bytes(),
+            max_priority_fee_per_gas: summary.max_priority_fee_per_gas.to_proto_bytes(),
+            gas_limit: summary.gas_limit.to_proto_bytes(),
+            bundler_sponsorship_max_cost: summary
+                .bundler_sponsorship_max_cost
+                .map(|c| c.to_proto_bytes())
+                .unwrap_or_default(),
         }
     }
 }
@@ -724,11 +731,20 @@ impl TryFrom<PoolOperationSummary> for RundlerPoolOperationSummary {
     type Error = ConversionError;
 
     fn try_from(summary: PoolOperationSummary) -> Result<Self, Self::Error> {
+        let bundler_sponsorship_max_cost = if summary.bundler_sponsorship_max_cost.is_empty() {
+            None
+        } else {
+            Some(from_bytes(&summary.bundler_sponsorship_max_cost)?)
+        };
         Ok(Self {
             hash: from_bytes(&summary.hash)?,
             entry_point: from_bytes(&summary.entry_point)?,
             sender: from_bytes(&summary.sender)?,
             sim_block_number: summary.sim_block_number,
+            max_fee_per_gas: from_bytes(&summary.max_fee_per_gas)?,
+            max_priority_fee_per_gas: from_bytes(&summary.max_priority_fee_per_gas)?,
+            gas_limit: from_bytes(&summary.gas_limit)?,
+            bundler_sponsorship_max_cost,
         })
     }
 }
@@ -829,5 +845,62 @@ impl TryUoFromProto<PoolOperationStatus> for RundlerPoolOperationStatus {
             pending_bundle,
             preconf_info,
         })
+    }
+}
+#[cfg(test)]
+mod tests {
+    use alloy_primitives::{Address, B256, U256};
+
+    use super::{PoolOperationSummary, RundlerPoolOperationSummary};
+
+    #[test]
+    fn pool_operation_summary_roundtrip_preserves_fee_fields() {
+        let summary = RundlerPoolOperationSummary {
+            hash: B256::from([1u8; 32]),
+            entry_point: Address::from([2u8; 20]),
+            sender: Address::from([3u8; 20]),
+            sim_block_number: 42,
+            max_fee_per_gas: 1234,
+            max_priority_fee_per_gas: 56,
+            gas_limit: 100_000,
+            bundler_sponsorship_max_cost: Some(U256::from(500_000)),
+        };
+
+        let proto = PoolOperationSummary::from(summary.clone());
+        let converted = RundlerPoolOperationSummary::try_from(proto).unwrap();
+
+        assert_eq!(converted.hash, summary.hash);
+        assert_eq!(converted.entry_point, summary.entry_point);
+        assert_eq!(converted.sender, summary.sender);
+        assert_eq!(converted.sim_block_number, summary.sim_block_number);
+        assert_eq!(converted.max_fee_per_gas, summary.max_fee_per_gas);
+        assert_eq!(
+            converted.max_priority_fee_per_gas,
+            summary.max_priority_fee_per_gas
+        );
+        assert_eq!(converted.gas_limit, summary.gas_limit);
+        assert_eq!(
+            converted.bundler_sponsorship_max_cost,
+            summary.bundler_sponsorship_max_cost
+        );
+    }
+
+    #[test]
+    fn pool_operation_summary_roundtrip_none_sponsorship() {
+        let summary = RundlerPoolOperationSummary {
+            hash: B256::from([1u8; 32]),
+            entry_point: Address::from([2u8; 20]),
+            sender: Address::from([3u8; 20]),
+            sim_block_number: 42,
+            max_fee_per_gas: 1234,
+            max_priority_fee_per_gas: 56,
+            gas_limit: 100_000,
+            bundler_sponsorship_max_cost: None,
+        };
+
+        let proto = PoolOperationSummary::from(summary.clone());
+        let converted = RundlerPoolOperationSummary::try_from(proto).unwrap();
+
+        assert_eq!(converted.bundler_sponsorship_max_cost, None);
     }
 }

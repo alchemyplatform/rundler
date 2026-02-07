@@ -1040,10 +1040,13 @@ impl<P: EvmProvider> Chain<P> {
         preconfirmed_txns: Vec<(B256, Vec<B256>)>,
         preconfirmed_block_number: u64,
     ) -> ChainUpdate {
-        info!(
-            "New preconfirmed txns: {:?} at block number {}",
-            preconfirmed_txns, preconfirmed_block_number
-        );
+        if !preconfirmed_txns.is_empty() {
+            tracing::info!(
+                "New preconfirmed txns: {:?} at block number {}",
+                preconfirmed_txns,
+                preconfirmed_block_number
+            );
+        }
         self.metrics.flashblock_uos.increment(
             preconfirmed_txns
                 .iter()
