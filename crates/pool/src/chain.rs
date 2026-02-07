@@ -1041,7 +1041,7 @@ impl<P: EvmProvider> Chain<P> {
         preconfirmed_block_number: u64,
     ) -> ChainUpdate {
         if !preconfirmed_txns.is_empty() {
-            tracing::debug!(
+            tracing::info!(
                 "New preconfirmed txns: {:?} at block number {}",
                 preconfirmed_txns,
                 preconfirmed_block_number
