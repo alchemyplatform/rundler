@@ -472,6 +472,7 @@ struct ProviderErrorWithContext {
 
 impl From<ProviderErrorWithContext> for EthRpcError {
     fn from(e: ProviderErrorWithContext) -> Self {
+        // Log the full error details at ERROR level for debugging
         let inner_msg = match &e.error {
             ProviderError::RPC(rpc_error) => match rpc_error {
                 RpcError::ErrorResp(error_payload) => {
@@ -498,15 +499,16 @@ impl From<ProviderErrorWithContext> for EthRpcError {
                 format!("other error: {}", error)
             }
         };
-        if let Some(context_msg) = e.context {
-            Self::Internal(anyhow::anyhow!(
-                "{}: provider error: {}",
-                context_msg,
-                inner_msg
-            ))
+
+        // Log full error details for debugging
+        if let Some(context_msg) = &e.context {
+            tracing::error!("{}: provider error: {}", context_msg, inner_msg);
         } else {
-            Self::Internal(anyhow::anyhow!("provider error: {}", inner_msg))
+            tracing::error!("provider error: {}", inner_msg);
         }
+
+        // Return generic error message to user
+        Self::Internal(anyhow::anyhow!("internal error: rpc provider error"))
     }
 }
 
@@ -518,6 +520,23 @@ impl From<ProviderError> for ProviderErrorWithContext {
         }
     }
 }
+
+impl From<crate::eth::events::EventProviderError> for EthRpcError {
+    fn from(e: crate::eth::events::EventProviderError) -> Self {
+        use crate::eth::events::EventProviderError;
+
+        match e {
+            // Reuse existing ProviderError conversion for all provider errors
+            EventProviderError::Provider(provider_err) => Self::from(ProviderErrorWithContext {
+                error: provider_err,
+                context: None,
+            }),
+            // All other variants become Internal errors with their descriptive messages
+            other => Self::Internal(anyhow::anyhow!("{}", other)),
+        }
+    }
+}
+
 impl From<GasEstimationError> for EthRpcError {
     fn from(e: GasEstimationError) -> Self {
         match e {

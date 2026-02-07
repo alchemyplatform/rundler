@@ -295,7 +295,9 @@ where
             self.entry_point_router
                 .get_mined_from_tx_receipt(&entry_point, uo_hash, tx_receipt);
 
-        let (uo, receipt) = future::try_join(uo_fut, receipt_fut).await?;
+        let (uo_result, receipt_result) = future::join(uo_fut, receipt_fut).await;
+        let uo = uo_result.map_err(EthRpcError::from)?;
+        let receipt = receipt_result.map_err(EthRpcError::from)?;
 
         match (uo, receipt) {
             (Some(uo), Some(mut receipt)) => {
@@ -334,7 +336,29 @@ where
                 .get_mined_and_receipt(ep, uo_hash, preconf_transaction)
         });
 
-        let mined_results = future::try_join_all(mined_futs).await?;
+        // Track if we failed to retrieve receipt for a preconfirmed UO
+        let mut preconf_receipt_failed = false;
+
+        // If this fails and the UO is preconfirmed, treat it as pending
+        let mined_results = match future::try_join_all(mined_futs).await {
+            Ok(results) => results,
+            Err(e) => {
+                // If UO is preconfirmed but receipt retrieval failed, log and treat as pending
+                if preconf_transaction.is_some() {
+                    tracing::warn!(
+                        "Failed to retrieve receipt for preconfirmed UO {}: {}. Treating as pending.",
+                        uo_hash,
+                        e
+                    );
+                    preconf_receipt_failed = true;
+                    // Fall through to return pool status as pending
+                    vec![]
+                } else {
+                    // For non-preconfirmed UOs, propagate the error
+                    return Err(EthRpcError::from(e));
+                }
+            }
+        };
 
         // Check for mined/preconfirmed receipt first (includes user operation)
         if let Some((uo_by_hash, receipt)) = mined_results.into_iter().find_map(|r| r) {
@@ -357,7 +381,14 @@ where
 
         // If found in pool, return extended status
         if let Some(pool_status) = op_status {
-            return Ok(pool_status.into());
+            let mut rpc_status: RpcUserOperationStatus = pool_status.into();
+
+            // If we failed to get receipt for a preconfirmed UO, clear preconf info
+            if preconf_receipt_failed {
+                rpc_status.pending_bundle = None;
+            }
+
+            return Ok(rpc_status);
         }
 
         Ok(RpcUserOperationStatus {

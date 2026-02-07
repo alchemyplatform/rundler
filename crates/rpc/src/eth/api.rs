@@ -143,7 +143,12 @@ where
         > = vec![];
 
         for ep in self.router.entry_points() {
-            futs.push(Box::pin(self.router.get_mined_by_hash(ep, hash)));
+            futs.push(Box::pin(async move {
+                self.router
+                    .get_mined_by_hash(ep, hash)
+                    .await
+                    .map_err(Into::into)
+            }));
         }
         futs.push(Box::pin(self.get_pending_user_operation_by_hash(hash)));
 
@@ -184,10 +189,12 @@ where
             BlockTag::Latest => None,
         };
 
-        let futs = self
-            .router
-            .entry_points()
-            .map(|ep| self.router.get_receipt(ep, hash, bundle_transaction));
+        let futs = self.router.entry_points().map(|ep| async move {
+            self.router
+                .get_receipt(ep, hash, bundle_transaction)
+                .await
+                .map_err(EthRpcError::from)
+        });
         let results = future::try_join_all(futs).await?;
         Ok(results.into_iter().find_map(|x| x))
     }

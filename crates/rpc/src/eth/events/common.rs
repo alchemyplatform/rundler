@@ -16,11 +16,10 @@ use std::{collections::VecDeque, marker::PhantomData};
 use alloy_consensus::Transaction;
 use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_sol_types::SolEvent;
-use anyhow::Context;
 use itertools::Itertools;
 use rundler_provider::{
     EvmProvider, Filter, GethDebugBuiltInTracerType, GethDebugTracerType, GethDebugTracingOptions,
-    GethTrace, Log, TransactionReceipt,
+    GethTrace, Log, ProviderError, TransactionReceipt,
 };
 use rundler_types::{
     UserOperation, UserOperationVariant, authorization::Eip7702Auth, chain::ChainSpec,
@@ -28,7 +27,7 @@ use rundler_types::{
 use rundler_utils::log::LogOnError;
 use tracing::instrument;
 
-use super::UserOperationEventProvider;
+use super::{EventProviderError, EventProviderResult, UserOperationEventProvider};
 use crate::types::{RpcUserOperationByHash, RpcUserOperationReceipt, UOStatusEnum};
 
 #[derive(Debug)]
@@ -73,7 +72,7 @@ where
     async fn get_mined_by_hash(
         &self,
         hash: B256,
-    ) -> anyhow::Result<Option<RpcUserOperationByHash>> {
+    ) -> EventProviderResult<Option<RpcUserOperationByHash>> {
         // Get event associated with hash (need to check all entry point addresses associated with this API)
         let event = self
             .get_event_by_hash(hash)
@@ -85,7 +84,7 @@ where
         // If the event is found, get the TX and entry point
         let transaction_hash = event
             .transaction_hash
-            .context("tx_hash should be present")?;
+            .ok_or_else(|| EventProviderError::TransactionNotFound(B256::ZERO))?;
 
         self.get_user_operation(hash, transaction_hash, &event)
             .await
@@ -97,7 +96,7 @@ where
         &self,
         uo_hash: B256,
         tx_receipt: TransactionReceipt,
-    ) -> anyhow::Result<Option<RpcUserOperationByHash>> {
+    ) -> EventProviderResult<Option<RpcUserOperationByHash>> {
         let Some(event) = self.get_event_from_tx_receipt(uo_hash, &tx_receipt) else {
             return Ok(None);
         };
@@ -108,7 +107,10 @@ where
     }
 
     #[instrument(skip_all)]
-    async fn get_receipt(&self, hash: B256) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
+    async fn get_receipt(
+        &self,
+        hash: B256,
+    ) -> EventProviderResult<Option<RpcUserOperationReceipt>> {
         let event = self
             .get_event_by_hash(hash)
             .await
@@ -117,15 +119,14 @@ where
 
         let tx_hash = event
             .transaction_hash
-            .context("tx_hash should be present")?;
+            .ok_or_else(|| EventProviderError::TransactionNotFound(hash))?;
 
         // get transaction receipt
         let tx_receipt = self
             .provider
             .get_transaction_receipt(tx_hash)
-            .await
-            .context("should have fetched tx receipt")?
-            .context("Failed to fetch tx receipt")?;
+            .await?
+            .ok_or_else(|| EventProviderError::ReceiptNotFound(tx_hash))?;
 
         self.construct_receipt(event, tx_receipt).map(Some)
     }
@@ -135,7 +136,7 @@ where
         &self,
         uo_hash: B256,
         tx_receipt: TransactionReceipt,
-    ) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
+    ) -> EventProviderResult<Option<RpcUserOperationReceipt>> {
         let Some(event) = self.get_event_from_tx_receipt(uo_hash, &tx_receipt) else {
             return Ok(None);
         };
@@ -152,13 +153,12 @@ where
         &self,
         uo_hash: B256,
         bundle_transaction: B256,
-    ) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
+    ) -> EventProviderResult<Option<RpcUserOperationReceipt>> {
         let txn_receipt = self
             .provider
             .get_transaction_receipt(bundle_transaction)
-            .await
-            .context("should have fetched tx receipt")?
-            .context("Failed to fetch tx receipt")?;
+            .await?
+            .ok_or_else(|| EventProviderError::ReceiptNotFound(bundle_transaction))?;
 
         let receipt = self
             .get_receipt_from_tx_receipt(uo_hash, txn_receipt)
@@ -177,7 +177,7 @@ where
         &self,
         hash: B256,
         preconfirmed_bundle_transaction: Option<B256>,
-    ) -> anyhow::Result<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>> {
+    ) -> EventProviderResult<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>> {
         // Step 1: Get tx_hash (preconfirmed: passed in, pending: find event first)
         let (tx_hash, event_from_logs) = if let Some(bundle_tx) = preconfirmed_bundle_transaction {
             (bundle_tx, None)
@@ -193,7 +193,7 @@ where
 
             let tx_hash = event
                 .transaction_hash
-                .context("tx_hash should be present")?;
+                .ok_or_else(|| EventProviderError::TransactionNotFound(hash))?;
 
             (tx_hash, Some(event))
         };
@@ -205,13 +205,10 @@ where
         let (tx_result, tx_receipt_result) =
             futures_util::future::join(tx_fut, tx_receipt_fut).await;
 
-        let tx = tx_result
-            .context("should have fetched tx from provider")?
-            .context("should have found tx")?;
+        let tx = tx_result?.ok_or_else(|| EventProviderError::TransactionNotFound(tx_hash))?;
 
-        let tx_receipt = tx_receipt_result
-            .context("should have fetched tx receipt")?
-            .context("Failed to fetch tx receipt")?;
+        let tx_receipt =
+            tx_receipt_result?.ok_or_else(|| EventProviderError::ReceiptNotFound(tx_hash))?;
 
         // Step 3: Get event (preconfirmed: from tx_receipt, pending: already have it)
         let event = if let Some(event) = event_from_logs {
@@ -219,7 +216,10 @@ where
         } else {
             let event = self
                 .get_event_from_tx_receipt(hash, &tx_receipt)
-                .context("should have found uo event in preconfirmed tx receipt")?;
+                .ok_or_else(|| EventProviderError::UserOpNotInReceipt {
+                    uo_hash: hash,
+                    tx_hash,
+                })?;
             event.clone()
         };
 
@@ -240,10 +240,9 @@ where
             return Ok(None);
         }
 
-        let to = tx
-            .inner
-            .to()
-            .expect("tx.to should be present on transaction containing user operation event");
+        let to = tx.inner.to().ok_or_else(|| {
+            ProviderError::Other(anyhow::anyhow!("transaction missing 'to' field"))
+        })?;
 
         let input = tx.input();
 
@@ -258,13 +257,18 @@ where
             )
             .into_iter()
             .find(|op| op.hash() == hash)
-            .context("matching user operation should be found in tx data")?
+            .ok_or_else(|| EventProviderError::UserOpNotInTransaction {
+                uo_hash: hash,
+                tx_hash,
+            })?
         } else {
             tracing::debug!("Unknown entrypoint {to:?}, falling back to trace");
             self.trace_find_user_operation(tx_hash, hash, &auth_list)
-                .await
-                .context("error running trace")?
-                .context("should have found user operation in trace")?
+                .await?
+                .ok_or_else(|| EventProviderError::UserOpNotInTrace {
+                    uo_hash: hash,
+                    tx_hash,
+                })?
         };
 
         let uo_by_hash = RpcUserOperationByHash {
@@ -302,7 +306,7 @@ where
     }
 
     #[instrument(skip_all)]
-    async fn get_event_by_hash(&self, hash: B256) -> anyhow::Result<Option<Log>> {
+    async fn get_event_by_hash(&self, hash: B256) -> EventProviderResult<Option<Log>> {
         let to_block = self.provider.get_block_number().await?;
 
         let from_block = match self.event_block_distance {
@@ -336,7 +340,7 @@ where
         hash: B256,
         from_block: u64,
         to_block: u64,
-    ) -> anyhow::Result<Option<Log>> {
+    ) -> EventProviderResult<Option<Log>> {
         let filter = Filter::new()
             .address(vec![self.entry_point_address])
             .event_signature(E::UserOperationEvent::SIGNATURE_HASH)
@@ -353,13 +357,12 @@ where
         uo_hash: B256,
         tx_hash: B256,
         event: &Log,
-    ) -> anyhow::Result<Option<RpcUserOperationByHash>> {
+    ) -> EventProviderResult<Option<RpcUserOperationByHash>> {
         let tx = self
             .provider
             .get_transaction_by_hash(tx_hash)
-            .await
-            .context("should have fetched tx from provider")?
-            .context("should have found tx")?;
+            .await?
+            .ok_or_else(|| EventProviderError::TransactionNotFound(tx_hash))?;
 
         let auth_list = rundler_provider::get_auth_list_from_transaction(&tx);
 
@@ -367,10 +370,9 @@ where
         if tx.block_hash.is_none() && tx.block_number.is_none() {
             return Ok(None);
         }
-        let to = tx
-            .inner
-            .to()
-            .expect("tx.to should be present on transaction containing user operation event");
+        let to = tx.inner.to().ok_or_else(|| {
+            ProviderError::Other(anyhow::anyhow!("transaction missing 'to' field"))
+        })?;
 
         let input = tx.input();
 
@@ -385,13 +387,12 @@ where
             )
             .into_iter()
             .find(|op| op.hash() == uo_hash)
-            .context("matching user operation should be found in tx data")?
+            .ok_or_else(|| EventProviderError::UserOpNotInTransaction { uo_hash, tx_hash })?
         } else {
             tracing::debug!("Unknown entrypoint {to:?}, falling back to trace");
             self.trace_find_user_operation(tx_hash, uo_hash, &auth_list)
-                .await
-                .context("error running trace")?
-                .context("should have found user operation in trace")?
+                .await?
+                .ok_or_else(|| EventProviderError::UserOpNotInTrace { uo_hash, tx_hash })?
         };
 
         Ok(Some(RpcUserOperationByHash {
@@ -419,20 +420,17 @@ where
         &self,
         event: Log,
         tx_receipt: TransactionReceipt,
-    ) -> anyhow::Result<RpcUserOperationReceipt> {
+    ) -> EventProviderResult<RpcUserOperationReceipt> {
         // filter receipt logs
         let filtered_logs = super::filter_receipt_logs_matching_user_op(
             self.entry_point_address,
             E::before_execution_selector(),
             &event,
             &tx_receipt,
-        )
-        .context("should have found receipt logs matching user op")?;
+        )?;
 
         // decode uo event
-        let uo_event = self
-            .decode_user_operation_event(event)
-            .context("should have decoded user operation event")?;
+        let uo_event = self.decode_user_operation_event(event)?;
 
         Ok(E::construct_receipt(
             uo_event,
@@ -442,10 +440,15 @@ where
         ))
     }
 
-    fn decode_user_operation_event(&self, log: Log) -> anyhow::Result<E::UserOperationEvent> {
+    fn decode_user_operation_event(&self, log: Log) -> EventProviderResult<E::UserOperationEvent> {
         log.log_decode::<E::UserOperationEvent>()
             .map(|l| l.inner.data)
-            .context("log should be a user operation event")
+            .map_err(|e| {
+                EventProviderError::LogProcessingError(format!(
+                    "failed to decode user operation event: {}",
+                    e
+                ))
+            })
     }
 
     /// This method takes a transaction hash and a user operation hash and returns the full user operation if it exists.
@@ -458,7 +461,7 @@ where
         tx_hash: B256,
         user_op_hash: B256,
         auth_list: &[Eip7702Auth],
-    ) -> anyhow::Result<Option<E::UO>> {
+    ) -> EventProviderResult<Option<E::UO>> {
         // initial call wasn't to an entrypoint, so we need to trace the transaction to find the user operation
         let trace_options = GethDebugTracingOptions {
             tracer: Some(GethDebugTracerType::BuiltInTracer(
@@ -469,8 +472,7 @@ where
         let trace = self
             .provider
             .debug_trace_transaction(tx_hash, trace_options)
-            .await
-            .context("should have fetched trace from provider")?;
+            .await?;
 
         // breadth first search for the user operation in the trace
         let mut frame_queue = VecDeque::new();
