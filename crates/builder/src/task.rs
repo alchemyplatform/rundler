@@ -39,7 +39,7 @@ use crate::{
     bundle_proposer::{self, BundleProposerImpl, BundleProposerProviders, BundleProposerT},
     bundle_sender::{self, BundleSender, BundleSenderAction, BundleSenderImpl},
     emit::BuilderEvent,
-    entrypoint_registry::{EntrypointEntry, EntrypointRegistry, EvmProviderAdapter},
+    entrypoint_registry::{EntrypointEntry, EntrypointRegistry},
     sender::TransactionSenderArgs,
     server::{self, LocalBuilderBuilder},
     transaction_tracker::{self, TransactionTrackerImpl},
@@ -517,16 +517,11 @@ where
             max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
         };
 
-        // Wrap the EVM provider in the object-safe adapter
-        let evm: Arc<dyn crate::entrypoint_registry::EvmProviderLike> =
-            Arc::new(EvmProviderAdapter::new(self.providers.evm().clone()));
-
         let builder = BundleSenderImpl::new(
             builder_tag,
             send_bundle_rx,
             self.args.chain_spec.clone(),
             sender_eoa,
-            evm,
             transaction_tracker,
             assigner,
             entrypoint_registry,
