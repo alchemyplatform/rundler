@@ -29,15 +29,17 @@ use metrics::{Counter, Histogram};
 use metrics_derive::Metrics;
 use rundler_provider::{
     BundleHandler, DAGasOracleSync, DAGasProvider, EntryPoint, EvmProvider, FeeEstimator,
-    HandleOpsOut, ProvidersWithEntryPointT, TransactionRequest,
+    HandleOpsOut, ProvidersWithEntryPointT, TransactionRequest, decode_v0_6_handle_ops_revert,
+    decode_v0_6_ops_from_calldata, decode_v0_7_handle_ops_revert, decode_v0_7_ops_from_calldata,
 };
 use rundler_sim::{SimulationError, SimulationResult, Simulator, ViolationError};
 use rundler_types::{
     BUNDLE_BYTE_OVERHEAD, BundleExpectedStorage, Entity, EntityInfo, EntityInfos, EntityType,
-    EntityUpdate, EntityUpdateType, EntryPointVersion, ExpectedStorage, GasFees, TIME_RANGE_BUFFER,
-    Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator, ValidTimeRange,
-    ValidationRevert,
+    EntityUpdate, EntityUpdateType, EntryPointAbiVersion, EntryPointVersion, ExpectedStorage,
+    GasFees, TIME_RANGE_BUFFER, Timestamp, UserOperation, UserOperationVariant,
+    UserOpsPerAggregator, ValidTimeRange, ValidationRevert,
     aggregator::SignatureAggregatorResult,
+    authorization::Eip7702Auth,
     chain::ChainSpec,
     da::{DAGasBlockData, DAGasData},
     pool::{PoolOperation, SimulationViolation},
@@ -151,6 +153,16 @@ pub(crate) trait BundleProposerT: Send + Sync {
         block_hash: B256,
         min_fees: Option<GasFees>,
     ) -> BundleProposerResult<(GasFees, u128)>;
+
+    /// Process a reverted bundle transaction and return op hashes to remove from pool.
+    /// Takes the calldata, auth_list, and optional revert output from the traced tx.
+    async fn process_revert(
+        &self,
+        calldata: &Bytes,
+        auth_list: &[Eip7702Auth],
+        revert_message: &str,
+        revert_data: &Option<Bytes>,
+    ) -> anyhow::Result<Vec<B256>>;
 }
 
 pub(crate) struct BundleProposerImpl<EP, BP> {
@@ -408,6 +420,91 @@ where
             rejected_op_hashes,
             entity_updates: bundle.entity_updates,
         })
+    }
+
+    async fn process_revert(
+        &self,
+        calldata: &Bytes,
+        auth_list: &[Eip7702Auth],
+        revert_message: &str,
+        revert_data: &Option<Bytes>,
+    ) -> anyhow::Result<Vec<B256>> {
+        let address = *self.ep_providers.entry_point().address();
+        let chain_spec = &self.settings.chain_spec;
+
+        // Decode ops from calldata using version-specific decoding
+        let ops: Vec<UserOpsPerAggregator<UserOperationVariant>> =
+            match self.ep_providers.entry_point().version().abi_version() {
+                EntryPointAbiVersion::V0_6 => {
+                    decode_v0_6_ops_from_calldata(chain_spec, address, calldata)
+                        .into_iter()
+                        .map(|ops| ops.into_uo_variants())
+                        .collect()
+                }
+                EntryPointAbiVersion::V0_7 => {
+                    decode_v0_7_ops_from_calldata(chain_spec, address, calldata, auth_list)
+                        .into_iter()
+                        .map(|ops| ops.into_uo_variants())
+                        .collect()
+                }
+            };
+
+        let Some(revert_data) = revert_data else {
+            // No revert data - remove all ops
+            return Ok(ops
+                .iter()
+                .flat_map(|ops| ops.user_ops.iter().map(|op| op.hash()))
+                .collect());
+        };
+
+        // If we have a submission proxy, use it to process the revert first
+        if let Some(proxy) = &self.settings.submission_proxy {
+            let to_remove = proxy.process_revert(revert_data, &ops).await;
+            if !to_remove.is_empty() {
+                return Ok(to_remove);
+            }
+        }
+
+        // Decode the revert using version-specific decoding
+        let handle_ops_out = match self.ep_providers.entry_point().version().abi_version() {
+            EntryPointAbiVersion::V0_6 => {
+                decode_v0_6_handle_ops_revert(revert_message, &Some(revert_data.clone()))
+            }
+            EntryPointAbiVersion::V0_7 => decode_v0_7_handle_ops_revert(&Some(revert_data.clone())),
+        };
+        warn!("decoded handle ops out: {handle_ops_out:?}");
+
+        match handle_ops_out {
+            Some(HandleOpsOut::Success) => {
+                anyhow::bail!("handle ops returned success");
+            }
+            Some(HandleOpsOut::FailedOp(index, _)) => {
+                warn!("removing op from pool for reverted bundle op index {index:?}");
+                Ok(ops
+                    .iter()
+                    .flat_map(|ops| ops.user_ops.iter())
+                    .nth(index)
+                    .map(|op| vec![op.hash()])
+                    .unwrap_or_default())
+            }
+            Some(HandleOpsOut::SignatureValidationFailed(aggregator)) => {
+                warn!(
+                    "removing all ops from pool for reverted bundle for aggregator {aggregator:?}"
+                );
+                Ok(ops
+                    .iter()
+                    .find(|op| op.aggregator == aggregator)
+                    .map(|ops| ops.user_ops.iter().map(|op| op.hash()).collect())
+                    .unwrap_or_default())
+            }
+            None | Some(HandleOpsOut::Revert(_)) | Some(HandleOpsOut::PostOpRevert) => {
+                warn!("removing all ops from pool for reverted bundle");
+                Ok(ops
+                    .iter()
+                    .flat_map(|ops| ops.user_ops.iter().map(|op| op.hash()))
+                    .collect())
+            }
+        }
     }
 }
 
