@@ -37,9 +37,8 @@ use tracing::info;
 use crate::{
     assigner::Assigner,
     bundle_proposer::{self, BundleProposerImpl, BundleProposerProviders, BundleProposerT},
-    bundle_sender::{self, BundleSender, BundleSenderAction, BundleSenderImpl},
+    bundle_sender::{self, BundleSender, BundleSenderAction, BundleSenderImpl, ProposerKey},
     emit::BuilderEvent,
-    entrypoint_registry::{EntrypointEntry, EntrypointRegistry},
     sender::TransactionSenderArgs,
     server::{self, LocalBuilderBuilder},
     transaction_tracker::{self, TransactionTrackerImpl},
@@ -207,7 +206,7 @@ where
         // Build entrypoint info (for assigner) and registry (for proposers) in a single pass.
         // Each (address, filter_id) combination is a separate "virtual entrypoint".
         let mut entrypoint_infos: Vec<crate::assigner::EntrypointInfo> = vec![];
-        let mut entrypoint_registry = EntrypointRegistry::new();
+        let mut proposers: HashMap<ProposerKey, Box<dyn BundleProposerT>> = HashMap::new();
         for ep in &self.args.entry_points {
             if ep.builders.is_empty() {
                 // No builders configured - create a default entry with no filter/proxy
@@ -219,7 +218,7 @@ where
                 let proposer = self
                     .create_proposer_for_entrypoint(ep, None, builder_tag)
                     .await?;
-                entrypoint_registry.insert((ep.address, None), EntrypointEntry::new(proposer));
+                proposers.insert((ep.address, None), proposer);
                 info!(
                     "Registered proposer for entrypoint {:?} (version {:?})",
                     ep.address, ep.version
@@ -277,10 +276,7 @@ where
                     let proposer = self
                         .create_proposer_for_entrypoint(ep, submission_proxy, builder_tag)
                         .await?;
-                    entrypoint_registry.insert(
-                        (ep.address, builder.filter_id.clone()),
-                        EntrypointEntry::new(proposer),
-                    );
+                    proposers.insert((ep.address, builder.filter_id.clone()), proposer);
                     info!(
                         "Registered proposer for entrypoint {:?} (version {:?}, filter_id: {:?}, proxy: {:?})",
                         ep.address, ep.version, builder.filter_id, builder.submission_proxy
@@ -297,7 +293,7 @@ where
             self.args.max_bundle_size,
         ));
 
-        let entrypoint_registry = Arc::new(entrypoint_registry);
+        let proposers = Arc::new(proposers);
         let supported_entry_points: Vec<_> =
             self.args.entry_points.iter().map(|ep| ep.address).collect();
 
@@ -307,7 +303,7 @@ where
                 &task_spawner,
                 &self.signer_manager,
                 assigner.clone(),
-                entrypoint_registry.clone(),
+                proposers.clone(),
             )
             .await?;
         bundle_sender_actions.extend(actions);
@@ -444,13 +440,13 @@ where
     }
 
     /// Create one bundle sender per signer. Each sender handles all entrypoints
-    /// via the EntrypointRegistry.
+    /// via the shared proposers map.
     async fn create_builders<T>(
         &self,
         task_spawner: &T,
         signer_manager: &Arc<dyn SignerManager>,
         assigner: Arc<Assigner>,
-        entrypoint_registry: Arc<EntrypointRegistry>,
+        proposers: Arc<HashMap<ProposerKey, Box<dyn BundleProposerT>>>,
     ) -> anyhow::Result<Vec<mpsc::Sender<BundleSenderAction>>>
     where
         T: TaskSpawnerExt,
@@ -463,7 +459,7 @@ where
                     task_spawner,
                     signer_manager,
                     assigner.clone(),
-                    entrypoint_registry.clone(),
+                    proposers.clone(),
                 )
                 .await?;
             bundle_sender_actions.push(bundle_sender_action);
@@ -476,7 +472,7 @@ where
         task_spawner: &T,
         signer_manager: &Arc<dyn SignerManager>,
         assigner: Arc<Assigner>,
-        entrypoint_registry: Arc<EntrypointRegistry>,
+        proposers: Arc<HashMap<ProposerKey, Box<dyn BundleProposerT>>>,
     ) -> anyhow::Result<mpsc::Sender<BundleSenderAction>>
     where
         T: TaskSpawnerExt,
@@ -524,7 +520,7 @@ where
             sender_eoa,
             transaction_tracker,
             assigner,
-            entrypoint_registry,
+            proposers,
             self.pool.clone(),
             sender_settings,
             self.event_sender.clone(),
