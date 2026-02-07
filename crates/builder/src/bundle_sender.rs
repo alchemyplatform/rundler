@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{pin::Pin, sync::Arc, time::Duration};
+use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
 use alloy_primitives::{Address, B256, hex};
 use anyhow::{Context, bail};
@@ -40,13 +40,16 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
     assigner::Assigner,
-    bundle_proposer::{BundleData, BundleProposerError},
+    bundle_proposer::{BundleData, BundleProposerError, BundleProposerT},
     emit::{BuilderEvent, BundleTxDetails},
-    entrypoint_registry::EntrypointRegistry,
     transaction_tracker::{
         TrackerState, TrackerUpdate, TransactionTracker, TransactionTrackerError,
     },
 };
+
+/// Key for looking up a proposer: (entrypoint address, filter_id)
+/// This allows multiple configurations per entrypoint address (virtual entrypoints)
+pub(crate) type ProposerKey = (Address, Option<String>);
 
 #[async_trait]
 pub(crate) trait BundleSender: Send + Sync {
@@ -67,8 +70,8 @@ pub(crate) struct BundleSenderImpl<T, C> {
     sender_eoa: Address,
     transaction_tracker: Option<T>,
     assigner: Arc<Assigner>,
-    /// Entrypoint registry for shared signer support
-    entrypoint_registry: Arc<EntrypointRegistry>,
+    /// Proposers keyed by (entrypoint address, filter_id) for shared signer support
+    proposers: Arc<HashMap<ProposerKey, Box<dyn BundleProposerT>>>,
     pool: C,
     settings: Settings,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
@@ -174,7 +177,7 @@ where
         sender_eoa: Address,
         transaction_tracker: T,
         assigner: Arc<Assigner>,
-        entrypoint_registry: Arc<EntrypointRegistry>,
+        proposers: Arc<HashMap<ProposerKey, Box<dyn BundleProposerT>>>,
         pool: C,
         settings: Settings,
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
@@ -186,7 +189,7 @@ where
             sender_eoa,
             transaction_tracker: Some(transaction_tracker),
             assigner,
-            entrypoint_registry,
+            proposers,
             pool,
             settings,
             event_sender,
@@ -196,7 +199,7 @@ where
     fn increment_counter(
         &self,
         name: &'static str,
-        last_bundle_key: &Option<crate::entrypoint_registry::RegistryKey>,
+        last_bundle_key: &Option<ProposerKey>,
         value: u64,
     ) {
         let ep = last_bundle_key
@@ -513,11 +516,10 @@ where
             inner.fee_increase_count
         );
 
-        // Get the proposer from the registry using the last bundle key
+        // Get the proposer using the last bundle key
         let estimated_fees = if let Some(key) = &state.last_bundle_key {
-            if let Some(entry) = self.entrypoint_registry.get(key) {
-                let (fees, _) = entry
-                    .proposer
+            if let Some(proposer) = self.proposers.get(key) {
+                let (fees, _) = proposer
                     .estimate_gas_fees(state.block_hash(), None)
                     .await
                     .unwrap_or_default();
@@ -743,12 +745,12 @@ where
         let filter_id = assignment.filter_id;
         let ops = assignment.operations;
 
-        // Store the registry key for later use (notify_condition_not_met, revert handling)
-        let registry_key = (entry_point, filter_id.clone());
-        state.last_bundle_key = Some(registry_key.clone());
+        // Store the proposer key for later use (revert handling, metrics)
+        let proposer_key = (entry_point, filter_id.clone());
+        state.last_bundle_key = Some(proposer_key.clone());
 
-        // Get proposer from registry for the selected entrypoint configuration
-        let entry = self.entrypoint_registry.get(&registry_key).ok_or_else(|| {
+        // Get proposer for the selected entrypoint configuration
+        let proposer = self.proposers.get(&proposer_key).ok_or_else(|| {
             anyhow::anyhow!(
                 "Unknown entrypoint config: {:?}, filter_id: {:?}",
                 entry_point,
@@ -759,8 +761,7 @@ where
         // Build bundle using the type-erased proposer
         // Only clear condition_not_met after a successful make_bundle attempt.
         let condition_not_met = state.condition_not_met;
-        let bundle_data = match entry
-            .proposer
+        let bundle_data = match proposer
             .make_bundle(
                 ops,
                 self.sender_eoa,
@@ -1088,34 +1089,27 @@ where
     async fn process_revert(
         &self,
         tx_hash: B256,
-        last_bundle_key: &Option<crate::entrypoint_registry::RegistryKey>,
+        last_bundle_key: &Option<ProposerKey>,
     ) -> anyhow::Result<()> {
         warn!("Bundle transaction {tx_hash:?} reverted onchain");
 
-        let registry_key = last_bundle_key
+        let proposer_key = last_bundle_key
             .clone()
             .context("No entry point for revert processing")?;
-        let ep_address = registry_key.0;
+        let ep_address = proposer_key.0;
 
-        let entry = self
-            .entrypoint_registry
-            .get(&registry_key)
-            .context(format!(
-                "Unknown entry point config: {:?}, filter_id: {:?}",
-                registry_key.0, registry_key.1
-            ))?;
+        let proposer = self.proposers.get(&proposer_key).context(format!(
+            "Unknown entry point config: {:?}, filter_id: {:?}",
+            proposer_key.0, proposer_key.1
+        ))?;
 
-        let to_remove = entry.proposer.process_revert(tx_hash).await?;
+        let to_remove = proposer.process_revert(tx_hash).await?;
 
         self.remove_ops_from_pool_by_hash(ep_address, to_remove)
             .await
     }
 
-    fn emit(
-        &self,
-        event: BuilderEvent,
-        last_bundle_key: &Option<crate::entrypoint_registry::RegistryKey>,
-    ) {
+    fn emit(&self, event: BuilderEvent, last_bundle_key: &Option<ProposerKey>) {
         // Use the last bundle entry point, defaulting to zero address if none
         let entry_point = last_bundle_key
             .as_ref()
@@ -1133,8 +1127,8 @@ struct SenderMachineState<T, TRIG> {
     send_bundle_response: Option<oneshot::Sender<SendBundleResult>>,
     inner: InnerState,
     requires_reset: bool,
-    /// Last bundle registry key (address, filter_id) - used for revert processing and emit
-    last_bundle_key: Option<crate::entrypoint_registry::RegistryKey>,
+    /// Last bundle proposer key (address, filter_id) - used for revert processing and emit
+    last_bundle_key: Option<ProposerKey>,
     /// Flag indicating a condition was not met on last bundle attempt
     /// Passed to proposer on next make_bundle call to re-check conditions
     condition_not_met: bool,
@@ -1642,7 +1636,6 @@ mod tests {
         assigner::EntrypointInfo,
         bundle_proposer::{BundleData, MockBundleProposerT},
         bundle_sender::{BundleSenderImpl, MockTrigger},
-        entrypoint_registry::{EntrypointEntry, EntrypointRegistry},
         transaction_tracker::MockTransactionTracker,
     };
 
@@ -1891,10 +1884,10 @@ mod tests {
                 })
             });
 
-        let mut registry = EntrypointRegistry::new();
-        registry.insert(
+        let mut proposers = HashMap::new();
+        proposers.insert(
             (pinned_entry_point, filter_id.clone()),
-            EntrypointEntry::new(Box::new(mock_proposer_t)),
+            Box::new(mock_proposer_t) as Box<dyn BundleProposerT>,
         );
 
         let entrypoints = vec![
@@ -1908,7 +1901,7 @@ mod tests {
             },
         ];
 
-        let mut sender = new_sender_with_entrypoints(mock_pool, entrypoints, registry);
+        let mut sender = new_sender_with_entrypoints(mock_pool, entrypoints, proposers);
 
         let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
         state.last_bundle_key = Some((pinned_entry_point, filter_id));
@@ -2464,12 +2457,8 @@ mod tests {
         let pool = Arc::new(mock_pool);
         let ep_address = ENTRY_POINT_ADDRESS_V0_6;
 
-        // Create registry with the mock proposer (keyed by (address, filter_id))
-        let mut registry = EntrypointRegistry::new();
-        registry.insert(
-            (ep_address, None),
-            EntrypointEntry::new(Box::new(mock_proposer_t)),
-        );
+        let mut proposers: HashMap<ProposerKey, Box<dyn BundleProposerT>> = HashMap::new();
+        proposers.insert((ep_address, None), Box::new(mock_proposer_t));
 
         // Create assigner with entrypoint info
         let entrypoints = vec![EntrypointInfo {
@@ -2490,7 +2479,7 @@ mod tests {
                 1024,
                 1024,
             )),
-            Arc::new(registry),
+            Arc::new(proposers),
             pool,
             Settings {
                 max_cancellation_fee_increases: 3,
@@ -2504,7 +2493,7 @@ mod tests {
     fn new_sender_with_entrypoints(
         mock_pool: MockPool,
         entrypoints: Vec<EntrypointInfo>,
-        registry: EntrypointRegistry,
+        proposers: HashMap<ProposerKey, Box<dyn BundleProposerT>>,
     ) -> BundleSenderImpl<MockTransactionTracker, Arc<MockPool>> {
         let pool = Arc::new(mock_pool);
 
@@ -2521,7 +2510,7 @@ mod tests {
                 1024,
                 1024,
             )),
-            Arc::new(registry),
+            Arc::new(proposers),
             pool,
             Settings {
                 max_cancellation_fee_increases: 3,
