@@ -147,7 +147,7 @@ where
                 self.router
                     .get_mined_by_hash(ep, hash)
                     .await
-                    .map_err(Into::into)
+                    .map_err(EthRpcError::from)
             }));
         }
         futs.push(Box::pin(self.get_pending_user_operation_by_hash(hash)));

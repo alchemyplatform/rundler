@@ -19,7 +19,7 @@ use alloy_sol_types::SolEvent;
 use itertools::Itertools;
 use rundler_provider::{
     EvmProvider, Filter, GethDebugBuiltInTracerType, GethDebugTracerType, GethDebugTracingOptions,
-    GethTrace, Log, ProviderError, TransactionReceipt,
+    GethTrace, Log, TransactionReceipt,
 };
 use rundler_types::{
     UserOperation, UserOperationVariant, authorization::Eip7702Auth, chain::ChainSpec,
@@ -82,9 +82,12 @@ where
         let Some(event) = event else { return Ok(None) };
 
         // If the event is found, get the TX and entry point
-        let transaction_hash = event
-            .transaction_hash
-            .ok_or_else(|| EventProviderError::TransactionNotFound(B256::ZERO))?;
+        let transaction_hash = event.transaction_hash.ok_or_else(|| {
+            EventProviderError::LogProcessingError(format!(
+                "event log for user operation {} missing transaction hash",
+                hash
+            ))
+        })?;
 
         self.get_user_operation(hash, transaction_hash, &event)
             .await
@@ -117,9 +120,12 @@ where
             .log_on_error("should have successfully queried for user op events by hash")?;
         let Some(event) = event else { return Ok(None) };
 
-        let tx_hash = event
-            .transaction_hash
-            .ok_or_else(|| EventProviderError::TransactionNotFound(hash))?;
+        let tx_hash = event.transaction_hash.ok_or_else(|| {
+            EventProviderError::LogProcessingError(format!(
+                "event log for user operation {} missing transaction hash",
+                hash
+            ))
+        })?;
 
         // get transaction receipt
         let tx_receipt = self
@@ -191,9 +197,12 @@ where
                 return Ok(None);
             };
 
-            let tx_hash = event
-                .transaction_hash
-                .ok_or_else(|| EventProviderError::TransactionNotFound(hash))?;
+            let tx_hash = event.transaction_hash.ok_or_else(|| {
+                EventProviderError::LogProcessingError(format!(
+                    "event log for user operation {} missing transaction hash",
+                    hash
+                ))
+            })?;
 
             (tx_hash, Some(event))
         };
@@ -241,7 +250,10 @@ where
         }
 
         let to = tx.inner.to().ok_or_else(|| {
-            ProviderError::Other(anyhow::anyhow!("transaction missing 'to' field"))
+            EventProviderError::LogProcessingError(format!(
+                "transaction {} missing 'to' field",
+                tx_hash
+            ))
         })?;
 
         let input = tx.input();
@@ -371,7 +383,10 @@ where
             return Ok(None);
         }
         let to = tx.inner.to().ok_or_else(|| {
-            ProviderError::Other(anyhow::anyhow!("transaction missing 'to' field"))
+            EventProviderError::LogProcessingError(format!(
+                "transaction {} missing 'to' field",
+                tx_hash
+            ))
         })?;
 
         let input = tx.input();

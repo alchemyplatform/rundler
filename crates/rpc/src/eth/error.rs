@@ -531,8 +531,11 @@ impl From<crate::eth::events::EventProviderError> for EthRpcError {
                 error: provider_err,
                 context: None,
             }),
-            // All other variants become Internal errors with their descriptive messages
-            other => Self::Internal(anyhow::anyhow!("{}", other)),
+            // Log full details server-side, return generic message to user
+            other => {
+                tracing::error!("event provider error: {}", other);
+                Self::Internal(anyhow::anyhow!("internal error: event provider error"))
+            }
         }
     }
 }

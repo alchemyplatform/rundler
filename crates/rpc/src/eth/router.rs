@@ -111,10 +111,7 @@ impl EntryPointRouter {
         entry_point: &Address,
         hash: B256,
     ) -> Result<Option<RpcUserOperationByHash>, EventProviderError> {
-        self.get_route(entry_point)
-            .map_err(|e| {
-                EventProviderError::Provider(rundler_provider::ProviderError::Other(e.into()))
-            })?
+        self.get_event_route(entry_point)?
             .get_mined_by_hash(hash)
             .await
     }
@@ -125,10 +122,7 @@ impl EntryPointRouter {
         uo_hash: B256,
         tx_receipt: TransactionReceipt,
     ) -> Result<Option<RpcUserOperationByHash>, EventProviderError> {
-        self.get_route(entry_point)
-            .map_err(|e| {
-                EventProviderError::Provider(rundler_provider::ProviderError::Other(e.into()))
-            })?
+        self.get_event_route(entry_point)?
             .get_mined_from_tx_receipt(uo_hash, tx_receipt)
             .await
     }
@@ -139,10 +133,7 @@ impl EntryPointRouter {
         hash: B256,
         bundle_transaction: Option<B256>,
     ) -> Result<Option<RpcUserOperationReceipt>, EventProviderError> {
-        self.get_route(entry_point)
-            .map_err(|e| {
-                EventProviderError::Provider(rundler_provider::ProviderError::Other(e.into()))
-            })?
+        self.get_event_route(entry_point)?
             .get_receipt(hash, bundle_transaction)
             .await
     }
@@ -153,10 +144,7 @@ impl EntryPointRouter {
         uo_hash: B256,
         tx_receipt: TransactionReceipt,
     ) -> Result<Option<RpcUserOperationReceipt>, EventProviderError> {
-        self.get_route(entry_point)
-            .map_err(|e| {
-                EventProviderError::Provider(rundler_provider::ProviderError::Other(e.into()))
-            })?
+        self.get_event_route(entry_point)?
             .get_receipt_from_tx_receipt(uo_hash, tx_receipt)
             .await
     }
@@ -169,10 +157,7 @@ impl EntryPointRouter {
         hash: B256,
         bundle_transaction: Option<B256>,
     ) -> Result<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>, EventProviderError> {
-        self.get_route(entry_point)
-            .map_err(|e| {
-                EventProviderError::Provider(rundler_provider::ProviderError::Other(e.into()))
-            })?
+        self.get_event_route(entry_point)?
             .get_mined_and_receipt(hash, bundle_transaction)
             .await
     }
@@ -229,6 +214,15 @@ impl EntryPointRouter {
                 entry_point
             )))?;
         Ok(route)
+    }
+
+    fn get_event_route(
+        &self,
+        entry_point: &Address,
+    ) -> Result<&Arc<dyn EntryPointRoute>, EventProviderError> {
+        self.get_route(entry_point).map_err(|e| {
+            EventProviderError::Provider(rundler_provider::ProviderError::Other(e.into()))
+        })
     }
 }
 
