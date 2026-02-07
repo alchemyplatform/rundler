@@ -67,6 +67,10 @@ where
         let svc = self.service.clone();
 
         async move {
+            // Create a guard that ensures done() is called even if the future is cancelled
+            // (e.g., due to timeout). This prevents connection leaks.
+            let _guard = method_logger.guard();
+
             if let Some(connection_guard) = req.extensions().get::<ConnectionGuard>() {
                 method_logger.record_active_connections(
                     (connection_guard.max_connections() - connection_guard.available_connections())
@@ -74,7 +78,6 @@ where
                 );
             }
             let rp = svc.call(req).await;
-            method_logger.done();
 
             if rp.is_success() {
                 method_logger.record_http(HttpCode::TwoHundreds);
@@ -97,6 +100,7 @@ where
             }
 
             rp
+            // _guard is dropped here, calling done() automatically
         }
         .boxed()
     }
