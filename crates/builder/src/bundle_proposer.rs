@@ -825,10 +825,7 @@ where
             } else if let Some(bundler_sponsorship) = &po.op.perms.bundler_sponsorship {
                 let valid_time_range =
                     ValidTimeRange::from_genesis(bundler_sponsorship.valid_until.into());
-                if !simulation
-                    .valid_time_range
-                    .contains(Timestamp::now(), TIME_RANGE_BUFFER)
-                {
+                if !valid_time_range.contains(Timestamp::now(), TIME_RANGE_BUFFER) {
                     self.emit(BuilderEvent::rejected_op(
                         self.builder_tag.clone(),
                         op.hash(),
@@ -4414,24 +4411,7 @@ mod tests {
         };
         let required_op_fees = bundle_fees;
 
-        let mut fee_estimator = MockFeeEstimator::new();
-        fee_estimator
-            .expect_required_bundle_fees()
-            .returning(move |_, _| {
-                Ok((
-                    GasFees {
-                        max_fee_per_gas: base_fee + max_priority_fee_per_gas,
-                        max_priority_fee_per_gas,
-                    },
-                    base_fee,
-                ))
-            });
-        fee_estimator
-            .expect_required_op_fees()
-            .returning(move |_| GasFees {
-                max_fee_per_gas: base_fee + max_priority_fee_per_gas,
-                max_priority_fee_per_gas,
-            });
+        let fee_estimator = MockFeeEstimator::new();
 
         if notify_condition_not_met {
             for (addr, slots) in actual_storage.0.into_iter() {
