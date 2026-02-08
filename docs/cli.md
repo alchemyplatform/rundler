@@ -247,6 +247,8 @@ List of command line options for configuring the Builder.
   - _Only required when running in distributed mode_
 - `--builder.assigner_max_ops_per_request`: Maximum number of operations requested from the mempool per entrypoint query. (default: `1024`)
   - env: _BUILDER_ASSIGNER_MAX_OPS_PER_REQUEST_
+- `--builder.assigner_starvation_ratio`: Starvation ratio for the assigner. Controls how many cycles (as a fraction of `num_signers`) an entrypoint can go without being selected before it is force-selected. Must be between 0.0 and 100.0. (default: `0.50`)
+  - env: _BUILDER_ASSIGNER_STARVATION_RATIO_
 
 ## Signer Options
 
