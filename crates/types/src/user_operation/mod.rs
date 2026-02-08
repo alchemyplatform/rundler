@@ -401,6 +401,11 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
         self.call_gas_limit() + self.paymaster_post_op_gas_limit()
     }
 
+    /// Returns the total gas limit for the user operation (pre-op + execution)
+    fn total_gas_limit(&self) -> u128 {
+        self.pre_op_gas_limit() + self.execution_gas_limit()
+    }
+
     /// Returns the limit of gas that may be used during the paymaster post operation
     fn paymaster_post_op_gas_limit(&self) -> u128;
 
@@ -946,5 +951,36 @@ mod tests {
 
         let b = Bytes::from(vec![0u8; 33]);
         assert_eq!(byte_array_abi_len(&b), 64);
+    }
+
+    #[test]
+    fn test_total_gas_limit_includes_paymaster_post_op() {
+        use crate::{
+            EntryPointVersion,
+            chain::ChainSpec,
+            v0_7::{UserOperationBuilder, UserOperationRequiredFields},
+        };
+
+        let uo = UserOperationBuilder::new(
+            &ChainSpec::default(),
+            EntryPointVersion::V0_7,
+            UserOperationRequiredFields {
+                sender: Address::from([1; 20]),
+                nonce: U256::ZERO,
+                call_data: Bytes::new(),
+                call_gas_limit: 100,
+                verification_gas_limit: 200,
+                pre_verification_gas: 300,
+                max_priority_fee_per_gas: 1,
+                max_fee_per_gas: 1,
+                signature: Bytes::new(),
+            },
+        )
+        .paymaster(Address::from([2; 20]), 400, 500, Bytes::new())
+        .build();
+
+        // pre_op = pvg(300) + verification(200) + paymaster_verification(400)
+        // execution = call(100) + paymaster_post_op(500)
+        assert_eq!(uo.total_gas_limit(), 1500);
     }
 }

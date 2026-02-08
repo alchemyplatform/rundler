@@ -344,13 +344,16 @@ impl Assigner {
         if let Some(max_cost) = op.bundler_sponsorship_max_cost {
             // Bundler-sponsored: check that required fees fit within the sponsorship budget
             let total_cost = U256::from(op.gas_limit) * U256::from(required_fees.max_fee_per_gas);
-            tracing::info!(
-                "op {:?} doesn't meet bundler sponsorship requirements: total_cost: {:?}, max_cost: {:?}",
-                op.hash,
-                total_cost,
-                max_cost
-            );
-            return total_cost <= max_cost;
+            if total_cost > max_cost {
+                tracing::info!(
+                    "op {:?} doesn't meet bundler sponsorship requirements: total_cost: {:?}, max_cost: {:?}",
+                    op.hash,
+                    total_cost,
+                    max_cost
+                );
+                return false;
+            }
+            return true;
         }
         // Non-sponsored: op fees must meet required fees
         if op.max_priority_fee_per_gas < required_fees.max_priority_fee_per_gas
