@@ -171,7 +171,7 @@ impl Builder for LocalBuilderHandle {
 #[async_trait]
 impl HealthCheck for LocalBuilderHandle {
     fn name(&self) -> &'static str {
-        "LocalPoolServer"
+        "LocalBuilderServer"
     }
 
     async fn status(&self) -> ServerStatus {
@@ -264,7 +264,6 @@ impl LocalBuilderServerRunner {
                                     SendBundleResult::NoOperationsInitially => {
                                         Err(BuilderError::NoOperationsToSend)
                                     },
-                                    SendBundleResult::StalledAtMaxFeeIncreases => Err(anyhow::anyhow!("stalled at max fee increases").into()),
                                     SendBundleResult::Error(e) => Err(anyhow::anyhow!("send bundle error: {e:?}").into()),
                                 }
                             },

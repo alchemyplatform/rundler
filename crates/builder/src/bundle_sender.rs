@@ -98,7 +98,6 @@ pub enum SendBundleResult {
         tx_hash: B256,
     },
     NoOperationsInitially,
-    StalledAtMaxFeeIncreases,
     Error(anyhow::Error),
 }
 
