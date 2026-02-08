@@ -20,7 +20,9 @@ use std::{
 
 use alloy_primitives::{Address, B256};
 use anyhow::Context;
-use rundler_provider::{AlloyNetworkConfig, Providers as ProvidersT, ProvidersWithEntryPointT};
+use rundler_provider::{
+    AlloyNetworkConfig, FeeEstimator, Providers as ProvidersT, ProvidersWithEntryPointT,
+};
 use rundler_signer::{SignerManager, SigningScheme};
 use rundler_sim::{
     MempoolConfig, SimulationSettings,
@@ -115,25 +117,6 @@ fn proposer_tag(
     format!("proposer:{}:{}:{}", entry_point_address, filter, proxy)
 }
 
-fn ensure_unique_proposer_key(
-    seen: &mut HashMap<ProposerKey, EntryPointVersion>,
-    proposer_key: ProposerKey,
-    version: EntryPointVersion,
-) -> anyhow::Result<()> {
-    if let Some(existing_version) = seen.get(&proposer_key) {
-        return Err(anyhow::anyhow!(
-            "Duplicate builder proposer key: entry_point {:?}, filter_id {:?} is configured for multiple entry point versions ({:?} and {:?})",
-            proposer_key.0,
-            proposer_key.1,
-            existing_version,
-            version
-        ));
-    }
-
-    seen.insert(proposer_key, version);
-    Ok(())
-}
-
 /// Builder settings for an entrypoint
 #[derive(Debug)]
 pub struct EntryPointBuilderSettings {
@@ -217,16 +200,10 @@ where
         // Each (address, filter_id) combination is a separate "virtual entrypoint".
         let mut entrypoint_infos: Vec<crate::assigner::EntrypointInfo> = vec![];
         let mut proposers: HashMap<ProposerKey, Box<dyn BundleProposerT>> = HashMap::new();
-        let mut seen_proposer_keys: HashMap<ProposerKey, EntryPointVersion> = HashMap::new();
         for ep in &self.args.entry_points {
             if ep.builders.is_empty() {
                 // No builders configured - create a default entry with no filter/proxy
                 let proposer_key = (ep.address, None);
-                ensure_unique_proposer_key(
-                    &mut seen_proposer_keys,
-                    proposer_key.clone(),
-                    ep.version,
-                )?;
 
                 entrypoint_infos.push(crate::assigner::EntrypointInfo {
                     address: ep.address,
@@ -265,11 +242,6 @@ where
                     }
 
                     let proposer_key = (ep.address, builder.filter_id.clone());
-                    ensure_unique_proposer_key(
-                        &mut seen_proposer_keys,
-                        proposer_key.clone(),
-                        ep.version,
-                    )?;
 
                     entrypoint_infos.push(crate::assigner::EntrypointInfo {
                         address: ep.address,
@@ -539,12 +511,15 @@ where
             max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
         };
 
+        let fee_estimator: Box<dyn FeeEstimator> = Box::new(self.providers.fee_estimator().clone());
+
         let builder = BundleSenderImpl::new(
             builder_tag,
             send_bundle_rx,
             self.args.chain_spec.clone(),
             sender_eoa,
             transaction_tracker,
+            fee_estimator,
             assigner,
             proposers,
             self.pool.clone(),

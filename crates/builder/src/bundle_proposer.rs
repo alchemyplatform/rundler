@@ -28,8 +28,8 @@ use linked_hash_map::LinkedHashMap;
 use metrics::{Counter, Histogram};
 use metrics_derive::Metrics;
 use rundler_provider::{
-    BundleHandler, DAGasOracleSync, DAGasProvider, EntryPoint, EvmProvider, FeeEstimator,
-    HandleOpsOut, ProvidersWithEntryPointT, TransactionRequest, decode_v0_6_handle_ops_revert,
+    BundleHandler, DAGasOracleSync, DAGasProvider, EntryPoint, EvmProvider, HandleOpsOut,
+    ProvidersWithEntryPointT, TransactionRequest, decode_v0_6_handle_ops_revert,
     decode_v0_6_ops_from_calldata, decode_v0_7_handle_ops_revert, decode_v0_7_ops_from_calldata,
 };
 use rundler_sim::{SimulationError, SimulationResult, Simulator, ViolationError};
@@ -142,17 +142,11 @@ pub(crate) trait BundleProposerT: Send + Sync {
         nonce: u64,
         block_hash: B256,
         max_bundle_fee: U256,
-        min_gas_fees: Option<GasFees>,
-        is_replacement: bool,
+        bundle_fees: GasFees,
+        base_fee: u128,
+        required_op_fees: GasFees,
         condition_not_met: bool,
     ) -> BundleProposerResult<BundleData>;
-
-    /// Gets the current gas fees.
-    async fn estimate_gas_fees(
-        &self,
-        block_hash: B256,
-        min_fees: Option<GasFees>,
-    ) -> BundleProposerResult<(GasFees, u128)>;
 
     /// Process a reverted bundle transaction and return op hashes to remove from pool.
     /// Fetches the trace and transaction internally, then decodes and processes the revert.
@@ -191,22 +185,12 @@ where
         ops: Vec<PoolOperation>,
         block_hash: B256,
         max_bundle_fee: U256,
-        min_gas_fees: Option<GasFees>,
-        is_replacement: bool,
+        bundle_fees: GasFees,
+        base_fee: u128,
+        required_op_fees: GasFees,
         condition_not_met: bool,
     ) -> BundleProposerResult<Bundle<EP::UO>> {
         let timer = Instant::now();
-        let (bundle_fees, base_fee) = self.estimate_gas_fees(block_hash, min_gas_fees).await?;
-
-        // (0) Determine fees required for ops to be included in a bundle
-        // if replacing, just require bundle fees increase chances of unsticking
-        let required_op_fees = if is_replacement {
-            bundle_fees
-        } else {
-            self.ep_providers
-                .fee_estimator()
-                .required_op_fees(bundle_fees)
-        };
         let all_paymaster_addresses = ops
             .iter()
             .filter_map(|op| op.uo.paymaster())
@@ -344,18 +328,6 @@ where
     EP: ProvidersWithEntryPointT,
     BP: BundleProposerProvidersT,
 {
-    async fn estimate_gas_fees(
-        &self,
-        block_hash: B256,
-        min_fees: Option<GasFees>,
-    ) -> BundleProposerResult<(GasFees, u128)> {
-        Ok(self
-            .ep_providers
-            .fee_estimator()
-            .required_bundle_fees(block_hash, min_fees)
-            .await?)
-    }
-
     async fn make_bundle(
         &self,
         ops: Vec<PoolOperation>,
@@ -363,8 +335,9 @@ where
         nonce: u64,
         block_hash: B256,
         max_bundle_fee: U256,
-        min_gas_fees: Option<GasFees>,
-        is_replacement: bool,
+        bundle_fees: GasFees,
+        base_fee: u128,
+        required_op_fees: GasFees,
         condition_not_met: bool,
     ) -> BundleProposerResult<BundleData> {
         // Build typed bundle, then erase types into BundleData
@@ -374,8 +347,9 @@ where
                 ops,
                 block_hash,
                 max_bundle_fee,
-                min_gas_fees,
-                is_replacement,
+                bundle_fees,
+                base_fee,
+                required_op_fees,
                 condition_not_met,
             )
             .await?;
@@ -4434,6 +4408,12 @@ mod tests {
             .expect_get_latest_block_hash_and_number()
             .returning(move || Ok((current_block_hash, 0)));
 
+        let bundle_fees = GasFees {
+            max_fee_per_gas: base_fee + max_priority_fee_per_gas,
+            max_priority_fee_per_gas,
+        };
+        let required_op_fees = bundle_fees;
+
         let mut fee_estimator = MockFeeEstimator::new();
         fee_estimator
             .expect_required_bundle_fees()
@@ -4530,8 +4510,9 @@ mod tests {
                 ops,
                 current_block_hash,
                 max_bundle_fee,
-                None,
-                false,
+                bundle_fees,
+                base_fee,
+                required_op_fees,
                 notify_condition_not_met,
             )
             .await
