@@ -27,7 +27,10 @@ use super::{
     error::{EthResult, EthRpcError},
     router::EntryPointRouter,
 };
-use crate::types::{RpcGasEstimate, RpcUserOperationByHash, RpcUserOperationReceipt};
+use crate::{
+    eth::events::EventProviderError,
+    types::{RpcGasEstimate, RpcUserOperationByHash, RpcUserOperationReceipt},
+};
 
 pub(crate) struct EthApi<P> {
     pub(crate) chain_spec: ChainSpec,
@@ -169,32 +172,52 @@ where
         }
         let tag = tag.unwrap_or(BlockTag::Latest);
 
-        let bundle_transaction: Option<B256> = match tag {
-            BlockTag::Pending => {
-                if !self.chain_spec.flashblocks_enabled {
-                    return Err(EthRpcError::InvalidParams(
-                        "Unsupported feature: preconfirmation".to_string(),
-                    ));
-                }
-                let op_status = self
-                    .pool
-                    .get_op_status(hash)
-                    .await
-                    .map_err(EthRpcError::from)?;
-
-                op_status
-                    .and_then(|s| s.preconf_info)
-                    .map(|info| info.tx_hash)
+        if tag == BlockTag::Pending {
+            if !self.chain_spec.flashblocks_enabled {
+                return Err(EthRpcError::InvalidParams(
+                    "Pending block tag is not supported on this network".to_string(),
+                ));
             }
-            BlockTag::Latest => None,
+
+            // Preconfirmed check. If not found fallthrough to pending check.
+            let op_status = self
+                .pool
+                .get_op_status(hash)
+                .await
+                .map_err(EthRpcError::from)?;
+
+            if let Some(op_status) = op_status
+                && let Some(preconf_info) = op_status.preconf_info
+            {
+                let ret = self
+                    .router
+                    .get_receipt(&op_status.entry_point, hash, Some(preconf_info.tx_hash))
+                    .await;
+                match ret {
+                    Ok(Some(receipt)) => return Ok(Some(receipt)),
+                    Ok(None) => {
+                        // fallthrough to pending if not found
+                        tracing::warn!(
+                            "no receipt found for preconfirmed user operation {hash}. Treating as pending."
+                        );
+                    }
+                    Err(EventProviderError::Provider(e)) => {
+                        return Err(EthRpcError::from(EventProviderError::Provider(e)));
+                    }
+                    _ => {
+                        // fallthrough to pending on unexpected errors related to consistency issues or invalid receipts
+                        tracing::warn!(
+                            "unexpected error fetching receipt for preconfirmed user operation {hash}. Treating as pending: {ret:?}"
+                        );
+                    }
+                };
+            }
         };
 
-        let futs = self.router.entry_points().map(|ep| async move {
-            self.router
-                .get_receipt(ep, hash, bundle_transaction)
-                .await
-                .map_err(EthRpcError::from)
-        });
+        let futs = self
+            .router
+            .entry_points()
+            .map(|ep| async move { self.router.get_receipt(ep, hash, None).await });
         let results = future::try_join_all(futs).await?;
         Ok(results.into_iter().find_map(|x| x))
     }
