@@ -5369,6 +5369,7 @@ dependencies = [
  "metrics-derive",
  "mockall",
  "prost",
+ "rand 0.8.5",
  "reqwest",
  "rundler-provider",
  "rundler-signer",

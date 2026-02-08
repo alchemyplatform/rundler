@@ -125,8 +125,8 @@ impl Assigner {
     /// 3. Selects an entrypoint using starvation-aware priority:
     ///    - If any entrypoint hasn't been selected in (num_signers * starvation_ratio) cycles, force-select the most starved
     ///    - Otherwise, select the entrypoint with the most eligible ops
-    /// 4. Assigns operations from that entrypoint to the worker
-    /// 5. Returns None if no work is available
+    /// 4. Attempts assignment from selected entrypoints in priority order until one succeeds
+    /// 5. Returns no-work only if all candidates fail assignment
     pub(crate) async fn assign_work(
         &self,
         builder_address: Address,
@@ -194,8 +194,8 @@ impl Assigner {
         let starvation_threshold =
             ((self.num_signers as f64 * self.starvation_ratio) as usize).max(1) as u64;
 
-        // Select entrypoint with starvation prevention
-        let (selected_ep, ops) = {
+        // Build candidate order with starvation prevention
+        let (current_cycle, ordered_candidates) = {
             let mut state = self.state.lock().unwrap();
             state.global_cycle += 1;
             let current_cycle = state.global_cycle;
@@ -219,14 +219,21 @@ impl Assigner {
                 })
                 .max_by(|a, b| a.3.cmp(&b.3).then_with(|| b.0.cmp(a.0)));
 
-            let (selected_ep, ops) = if let Some((_, ep, ops, gap)) = starved {
+            if let Some((starved_idx, ep, _, gap)) = starved {
                 tracing::info!(
                     "Builder Assigner: Force-selecting starved entrypoint {:?} (filter: {:?}) - gap: {} cycles",
                     ep.address,
                     ep.filter_id,
                     gap
                 );
-                (ep.clone(), ops.clone())
+                let starved_idx = *starved_idx;
+                if let Some(pos) = candidates
+                    .iter()
+                    .position(|(idx, _, _, _)| *idx == starved_idx)
+                {
+                    let starved_candidate = candidates.remove(pos);
+                    candidates.insert(0, starved_candidate);
+                }
             } else {
                 // Normal: pick highest eligible count, break ties by least recently selected
                 candidates.sort_by(|a, b| {
@@ -246,47 +253,63 @@ impl Assigner {
                         last_a.cmp(&last_b).then_with(|| a.0.cmp(&b.0))
                     })
                 });
-                let (_, ep, ops, _) = candidates.into_iter().next().unwrap();
-                (ep, ops)
-            };
+            }
 
-            // Record that we selected this entrypoint
-            let key: ProposerKey = (selected_ep.address, selected_ep.filter_id.clone());
-            state.entrypoint_last_selected.insert(key, current_cycle);
+            let ordered_candidates = candidates
+                .into_iter()
+                .map(|(_, ep, ops, _)| (ep, ops))
+                .collect::<Vec<_>>();
 
-            (selected_ep, ops)
+            (current_cycle, ordered_candidates)
         };
 
-        tracing::info!(
-            "Builder Assigner: selected_ep: {:?}, num ops: {:?}",
-            selected_ep.address,
-            ops.len()
-        );
+        let total_candidates = ordered_candidates.len();
+        for (candidate_idx, (selected_ep, ops)) in ordered_candidates.into_iter().enumerate() {
+            // Record the attempted entrypoint for starvation and tie-break tracking.
+            {
+                let mut state = self.state.lock().unwrap();
+                let key: ProposerKey = (selected_ep.address, selected_ep.filter_id.clone());
+                state.entrypoint_last_selected.insert(key, current_cycle);
+            }
 
-        // Assign operations from selected entrypoint
-        let assigned_ops = self
-            .assign_ops_internal(
-                builder_address,
-                selected_ep.address,
-                ops,
-                max_sim_block_number,
-                &required_fees,
-            )
-            .await?;
-
-        if assigned_ops.is_empty() {
             tracing::info!(
-                "Builder Assigner: no assigned ops for ep {:?} after selection",
-                selected_ep.address
+                "Builder Assigner: selected_ep: {:?} (filter: {:?}) for builder {:?}, candidate {}/{}, num pool summaries: {:?}",
+                selected_ep.address,
+                selected_ep.filter_id,
+                builder_address,
+                candidate_idx + 1,
+                total_candidates,
+                ops.len()
             );
-            return Ok(AssignmentResult::NoOperations);
+
+            // Assign operations from selected entrypoint
+            let assigned_ops = self
+                .assign_ops_internal(
+                    builder_address,
+                    selected_ep.address,
+                    ops,
+                    max_sim_block_number,
+                    &required_fees,
+                )
+                .await?;
+
+            if assigned_ops.is_empty() {
+                tracing::info!(
+                    "Builder Assigner: no assigned ops for ep {:?} (filter: {:?}) after selection",
+                    selected_ep.address,
+                    selected_ep.filter_id
+                );
+                continue;
+            }
+
+            return Ok(AssignmentResult::Assigned(WorkAssignment {
+                entry_point: selected_ep.address,
+                filter_id: selected_ep.filter_id,
+                operations: assigned_ops,
+            }));
         }
 
-        Ok(AssignmentResult::Assigned(WorkAssignment {
-            entry_point: selected_ep.address,
-            filter_id: selected_ep.filter_id,
-            operations: assigned_ops,
-        }))
+        Ok(AssignmentResult::NoOperations)
     }
 
     /// Assigns work for a specific entrypoint configuration.
@@ -1145,6 +1168,58 @@ mod tests {
             result.entry_point, TEST_ENTRY_POINT,
             "Cycle 4: EP1 expected"
         );
+    }
+
+    #[tokio::test]
+    async fn test_assign_work_falls_back_to_next_candidate() {
+        let ep1_ops = create_test_ops_for_entrypoint(&[address(10), address(11)], TEST_ENTRY_POINT);
+        let ep2_ops = create_test_ops_for_entrypoint(&[address(20)], TEST_ENTRY_POINT_2);
+
+        let mut mock_pool = MockPool::new();
+        let ep1_ops_clone = ep1_ops.clone();
+        let ep2_ops_clone = ep2_ops.clone();
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(move |ep, _, _| {
+                if ep == TEST_ENTRY_POINT {
+                    Ok(ep1_ops_clone.iter().map(|op| op.into()).collect())
+                } else {
+                    Ok(ep2_ops_clone.iter().map(|op| op.into()).collect())
+                }
+            });
+
+        // Simulate first candidate returning no concrete ops after selection; assigner should
+        // continue to the next candidate in the same call.
+        let ep2_ops_for_hashes = ep2_ops.clone();
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .returning(move |ep, hashes| {
+                if ep == TEST_ENTRY_POINT {
+                    Ok(Vec::new())
+                } else {
+                    Ok(ep2_ops_for_hashes
+                        .iter()
+                        .filter(|op| hashes.contains(&op.uo.hash()))
+                        .cloned()
+                        .collect())
+                }
+            });
+
+        let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
+
+        let result = expect_assigned(
+            assigner
+                .assign_work(address(0), u64::MAX, GasFees::default())
+                .await
+                .unwrap(),
+        );
+
+        assert_eq!(
+            result.entry_point, TEST_ENTRY_POINT_2,
+            "assignment should fall back to next candidate in same call"
+        );
+        assert_eq!(result.operations.len(), 1);
+        assert_eq!(result.operations[0].uo.sender(), address(20));
     }
 
     /// Create test ops with specific fees
