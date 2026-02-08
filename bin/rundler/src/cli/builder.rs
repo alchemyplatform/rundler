@@ -356,6 +356,8 @@ pub(crate) struct EntryPointBuilderConfig {
     pub(crate) builders: Vec<BuilderConfig>,
 }
 
+// deny_unknown_fields is intentional: catch typos/misconfigurations in per-builder JSON config
+// early rather than silently ignoring unknown keys.
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct BuilderConfig {

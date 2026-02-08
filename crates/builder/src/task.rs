@@ -241,10 +241,10 @@ where
 
                 // Create an assigner entry and proposer for each builder configuration
                 for builder in &ep.builders {
-                    // Submission proxies are not supported for v0.9 entrypoints
-                    if builder.submission_proxy.is_some() && ep.version == EntryPointVersion::V0_9 {
+                    // Submission proxies are not supported for v0.9+ entrypoints
+                    if builder.submission_proxy.is_some() && ep.version >= EntryPointVersion::V0_9 {
                         return Err(anyhow::anyhow!(
-                            "Submission proxies are not supported for entry point v0.9 ({:?})",
+                            "Submission proxies are not supported for entry point v0.9+ ({:?})",
                             ep.address
                         ));
                     }

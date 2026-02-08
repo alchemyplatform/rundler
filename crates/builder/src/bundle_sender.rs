@@ -513,17 +513,19 @@ where
             inner.fee_increase_count
         );
 
-        // Get the proposer using the last bundle key
-        let estimated_fees = if let Some(key) = &state.last_bundle_key {
-            if let Some(proposer) = self.proposers.get(key) {
-                let (fees, _) = proposer
-                    .estimate_gas_fees(state.block_hash(), None)
-                    .await
-                    .unwrap_or_default();
-                fees
-            } else {
-                GasFees::default()
-            }
+        // Prefer fees from the proposer that built the bundle, but if unavailable
+        // (e.g. after restart), fallback to any configured proposer.
+        let proposer = state
+            .last_bundle_key
+            .as_ref()
+            .and_then(|key| self.proposers.get(key))
+            .or_else(|| self.proposers.values().next());
+        let estimated_fees = if let Some(proposer) = proposer {
+            let (fees, _) = proposer
+                .estimate_gas_fees(state.block_hash(), None)
+                .await
+                .unwrap_or_default();
+            fees
         } else {
             GasFees::default()
         };
@@ -738,52 +740,50 @@ where
         let proposer_key = (entry_point, filter_id.clone());
         state.last_bundle_key = Some(proposer_key.clone());
 
-        // Get proposer for the selected entrypoint configuration
-        let proposer = self.proposers.get(&proposer_key).ok_or_else(|| {
-            anyhow::anyhow!(
+        // Build and send bundle. Keep this as a single result path so assigner
+        // cleanup runs for all outcomes, including hard errors.
+        let result = if let Some(proposer) = self.proposers.get(&proposer_key) {
+            // Clear condition_not_met once make_bundle completes (success or
+            // NoOperationsAfterFeeFilter), and keep it set for hard failures so the
+            // next attempt still re-checks conditions.
+            let condition_not_met = state.condition_not_met;
+            match proposer
+                .make_bundle(
+                    ops,
+                    self.sender_eoa,
+                    nonce,
+                    state.block_hash(),
+                    balance,
+                    required_fees,
+                    fee_increase_count > 0,
+                    condition_not_met,
+                )
+                .await
+            {
+                Ok(bundle_data) => {
+                    state.condition_not_met = false;
+                    self.send_bundle_from_data(
+                        state,
+                        entry_point,
+                        bundle_data,
+                        nonce,
+                        fee_increase_count,
+                    )
+                    .await
+                }
+                Err(BundleProposerError::NoOperationsAfterFeeFilter) => {
+                    state.condition_not_met = false;
+                    Ok(SendBundleAttemptResult::NoOperationsAfterFeeFilter)
+                }
+                Err(e) => Err(anyhow::anyhow!("Failed to make bundle: {e:?}")),
+            }
+        } else {
+            Err(anyhow::anyhow!(
                 "Unknown entrypoint config: {:?}, filter_id: {:?}",
                 entry_point,
                 filter_id
-            )
-        })?;
-
-        // Build bundle using the type-erased proposer.
-        // Clear condition_not_met once make_bundle completes (success or
-        // NoOperationsAfterFeeFilter), and keep it set for hard failures so the
-        // next attempt still re-checks conditions.
-        let condition_not_met = state.condition_not_met;
-        let bundle_data = match proposer
-            .make_bundle(
-                ops,
-                self.sender_eoa,
-                nonce,
-                state.block_hash(),
-                balance,
-                required_fees,
-                fee_increase_count > 0,
-                condition_not_met,
-            )
-            .await
-        {
-            Ok(bundle) => {
-                state.condition_not_met = false;
-                bundle
-            }
-            Err(BundleProposerError::NoOperationsAfterFeeFilter) => {
-                state.condition_not_met = false;
-                self.assigner.release_all(self.sender_eoa);
-                if state.transaction_tracker.num_pending_transactions() == 0 {
-                    state.last_bundle_key = None;
-                }
-                return Ok(SendBundleAttemptResult::NoOperationsAfterFeeFilter);
-            }
-            Err(e) => bail!("Failed to make bundle: {e:?}"),
+            ))
         };
-
-        // Send the bundle using BundleData
-        let result = self
-            .send_bundle_from_data(state, entry_point, bundle_data, nonce, fee_increase_count)
-            .await;
 
         // Handle assigner confirmations based on result
         match &result {
@@ -793,6 +793,12 @@ where
             }
             Ok(SendBundleAttemptResult::NonceTooLow) => {
                 self.assigner.release_all(self.sender_eoa);
+            }
+            Ok(SendBundleAttemptResult::NoOperationsAfterFeeFilter) => {
+                self.assigner.release_all(self.sender_eoa);
+                if state.transaction_tracker.num_pending_transactions() == 0 {
+                    state.last_bundle_key = None;
+                }
             }
             Ok(SendBundleAttemptResult::NoOperationsAfterSimulation) => {
                 self.assigner.release_all(self.sender_eoa);
@@ -1155,7 +1161,9 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
 
     // Move to the initial state, will wait for the next trigger.
     // Preserves the transaction tracker state.
+    // Clears entrypoint pinning so the next attempt uses priority-based selection.
     fn initial(&mut self) {
+        self.last_bundle_key = None;
         self.inner = InnerState::new();
     }
 
@@ -1179,9 +1187,7 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
     // Sends an error result and moves to initial state
     fn bundle_error(&mut self, err: anyhow::Error) {
         self.send_result(SendBundleResult::Error(err));
-        // Clear last_bundle_key since the tracker is fully reset after an error,
-        // so there's no pending transaction to replace.
-        self.last_bundle_key = None;
+        self.condition_not_met = false;
         self.initial();
     }
 
@@ -2347,6 +2353,144 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_send_cancel_fallbacks_to_any_proposer_for_fee_estimation() {
+        let Mocks {
+            mut mock_proposer_t,
+            mut mock_tracker,
+            mut mock_trigger,
+            mock_pool,
+        } = new_mocks();
+
+        mock_proposer_t
+            .expect_estimate_gas_fees()
+            .once()
+            .returning(|_, _| {
+                Box::pin(async {
+                    Ok((
+                        GasFees {
+                            max_fee_per_gas: 55,
+                            max_priority_fee_per_gas: 7,
+                        },
+                        0,
+                    ))
+                })
+            });
+
+        mock_tracker
+            .expect_cancel_transaction()
+            .once()
+            .withf(|fees| fees.max_fee_per_gas == 55 && fees.max_priority_fee_per_gas == 7)
+            .returning(|_| Box::pin(async { Ok(Some(B256::ZERO)) }));
+
+        mock_trigger.expect_last_block().return_const(NewHead {
+            block_number: 0,
+            block_hash: B256::ZERO,
+            address_updates: vec![],
+        });
+
+        let mut state = SenderMachineState {
+            trigger: mock_trigger,
+            transaction_tracker: mock_tracker,
+            send_bundle_response: None,
+            inner: InnerState::Cancelling(CancellingState {
+                fee_increase_count: 0,
+            }),
+            requires_reset: false,
+            // Unknown key forces fallback to any configured proposer.
+            last_bundle_key: Some((ENTRY_POINT_ADDRESS_V0_7, Some("missing".to_string()))),
+            condition_not_met: false,
+        };
+
+        let mut sender = new_sender(mock_proposer_t, mock_pool);
+        sender.step_state(&mut state).await.unwrap();
+
+        assert!(matches!(
+            state.inner,
+            InnerState::CancelPending(CancelPendingState {
+                until: 3,
+                fee_increase_count: 0,
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_send_bundle_unknown_proposer_releases_assignments() {
+        let mut mock_pool = MockPool::new();
+        let mut mock_trigger = MockTrigger::new();
+        let mut mock_tracker = MockTransactionTracker::new();
+
+        mock_trigger
+            .expect_last_block()
+            .times(1)
+            .return_const(NewHead {
+                block_number: 0,
+                block_hash: B256::ZERO,
+                address_updates: vec![],
+            });
+
+        mock_tracker.expect_get_state().times(1).returning(|| {
+            Ok(TrackerState {
+                nonce: 1,
+                balance: U256::ZERO,
+                required_fees: None,
+            })
+        });
+        mock_tracker
+            .expect_num_pending_transactions()
+            .times(1)
+            .return_const(0_usize);
+
+        mock_pool
+            .expect_get_ops_summaries()
+            .times(2)
+            .returning(|_, _, _| {
+                Ok(vec![PoolOperationSummary {
+                    hash: B256::ZERO,
+                    sender: Address::from([9; 20]),
+                    entry_point: ENTRY_POINT_ADDRESS_V0_6,
+                    sim_block_number: 0,
+                    max_fee_per_gas: 0,
+                    max_priority_fee_per_gas: 0,
+                    gas_limit: 0,
+                    bundler_sponsorship_max_cost: None,
+                }])
+            });
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .times(2)
+            .returning(|_, _| Ok(vec![demo_pool_op()]));
+
+        let entrypoints = vec![EntrypointInfo {
+            address: ENTRY_POINT_ADDRESS_V0_6,
+            filter_id: None,
+        }];
+        let proposers: HashMap<ProposerKey, Box<dyn BundleProposerT>> = HashMap::new();
+
+        let mut sender = new_sender_with_entrypoints(mock_pool, entrypoints, proposers);
+
+        let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
+        let err = sender
+            .send_bundle(&mut state, 0)
+            .await
+            .expect_err("should fail");
+        assert!(
+            err.to_string().contains("Unknown entrypoint config"),
+            "unexpected error: {err:#}"
+        );
+
+        // If assignment cleanup ran on error, another builder can immediately claim the same sender.
+        let next_assignment = sender
+            .assigner
+            .assign_work(Address::from([0xAA; 20]), u64::MAX, GasFees::default())
+            .await
+            .unwrap();
+        assert!(
+            next_assignment.is_some(),
+            "assignment lock should be released after proposer lookup error"
+        );
+    }
+
+    #[tokio::test]
     async fn test_resubmit_cancel() {
         let Mocks {
             mock_proposer_t,
@@ -2492,6 +2636,14 @@ mod tests {
                 underpriced_info: None,
             })
         ));
+    }
+
+    #[test]
+    fn test_bundle_error_clears_condition_not_met() {
+        let mut state = SenderMachineState::new(MockTrigger::new(), MockTransactionTracker::new());
+        state.condition_not_met = true;
+        state.bundle_error(anyhow::anyhow!("boom"));
+        assert!(!state.condition_not_met);
     }
 
     #[tokio::test]
