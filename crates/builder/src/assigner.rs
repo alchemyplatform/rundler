@@ -44,6 +44,17 @@ pub(crate) struct WorkAssignment {
     pub operations: Vec<PoolOperation>,
 }
 
+/// Detailed result of attempting to assign work.
+#[derive(Debug)]
+pub(crate) enum AssignmentResult {
+    /// Work was assigned successfully.
+    Assigned(WorkAssignment),
+    /// No assignable operations were available.
+    NoOperations,
+    /// Assignable operations existed, but all failed fee requirements.
+    NoOperationsAfterFeeFilter,
+}
+
 // The Assigner is responsible for assigning operations to builder addresses.
 //
 // It handles both entrypoint selection (with starvation prevention) and operation
@@ -121,20 +132,39 @@ impl Assigner {
         builder_address: Address,
         max_sim_block_number: u64,
         required_fees: GasFees,
-    ) -> anyhow::Result<Option<WorkAssignment>> {
-        // Query each entrypoint for pending ops and count eligible ones
-        let mut candidates = Vec::new();
-        for (entrypoint_idx, ep) in self.entrypoints.iter().enumerate() {
-            let ops = self
-                .pool
-                .get_ops_summaries(
+    ) -> anyhow::Result<AssignmentResult> {
+        // Query all entrypoints in parallel for pending ops, then count eligible ones.
+        //
+        // NOTE: There is a deliberate TOCTOU gap between counting eligible ops here
+        // and the actual assignment in assign_ops_internal. Between these two steps,
+        // another concurrent worker could assign some of the same senders. This is
+        // acceptable: assign_ops_internal re-checks sender locks under the state mutex,
+        // so correctness is preserved. The worst case is suboptimal entrypoint selection
+        // (picking an entrypoint that appeared to have more ops but some were claimed).
+        let query_futures: Vec<_> = self
+            .entrypoints
+            .iter()
+            .map(|ep| {
+                self.pool.get_ops_summaries(
                     ep.address,
                     self.max_pool_ops_per_request,
                     ep.filter_id.clone(),
                 )
-                .await?;
+            })
+            .collect();
+        let query_results = futures_util::future::join_all(query_futures).await;
 
-            // Count eligible ops (not assigned to other builders, simulated before max_sim_block_number, meets fee requirements)
+        let mut candidates = Vec::new();
+        let mut fee_filtered_candidate_exists = false;
+        for (entrypoint_idx, (ep, result)) in self
+            .entrypoints
+            .iter()
+            .zip(query_results.into_iter())
+            .enumerate()
+        {
+            let ops = result?;
+            let assignable_count =
+                self.count_assignable_ops(&ops, builder_address, max_sim_block_number);
             let eligible_count = self.count_eligible_ops(
                 &ops,
                 builder_address,
@@ -143,15 +173,21 @@ impl Assigner {
             );
             if eligible_count > 0 {
                 candidates.push((entrypoint_idx, ep.clone(), ops, eligible_count));
+            } else if assignable_count > 0 {
+                fee_filtered_candidate_exists = true;
             }
         }
 
         if candidates.is_empty() {
-            tracing::info!(
-                "Builder Assigner: no eligible ops for builder {:?}",
-                builder_address
-            );
-            return Ok(None);
+            return Ok(if fee_filtered_candidate_exists {
+                AssignmentResult::NoOperationsAfterFeeFilter
+            } else {
+                tracing::debug!(
+                    "Builder Assigner: no eligible ops for builder {:?}",
+                    builder_address
+                );
+                AssignmentResult::NoOperations
+            });
         }
 
         // Starvation threshold: each entrypoint should be selected at least once per starvation_ratio cycle through signers
@@ -243,17 +279,17 @@ impl Assigner {
                 "Builder Assigner: no assigned ops for ep {:?} after selection",
                 selected_ep.address
             );
-            return Ok(None);
+            return Ok(AssignmentResult::NoOperations);
         }
 
-        Ok(Some(WorkAssignment {
+        Ok(AssignmentResult::Assigned(WorkAssignment {
             entry_point: selected_ep.address,
             filter_id: selected_ep.filter_id,
             operations: assigned_ops,
         }))
     }
 
-    /// Assigns work to a worker for a specific entrypoint configuration.
+    /// Assigns work for a specific entrypoint configuration.
     ///
     /// This is used for replacement attempts to ensure the entrypoint does not change.
     pub(crate) async fn assign_work_for_entrypoint(
@@ -263,7 +299,7 @@ impl Assigner {
         required_fees: GasFees,
         entry_point: Address,
         filter_id: Option<String>,
-    ) -> anyhow::Result<Option<WorkAssignment>> {
+    ) -> anyhow::Result<AssignmentResult> {
         let ops = self
             .pool
             .get_ops_summaries(
@@ -273,6 +309,8 @@ impl Assigner {
             )
             .await?;
 
+        let assignable_count =
+            self.count_assignable_ops(&ops, builder_address, max_sim_block_number);
         let eligible_count =
             self.count_eligible_ops(&ops, builder_address, max_sim_block_number, &required_fees);
 
@@ -288,8 +326,12 @@ impl Assigner {
             state.entrypoint_last_selected.insert(key, global_cycle);
         }
 
+        if assignable_count == 0 {
+            return Ok(AssignmentResult::NoOperations);
+        }
+
         if eligible_count == 0 {
-            return Ok(None);
+            return Ok(AssignmentResult::NoOperationsAfterFeeFilter);
         }
 
         let assigned_ops = self
@@ -303,14 +345,35 @@ impl Assigner {
             .await?;
 
         if assigned_ops.is_empty() {
-            return Ok(None);
+            return Ok(AssignmentResult::NoOperations);
         }
 
-        Ok(Some(WorkAssignment {
+        Ok(AssignmentResult::Assigned(WorkAssignment {
             entry_point,
             filter_id,
             operations: assigned_ops,
         }))
+    }
+
+    /// Count ops that are assignable before fee filtering:
+    /// - Not assigned to another builder
+    /// - Simulated before max_sim_block_number
+    fn count_assignable_ops(
+        &self,
+        ops: &[PoolOperationSummary],
+        builder_address: Address,
+        max_sim_block_number: u64,
+    ) -> usize {
+        let state = self.state.lock().unwrap();
+        ops.iter()
+            .filter(|op| op.sim_block_number <= max_sim_block_number)
+            .filter(
+                |op| match state.uo_sender_to_builder_state.get(&op.sender) {
+                    None => true,
+                    Some((locked_builder, _)) => *locked_builder == builder_address,
+                },
+            )
+            .count()
     }
 
     /// Count ops that are eligible for assignment:
@@ -359,7 +422,7 @@ impl Assigner {
             if total_cost > max_cost {
                 if log {
                     tracing::info!(
-                        "op {:?} doesn't meet bundler sponsorship requirements: total_cost: {:?}, max_cost: {:?}",
+                        "Builder Assigner: op {:?} doesn't meet bundler sponsorship requirements: total_cost: {:?}, max_cost: {:?}",
                         op.hash,
                         total_cost,
                         max_cost
@@ -375,7 +438,7 @@ impl Assigner {
         {
             if log {
                 tracing::info!(
-                    "op {:?} doesn't meet fee requirements: max_priority_fee_per_gas: {:?}, max_fee_per_gas: {:?}, required_fees: {:?}",
+                    "Builder Assigner: op {:?} doesn't meet fee requirements: max_priority_fee_per_gas: {:?}, max_fee_per_gas: {:?}, required_fees: {:?}",
                     op.hash,
                     op.max_priority_fee_per_gas,
                     op.max_fee_per_gas,
@@ -612,35 +675,7 @@ mod tests {
     const TEST_ENTRY_POINT: Address = Address::ZERO;
 
     fn create_test_ops(senders: &[Address]) -> Vec<PoolOperation> {
-        senders
-            .iter()
-            .map(|sender| {
-                let uo = UserOperationBuilder::new(
-                    &ChainSpec::default(),
-                    UserOperationRequiredFields {
-                        sender: *sender,
-                        ..Default::default()
-                    },
-                )
-                .build()
-                .into();
-                PoolOperation {
-                    uo,
-                    expected_code_hash: B256::ZERO,
-                    entry_point: TEST_ENTRY_POINT,
-                    sim_block_hash: B256::ZERO,
-                    sim_block_number: 0,
-                    account_is_staked: false,
-                    valid_time_range: ValidTimeRange::default(),
-                    entity_infos: EntityInfos::default(),
-                    aggregator: None,
-                    da_gas_data: Default::default(),
-                    filter_id: None,
-                    perms: UserOperationPermissions::default(),
-                    sender_is_7702: false,
-                }
-            })
-            .collect()
+        create_test_ops_for_entrypoint(senders, TEST_ENTRY_POINT)
     }
 
     fn mock_pool_get_ops(mock_pool: &mut MockPool, ops: Vec<PoolOperation>) {
@@ -668,6 +703,13 @@ mod tests {
         }]
     }
 
+    fn expect_assigned(result: AssignmentResult) -> WorkAssignment {
+        match result {
+            AssignmentResult::Assigned(assignment) => assignment,
+            other => panic!("should have work, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn test_no_operations() {
         let mut mock_pool = MockPool::new();
@@ -678,7 +720,7 @@ mod tests {
             .assign_work(address(0), u64::MAX, GasFees::default())
             .await
             .unwrap();
-        assert!(result.is_none());
+        assert!(matches!(result, AssignmentResult::NoOperations));
     }
 
     #[tokio::test]
@@ -688,11 +730,12 @@ mod tests {
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
         let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
-        let assignment = assigner
-            .assign_work(address(0), u64::MAX, GasFees::default())
-            .await
-            .unwrap()
-            .expect("should have work");
+        let assignment = expect_assigned(
+            assigner
+                .assign_work(address(0), u64::MAX, GasFees::default())
+                .await
+                .unwrap(),
+        );
         assert_eq!(assignment.operations.len(), 2);
         assert_eq!(assignment.operations[0].uo.sender(), address(1));
         assert_eq!(assignment.operations[1].uo.sender(), address(2));
@@ -712,11 +755,12 @@ mod tests {
             .unwrap();
 
         // Same builder address should assign again
-        let assignment = assigner
-            .assign_work(address(0), u64::MAX, GasFees::default())
-            .await
-            .unwrap()
-            .expect("should have work");
+        let assignment = expect_assigned(
+            assigner
+                .assign_work(address(0), u64::MAX, GasFees::default())
+                .await
+                .unwrap(),
+        );
         assert_eq!(assignment.operations.len(), 2);
 
         // Different builder address should not assign (ops locked to builder 0)
@@ -724,7 +768,7 @@ mod tests {
             .assign_work(address(1), u64::MAX, GasFees::default())
             .await
             .unwrap();
-        assert!(result.is_none());
+        assert!(matches!(result, AssignmentResult::NoOperations));
     }
 
     #[tokio::test]
@@ -743,11 +787,12 @@ mod tests {
         assigner.confirm_senders_drop_unused(address(0), &[address(1)]);
 
         // Different builder should be able to receive address(2)
-        let assignment = assigner
-            .assign_work(address(1), u64::MAX, GasFees::default())
-            .await
-            .unwrap()
-            .expect("should have work");
+        let assignment = expect_assigned(
+            assigner
+                .assign_work(address(1), u64::MAX, GasFees::default())
+                .await
+                .unwrap(),
+        );
         assert_eq!(assignment.operations.len(), 1);
         assert_eq!(assignment.operations[0].uo.sender(), address(2));
     }
@@ -768,11 +813,12 @@ mod tests {
         assigner.release_all(address(0));
 
         // Different builder should get all ops
-        let assignment = assigner
-            .assign_work(address(1), u64::MAX, GasFees::default())
-            .await
-            .unwrap()
-            .expect("should have work");
+        let assignment = expect_assigned(
+            assigner
+                .assign_work(address(1), u64::MAX, GasFees::default())
+                .await
+                .unwrap(),
+        );
         assert_eq!(assignment.operations.len(), 2);
         assert_eq!(assignment.operations[0].uo.sender(), address(1));
         assert_eq!(assignment.operations[1].uo.sender(), address(2));
@@ -796,11 +842,12 @@ mod tests {
         assigner.confirm_senders_drop_unused(address(0), &[]);
 
         // Different builder should only get address(2)
-        let assignment = assigner
-            .assign_work(address(1), u64::MAX, GasFees::default())
-            .await
-            .unwrap()
-            .expect("should have work");
+        let assignment = expect_assigned(
+            assigner
+                .assign_work(address(1), u64::MAX, GasFees::default())
+                .await
+                .unwrap(),
+        );
         assert_eq!(assignment.operations.len(), 1);
         assert_eq!(assignment.operations[0].uo.sender(), address(2));
     }
@@ -942,20 +989,22 @@ mod tests {
         let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
 
         // Cycle 1: Both unseen (last_selected=0). Tertiary tiebreak by config order keeps EP1 first.
-        let r1 = assigner
-            .assign_work(address(0), u64::MAX, GasFees::default())
-            .await
-            .unwrap()
-            .expect("should have work");
+        let r1 = expect_assigned(
+            assigner
+                .assign_work(address(0), u64::MAX, GasFees::default())
+                .await
+                .unwrap(),
+        );
         let first = r1.entry_point;
         assigner.release_all(address(0));
 
         // Cycle 2: The other EP should win the tiebreak (least recently selected).
-        let r2 = assigner
-            .assign_work(address(0), u64::MAX, GasFees::default())
-            .await
-            .unwrap()
-            .expect("should have work");
+        let r2 = expect_assigned(
+            assigner
+                .assign_work(address(0), u64::MAX, GasFees::default())
+                .await
+                .unwrap(),
+        );
         assert_ne!(
             r2.entry_point, first,
             "Cycle 2: should pick the other EP via tiebreak"
@@ -963,11 +1012,12 @@ mod tests {
         assigner.release_all(address(0));
 
         // Cycle 3: Should alternate back to the first EP.
-        let r3 = assigner
-            .assign_work(address(0), u64::MAX, GasFees::default())
-            .await
-            .unwrap()
-            .expect("should have work");
+        let r3 = expect_assigned(
+            assigner
+                .assign_work(address(0), u64::MAX, GasFees::default())
+                .await
+                .unwrap(),
+        );
         assert_eq!(
             r3.entry_point, first,
             "Cycle 3: should alternate back to first EP"
@@ -975,11 +1025,12 @@ mod tests {
         assigner.release_all(address(0));
 
         // Cycle 4: Should alternate again.
-        let r4 = assigner
-            .assign_work(address(0), u64::MAX, GasFees::default())
-            .await
-            .unwrap()
-            .expect("should have work");
+        let r4 = expect_assigned(
+            assigner
+                .assign_work(address(0), u64::MAX, GasFees::default())
+                .await
+                .unwrap(),
+        );
         assert_ne!(
             r4.entry_point, first,
             "Cycle 4: should alternate to other EP"
@@ -1045,11 +1096,12 @@ mod tests {
         let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 0.50);
 
         // Cycle 1: EP1 should be selected (more ops)
-        let result = assigner
-            .assign_work(address(0), u64::MAX, GasFees::default())
-            .await
-            .unwrap()
-            .expect("should have work");
+        let result = expect_assigned(
+            assigner
+                .assign_work(address(0), u64::MAX, GasFees::default())
+                .await
+                .unwrap(),
+        );
         assert_eq!(
             result.entry_point, TEST_ENTRY_POINT,
             "Cycle 1: EP1 expected"
@@ -1057,11 +1109,12 @@ mod tests {
         assigner.release_all(address(0));
 
         // Cycle 2: EP1 still has more ops, should still be selected
-        let result = assigner
-            .assign_work(address(0), u64::MAX, GasFees::default())
-            .await
-            .unwrap()
-            .expect("should have work");
+        let result = expect_assigned(
+            assigner
+                .assign_work(address(0), u64::MAX, GasFees::default())
+                .await
+                .unwrap(),
+        );
         assert_eq!(
             result.entry_point, TEST_ENTRY_POINT,
             "Cycle 2: EP1 expected"
@@ -1069,11 +1122,12 @@ mod tests {
         assigner.release_all(address(0));
 
         // Cycle 3: EP2 hasn't been selected in 2 cycles (threshold), should be force-selected
-        let result = assigner
-            .assign_work(address(0), u64::MAX, GasFees::default())
-            .await
-            .unwrap()
-            .expect("should have work");
+        let result = expect_assigned(
+            assigner
+                .assign_work(address(0), u64::MAX, GasFees::default())
+                .await
+                .unwrap(),
+        );
         assert_eq!(
             result.entry_point, TEST_ENTRY_POINT_2,
             "Cycle 3: EP2 expected (starvation prevention)"
@@ -1081,11 +1135,12 @@ mod tests {
         assigner.release_all(address(0));
 
         // Cycle 4: EP2 was just selected, back to normal - EP1 has more ops
-        let result = assigner
-            .assign_work(address(0), u64::MAX, GasFees::default())
-            .await
-            .unwrap()
-            .expect("should have work");
+        let result = expect_assigned(
+            assigner
+                .assign_work(address(0), u64::MAX, GasFees::default())
+                .await
+                .unwrap(),
+        );
         assert_eq!(
             result.entry_point, TEST_ENTRY_POINT,
             "Cycle 4: EP1 expected"
@@ -1173,11 +1228,12 @@ mod tests {
             max_priority_fee_per_gas: 5,
         };
 
-        let assignment = assigner
-            .assign_work(address(0), u64::MAX, required_fees)
-            .await
-            .unwrap()
-            .expect("should have work");
+        let assignment = expect_assigned(
+            assigner
+                .assign_work(address(0), u64::MAX, required_fees)
+                .await
+                .unwrap(),
+        );
 
         // Should only get the high fee ops (address(1) and address(2))
         assert_eq!(assignment.operations.len(), 2);
@@ -1218,9 +1274,37 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(
-            result.is_none(),
-            "No ops should be eligible with high fee requirements"
-        );
+        assert!(matches!(
+            result,
+            AssignmentResult::NoOperationsAfterFeeFilter
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_fee_filtering_reports_no_operations_after_fee_filter() {
+        // Ops are assignable (unlocked + valid sim block), but fees are too low.
+        let low_fee_ops = create_test_ops_with_fees(&[address(1), address(2)], 10, 2);
+
+        let mut mock_pool = MockPool::new();
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(move |_, _, _| Ok(low_fee_ops.iter().map(|op| op.into()).collect()));
+
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+
+        let required_fees = GasFees {
+            max_fee_per_gas: 100,
+            max_priority_fee_per_gas: 50,
+        };
+
+        let result = assigner
+            .assign_work(address(0), u64::MAX, required_fees)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            result,
+            AssignmentResult::NoOperationsAfterFeeFilter
+        ));
     }
 }

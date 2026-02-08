@@ -198,14 +198,24 @@ pub struct BuilderArgs {
     )]
     assigner_max_ops_per_request: u64,
 
-    /// Starvation ratio for the assigner (fraction of signers before force-selecting a starved entrypoint)
+    /// Starvation ratio for the assigner (fraction of signers before force-selecting a starved entrypoint).
+    /// Must be between 0.0 and 100.0.
     #[arg(
         long = "builder.assigner_starvation_ratio",
         name = "builder.assigner_starvation_ratio",
         env = "BUILDER_ASSIGNER_STARVATION_RATIO",
-        default_value = "0.50"
+        default_value = "0.50",
+        value_parser = parse_starvation_ratio
     )]
     assigner_starvation_ratio: f64,
+}
+
+fn parse_starvation_ratio(s: &str) -> Result<f64, String> {
+    let val: f64 = s.parse().map_err(|e| format!("{e}"))?;
+    if !val.is_finite() || !(0.0..=100.0).contains(&val) {
+        return Err("assigner_starvation_ratio must be between 0.0 and 100.0".to_string());
+    }
+    Ok(val)
 }
 
 impl BuilderArgs {

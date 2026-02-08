@@ -40,7 +40,7 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
     ProposerKey,
-    assigner::Assigner,
+    assigner::{Assigner, AssignmentResult},
     bundle_proposer::{BundleData, BundleProposerError, BundleProposerT},
     emit::{BuilderEvent, BundleTxDetails},
     transaction_tracker::{
@@ -217,7 +217,10 @@ where
             .record(value);
     }
 
-    #[instrument(skip_all, fields(tag = self.builder_tag))]
+    #[instrument(skip_all, fields(
+        tag = self.builder_tag,
+        entry_point = state.last_bundle_key.as_ref().map(|(addr, _)| addr.to_string()).unwrap_or_default(),
+    ))]
     async fn step_state<TRIG: Trigger>(
         &mut self,
         state: &mut SenderMachineState<T, TRIG>,
@@ -723,26 +726,39 @@ where
                 .await?
         };
 
-        let Some(assignment) = assignment else {
-            // No work available from any entrypoint
-            self.assigner.release_all(self.sender_eoa);
-            if state.transaction_tracker.num_pending_transactions() == 0 {
-                state.last_bundle_key = None;
+        let assignment = match assignment {
+            AssignmentResult::Assigned(assignment) => assignment,
+            AssignmentResult::NoOperations => {
+                // No work available from any entrypoint
+                self.assigner.release_all(self.sender_eoa);
+                if state.transaction_tracker.num_pending_transactions() == 0 {
+                    state.last_bundle_key = None;
+                }
+                return Ok(SendBundleAttemptResult::NoOperationsInitially);
             }
-            return Ok(SendBundleAttemptResult::NoOperationsInitially);
+            AssignmentResult::NoOperationsAfterFeeFilter => {
+                // Keep confirmed locks when a pending tx exists; only drop unconfirmed.
+                if state.transaction_tracker.num_pending_transactions() == 0 {
+                    self.assigner.release_all(self.sender_eoa);
+                    state.last_bundle_key = None;
+                } else {
+                    self.assigner
+                        .confirm_senders_drop_unused(self.sender_eoa, &[]);
+                }
+                return Ok(SendBundleAttemptResult::NoOperationsAfterFeeFilter);
+            }
         };
 
         let entry_point = assignment.entry_point;
         let filter_id = assignment.filter_id;
         let ops = assignment.operations;
 
-        // Store the proposer key for later use (revert handling, metrics)
-        let proposer_key = (entry_point, filter_id.clone());
-        state.last_bundle_key = Some(proposer_key.clone());
-
         // Build and send bundle. Keep this as a single result path so assigner
         // cleanup runs for all outcomes, including hard errors.
+        let proposer_key = (entry_point, filter_id.clone());
         let result = if let Some(proposer) = self.proposers.get(&proposer_key) {
+            // Only pin to this entrypoint once we've confirmed the proposer exists
+            state.last_bundle_key = Some(proposer_key.clone());
             // Clear condition_not_met once make_bundle completes (success or
             // NoOperationsAfterFeeFilter), and keep it set for hard failures so the
             // next attempt still re-checks conditions.
@@ -795,9 +811,12 @@ where
                 self.assigner.release_all(self.sender_eoa);
             }
             Ok(SendBundleAttemptResult::NoOperationsAfterFeeFilter) => {
-                self.assigner.release_all(self.sender_eoa);
                 if state.transaction_tracker.num_pending_transactions() == 0 {
+                    self.assigner.release_all(self.sender_eoa);
                     state.last_bundle_key = None;
+                } else {
+                    self.assigner
+                        .confirm_senders_drop_unused(self.sender_eoa, &[]);
                 }
             }
             Ok(SendBundleAttemptResult::NoOperationsAfterSimulation) => {
@@ -1164,6 +1183,7 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
     // Clears entrypoint pinning so the next attempt uses priority-based selection.
     fn initial(&mut self) {
         self.last_bundle_key = None;
+        self.condition_not_met = false;
         self.inner = InnerState::new();
     }
 
@@ -1187,7 +1207,6 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
     // Sends an error result and moves to initial state
     fn bundle_error(&mut self, err: anyhow::Error) {
         self.send_result(SendBundleResult::Error(err));
-        self.condition_not_met = false;
         self.initial();
     }
 
@@ -1214,8 +1233,11 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
 
     // No operations are available, send result, move to initial state
     // Preserves fee/underpriced info for further rounds.
+    // Clears entrypoint pin since any pending tx was already abandoned by the caller.
     fn no_operations(&mut self) {
         self.send_result(SendBundleResult::NoOperationsInitially);
+        self.last_bundle_key = None;
+        self.condition_not_met = false;
 
         self.inner = match &self.inner {
             InnerState::Building(s) => InnerState::Building(BuildingState {
@@ -1643,7 +1665,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        assigner::EntrypointInfo,
+        assigner::{AssignmentResult, EntrypointInfo},
         bundle_proposer::{BundleData, MockBundleProposerT},
         bundle_sender::{BundleSenderImpl, MockTrigger},
         transaction_tracker::MockTransactionTracker,
@@ -2222,7 +2244,7 @@ mod tests {
     #[tokio::test]
     async fn test_transition_to_cancel() {
         let Mocks {
-            mut mock_proposer_t,
+            mock_proposer_t,
             mut mock_tracker,
             mut mock_trigger,
             mut mock_pool,
@@ -2236,7 +2258,10 @@ mod tests {
             Ok(TrackerState {
                 nonce: 0,
                 balance: U256::ZERO,
-                required_fees: None,
+                required_fees: Some(GasFees {
+                    max_fee_per_gas: 100,
+                    max_priority_fee_per_gas: 50,
+                }),
             })
         });
         mock_tracker.expect_address().return_const(Address::ZERO);
@@ -2253,24 +2278,13 @@ mod tests {
                     sender: Address::ZERO,
                     entry_point: ENTRY_POINT_ADDRESS_V0_6,
                     sim_block_number: 0,
-                    max_fee_per_gas: 0,
-                    max_priority_fee_per_gas: 0,
+                    max_fee_per_gas: 10,
+                    max_priority_fee_per_gas: 2,
                     gas_limit: 0,
                     bundler_sponsorship_max_cost: None,
                 }])
             });
-        mock_pool
-            .expect_get_ops_by_hashes()
-            .times(1)
-            .returning(|_, _| Ok(vec![demo_pool_op()]));
-
-        // fee filter error - now uses BundleProposerT
-        mock_proposer_t
-            .expect_make_bundle()
-            .times(1)
-            .returning(|_, _, _, _, _, _, _, _| {
-                Box::pin(async { Err(BundleProposerError::NoOperationsAfterFeeFilter) })
-            });
+        mock_pool.expect_get_ops_by_hashes().times(0);
 
         let mut sender = new_sender(mock_proposer_t, mock_pool);
 
@@ -2485,8 +2499,96 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            next_assignment.is_some(),
+            matches!(next_assignment, AssignmentResult::Assigned(_)),
             "assignment lock should be released after proposer lookup error"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_no_ops_after_fee_filter_with_pending_keeps_confirmed_locks() {
+        let mut mock_pool = MockPool::new();
+        let mut mock_trigger = MockTrigger::new();
+        let mut mock_tracker = MockTransactionTracker::new();
+
+        let sender = Address::ZERO;
+
+        mock_trigger
+            .expect_last_block()
+            .times(1)
+            .return_const(NewHead {
+                block_number: 0,
+                block_hash: B256::ZERO,
+                address_updates: vec![],
+            });
+
+        mock_tracker.expect_get_state().times(1).returning(|| {
+            Ok(TrackerState {
+                nonce: 1,
+                balance: U256::ZERO,
+                required_fees: Some(GasFees {
+                    max_fee_per_gas: 100,
+                    max_priority_fee_per_gas: 50,
+                }),
+            })
+        });
+        mock_tracker
+            .expect_num_pending_transactions()
+            .times(1)
+            .return_const(1_usize);
+
+        mock_pool
+            .expect_get_ops_summaries()
+            .times(3)
+            .returning(move |_, _, _| {
+                Ok(vec![PoolOperationSummary {
+                    hash: B256::ZERO,
+                    sender,
+                    entry_point: ENTRY_POINT_ADDRESS_V0_6,
+                    sim_block_number: 0,
+                    max_fee_per_gas: 0,
+                    max_priority_fee_per_gas: 0,
+                    gas_limit: 0,
+                    bundler_sponsorship_max_cost: None,
+                }])
+            });
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .times(1)
+            .returning(|_, _| Ok(vec![demo_pool_op()]));
+
+        let mut sender_impl = new_sender(MockBundleProposerT::new(), mock_pool);
+
+        // Pre-lock and confirm sender to simulate an existing in-flight bundle.
+        let initial_assignment = match sender_impl
+            .assigner
+            .assign_work(sender, u64::MAX, GasFees::default())
+            .await
+            .unwrap()
+        {
+            AssignmentResult::Assigned(assignment) => assignment,
+            other => panic!("initial assignment should exist, got {other:?}"),
+        };
+        assert_eq!(initial_assignment.operations.len(), 1);
+        sender_impl
+            .assigner
+            .confirm_senders_drop_unused(sender, &[sender]);
+
+        let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
+        let result = sender_impl.send_bundle(&mut state, 0).await.unwrap();
+        assert!(matches!(
+            result,
+            SendBundleAttemptResult::NoOperationsAfterFeeFilter
+        ));
+
+        // Confirmed sender lock should remain while pending tx exists.
+        let reassignment = sender_impl
+            .assigner
+            .assign_work(Address::from([0xAA; 20]), u64::MAX, GasFees::default())
+            .await
+            .unwrap();
+        assert!(
+            matches!(reassignment, AssignmentResult::NoOperations),
+            "confirmed lock should be preserved during pending tx"
         );
     }
 
