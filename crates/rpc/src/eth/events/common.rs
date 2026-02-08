@@ -84,8 +84,7 @@ where
         // If the event is found, get the TX and entry point
         let transaction_hash = event.transaction_hash.ok_or_else(|| {
             EventProviderError::LogProcessingError(format!(
-                "event log for user operation {} missing transaction hash",
-                hash
+                "event log for user operation {hash:?} missing transaction hash"
             ))
         })?;
 
@@ -122,8 +121,7 @@ where
 
         let tx_hash = event.transaction_hash.ok_or_else(|| {
             EventProviderError::LogProcessingError(format!(
-                "event log for user operation {} missing transaction hash",
-                hash
+                "event log for user operation {hash:?} missing transaction hash"
             ))
         })?;
 
@@ -199,8 +197,7 @@ where
 
             let tx_hash = event.transaction_hash.ok_or_else(|| {
                 EventProviderError::LogProcessingError(format!(
-                    "event log for user operation {} missing transaction hash",
-                    hash
+                    "event log for user operation {hash:?} missing transaction hash"
                 ))
             })?;
 
@@ -251,8 +248,7 @@ where
 
         let to = tx.inner.to().ok_or_else(|| {
             EventProviderError::LogProcessingError(format!(
-                "transaction {} missing 'to' field",
-                tx_hash
+                "transaction {tx_hash:?} missing 'to' field"
             ))
         })?;
 
@@ -384,8 +380,7 @@ where
         }
         let to = tx.inner.to().ok_or_else(|| {
             EventProviderError::LogProcessingError(format!(
-                "transaction {} missing 'to' field",
-                tx_hash
+                "transaction {tx_hash:?} missing 'to' field"
             ))
         })?;
 
@@ -460,8 +455,7 @@ where
             .map(|l| l.inner.data)
             .map_err(|e| {
                 EventProviderError::LogProcessingError(format!(
-                    "failed to decode user operation event: {}",
-                    e
+                    "failed to decode user operation event: {e:?}"
                 ))
             })
     }

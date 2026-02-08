@@ -27,7 +27,10 @@ use rundler_types::{
 };
 use serde::Serialize;
 
-use crate::error::{rpc_err, rpc_err_with_data};
+use crate::{
+    error::{rpc_err, rpc_err_with_data},
+    eth::events::EventProviderError,
+};
 
 // Error codes borrowed from jsonrpsee
 // INVALID_REQUEST_CODE = -32600
@@ -521,10 +524,8 @@ impl From<ProviderError> for ProviderErrorWithContext {
     }
 }
 
-impl From<crate::eth::events::EventProviderError> for EthRpcError {
-    fn from(e: crate::eth::events::EventProviderError) -> Self {
-        use crate::eth::events::EventProviderError;
-
+impl From<EventProviderError> for EthRpcError {
+    fn from(e: EventProviderError) -> Self {
         match e {
             // Reuse existing ProviderError conversion for all provider errors
             EventProviderError::Provider(provider_err) => Self::from(ProviderErrorWithContext {

@@ -19,7 +19,9 @@ use std::{
 };
 
 use alloy_primitives::{Address, B256};
-use rundler_provider::{EntryPoint, SimulationProvider, StateOverride, TransactionReceipt};
+use rundler_provider::{
+    EntryPoint, ProviderError, SimulationProvider, StateOverride, TransactionReceipt,
+};
 use rundler_sim::{GasEstimationError, GasEstimator};
 use rundler_types::{
     EntryPointAbiVersion, EntryPointVersion, GasEstimate, UserOperation, UserOperationOptionalGas,
@@ -220,9 +222,8 @@ impl EntryPointRouter {
         &self,
         entry_point: &Address,
     ) -> Result<&Arc<dyn EntryPointRoute>, EventProviderError> {
-        self.get_route(entry_point).map_err(|e| {
-            EventProviderError::Provider(rundler_provider::ProviderError::Other(e.into()))
-        })
+        self.get_route(entry_point)
+            .map_err(|e| EventProviderError::Provider(ProviderError::Other(e.into())))
     }
 }
 

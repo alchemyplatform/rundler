@@ -217,7 +217,7 @@ where
         let futs = self
             .router
             .entry_points()
-            .map(|ep| async move { self.router.get_receipt(ep, hash, None).await });
+            .map(|ep| self.router.get_receipt(ep, hash, None));
         let results = future::try_join_all(futs).await?;
         Ok(results.into_iter().find_map(|x| x))
     }

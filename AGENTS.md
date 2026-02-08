@@ -23,6 +23,9 @@ Rundler is a Rust workspace.
 - Lint must be clean: `cargo clippy --all --all-features --tests -- -D warnings`.
 - Follow Rust naming defaults: modules/files `snake_case`, types/traits `UpperCamelCase`, constants `SCREAMING_SNAKE_CASE`.
 - Keep crate names in the established `rundler-*` pattern.
+- Use the `{variable}` shorthand syntax in format strings, logs, and error messages (e.g. `format!("transaction {tx_hash} missing")` instead of `format!("transaction {} missing", tx_hash)`).
+- Always import types rather than using inline paths (e.g. `use crate::eth::events::EventProviderError;` then `EventProviderError`, not `crate::eth::events::EventProviderError` inline). Use `as` renames to resolve conflicts.
+- Always qualify function calls with their module or type (e.g. `EthRpcError::from(...)`, `Vec::new()`), but do not qualify types/structs/enums unless needed to resolve ambiguity.
 
 ## Testing Guidelines
 - Add or update tests for every behavior change (`#[test]` / `#[tokio::test]` near the changed module is common here).

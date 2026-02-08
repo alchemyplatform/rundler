@@ -156,8 +156,7 @@ fn filter_receipt_logs_matching_user_op(
 
     let uo_hash = reference_log.topics().get(1).copied().unwrap_or_default();
     Err(EventProviderError::LogProcessingError(format!(
-        "no matching user operation {} found in transaction receipt",
-        uo_hash
+        "no matching user operation {uo_hash:?} found in transaction receipt"
     )))
 }
 

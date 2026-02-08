@@ -321,43 +321,38 @@ where
             .await
             .map_err(EthRpcError::from)?;
 
-        let preconf_transaction: Option<B256> = if self.chain_spec.flashblocks_enabled {
-            op_status
-                .as_ref()
-                .and_then(|s| s.preconf_info.as_ref())
-                .map(|info| info.tx_hash)
-        } else {
-            None
-        };
-
-        // Fetch mined UO + receipt from all entry points
-        let mined_futs = self.entry_point_router.entry_points().map(|ep| {
-            self.entry_point_router
-                .get_mined_and_receipt(ep, uo_hash, preconf_transaction)
-        });
-
-        // Track if we failed to retrieve receipt for a preconfirmed UO
-        let mut preconf_receipt_failed = false;
-
-        // If this fails and the UO is preconfirmed, treat it as pending
-        let mined_results = match future::try_join_all(mined_futs).await {
-            Ok(results) => results,
-            Err(e) => {
-                // If UO is preconfirmed but receipt retrieval failed, log and treat as pending
-                if preconf_transaction.is_some() {
+        // Fetch mined UO + receipt.
+        // If preconfirmed, we know the entry point so query it directly.
+        // Otherwise, fan out to all entry points.
+        let mined_results = if let Some(pool_status) = op_status.as_ref()
+            && self.chain_spec.flashblocks_enabled
+            && let Some(preconf_info) = &pool_status.preconf_info
+        {
+            let ret = self
+                .entry_point_router
+                .get_mined_and_receipt(
+                    &pool_status.entry_point,
+                    uo_hash,
+                    Some(preconf_info.tx_hash),
+                )
+                .await;
+            match ret {
+                Ok(result) => vec![result],
+                Err(e) => {
                     tracing::warn!(
-                        "Failed to retrieve receipt for preconfirmed UO {}: {}. Treating as pending.",
-                        uo_hash,
-                        e
+                        "failed to retrieve receipt for preconfirmed UO {uo_hash}: {e}. Treating as pending."
                     );
-                    preconf_receipt_failed = true;
-                    // Fall through to return pool status as pending
                     vec![]
-                } else {
-                    // For non-preconfirmed UOs, propagate the error
-                    return Err(EthRpcError::from(e));
                 }
             }
+        } else {
+            let mined_futs = self.entry_point_router.entry_points().map(|ep| {
+                self.entry_point_router
+                    .get_mined_and_receipt(ep, uo_hash, None)
+            });
+            future::try_join_all(mined_futs)
+                .await
+                .map_err(EthRpcError::from)?
         };
 
         // Check for mined/preconfirmed receipt first (includes user operation)
@@ -381,14 +376,7 @@ where
 
         // If found in pool, return extended status
         if let Some(pool_status) = op_status {
-            let mut rpc_status: RpcUserOperationStatus = pool_status.into();
-
-            // If we failed to get receipt for a preconfirmed UO, clear preconf info
-            if preconf_receipt_failed {
-                rpc_status.pending_bundle = None;
-            }
-
-            return Ok(rpc_status);
+            return Ok(pool_status.into());
         }
 
         Ok(RpcUserOperationStatus {
