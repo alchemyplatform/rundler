@@ -212,7 +212,7 @@ where
         let ep = last_bundle_key
             .as_ref()
             .map(|(addr, _)| addr.to_string())
-            .unwrap_or_default();
+            .unwrap_or_else(|| "unknown".to_string());
         metrics::counter!(name, "sender" => self.sender_eoa.to_string(), "entry_point" => ep)
             .increment(value);
     }
@@ -229,7 +229,7 @@ where
 
     #[instrument(skip_all, fields(
         tag = self.builder_tag,
-        entry_point = state.last_bundle_key.as_ref().map(|(addr, _)| addr.to_string()).unwrap_or_default(),
+        entry_point = state.last_bundle_key.as_ref().map(|(addr, _)| addr.to_string()).unwrap_or_else(|| "unknown".to_string()),
     ))]
     async fn step_state<TRIG: Trigger>(
         &mut self,
@@ -1239,6 +1239,7 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
         // via the assigner's priority selection, rather than staying pinned to the
         // old entrypoint.
         self.last_bundle_key = None;
+        self.condition_not_met = false;
         self.update(InnerState::Building(BuildingState {
             wait_for_trigger: self.trigger.builder_must_wait_for_trigger(),
             fee_increase_count: 0,
