@@ -87,7 +87,7 @@ The Assigner component is responsible for coordinating work distribution among w
 
 1. **Entrypoint Selection**: Uses a priority-based strategy with starvation prevention
    - Primary: Select the entrypoint with the most eligible operations (throughput-optimized)
-   - Starvation prevention: If any entrypoint hasn't been selected in `num_signers * starvation_ratio` cycles (configurable, default 0.50), force-select the most starved one
+   - Starvation prevention: If any entrypoint hasn't been selected in `num_signers * starvation_ratio` cycles, force-select the most starved one. For example, with 4 signers and the default ratio of 0.50, an entrypoint is force-selected after 2 idle cycles.
 
 2. **Operation Assignment**: Ensures no two workers attempt to bundle operations from the same sender simultaneously
    - Tracks sender-to-worker assignments

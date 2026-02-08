@@ -485,6 +485,7 @@ where
             }
             EntryPointAbiVersion::V0_7 => decode_v0_7_handle_ops_revert(&Some(revert_data.clone())),
         };
+        warn!("Onchain revert data for {tx_hash:?}: {revert_data:?}");
         warn!("decoded handle ops out: {handle_ops_out:?}");
 
         match handle_ops_out {

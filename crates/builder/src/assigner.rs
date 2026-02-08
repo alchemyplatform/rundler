@@ -217,6 +217,8 @@ impl Assigner {
                         None
                     }
                 })
+                // Tiebreak: prefer lower config index (b.0.cmp(a.0) in max_by
+                // is equivalent to a.0.cmp(b.0) in sort_by — both prefer lower index)
                 .max_by(|a, b| a.3.cmp(&b.3).then_with(|| b.0.cmp(a.0)));
 
             if let Some((starved_idx, ep, _, gap)) = starved {
@@ -914,7 +916,7 @@ mod tests {
         Address::from([i as u8; 20])
     }
 
-    const TEST_ENTRY_POINT_2: Address = Address::new([0x01; 20]);
+    const TEST_ENTRY_POINT_2: Address = Address::new([0xBB; 20]);
 
     fn two_entrypoints() -> Vec<EntrypointInfo> {
         vec![
@@ -1325,6 +1327,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_assign_work_for_entrypoint_returns_ops_for_pinned_ep() {
+        // assign_work_for_entrypoint should return ops only from the specified entrypoint,
+        // update starvation tracking, and support the replacement (fee escalation) flow.
+        let ep1_ops = create_test_ops_for_entrypoint(&[address(10), address(11)], TEST_ENTRY_POINT);
+        let ep2_ops = create_test_ops_for_entrypoint(
+            &[address(20), address(21), address(22)],
+            TEST_ENTRY_POINT_2,
+        );
+
+        let mut mock_pool = MockPool::new();
+        let ep1_ops_clone = ep1_ops.clone();
+        let ep2_ops_clone = ep2_ops.clone();
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(move |ep, _, _| {
+                if ep == TEST_ENTRY_POINT {
+                    Ok(ep1_ops_clone.iter().map(|op| op.into()).collect())
+                } else {
+                    Ok(ep2_ops_clone.iter().map(|op| op.into()).collect())
+                }
+            });
+
+        let ep1_ops_for_hashes = ep1_ops.clone();
+        let ep2_ops_for_hashes = ep2_ops.clone();
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .returning(move |ep, hashes| {
+                let ops = if ep == TEST_ENTRY_POINT {
+                    &ep1_ops_for_hashes
+                } else {
+                    &ep2_ops_for_hashes
+                };
+                Ok(ops
+                    .iter()
+                    .filter(|op| hashes.contains(&op.uo.hash()))
+                    .cloned()
+                    .collect())
+            });
+
+        let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
+
+        // Pin to EP2 (as if doing a replacement for an existing bundle on EP2)
+        let result = assigner
+            .assign_work_for_entrypoint(
+                address(0),
+                u64::MAX,
+                GasFees::default(),
+                TEST_ENTRY_POINT_2,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let assignment = expect_assigned(result);
+        assert_eq!(assignment.entry_point, TEST_ENTRY_POINT_2);
+        assert_eq!(assignment.operations.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_assign_work_for_entrypoint_no_ops_returns_no_operations() {
+        let mut mock_pool = MockPool::new();
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(|_, _, _| Ok(vec![]));
+
+        let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
+
+        let result = assigner
+            .assign_work_for_entrypoint(
+                address(0),
+                u64::MAX,
+                GasFees::default(),
+                TEST_ENTRY_POINT_2,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(result, AssignmentResult::NoOperations));
+    }
+
+    #[tokio::test]
     async fn test_fee_filtering_no_eligible_ops() {
         // All ops have fees too low
         let low_fee_ops = create_test_ops_with_fees(&[address(1), address(2)], 10, 2);
@@ -1339,34 +1423,6 @@ mod tests {
         let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
 
         // Request with high fee requirements - no ops should be eligible
-        let required_fees = GasFees {
-            max_fee_per_gas: 100,
-            max_priority_fee_per_gas: 50,
-        };
-
-        let result = assigner
-            .assign_work(address(0), u64::MAX, required_fees)
-            .await
-            .unwrap();
-
-        assert!(matches!(
-            result,
-            AssignmentResult::NoOperationsAfterFeeFilter
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_fee_filtering_reports_no_operations_after_fee_filter() {
-        // Ops are assignable (unlocked + valid sim block), but fees are too low.
-        let low_fee_ops = create_test_ops_with_fees(&[address(1), address(2)], 10, 2);
-
-        let mut mock_pool = MockPool::new();
-        mock_pool
-            .expect_get_ops_summaries()
-            .returning(move |_, _, _| Ok(low_fee_ops.iter().map(|op| op.into()).collect()));
-
-        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
-
         let required_fees = GasFees {
             max_fee_per_gas: 100,
             max_priority_fee_per_gas: 50,

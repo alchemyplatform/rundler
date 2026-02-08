@@ -483,7 +483,8 @@ pub struct CommonArgs {
         name = "num_signers",
         env = "NUM_SIGNERS",
         default_value = "1",
-        global = true
+        global = true,
+        value_parser = clap::value_parser!(u64).range(1..)
     )]
     pub num_signers: u64,
 
