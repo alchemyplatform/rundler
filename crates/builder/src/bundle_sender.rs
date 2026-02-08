@@ -21,9 +21,9 @@ use futures_util::StreamExt;
 #[cfg(test)]
 use mockall::automock;
 use rand::Rng;
+use rundler_provider::FeeEstimator;
 use rundler_task::TaskSpawner;
 use rundler_types::{
-    GasFees,
     builder::BundlingMode,
     chain::ChainSpec,
     pool::{AddressUpdate, NewHead, Pool},
@@ -69,6 +69,7 @@ pub(crate) struct BundleSenderImpl<T, C> {
     chain_spec: ChainSpec,
     sender_eoa: Address,
     transaction_tracker: Option<T>,
+    fee_estimator: Box<dyn FeeEstimator>,
     assigner: Arc<Assigner>,
     /// Proposers keyed by (entrypoint address, filter_id) for shared signer support
     proposers: Arc<HashMap<ProposerKey, Box<dyn BundleProposerT>>>,
@@ -183,6 +184,7 @@ where
         chain_spec: ChainSpec,
         sender_eoa: Address,
         transaction_tracker: T,
+        fee_estimator: Box<dyn FeeEstimator>,
         assigner: Arc<Assigner>,
         proposers: Arc<HashMap<ProposerKey, Box<dyn BundleProposerT>>>,
         pool: C,
@@ -195,6 +197,7 @@ where
             chain_spec,
             sender_eoa,
             transaction_tracker: Some(transaction_tracker),
+            fee_estimator,
             assigner,
             proposers,
             pool,
@@ -229,7 +232,6 @@ where
 
     #[instrument(skip_all, fields(
         tag = self.builder_tag,
-        entry_point = state.last_bundle_key.as_ref().map(|(addr, _)| addr.to_string()).unwrap_or_else(|| "unknown".to_string()),
     ))]
     async fn step_state<TRIG: Trigger>(
         &mut self,
@@ -531,22 +533,11 @@ where
             inner.fee_increase_count
         );
 
-        // Prefer fees from the proposer that built the bundle, but if unavailable
-        // (e.g. after restart), fallback to any configured proposer.
-        let proposer = state
-            .last_bundle_key
-            .as_ref()
-            .and_then(|key| self.proposers.get(key))
-            .or_else(|| self.proposers.values().next());
-        let estimated_fees = if let Some(proposer) = proposer {
-            let (fees, _) = proposer
-                .estimate_gas_fees(state.block_hash(), None)
-                .await
-                .unwrap_or_default();
-            fees
-        } else {
-            GasFees::default()
-        };
+        let (estimated_fees, _) = self
+            .fee_estimator
+            .required_bundle_fees(state.block_hash(), None)
+            .await
+            .unwrap_or_default();
 
         let cancel_res = state
             .transaction_tracker
@@ -719,17 +710,25 @@ where
             balance,
         } = state.transaction_tracker.get_state()?;
 
-        // Use assign_work() to get work from any entrypoint with priority-based selection.
-        // If we have a last_bundle_key, pin to that entrypoint for replacement.
-        // Note: assign_work takes GasFees for fee-based filtering, use defaults if not available.
-        let fees_for_assign = required_fees.unwrap_or_default();
+        // Estimate fresh fees, using tracker's required_fees as a floor so the
+        // 10% replacement bump is respected when a prior tx exists.
+        let (bundle_fees, base_fee) = self
+            .fee_estimator
+            .required_bundle_fees(state.block_hash(), required_fees)
+            .await?;
+        let is_replacement = fee_increase_count > 0;
+        let required_op_fees = if is_replacement {
+            bundle_fees
+        } else {
+            self.fee_estimator.required_op_fees(bundle_fees)
+        };
         let assignment = if let Some((entry_point, filter_id)) = state.last_bundle_key.clone() {
             // Pinned: use the same entrypoint for replacement
             self.assigner
                 .assign_work_for_entrypoint(
                     self.sender_eoa,
                     state.block_number(),
-                    fees_for_assign,
+                    required_op_fees,
                     entry_point,
                     filter_id,
                 )
@@ -737,7 +736,7 @@ where
         } else {
             // Fresh: let assigner pick best entrypoint
             self.assigner
-                .assign_work(self.sender_eoa, state.block_number(), fees_for_assign)
+                .assign_work(self.sender_eoa, state.block_number(), required_op_fees)
                 .await?
         };
 
@@ -783,8 +782,9 @@ where
                     nonce,
                     state.block_hash(),
                     balance,
-                    required_fees,
-                    fee_increase_count > 0,
+                    bundle_fees,
+                    base_fee,
+                    required_op_fees,
                     condition_not_met,
                 )
                 .await
@@ -1689,6 +1689,38 @@ mod tests {
         transaction_tracker::MockTransactionTracker,
     };
 
+    struct TestFeeEstimator;
+
+    #[async_trait]
+    impl FeeEstimator for TestFeeEstimator {
+        async fn required_bundle_fees(
+            &self,
+            _block_hash: B256,
+            min_fees: Option<GasFees>,
+        ) -> anyhow::Result<(GasFees, u128)> {
+            // Return min_fees if provided (simulates floor from tracker),
+            // otherwise return zero fees.
+            Ok((min_fees.unwrap_or_default(), 0))
+        }
+
+        async fn latest_bundle_fees(&self) -> anyhow::Result<(GasFees, u128)> {
+            Ok((GasFees::default(), 0))
+        }
+
+        async fn latest_fee_estimate(&self) -> anyhow::Result<rundler_provider::LatestFeeEstimate> {
+            Ok(rundler_provider::LatestFeeEstimate {
+                block_number: 0,
+                base_fee: 0,
+                required_base_fee: 0,
+                required_priority_fee: 0,
+            })
+        }
+
+        fn required_op_fees(&self, bundle_fees: GasFees) -> GasFees {
+            bundle_fees
+        }
+    }
+
     const ENTRY_POINT_ADDRESS_V0_6: Address = address!("5FF137D4b0FDCD49DcA30c7CF57E578a026d2789");
     const ENTRY_POINT_ADDRESS_V0_7: Address = address!("0000000000000000000000000000000000000007");
 
@@ -1744,7 +1776,7 @@ mod tests {
         mock_proposer_t
             .expect_make_bundle()
             .times(1)
-            .returning(|_, _, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _, _| {
                 Box::pin(async {
                     Ok(BundleData {
                         tx: rundler_provider::TransactionRequest::default(),
@@ -1827,7 +1859,7 @@ mod tests {
         mock_proposer_t
             .expect_make_bundle()
             .times(1)
-            .returning(|_, _, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _, _| {
                 Box::pin(async {
                     Ok(BundleData {
                         tx: rundler_provider::TransactionRequest::default(),
@@ -1927,7 +1959,7 @@ mod tests {
         mock_proposer_t
             .expect_make_bundle()
             .times(1)
-            .returning(|_, _, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _, _| {
                 Box::pin(async {
                     Ok(BundleData {
                         tx: rundler_provider::TransactionRequest::default(),
@@ -1984,10 +2016,7 @@ mod tests {
             block_hash: B256::ZERO,
             address_updates: vec![],
         };
-        mock_trigger
-            .expect_last_block()
-            .times(4)
-            .return_const(new_head);
+        mock_trigger.expect_last_block().return_const(new_head);
 
         mock_tracker.expect_get_state().times(2).returning(|| {
             Ok(TrackerState {
@@ -2048,7 +2077,7 @@ mod tests {
         pinned_proposer
             .expect_make_bundle()
             .times(1)
-            .returning(|_, _, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _, _| {
                 Box::pin(async {
                     Ok(BundleData {
                         tx: rundler_provider::TransactionRequest::default(),
@@ -2065,7 +2094,7 @@ mod tests {
         other_proposer
             .expect_make_bundle()
             .times(1)
-            .returning(|_, _, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _, _| {
                 Box::pin(async {
                     Ok(BundleData {
                         tx: rundler_provider::TransactionRequest::default(),
@@ -2337,16 +2366,11 @@ mod tests {
     #[tokio::test]
     async fn test_send_cancel() {
         let Mocks {
-            mut mock_proposer_t,
+            mock_proposer_t,
             mut mock_tracker,
             mut mock_trigger,
             mock_pool,
         } = new_mocks();
-
-        mock_proposer_t
-            .expect_estimate_gas_fees()
-            .once()
-            .returning(|_, _| Box::pin(async { Ok((GasFees::default(), 0)) }));
 
         mock_tracker
             .expect_cancel_transaction()
@@ -2385,33 +2409,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_send_cancel_fallbacks_to_any_proposer_for_fee_estimation() {
+    async fn test_send_cancel_uses_sender_fee_estimator() {
         let Mocks {
-            mut mock_proposer_t,
+            mock_proposer_t,
             mut mock_tracker,
             mut mock_trigger,
             mock_pool,
         } = new_mocks();
 
-        mock_proposer_t
-            .expect_estimate_gas_fees()
-            .once()
-            .returning(|_, _| {
-                Box::pin(async {
-                    Ok((
-                        GasFees {
-                            max_fee_per_gas: 55,
-                            max_priority_fee_per_gas: 7,
-                        },
-                        0,
-                    ))
-                })
-            });
-
         mock_tracker
             .expect_cancel_transaction()
             .once()
-            .withf(|fees| fees.max_fee_per_gas == 55 && fees.max_priority_fee_per_gas == 7)
             .returning(|_| Box::pin(async { Ok(Some(B256::ZERO)) }));
 
         mock_trigger.expect_last_block().return_const(NewHead {
@@ -2428,7 +2436,8 @@ mod tests {
                 fee_increase_count: 0,
             }),
             requires_reset: false,
-            // Unknown key forces fallback to any configured proposer.
+            // Unknown key — cancellation now uses the sender's fee_estimator directly,
+            // so it doesn't need to find a matching proposer.
             last_bundle_key: Some((ENTRY_POINT_ADDRESS_V0_7, Some("missing".to_string()))),
             condition_not_met: false,
         };
@@ -2451,14 +2460,11 @@ mod tests {
         let mut mock_trigger = MockTrigger::new();
         let mut mock_tracker = MockTransactionTracker::new();
 
-        mock_trigger
-            .expect_last_block()
-            .times(1)
-            .return_const(NewHead {
-                block_number: 0,
-                block_hash: B256::ZERO,
-                address_updates: vec![],
-            });
+        mock_trigger.expect_last_block().return_const(NewHead {
+            block_number: 0,
+            block_hash: B256::ZERO,
+            address_updates: vec![],
+        });
 
         mock_tracker.expect_get_state().times(1).returning(|| {
             Ok(TrackerState {
@@ -2530,14 +2536,11 @@ mod tests {
 
         let sender = Address::ZERO;
 
-        mock_trigger
-            .expect_last_block()
-            .times(1)
-            .return_const(NewHead {
-                block_number: 0,
-                block_hash: B256::ZERO,
-                address_updates: vec![],
-            });
+        mock_trigger.expect_last_block().return_const(NewHead {
+            block_number: 0,
+            block_hash: B256::ZERO,
+            address_updates: vec![],
+        });
 
         mock_tracker.expect_get_state().times(1).returning(|| {
             Ok(TrackerState {
@@ -2708,7 +2711,7 @@ mod tests {
         mock_proposer_t
             .expect_make_bundle()
             .times(1)
-            .returning(|_, _, _, _, _, _, _, _| {
+            .returning(|_, _, _, _, _, _, _, _, _| {
                 Box::pin(async {
                     Ok(BundleData {
                         tx: rundler_provider::TransactionRequest::default(),
@@ -2905,6 +2908,7 @@ mod tests {
             ChainSpec::default(),
             Address::default(),
             MockTransactionTracker::new(),
+            Box::new(TestFeeEstimator),
             Arc::new(Assigner::new(
                 Box::new(pool.clone()),
                 entrypoints,
@@ -2937,6 +2941,7 @@ mod tests {
             ChainSpec::default(),
             Address::default(),
             MockTransactionTracker::new(),
+            Box::new(TestFeeEstimator),
             Arc::new(Assigner::new(
                 Box::new(pool.clone()),
                 entrypoints,
