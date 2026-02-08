@@ -599,10 +599,9 @@ impl Assigner {
         }
 
         // Drop locks for all senders that are still in the assigned state
-        let builder_senders = state
-            .builder_to_uo_senders
-            .get(&builder_address)
-            .expect("BUG: builder_address not found in state, lock contract broken");
+        let Some(builder_senders) = state.builder_to_uo_senders.get(&builder_address) else {
+            return;
+        };
 
         let mut to_remove = Vec::new();
 

@@ -105,18 +105,6 @@ pub struct BuilderSettings {
     pub filter_id: Option<String>,
 }
 
-impl BuilderSettings {
-    /// Unique string tag for this builder
-    pub fn tag(&self, entry_point_address: &Address, builder_address: &Address) -> String {
-        format!(
-            "{}:{}:{}",
-            entry_point_address,
-            self.filter_id.as_ref().map_or("any", |v| v),
-            builder_address
-        )
-    }
-}
-
 fn proposer_tag(
     entry_point_address: &Address,
     filter_id: Option<&str>,
@@ -125,6 +113,25 @@ fn proposer_tag(
     let filter = filter_id.unwrap_or("any");
     let proxy = submission_proxy.map_or_else(|| "none".to_string(), |addr| addr.to_string());
     format!("proposer:{}:{}:{}", entry_point_address, filter, proxy)
+}
+
+fn ensure_unique_proposer_key(
+    seen: &mut HashMap<ProposerKey, EntryPointVersion>,
+    proposer_key: ProposerKey,
+    version: EntryPointVersion,
+) -> anyhow::Result<()> {
+    if let Some(existing_version) = seen.get(&proposer_key) {
+        return Err(anyhow::anyhow!(
+            "Duplicate builder proposer key: entry_point {:?}, filter_id {:?} is configured for multiple entry point versions ({:?} and {:?})",
+            proposer_key.0,
+            proposer_key.1,
+            existing_version,
+            version
+        ));
+    }
+
+    seen.insert(proposer_key, version);
+    Ok(())
 }
 
 /// Builder settings for an entrypoint
@@ -210,9 +217,17 @@ where
         // Each (address, filter_id) combination is a separate "virtual entrypoint".
         let mut entrypoint_infos: Vec<crate::assigner::EntrypointInfo> = vec![];
         let mut proposers: HashMap<ProposerKey, Box<dyn BundleProposerT>> = HashMap::new();
+        let mut seen_proposer_keys: HashMap<ProposerKey, EntryPointVersion> = HashMap::new();
         for ep in &self.args.entry_points {
             if ep.builders.is_empty() {
                 // No builders configured - create a default entry with no filter/proxy
+                let proposer_key = (ep.address, None);
+                ensure_unique_proposer_key(
+                    &mut seen_proposer_keys,
+                    proposer_key.clone(),
+                    ep.version,
+                )?;
+
                 entrypoint_infos.push(crate::assigner::EntrypointInfo {
                     address: ep.address,
                     filter_id: None,
@@ -221,7 +236,7 @@ where
                 let proposer = self
                     .create_proposer_for_entrypoint(ep, None, builder_tag)
                     .await?;
-                proposers.insert((ep.address, None), proposer);
+                proposers.insert(proposer_key, proposer);
                 info!(
                     "Registered proposer for entrypoint {:?} (version {:?})",
                     ep.address, ep.version
@@ -249,9 +264,16 @@ where
                         ));
                     }
 
+                    let proposer_key = (ep.address, builder.filter_id.clone());
+                    ensure_unique_proposer_key(
+                        &mut seen_proposer_keys,
+                        proposer_key.clone(),
+                        ep.version,
+                    )?;
+
                     entrypoint_infos.push(crate::assigner::EntrypointInfo {
                         address: ep.address,
-                        filter_id: builder.filter_id.clone(),
+                        filter_id: proposer_key.1.clone(),
                     });
 
                     // Look up the submission proxy from chain_spec if configured
@@ -279,7 +301,7 @@ where
                     let proposer = self
                         .create_proposer_for_entrypoint(ep, submission_proxy, builder_tag)
                         .await?;
-                    proposers.insert((ep.address, builder.filter_id.clone()), proposer);
+                    proposers.insert(proposer_key, proposer);
                     info!(
                         "Registered proposer for entrypoint {:?} (version {:?}, filter_id: {:?}, proxy: {:?})",
                         ep.address, ep.version, builder.filter_id, builder.submission_proxy

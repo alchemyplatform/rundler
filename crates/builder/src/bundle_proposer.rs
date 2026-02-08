@@ -433,9 +433,14 @@ where
         let (trace, tx) = tokio::try_join!(trace_fut, get_fut)
             .context("should have fetched trace and tx from provider")?;
 
-        let auth_list: Vec<Eip7702Auth> = tx
-            .map(|tx| get_auth_list_from_transaction(&tx))
-            .unwrap_or_default();
+        let auth_list: Vec<Eip7702Auth> = if let Some(tx) = tx {
+            get_auth_list_from_transaction(&tx)
+        } else {
+            warn!(
+                "Transaction {tx_hash:?} not found during revert processing, using empty auth list"
+            );
+            vec![]
+        };
 
         let frame = trace
             .try_into_call_frame()
