@@ -124,7 +124,7 @@ impl Assigner {
     ) -> anyhow::Result<Option<WorkAssignment>> {
         // Query each entrypoint for pending ops and count eligible ones
         let mut candidates = Vec::new();
-        for ep in &self.entrypoints {
+        for (entrypoint_idx, ep) in self.entrypoints.iter().enumerate() {
             let ops = self
                 .pool
                 .get_ops_summaries(
@@ -142,7 +142,7 @@ impl Assigner {
                 &required_fees,
             );
             if eligible_count > 0 {
-                candidates.push((ep.clone(), ops, eligible_count));
+                candidates.push((entrypoint_idx, ep.clone(), ops, eligible_count));
             }
         }
 
@@ -167,7 +167,7 @@ impl Assigner {
             // Find the most starved entrypoint (if any are past threshold)
             let starved = candidates
                 .iter()
-                .filter_map(|(ep, ops, _)| {
+                .filter_map(|(entrypoint_idx, ep, ops, _)| {
                     let key: ProposerKey = (ep.address, ep.filter_id.clone());
                     let last = state
                         .entrypoint_last_selected
@@ -176,14 +176,14 @@ impl Assigner {
                         .unwrap_or(0);
                     let gap = current_cycle.saturating_sub(last);
                     if gap > starvation_threshold {
-                        Some((ep, ops, gap))
+                        Some((entrypoint_idx, ep, ops, gap))
                     } else {
                         None
                     }
                 })
-                .max_by_key(|(_, _, gap)| *gap);
+                .max_by(|a, b| a.3.cmp(&b.3).then_with(|| b.0.cmp(a.0)));
 
-            let (selected_ep, ops) = if let Some((ep, ops, gap)) = starved {
+            let (selected_ep, ops) = if let Some((_, ep, ops, gap)) = starved {
                 tracing::info!(
                     "Builder Assigner: Force-selecting starved entrypoint {:?} (filter: {:?}) - gap: {} cycles",
                     ep.address,
@@ -194,9 +194,9 @@ impl Assigner {
             } else {
                 // Normal: pick highest eligible count, break ties by least recently selected
                 candidates.sort_by(|a, b| {
-                    b.2.cmp(&a.2).then_with(|| {
-                        let key_a: ProposerKey = (a.0.address, a.0.filter_id.clone());
-                        let key_b: ProposerKey = (b.0.address, b.0.filter_id.clone());
+                    b.3.cmp(&a.3).then_with(|| {
+                        let key_a: ProposerKey = (a.1.address, a.1.filter_id.clone());
+                        let key_b: ProposerKey = (b.1.address, b.1.filter_id.clone());
                         let last_a = state
                             .entrypoint_last_selected
                             .get(&key_a)
@@ -207,10 +207,10 @@ impl Assigner {
                             .get(&key_b)
                             .copied()
                             .unwrap_or(0);
-                        last_a.cmp(&last_b)
+                        last_a.cmp(&last_b).then_with(|| a.0.cmp(&b.0))
                     })
                 });
-                let (ep, ops, _) = candidates.into_iter().next().unwrap();
+                let (_, ep, ops, _) = candidates.into_iter().next().unwrap();
                 (ep, ops)
             };
 
@@ -276,7 +276,10 @@ impl Assigner {
         let eligible_count =
             self.count_eligible_ops(&ops, builder_address, max_sim_block_number, &required_fees);
 
-        // Always update starvation tracking, even with no eligible ops
+        // Always update starvation tracking, even with no eligible ops.
+        // This intentionally inflates the starvation counter for this entrypoint during
+        // replacement attempts, which is acceptable: the entrypoint is actively being
+        // worked on (fee escalation), so it shouldn't trigger starvation prevention.
         {
             let mut state = self.state.lock().unwrap();
             state.global_cycle += 1;
@@ -324,7 +327,7 @@ impl Assigner {
         let state = self.state.lock().unwrap();
         ops.iter()
             .filter(|op| op.sim_block_number <= max_sim_block_number)
-            .filter(|op| self.op_meets_fee_requirements(op, required_fees))
+            .filter(|op| self.op_meets_fee_requirements(op, required_fees, false))
             .filter(|op| {
                 // Check if sender is unassigned or assigned to this builder
                 match state.uo_sender_to_builder_state.get(&op.sender) {
@@ -335,22 +338,33 @@ impl Assigner {
             .count()
     }
 
-    /// Check if an operation meets the fee requirements for bundling
+    /// Check if an operation meets the fee requirements for bundling.
+    ///
+    /// NOTE: For bundler-sponsored ops, this is an approximate check using the summary's
+    /// gas_limit which does not account for dynamic pre-verification gas (PVG) calculated
+    /// later by the proposer. Some sponsored ops may pass this check but be rejected
+    /// during bundle proposal when exact gas costs are known.
+    ///
+    /// When `log` is true, logs the reason for rejection (used during assignment).
+    /// Set `log` to false for counting paths to avoid duplicate log noise.
     fn op_meets_fee_requirements(
         &self,
         op: &PoolOperationSummary,
         required_fees: &GasFees,
+        log: bool,
     ) -> bool {
         if let Some(max_cost) = op.bundler_sponsorship_max_cost {
             // Bundler-sponsored: check that required fees fit within the sponsorship budget
             let total_cost = U256::from(op.gas_limit) * U256::from(required_fees.max_fee_per_gas);
             if total_cost > max_cost {
-                tracing::info!(
-                    "op {:?} doesn't meet bundler sponsorship requirements: total_cost: {:?}, max_cost: {:?}",
-                    op.hash,
-                    total_cost,
-                    max_cost
-                );
+                if log {
+                    tracing::info!(
+                        "op {:?} doesn't meet bundler sponsorship requirements: total_cost: {:?}, max_cost: {:?}",
+                        op.hash,
+                        total_cost,
+                        max_cost
+                    );
+                }
                 return false;
             }
             return true;
@@ -359,13 +373,15 @@ impl Assigner {
         if op.max_priority_fee_per_gas < required_fees.max_priority_fee_per_gas
             || op.max_fee_per_gas < required_fees.max_fee_per_gas
         {
-            tracing::info!(
-                "op {:?} doesn't meet fee requirements: max_priority_fee_per_gas: {:?}, max_fee_per_gas: {:?}, required_fees: {:?}",
-                op.hash,
-                op.max_priority_fee_per_gas,
-                op.max_fee_per_gas,
-                required_fees
-            );
+            if log {
+                tracing::info!(
+                    "op {:?} doesn't meet fee requirements: max_priority_fee_per_gas: {:?}, max_fee_per_gas: {:?}, required_fees: {:?}",
+                    op.hash,
+                    op.max_priority_fee_per_gas,
+                    op.max_fee_per_gas,
+                    required_fees
+                );
+            }
             return false;
         }
         true
@@ -389,7 +405,7 @@ impl Assigner {
             for op in ops
                 .iter()
                 .filter(|op| op.sim_block_number <= max_sim_block_number)
-                .filter(|op| self.op_meets_fee_requirements(op, required_fees))
+                .filter(|op| self.op_meets_fee_requirements(op, required_fees, true))
             {
                 let (locked_builder_address, _) = state
                     .uo_sender_to_builder_state
@@ -925,7 +941,7 @@ mod tests {
         // High starvation ratio so starvation prevention doesn't interfere
         let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
 
-        // Cycle 1: Both unseen (last_selected=0). Stable sort keeps EP1 first.
+        // Cycle 1: Both unseen (last_selected=0). Tertiary tiebreak by config order keeps EP1 first.
         let r1 = assigner
             .assign_work(address(0), u64::MAX, GasFees::default())
             .await
