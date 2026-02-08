@@ -236,11 +236,7 @@ where
         self.preconfirmed_uos_bundle_mapping.keys().cloned()
     }
 
-    pub(crate) fn preconfirm_txns(
-        &mut self,
-        block_number: u64,
-        txn_to_uos: &Vec<(B256, Vec<B256>)>,
-    ) {
+    pub(crate) fn preconfirm_txns(&mut self, block_number: u64, txn_to_uos: &[(B256, Vec<B256>)]) {
         for (txn, uos) in txn_to_uos {
             for uo in uos {
                 if self.get_operation_by_hash(*uo).is_some() {

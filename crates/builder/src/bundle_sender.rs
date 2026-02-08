@@ -772,8 +772,6 @@ where
         // cleanup runs for all outcomes, including hard errors.
         let proposer_key = (entry_point, filter_id.clone());
         let result = if let Some(proposer) = self.proposers.get(&proposer_key) {
-            // Only pin to this entrypoint once we've confirmed the proposer exists
-            state.last_bundle_key = Some(proposer_key.clone());
             // Clear condition_not_met once make_bundle completes (success or
             // NoOperationsAfterFeeFilter), and keep it set for hard failures so the
             // next attempt still re-checks conditions.
@@ -792,6 +790,9 @@ where
                 .await
             {
                 Ok(bundle_data) => {
+                    // Pin to this entrypoint only after make_bundle succeeds, so hard
+                    // errors never leave a stale pin.
+                    state.last_bundle_key = Some(proposer_key.clone());
                     state.condition_not_met = false;
                     self.send_bundle_from_data(
                         state,
@@ -803,6 +804,7 @@ where
                     .await
                 }
                 Err(BundleProposerError::NoOperationsAfterFeeFilter) => {
+                    state.last_bundle_key = Some(proposer_key.clone());
                     state.condition_not_met = false;
                     Ok(SendBundleAttemptResult::NoOperationsAfterFeeFilter)
                 }
