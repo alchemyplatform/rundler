@@ -198,7 +198,7 @@ pub struct BuilderArgs {
     )]
     assigner_max_ops_per_request: u64,
 
-    /// Starvation ratio for the assigner (fraction of signers before force-selecting a starved entrypoint).
+    /// Starvation multiplier for the assigner (applied to `num_signers` before force-selecting a starved entrypoint).
     /// Must be between 0.0 and 100.0.
     #[arg(
         long = "builder.assigner_starvation_ratio",

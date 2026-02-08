@@ -87,7 +87,7 @@ The Assigner component is responsible for coordinating work distribution among w
 
 1. **Entrypoint Selection**: Uses a priority-based strategy with starvation prevention
    - Primary: Select the entrypoint with the most eligible operations (throughput-optimized)
-   - Starvation prevention: If any entrypoint hasn't been selected in `num_signers * starvation_ratio` cycles, force-select the most starved one. For example, with 4 signers and the default ratio of 0.50, an entrypoint is force-selected after 2 idle cycles.
+   - Starvation prevention: If any entrypoint hasn't been selected in `num_signers * starvation_ratio` cycles, force-select the most starved one. Here `starvation_ratio` acts as a multiplier on signer count. For example, with 4 signers and the default ratio of 0.50, an entrypoint is force-selected after 2 idle cycles.
 
 2. **Operation Assignment**: Ensures no two workers attempt to bundle operations from the same sender simultaneously
    - Tracks sender-to-worker assignments
@@ -171,7 +171,7 @@ Each worker is paired 1:1 with a leased signer. The Assigner coordinates which e
 
 Most deployments of Rundler should be able to use the simple `--num_signers` configuration. For advanced use cases requiring per-entrypoint builder configurations, Rundler supports a custom configuration file.
 
-See [`EntryPointBuilderConfigs`](../../bin/rundler/src/cli/builder.rs) for the exact schema. Set the path via `--entry_point_builders_path`. When this file is provided, the normal CLI-based options are ignored.
+See [`EntryPointBuilderConfigs`](../../bin/rundler/src/cli/builder.rs) for the exact schema. Set the path via `--builders_config_path`. When this file is provided, the normal CLI-based options are ignored.
 
 #### Configuration Schema
 

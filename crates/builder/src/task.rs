@@ -94,7 +94,7 @@ pub struct Args {
     pub verification_gas_limit_efficiency_reject_threshold: f64,
     /// Maximum ops requested from mempool
     pub assigner_max_ops_per_request: u64,
-    /// Starvation ratio for the assigner (fraction of signers before force-selecting a starved entrypoint)
+    /// Starvation multiplier for the assigner (applied to `num_signers` before force-selecting a starved entrypoint)
     pub assigner_starvation_ratio: f64,
 }
 
