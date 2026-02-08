@@ -533,9 +533,12 @@ where
             inner.fee_increase_count
         );
 
+        // Use the tracker's required_fees as a floor so the cancellation tx
+        // is priced above any pending transaction (avoids a wasted ReplacementUnderpriced round-trip).
+        let required_fees = state.transaction_tracker.get_state()?.required_fees;
         let (estimated_fees, _) = self
             .fee_estimator
-            .required_bundle_fees(state.block_hash(), None)
+            .required_bundle_fees(state.block_hash(), required_fees)
             .await
             .unwrap_or_default();
 
@@ -2372,6 +2375,14 @@ mod tests {
             mock_pool,
         } = new_mocks();
 
+        mock_tracker.expect_get_state().returning(|| {
+            Ok(TrackerState {
+                nonce: 0,
+                balance: U256::ZERO,
+                required_fees: None,
+            })
+        });
+
         mock_tracker
             .expect_cancel_transaction()
             .once()
@@ -2416,6 +2427,14 @@ mod tests {
             mut mock_trigger,
             mock_pool,
         } = new_mocks();
+
+        mock_tracker.expect_get_state().returning(|| {
+            Ok(TrackerState {
+                nonce: 0,
+                balance: U256::ZERO,
+                required_fees: None,
+            })
+        });
 
         mock_tracker
             .expect_cancel_transaction()
