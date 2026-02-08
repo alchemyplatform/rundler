@@ -24,6 +24,8 @@ use rundler_types::{
     pool::{Pool, PoolOperation, PoolOperationSummary},
 };
 
+use crate::ProposerKey;
+
 /// Information about a configured entrypoint (or virtual entrypoint with filter)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct EntrypointInfo {
@@ -31,6 +33,13 @@ pub(crate) struct EntrypointInfo {
     pub address: Address,
     /// Optional filter ID for pool filtering (creates "virtual" entrypoints)
     pub filter_id: Option<String>,
+}
+
+impl EntrypointInfo {
+    /// Returns the proposer key for this entrypoint.
+    pub(crate) fn key(&self) -> ProposerKey {
+        (self.address, self.filter_id.clone())
+    }
 }
 
 /// Result of assigning work to a worker
@@ -76,8 +85,6 @@ pub(crate) struct Assigner {
     metrics: GlobalMetrics,
 }
 
-use crate::ProposerKey;
-
 #[derive(Default)]
 struct State {
     uo_sender_to_builder_state: HashMap<Address, (Address, LockState)>,
@@ -86,6 +93,18 @@ struct State {
     global_cycle: u64,
     /// Tracks when each entrypoint was last selected (by cycle number)
     entrypoint_last_selected: HashMap<ProposerKey, u64>,
+}
+
+/// A candidate entrypoint for assignment, used during priority-based selection.
+struct Candidate {
+    /// Index in the entrypoints config vec (for stable tiebreaking).
+    config_index: usize,
+    /// The entrypoint info.
+    ep: EntrypointInfo,
+    /// The pool operation summaries for this entrypoint.
+    ops: Vec<PoolOperationSummary>,
+    /// Number of eligible ops (after fee filtering).
+    eligible_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,16 +182,15 @@ impl Assigner {
             .enumerate()
         {
             let ops = result?;
-            let assignable_count =
-                self.count_assignable_ops(&ops, builder_address, max_sim_block_number);
-            let eligible_count = self.count_eligible_ops(
-                &ops,
-                builder_address,
-                max_sim_block_number,
-                &required_fees,
-            );
+            let (assignable_count, eligible_count) =
+                self.count_ops(&ops, builder_address, max_sim_block_number, &required_fees);
             if eligible_count > 0 {
-                candidates.push((entrypoint_idx, ep.clone(), ops, eligible_count));
+                candidates.push(Candidate {
+                    config_index: entrypoint_idx,
+                    ep: ep.clone(),
+                    ops,
+                    eligible_count,
+                });
             } else if assignable_count > 0 {
                 fee_filtered_candidate_exists = true;
             }
@@ -195,7 +213,7 @@ impl Assigner {
             ((self.num_signers as f64 * self.starvation_ratio) as usize).max(1) as u64;
 
         // Build candidate order with starvation prevention
-        let (current_cycle, ordered_candidates) = {
+        let (current_cycle, candidates) = {
             let mut state = self.state.lock().unwrap();
             state.global_cycle += 1;
             let current_cycle = state.global_cycle;
@@ -203,93 +221,78 @@ impl Assigner {
             // Find the most starved entrypoint (if any are past threshold)
             let starved = candidates
                 .iter()
-                .filter_map(|(entrypoint_idx, ep, ops, _)| {
-                    let key: ProposerKey = (ep.address, ep.filter_id.clone());
+                .enumerate()
+                .filter_map(|(pos, c)| {
                     let last = state
                         .entrypoint_last_selected
-                        .get(&key)
+                        .get(&c.ep.key())
                         .copied()
                         .unwrap_or(0);
                     let gap = current_cycle.saturating_sub(last);
                     if gap > starvation_threshold {
-                        Some((entrypoint_idx, ep, ops, gap))
+                        Some((pos, c, gap))
                     } else {
                         None
                     }
                 })
-                // Tiebreak: prefer lower config index (b.0.cmp(a.0) in max_by
-                // is equivalent to a.0.cmp(b.0) in sort_by — both prefer lower index)
-                .max_by(|a, b| a.3.cmp(&b.3).then_with(|| b.0.cmp(a.0)));
+                // Tiebreak: prefer lower config index (b.config_index.cmp(a.config_index) in max_by
+                // is equivalent to a.config_index.cmp(b.config_index) in sort_by — both prefer lower index)
+                .max_by(|a, b| {
+                    a.2.cmp(&b.2)
+                        .then_with(|| b.1.config_index.cmp(&a.1.config_index))
+                });
 
-            if let Some((starved_idx, ep, _, gap)) = starved {
+            if let Some((pos, c, gap)) = starved {
                 tracing::info!(
                     "Builder Assigner: Force-selecting starved entrypoint {:?} (filter: {:?}) - gap: {} cycles",
-                    ep.address,
-                    ep.filter_id,
+                    c.ep.address,
+                    c.ep.filter_id,
                     gap
                 );
-                let starved_idx = *starved_idx;
-                if let Some(pos) = candidates
-                    .iter()
-                    .position(|(idx, _, _, _)| *idx == starved_idx)
-                {
-                    let starved_candidate = candidates.remove(pos);
-                    candidates.insert(0, starved_candidate);
-                }
+                let starved_candidate = candidates.remove(pos);
+                candidates.insert(0, starved_candidate);
             } else {
                 // Normal: pick highest eligible count, break ties by least recently selected
                 candidates.sort_by(|a, b| {
-                    b.3.cmp(&a.3).then_with(|| {
-                        let key_a: ProposerKey = (a.1.address, a.1.filter_id.clone());
-                        let key_b: ProposerKey = (b.1.address, b.1.filter_id.clone());
+                    b.eligible_count.cmp(&a.eligible_count).then_with(|| {
                         let last_a = state
                             .entrypoint_last_selected
-                            .get(&key_a)
+                            .get(&a.ep.key())
                             .copied()
                             .unwrap_or(0);
                         let last_b = state
                             .entrypoint_last_selected
-                            .get(&key_b)
+                            .get(&b.ep.key())
                             .copied()
                             .unwrap_or(0);
-                        last_a.cmp(&last_b).then_with(|| a.0.cmp(&b.0))
+                        last_a
+                            .cmp(&last_b)
+                            .then_with(|| a.config_index.cmp(&b.config_index))
                     })
                 });
             }
 
-            let ordered_candidates = candidates
-                .into_iter()
-                .map(|(_, ep, ops, _)| (ep, ops))
-                .collect::<Vec<_>>();
-
-            (current_cycle, ordered_candidates)
+            (current_cycle, candidates)
         };
 
-        let total_candidates = ordered_candidates.len();
-        for (candidate_idx, (selected_ep, ops)) in ordered_candidates.into_iter().enumerate() {
-            // Record the attempted entrypoint for starvation and tie-break tracking.
-            {
-                let mut state = self.state.lock().unwrap();
-                let key: ProposerKey = (selected_ep.address, selected_ep.filter_id.clone());
-                state.entrypoint_last_selected.insert(key, current_cycle);
-            }
-
+        let total_candidates = candidates.len();
+        for (candidate_idx, candidate) in candidates.into_iter().enumerate() {
             tracing::info!(
                 "Builder Assigner: selected_ep: {:?} (filter: {:?}) for builder {:?}, candidate {}/{}, num pool summaries: {:?}",
-                selected_ep.address,
-                selected_ep.filter_id,
+                candidate.ep.address,
+                candidate.ep.filter_id,
                 builder_address,
                 candidate_idx + 1,
                 total_candidates,
-                ops.len()
+                candidate.ops.len()
             );
 
             // Assign operations from selected entrypoint
             let assigned_ops = self
                 .assign_ops_internal(
                     builder_address,
-                    selected_ep.address,
-                    ops,
+                    candidate.ep.address,
+                    candidate.ops,
                     max_sim_block_number,
                     &required_fees,
                 )
@@ -298,15 +301,25 @@ impl Assigner {
             if assigned_ops.is_empty() {
                 tracing::info!(
                     "Builder Assigner: no assigned ops for ep {:?} (filter: {:?}) after selection",
-                    selected_ep.address,
-                    selected_ep.filter_id
+                    candidate.ep.address,
+                    candidate.ep.filter_id
                 );
                 continue;
             }
 
+            // Record the selected entrypoint for starvation and tie-break tracking.
+            // Only updated on successful assignment to avoid refreshing the counter
+            // for entrypoints that had no concrete ops assigned.
+            {
+                let mut state = self.state.lock().unwrap();
+                state
+                    .entrypoint_last_selected
+                    .insert(candidate.ep.key(), current_cycle);
+            }
+
             return Ok(AssignmentResult::Assigned(WorkAssignment {
-                entry_point: selected_ep.address,
-                filter_id: selected_ep.filter_id,
+                entry_point: candidate.ep.address,
+                filter_id: candidate.ep.filter_id,
                 operations: assigned_ops,
             }));
         }
@@ -334,10 +347,8 @@ impl Assigner {
             )
             .await?;
 
-        let assignable_count =
-            self.count_assignable_ops(&ops, builder_address, max_sim_block_number);
-        let eligible_count =
-            self.count_eligible_ops(&ops, builder_address, max_sim_block_number, &required_fees);
+        let (assignable_count, eligible_count) =
+            self.count_ops(&ops, builder_address, max_sim_block_number, &required_fees);
 
         // Always update starvation tracking, even with no eligible ops.
         // This intentionally inflates the starvation counter for this entrypoint during
@@ -347,8 +358,13 @@ impl Assigner {
             let mut state = self.state.lock().unwrap();
             state.global_cycle += 1;
             let global_cycle = state.global_cycle;
-            let key: ProposerKey = (entry_point, filter_id.clone());
-            state.entrypoint_last_selected.insert(key, global_cycle);
+            let ep = EntrypointInfo {
+                address: entry_point,
+                filter_id: filter_id.clone(),
+            };
+            state
+                .entrypoint_last_selected
+                .insert(ep.key(), global_cycle);
         }
 
         if assignable_count == 0 {
@@ -380,50 +396,37 @@ impl Assigner {
         }))
     }
 
-    /// Count ops that are assignable before fee filtering:
-    /// - Not assigned to another builder
-    /// - Simulated before max_sim_block_number
-    fn count_assignable_ops(
-        &self,
-        ops: &[PoolOperationSummary],
-        builder_address: Address,
-        max_sim_block_number: u64,
-    ) -> usize {
-        let state = self.state.lock().unwrap();
-        ops.iter()
-            .filter(|op| op.sim_block_number <= max_sim_block_number)
-            .filter(
-                |op| match state.uo_sender_to_builder_state.get(&op.sender) {
-                    None => true,
-                    Some((locked_builder, _)) => *locked_builder == builder_address,
-                },
-            )
-            .count()
-    }
-
-    /// Count ops that are eligible for assignment:
-    /// - Not assigned to another builder
-    /// - Simulated before max_sim_block_number
-    /// - Meets fee requirements
-    fn count_eligible_ops(
+    /// Count ops in a single pass under one lock acquisition.
+    /// Returns (assignable_count, eligible_count) where:
+    /// - assignable: not assigned to another builder, simulated before max_sim_block_number
+    /// - eligible: assignable AND meets fee requirements
+    fn count_ops(
         &self,
         ops: &[PoolOperationSummary],
         builder_address: Address,
         max_sim_block_number: u64,
         required_fees: &GasFees,
-    ) -> usize {
+    ) -> (usize, usize) {
         let state = self.state.lock().unwrap();
-        ops.iter()
-            .filter(|op| op.sim_block_number <= max_sim_block_number)
-            .filter(|op| self.op_meets_fee_requirements(op, required_fees, false))
-            .filter(|op| {
-                // Check if sender is unassigned or assigned to this builder
-                match state.uo_sender_to_builder_state.get(&op.sender) {
-                    None => true,
-                    Some((locked_builder, _)) => *locked_builder == builder_address,
-                }
-            })
-            .count()
+        let mut assignable = 0;
+        let mut eligible = 0;
+        for op in ops.iter() {
+            if op.sim_block_number > max_sim_block_number {
+                continue;
+            }
+            let is_assignable = match state.uo_sender_to_builder_state.get(&op.sender) {
+                None => true,
+                Some((locked_builder, _)) => *locked_builder == builder_address,
+            };
+            if !is_assignable {
+                continue;
+            }
+            assignable += 1;
+            if self.op_meets_fee_requirements(op, required_fees, false) {
+                eligible += 1;
+            }
+        }
+        (assignable, eligible)
     }
 
     /// Check if an operation meets the fee requirements for bundling.
