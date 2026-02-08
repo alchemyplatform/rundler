@@ -83,9 +83,9 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - This path can either be a local file path or an S3 url. If using an S3 url, Make sure your machine has access to this file.
   - env: _MEMPOOL_CONFIG_PATH_
   - See [here](./architecture/pool.md#alternative-mempools-in-preview) for details.
-- `--entry_point_builders_path`: Path to the entry point builders configuration file (example: `builders.json`, `s3://my-bucket/builders.json`). (default: `None`)
+- `--builders_config_path`: Path to the entry point builders configuration file (example: `builders.json`, `s3://my-bucket/builders.json`). (default: `None`)
   - This path can either be a local file path or an S3 url. If using an S3 url, Make sure your machine has access to this file.
-  - env: _ENTRY_POINT_BUILDERS_PATH_
+  - env: _BUILDERS_CONFIG_PATH_
   - NOTE: most deployments can ignore this and use the settings below.
   - See [here](./architecture/builder.md#custom) for details.
 - `--enabled_entry_points`: Enabled entry point versions. (default: `v0.7`)
@@ -247,7 +247,7 @@ List of command line options for configuring the Builder.
   - _Only required when running in distributed mode_
 - `--builder.assigner_max_ops_per_request`: Maximum number of operations requested from the mempool per entrypoint query. (default: `1024`)
   - env: _BUILDER_ASSIGNER_MAX_OPS_PER_REQUEST_
-- `--builder.assigner_starvation_ratio`: Starvation ratio for the assigner. An entrypoint is force-selected if it hasn't been chosen in `num_signers * starvation_ratio` cycles. For example, with 4 signers and the default ratio of 0.50, an entrypoint is force-selected after 2 idle cycles. Must be between 0.0 and 100.0. (default: `0.50`)
+- `--builder.assigner_starvation_ratio`: Starvation ratio for the assigner. This value acts as a multiplier on signer count (`num_signers * starvation_ratio`) before force-selecting a starved entrypoint. For example, with 4 signers and the default ratio of 0.50, an entrypoint is force-selected after 2 idle cycles. Must be between 0.0 and 100.0. (default: `0.50`)
   - env: _BUILDER_ASSIGNER_STARVATION_RATIO_
 
 ## Signer Options
