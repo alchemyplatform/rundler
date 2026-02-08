@@ -25,6 +25,7 @@ metrics.workspace = true
 metrics-derive.workspace = true
 prost.workspace = true
 reqwest = { workspace = true, default-features = false, features = ["json"] }
+rand.workspace = true
 rundler-provider.workspace = true
 rundler-signer.workspace = true
 rundler-sim.workspace = true

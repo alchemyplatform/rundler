@@ -20,6 +20,7 @@ use futures::Stream;
 use futures_util::StreamExt;
 #[cfg(test)]
 use mockall::automock;
+use rand::Rng;
 use rundler_task::TaskSpawner;
 use rundler_types::{
     GasFees,
@@ -47,6 +48,8 @@ use crate::{
         TrackerState, TrackerUpdate, TransactionTracker, TransactionTrackerError,
     },
 };
+
+const SLEEP_JITTER_MAX_MILLIS: u64 = 9;
 
 #[async_trait]
 pub(crate) trait BundleSender: Send + Sync {
@@ -166,6 +169,13 @@ where
     T: TransactionTracker,
     C: Pool,
 {
+    async fn sleep_jitter(&self) {
+        let jitter_ms = rand::thread_rng().gen_range(0..=SLEEP_JITTER_MAX_MILLIS);
+        if jitter_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(jitter_ms)).await;
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         builder_tag: String,
@@ -257,6 +267,11 @@ where
         state: &mut SenderMachineState<T, TRIG>,
         inner: BuildingState,
     ) -> anyhow::Result<()> {
+        // Add a small jitter only on triggered attempts to reduce synchronized contention.
+        if inner.wait_for_trigger {
+            self.sleep_jitter().await;
+        }
+
         // send bundle
         let block_number = state.block_number();
         debug!("Building bundle on block {}", block_number);
