@@ -147,6 +147,10 @@ impl Assigner {
         }
 
         if candidates.is_empty() {
+            tracing::info!(
+                "Builder Assigner: no eligible ops for builder {:?}",
+                builder_address
+            );
             return Ok(None);
         }
 
@@ -180,16 +184,32 @@ impl Assigner {
                 .max_by_key(|(_, _, gap)| *gap);
 
             let (selected_ep, ops) = if let Some((ep, ops, gap)) = starved {
-                tracing::debug!(
-                    "Force-selecting starved entrypoint {:?} (filter: {:?}) - gap: {} cycles",
+                tracing::info!(
+                    "Builder Assigner: Force-selecting starved entrypoint {:?} (filter: {:?}) - gap: {} cycles",
                     ep.address,
                     ep.filter_id,
                     gap
                 );
                 (ep.clone(), ops.clone())
             } else {
-                // Normal: pick highest eligible count
-                candidates.sort_by(|a, b| b.2.cmp(&a.2));
+                // Normal: pick highest eligible count, break ties by least recently selected
+                candidates.sort_by(|a, b| {
+                    b.2.cmp(&a.2).then_with(|| {
+                        let key_a: ProposerKey = (a.0.address, a.0.filter_id.clone());
+                        let key_b: ProposerKey = (b.0.address, b.0.filter_id.clone());
+                        let last_a = state
+                            .entrypoint_last_selected
+                            .get(&key_a)
+                            .copied()
+                            .unwrap_or(0);
+                        let last_b = state
+                            .entrypoint_last_selected
+                            .get(&key_b)
+                            .copied()
+                            .unwrap_or(0);
+                        last_a.cmp(&last_b)
+                    })
+                });
                 let (ep, ops, _) = candidates.into_iter().next().unwrap();
                 (ep, ops)
             };
@@ -200,6 +220,12 @@ impl Assigner {
 
             (selected_ep, ops)
         };
+
+        tracing::info!(
+            "Builder Assigner: selected_ep: {:?}, num ops: {:?}",
+            selected_ep.address,
+            ops.len()
+        );
 
         // Assign operations from selected entrypoint
         let assigned_ops = self
@@ -213,6 +239,10 @@ impl Assigner {
             .await?;
 
         if assigned_ops.is_empty() {
+            tracing::info!(
+                "Builder Assigner: no assigned ops for ep {:?} after selection",
+                selected_ep.address
+            );
             return Ok(None);
         }
 
@@ -314,13 +344,25 @@ impl Assigner {
         if let Some(max_cost) = op.bundler_sponsorship_max_cost {
             // Bundler-sponsored: check that required fees fit within the sponsorship budget
             let total_cost = U256::from(op.gas_limit) * U256::from(required_fees.max_fee_per_gas);
+            tracing::info!(
+                "op {:?} doesn't meet bundler sponsorship requirements: total_cost: {:?}, max_cost: {:?}",
+                op.hash,
+                total_cost,
+                max_cost
+            );
             return total_cost <= max_cost;
         }
         // Non-sponsored: op fees must meet required fees
-        if op.max_priority_fee_per_gas < required_fees.max_priority_fee_per_gas {
-            return false;
-        }
-        if op.max_fee_per_gas < required_fees.max_fee_per_gas {
+        if op.max_priority_fee_per_gas < required_fees.max_priority_fee_per_gas
+            || op.max_fee_per_gas < required_fees.max_fee_per_gas
+        {
+            tracing::info!(
+                "op {:?} doesn't meet fee requirements: max_priority_fee_per_gas: {:?}, max_fee_per_gas: {:?}, required_fees: {:?}",
+                op.hash,
+                op.max_priority_fee_per_gas,
+                op.max_fee_per_gas,
+                required_fees
+            );
             return false;
         }
         true
@@ -832,6 +874,97 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    #[tokio::test]
+    async fn test_tiebreak_by_last_selected() {
+        // EP1 and EP2 both have 3 ops (equal eligible count).
+        // Tie should be broken by least-recently-selected, producing round-robin.
+        let ep1_ops = create_test_ops_for_entrypoint(
+            &[address(10), address(11), address(12)],
+            TEST_ENTRY_POINT,
+        );
+        let ep2_ops = create_test_ops_for_entrypoint(
+            &[address(20), address(21), address(22)],
+            TEST_ENTRY_POINT_2,
+        );
+
+        let mut mock_pool = MockPool::new();
+        let ep1_ops_clone = ep1_ops.clone();
+        let ep2_ops_clone = ep2_ops.clone();
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(move |ep, _, _| {
+                if ep == TEST_ENTRY_POINT {
+                    Ok(ep1_ops_clone.iter().map(|op| op.into()).collect())
+                } else {
+                    Ok(ep2_ops_clone.iter().map(|op| op.into()).collect())
+                }
+            });
+
+        let ep1_ops_for_hashes = ep1_ops.clone();
+        let ep2_ops_for_hashes = ep2_ops.clone();
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .returning(move |ep, hashes| {
+                let ops = if ep == TEST_ENTRY_POINT {
+                    &ep1_ops_for_hashes
+                } else {
+                    &ep2_ops_for_hashes
+                };
+                Ok(ops
+                    .iter()
+                    .filter(|op| hashes.contains(&op.uo.hash()))
+                    .cloned()
+                    .collect())
+            });
+
+        // High starvation ratio so starvation prevention doesn't interfere
+        let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
+
+        // Cycle 1: Both unseen (last_selected=0). Stable sort keeps EP1 first.
+        let r1 = assigner
+            .assign_work(address(0), u64::MAX, GasFees::default())
+            .await
+            .unwrap()
+            .expect("should have work");
+        let first = r1.entry_point;
+        assigner.release_all(address(0));
+
+        // Cycle 2: The other EP should win the tiebreak (least recently selected).
+        let r2 = assigner
+            .assign_work(address(0), u64::MAX, GasFees::default())
+            .await
+            .unwrap()
+            .expect("should have work");
+        assert_ne!(
+            r2.entry_point, first,
+            "Cycle 2: should pick the other EP via tiebreak"
+        );
+        assigner.release_all(address(0));
+
+        // Cycle 3: Should alternate back to the first EP.
+        let r3 = assigner
+            .assign_work(address(0), u64::MAX, GasFees::default())
+            .await
+            .unwrap()
+            .expect("should have work");
+        assert_eq!(
+            r3.entry_point, first,
+            "Cycle 3: should alternate back to first EP"
+        );
+        assigner.release_all(address(0));
+
+        // Cycle 4: Should alternate again.
+        let r4 = assigner
+            .assign_work(address(0), u64::MAX, GasFees::default())
+            .await
+            .unwrap()
+            .expect("should have work");
+        assert_ne!(
+            r4.entry_point, first,
+            "Cycle 4: should alternate to other EP"
+        );
     }
 
     #[tokio::test]

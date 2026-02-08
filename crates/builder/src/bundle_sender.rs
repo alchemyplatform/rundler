@@ -1168,6 +1168,9 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
     // Sends an error result and moves to initial state
     fn bundle_error(&mut self, err: anyhow::Error) {
         self.send_result(SendBundleResult::Error(err));
+        // Clear last_bundle_key since the tracker is fully reset after an error,
+        // so there's no pending transaction to replace.
+        self.last_bundle_key = None;
         self.initial();
     }
 
@@ -1181,6 +1184,10 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
             attempt_number,
             tx_hash,
         });
+        // Clear last_bundle_key so the next bundle attempt can pick any entrypoint
+        // via the assigner's priority selection, rather than staying pinned to the
+        // old entrypoint.
+        self.last_bundle_key = None;
         self.update(InnerState::Building(BuildingState {
             wait_for_trigger: self.trigger.builder_must_wait_for_trigger(),
             fee_increase_count: 0,
