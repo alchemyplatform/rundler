@@ -1738,18 +1738,7 @@ mod tests {
         // block 0
         add_trigger_no_update_last_block(&mut mock_trigger, &mut Sequence::new(), 0);
 
-        // zero nonce
-        mock_tracker.expect_get_state().returning(|| {
-            Ok(TrackerState {
-                nonce: 0,
-                balance: U256::ZERO,
-                required_fees: None,
-            })
-        });
-        mock_tracker.expect_address().return_const(Address::ZERO);
-        mock_tracker
-            .expect_num_pending_transactions()
-            .return_const(0_usize);
+        setup_tracker_default(&mut mock_tracker);
         mock_tracker
             .expect_num_pending_transactions()
             .return_const(0_usize);
@@ -1758,38 +1747,17 @@ mod tests {
             .expect_get_ops_summaries()
             .times(1)
             .returning(|_, _, _| {
-                Ok(vec![PoolOperationSummary {
-                    hash: B256::ZERO,
-                    sender: Address::ZERO,
-                    entry_point: ENTRY_POINT_ADDRESS_V0_6,
-                    sim_block_number: 0,
-                    max_fee_per_gas: 0,
-                    max_priority_fee_per_gas: 0,
-                    gas_limit: 0,
-                    bundler_sponsorship_max_cost: None,
-                }])
+                Ok(vec![pool_op_summary(
+                    ENTRY_POINT_ADDRESS_V0_6,
+                    Address::ZERO,
+                )])
             });
         mock_pool
             .expect_get_ops_by_hashes()
             .times(1)
             .returning(|_, _| Ok(vec![demo_pool_op()]));
 
-        // empty bundle - now uses BundleProposerT
-        mock_proposer_t
-            .expect_make_bundle()
-            .times(1)
-            .returning(|_, _, _, _, _, _, _, _, _| {
-                Box::pin(async {
-                    Ok(BundleData {
-                        tx: rundler_provider::TransactionRequest::default(),
-                        expected_storage: Default::default(),
-                        gas_fees: GasFees::default(),
-                        ops: vec![],
-                        rejected_op_hashes: vec![],
-                        entity_updates: vec![],
-                    })
-                })
-            });
+        mock_make_bundle(&mut mock_proposer_t, 1, vec![]);
 
         let mut sender = new_sender(mock_proposer_t, mock_pool);
 
@@ -1820,33 +1788,16 @@ mod tests {
         // block 0
         add_trigger_no_update_last_block(&mut mock_trigger, &mut Sequence::new(), 0);
 
-        // zero nonce
-        mock_tracker.expect_get_state().returning(|| {
-            Ok(TrackerState {
-                nonce: 0,
-                balance: U256::ZERO,
-                required_fees: None,
-            })
-        });
-        mock_tracker.expect_address().return_const(Address::ZERO);
-        mock_tracker
-            .expect_num_pending_transactions()
-            .return_const(0_usize);
+        setup_tracker_default(&mut mock_tracker);
 
         mock_pool
             .expect_get_ops_summaries()
             .times(1)
             .returning(|_, _, _| {
-                Ok(vec![PoolOperationSummary {
-                    hash: B256::ZERO,
-                    sender: Address::ZERO,
-                    entry_point: ENTRY_POINT_ADDRESS_V0_6,
-                    sim_block_number: 0,
-                    max_fee_per_gas: 0,
-                    max_priority_fee_per_gas: 0,
-                    gas_limit: 0,
-                    bundler_sponsorship_max_cost: None,
-                }])
+                Ok(vec![pool_op_summary(
+                    ENTRY_POINT_ADDRESS_V0_6,
+                    Address::ZERO,
+                )])
             });
         mock_pool
             .expect_get_ops_by_hashes()
@@ -1857,22 +1808,7 @@ mod tests {
             .times(1)
             .returning(|_, _, _, _, _| Ok(()));
 
-        // bundle with one op - now uses BundleProposerT which returns BundleData
-        mock_proposer_t
-            .expect_make_bundle()
-            .times(1)
-            .returning(|_, _, _, _, _, _, _, _, _| {
-                Box::pin(async {
-                    Ok(BundleData {
-                        tx: rundler_provider::TransactionRequest::default(),
-                        expected_storage: Default::default(),
-                        gas_fees: GasFees::default(),
-                        ops: vec![(Address::ZERO, B256::ZERO)],
-                        rejected_op_hashes: vec![],
-                        entity_updates: vec![],
-                    })
-                })
-            });
+        mock_make_bundle(&mut mock_proposer_t, 1, vec![(Address::ZERO, B256::ZERO)]);
 
         // should send the bundle txn
         mock_tracker
@@ -1908,11 +1844,7 @@ mod tests {
         let filter_id = Some("filter-a".to_string());
 
         // Set up trigger to return block info (only need last_block for send_bundle)
-        mock_trigger.expect_last_block().return_const(NewHead {
-            block_number: 0,
-            block_hash: B256::ZERO,
-            address_updates: vec![],
-        });
+        mock_trigger.expect_last_block().return_const(new_head(0));
 
         mock_tracker.expect_get_state().returning(|| {
             Ok(TrackerState {
@@ -1936,18 +1868,7 @@ mod tests {
                     && filter.as_deref() == expected_filter.as_deref()
             })
             .times(1)
-            .returning(move |_, _, _| {
-                Ok(vec![PoolOperationSummary {
-                    hash: B256::ZERO,
-                    sender: Address::ZERO,
-                    entry_point: pinned_entry_point,
-                    sim_block_number: 0,
-                    max_fee_per_gas: 0,
-                    max_priority_fee_per_gas: 0,
-                    gas_limit: 0,
-                    bundler_sponsorship_max_cost: None,
-                }])
-            });
+            .returning(move |_, _, _| Ok(vec![pool_op_summary(pinned_entry_point, Address::ZERO)]));
         mock_pool
             .expect_get_ops_summaries()
             .withf(move |entry_point, _, _| *entry_point == other_entry_point)
@@ -1958,21 +1879,7 @@ mod tests {
             .times(1)
             .returning(|_, _| Ok(vec![demo_pool_op()]));
 
-        mock_proposer_t
-            .expect_make_bundle()
-            .times(1)
-            .returning(|_, _, _, _, _, _, _, _, _| {
-                Box::pin(async {
-                    Ok(BundleData {
-                        tx: rundler_provider::TransactionRequest::default(),
-                        expected_storage: Default::default(),
-                        gas_fees: GasFees::default(),
-                        ops: vec![],
-                        rejected_op_hashes: vec![],
-                        entity_updates: vec![],
-                    })
-                })
-            });
+        mock_make_bundle(&mut mock_proposer_t, 1, vec![]);
 
         let mut proposers = HashMap::new();
         proposers.insert(
@@ -2013,12 +1920,7 @@ mod tests {
         let other_entry_point = ENTRY_POINT_ADDRESS_V0_7;
         let filter_id = Some("filter-a".to_string());
 
-        let new_head = NewHead {
-            block_number: 0,
-            block_hash: B256::ZERO,
-            address_updates: vec![],
-        };
-        mock_trigger.expect_last_block().return_const(new_head);
+        mock_trigger.expect_last_block().return_const(new_head(0));
 
         mock_tracker.expect_get_state().times(2).returning(|| {
             Ok(TrackerState {
@@ -2040,18 +1942,7 @@ mod tests {
                     && filter.as_deref() == expected_filter.as_deref()
             })
             .times(2)
-            .returning(move |_, _, _| {
-                Ok(vec![PoolOperationSummary {
-                    hash: B256::ZERO,
-                    sender: Address::ZERO,
-                    entry_point: pinned_entry_point,
-                    sim_block_number: 0,
-                    max_fee_per_gas: 0,
-                    max_priority_fee_per_gas: 0,
-                    gas_limit: 0,
-                    bundler_sponsorship_max_cost: None,
-                }])
-            });
+            .returning(move |_, _, _| Ok(vec![pool_op_summary(pinned_entry_point, Address::ZERO)]));
         mock_pool
             .expect_get_ops_summaries()
             .withf(move |entry_point, _, filter| {
@@ -2061,13 +1952,7 @@ mod tests {
             .returning(move |_, _, _| {
                 Ok(vec![PoolOperationSummary {
                     hash: B256::from([1; 32]),
-                    sender: Address::from([1; 20]),
-                    entry_point: other_entry_point,
-                    sim_block_number: 0,
-                    max_fee_per_gas: 0,
-                    max_priority_fee_per_gas: 0,
-                    gas_limit: 0,
-                    bundler_sponsorship_max_cost: None,
+                    ..pool_op_summary(other_entry_point, Address::from([1; 20]))
                 }])
             });
         mock_pool
@@ -2076,38 +1961,10 @@ mod tests {
             .returning(|_, _| Ok(vec![demo_pool_op()]));
 
         let mut pinned_proposer = MockBundleProposerT::new();
-        pinned_proposer
-            .expect_make_bundle()
-            .times(1)
-            .returning(|_, _, _, _, _, _, _, _, _| {
-                Box::pin(async {
-                    Ok(BundleData {
-                        tx: rundler_provider::TransactionRequest::default(),
-                        expected_storage: Default::default(),
-                        gas_fees: GasFees::default(),
-                        ops: vec![],
-                        rejected_op_hashes: vec![],
-                        entity_updates: vec![],
-                    })
-                })
-            });
+        mock_make_bundle(&mut pinned_proposer, 1, vec![]);
 
         let mut other_proposer = MockBundleProposerT::new();
-        other_proposer
-            .expect_make_bundle()
-            .times(1)
-            .returning(|_, _, _, _, _, _, _, _, _| {
-                Box::pin(async {
-                    Ok(BundleData {
-                        tx: rundler_provider::TransactionRequest::default(),
-                        expected_storage: Default::default(),
-                        gas_fees: GasFees::default(),
-                        ops: vec![],
-                        rejected_op_hashes: vec![],
-                        entity_updates: vec![],
-                    })
-                })
-            });
+        mock_make_bundle(&mut other_proposer, 1, vec![]);
 
         let mut proposers: HashMap<ProposerKey, Box<dyn BundleProposerT>> = HashMap::new();
         proposers.insert(
@@ -2159,17 +2016,8 @@ mod tests {
         let mut seq = Sequence::new();
         add_trigger_wait_for_block_last_block(&mut mock_trigger, &mut seq, 1);
 
-        let new_head = NewHead {
-            block_number: 2,
-            block_hash: B256::ZERO,
-            address_updates: vec![AddressUpdate {
-                address: Address::ZERO,
-                nonce: Some(0),
-                balance: U256::ZERO,
-                mined_tx_hashes: vec![B256::ZERO],
-            }],
-        };
-        let new_head_clone = new_head.clone();
+        let mined = new_head_mined(2);
+        let mined_clone = mined.clone();
 
         mock_trigger
             .expect_wait_for_block()
@@ -2177,15 +2025,15 @@ mod tests {
             .in_sequence(&mut seq)
             .returning(move || {
                 Box::pin({
-                    let new_head = new_head_clone.clone();
-                    async move { Ok(new_head) }
+                    let mined = mined_clone.clone();
+                    async move { Ok(mined) }
                 })
             });
         mock_trigger
             .expect_last_block()
             .once()
             .in_sequence(&mut seq)
-            .return_const(new_head);
+            .return_const(mined);
 
         mock_tracker.expect_address().return_const(Address::ZERO);
 
@@ -2206,19 +2054,14 @@ mod tests {
 
         let mut sender = new_sender(mock_proposer_t, mock_pool);
 
-        // start in pending state
-        let mut state = SenderMachineState {
-            trigger: mock_trigger,
-            transaction_tracker: mock_tracker,
-            send_bundle_response: None,
-            inner: InnerState::Pending(PendingState {
+        let mut state = new_state_with(
+            mock_trigger,
+            mock_tracker,
+            InnerState::Pending(PendingState {
                 until: 3,
                 fee_increase_count: 0,
             }),
-            requires_reset: false,
-            last_bundle_key: None,
-            condition_not_met: false,
-        };
+        );
 
         // first step has no update
         sender.step_state(&mut state).await.unwrap();
@@ -2255,19 +2098,14 @@ mod tests {
 
         let mut sender = new_sender(mock_proposer_t, mock_pool);
 
-        // start in pending state
-        let mut state = SenderMachineState {
-            trigger: mock_trigger,
-            transaction_tracker: mock_tracker,
-            send_bundle_response: None,
-            inner: InnerState::Pending(PendingState {
+        let mut state = new_state_with(
+            mock_trigger,
+            mock_tracker,
+            InnerState::Pending(PendingState {
                 until: 3,
                 fee_increase_count: 0,
             }),
-            requires_reset: false,
-            last_bundle_key: None,
-            condition_not_met: false,
-        };
+        );
 
         // first and second step has no update
         for _ in 0..2 {
@@ -2302,7 +2140,6 @@ mod tests {
         let mut seq = Sequence::new();
         add_trigger_no_update_last_block(&mut mock_trigger, &mut seq, 3);
 
-        // zero nonce
         mock_tracker.expect_get_state().returning(|| {
             Ok(TrackerState {
                 nonce: 0,
@@ -2323,14 +2160,9 @@ mod tests {
             .times(1)
             .returning(|_, _, _| {
                 Ok(vec![PoolOperationSummary {
-                    hash: B256::ZERO,
-                    sender: Address::ZERO,
-                    entry_point: ENTRY_POINT_ADDRESS_V0_6,
-                    sim_block_number: 0,
                     max_fee_per_gas: 10,
                     max_priority_fee_per_gas: 2,
-                    gas_limit: 0,
-                    bundler_sponsorship_max_cost: None,
+                    ..pool_op_summary(ENTRY_POINT_ADDRESS_V0_6, Address::ZERO)
                 }])
             });
         mock_pool.expect_get_ops_by_hashes().times(0);
@@ -2338,11 +2170,10 @@ mod tests {
         let mut sender = new_sender(mock_proposer_t, mock_pool);
 
         // start in underpriced meta-state
-        let mut state = SenderMachineState {
-            trigger: mock_trigger,
-            transaction_tracker: mock_tracker,
-            send_bundle_response: None,
-            inner: InnerState::Building(BuildingState {
+        let mut state = new_state_with(
+            mock_trigger,
+            mock_tracker,
+            InnerState::Building(BuildingState {
                 wait_for_trigger: true,
                 fee_increase_count: 0,
                 underpriced_info: Some(UnderpricedInfo {
@@ -2350,10 +2181,7 @@ mod tests {
                     rounds: 1,
                 }),
             }),
-            requires_reset: false,
-            last_bundle_key: None,
-            condition_not_met: false,
-        };
+        );
 
         // step state, block number should trigger move to cancellation
         sender.step_state(&mut state).await.unwrap();
@@ -2387,24 +2215,17 @@ mod tests {
             .once()
             .returning(|_| Box::pin(async { Ok(Some(B256::ZERO)) }));
 
-        mock_trigger.expect_last_block().return_const(NewHead {
-            block_number: 0,
-            block_hash: B256::ZERO,
-            address_updates: vec![],
-        });
+        mock_trigger.expect_last_block().return_const(new_head(0));
 
-        let mut state = SenderMachineState {
-            trigger: mock_trigger,
-            transaction_tracker: mock_tracker,
-            send_bundle_response: None,
-            inner: InnerState::Cancelling(CancellingState {
+        let mut state = new_state_with(
+            mock_trigger,
+            mock_tracker,
+            InnerState::Cancelling(CancellingState {
                 fee_increase_count: 0,
             }),
-            requires_reset: false,
-            // Set last_bundle_key so the cancellation code can find the proposer
-            last_bundle_key: Some((ENTRY_POINT_ADDRESS_V0_6, None)),
-            condition_not_met: false,
-        };
+        );
+        // Set last_bundle_key so the cancellation code can find the proposer
+        state.last_bundle_key = Some((ENTRY_POINT_ADDRESS_V0_6, None));
 
         let mut sender = new_sender(mock_proposer_t, mock_pool);
 
@@ -2440,25 +2261,18 @@ mod tests {
             .once()
             .returning(|_| Box::pin(async { Ok(Some(B256::ZERO)) }));
 
-        mock_trigger.expect_last_block().return_const(NewHead {
-            block_number: 0,
-            block_hash: B256::ZERO,
-            address_updates: vec![],
-        });
+        mock_trigger.expect_last_block().return_const(new_head(0));
 
-        let mut state = SenderMachineState {
-            trigger: mock_trigger,
-            transaction_tracker: mock_tracker,
-            send_bundle_response: None,
-            inner: InnerState::Cancelling(CancellingState {
+        let mut state = new_state_with(
+            mock_trigger,
+            mock_tracker,
+            InnerState::Cancelling(CancellingState {
                 fee_increase_count: 0,
             }),
-            requires_reset: false,
-            // Unknown key — cancellation now uses the sender's fee_estimator directly,
-            // so it doesn't need to find a matching proposer.
-            last_bundle_key: Some((ENTRY_POINT_ADDRESS_V0_7, Some("missing".to_string()))),
-            condition_not_met: false,
-        };
+        );
+        // Unknown key — cancellation now uses the sender's fee_estimator directly,
+        // so it doesn't need to find a matching proposer.
+        state.last_bundle_key = Some((ENTRY_POINT_ADDRESS_V0_7, Some("missing".to_string())));
 
         let mut sender = new_sender(mock_proposer_t, mock_pool);
         sender.step_state(&mut state).await.unwrap();
@@ -2478,11 +2292,7 @@ mod tests {
         let mut mock_trigger = MockTrigger::new();
         let mut mock_tracker = MockTransactionTracker::new();
 
-        mock_trigger.expect_last_block().return_const(NewHead {
-            block_number: 0,
-            block_hash: B256::ZERO,
-            address_updates: vec![],
-        });
+        mock_trigger.expect_last_block().return_const(new_head(0));
 
         mock_tracker.expect_get_state().times(1).returning(|| {
             Ok(TrackerState {
@@ -2500,16 +2310,10 @@ mod tests {
             .expect_get_ops_summaries()
             .times(2)
             .returning(|_, _, _| {
-                Ok(vec![PoolOperationSummary {
-                    hash: B256::ZERO,
-                    sender: Address::from([9; 20]),
-                    entry_point: ENTRY_POINT_ADDRESS_V0_6,
-                    sim_block_number: 0,
-                    max_fee_per_gas: 0,
-                    max_priority_fee_per_gas: 0,
-                    gas_limit: 0,
-                    bundler_sponsorship_max_cost: None,
-                }])
+                Ok(vec![pool_op_summary(
+                    ENTRY_POINT_ADDRESS_V0_6,
+                    Address::from([9; 20]),
+                )])
             });
         mock_pool
             .expect_get_ops_by_hashes()
@@ -2554,11 +2358,7 @@ mod tests {
 
         let sender = Address::ZERO;
 
-        mock_trigger.expect_last_block().return_const(NewHead {
-            block_number: 0,
-            block_hash: B256::ZERO,
-            address_updates: vec![],
-        });
+        mock_trigger.expect_last_block().return_const(new_head(0));
 
         mock_tracker.expect_get_state().times(1).returning(|| {
             Ok(TrackerState {
@@ -2578,18 +2378,7 @@ mod tests {
         mock_pool
             .expect_get_ops_summaries()
             .times(3)
-            .returning(move |_, _, _| {
-                Ok(vec![PoolOperationSummary {
-                    hash: B256::ZERO,
-                    sender,
-                    entry_point: ENTRY_POINT_ADDRESS_V0_6,
-                    sim_block_number: 0,
-                    max_fee_per_gas: 0,
-                    max_priority_fee_per_gas: 0,
-                    gas_limit: 0,
-                    bundler_sponsorship_max_cost: None,
-                }])
-            });
+            .returning(move |_, _, _| Ok(vec![pool_op_summary(ENTRY_POINT_ADDRESS_V0_6, sender)]));
         mock_pool
             .expect_get_ops_by_hashes()
             .times(1)
@@ -2645,18 +2434,14 @@ mod tests {
             add_trigger_wait_for_block_last_block(&mut mock_trigger, &mut seq, i);
         }
 
-        let mut state = SenderMachineState {
-            trigger: mock_trigger,
-            transaction_tracker: mock_tracker,
-            send_bundle_response: None,
-            inner: InnerState::CancelPending(CancelPendingState {
+        let mut state = new_state_with(
+            mock_trigger,
+            mock_tracker,
+            InnerState::CancelPending(CancelPendingState {
                 until: 3,
                 fee_increase_count: 0,
             }),
-            requires_reset: false,
-            last_bundle_key: None,
-            condition_not_met: false,
-        };
+        );
 
         let mut sender = new_sender(mock_proposer_t, mock_pool);
 
@@ -2692,55 +2477,23 @@ mod tests {
         let mut seq = Sequence::new();
         add_trigger_no_update_last_block(&mut mock_trigger, &mut seq, 1);
 
-        // zero nonce
-        mock_tracker.expect_get_state().returning(|| {
-            Ok(TrackerState {
-                nonce: 0,
-                balance: U256::ZERO,
-                required_fees: None,
-            })
-        });
-        mock_tracker.expect_address().return_const(Address::ZERO);
-        mock_tracker
-            .expect_num_pending_transactions()
-            .return_const(0_usize);
+        setup_tracker_default(&mut mock_tracker);
 
         mock_pool
             .expect_get_ops_summaries()
             .times(1)
             .returning(|_, _, _| {
-                Ok(vec![PoolOperationSummary {
-                    hash: B256::ZERO,
-                    sender: Address::ZERO,
-                    entry_point: ENTRY_POINT_ADDRESS_V0_6,
-                    sim_block_number: 0,
-                    max_fee_per_gas: 0,
-                    max_priority_fee_per_gas: 0,
-                    gas_limit: 0,
-                    bundler_sponsorship_max_cost: None,
-                }])
+                Ok(vec![pool_op_summary(
+                    ENTRY_POINT_ADDRESS_V0_6,
+                    Address::ZERO,
+                )])
             });
         mock_pool
             .expect_get_ops_by_hashes()
             .times(1)
             .returning(|_, _| Ok(vec![demo_pool_op()]));
 
-        // bundle with one op - now uses BundleProposerT
-        mock_proposer_t
-            .expect_make_bundle()
-            .times(1)
-            .returning(|_, _, _, _, _, _, _, _, _| {
-                Box::pin(async {
-                    Ok(BundleData {
-                        tx: rundler_provider::TransactionRequest::default(),
-                        expected_storage: Default::default(),
-                        gas_fees: GasFees::default(),
-                        ops: vec![(Address::ZERO, B256::ZERO)],
-                        rejected_op_hashes: vec![],
-                        entity_updates: vec![],
-                    })
-                })
-            });
+        mock_make_bundle(&mut mock_proposer_t, 1, vec![(Address::ZERO, B256::ZERO)]);
 
         // should send the bundle txn, returns condition not met
         mock_tracker
@@ -2750,19 +2503,15 @@ mod tests {
         // Sender will set condition_not_met flag and pass it to next make_bundle call
         // (tested implicitly via state transition to Building with retry)
 
-        let mut state = SenderMachineState {
-            trigger: mock_trigger,
-            transaction_tracker: mock_tracker,
-            send_bundle_response: None,
-            inner: InnerState::Building(BuildingState {
+        let mut state = new_state_with(
+            mock_trigger,
+            mock_tracker,
+            InnerState::Building(BuildingState {
                 wait_for_trigger: true,
                 fee_increase_count: 0,
                 underpriced_info: None,
             }),
-            requires_reset: false,
-            last_bundle_key: None,
-            condition_not_met: false,
-        };
+        );
 
         let mut sender = new_sender(mock_proposer_t, mock_pool);
 
@@ -2799,17 +2548,8 @@ mod tests {
         let mut seq = Sequence::new();
         add_trigger_wait_for_block_last_block(&mut mock_trigger, &mut seq, 1);
 
-        let new_head = NewHead {
-            block_number: 2,
-            block_hash: B256::ZERO,
-            address_updates: vec![AddressUpdate {
-                address: Address::ZERO,
-                nonce: Some(0),
-                balance: U256::ZERO,
-                mined_tx_hashes: vec![B256::ZERO],
-            }],
-        };
-        let new_head_clone = new_head.clone();
+        let mined = new_head_mined(2);
+        let mined_clone = mined.clone();
 
         mock_trigger
             .expect_wait_for_block()
@@ -2817,15 +2557,15 @@ mod tests {
             .in_sequence(&mut seq)
             .returning(move || {
                 Box::pin({
-                    let new_head = new_head_clone.clone();
-                    async move { Ok(new_head) }
+                    let mined = mined_clone.clone();
+                    async move { Ok(mined) }
                 })
             });
         mock_trigger
             .expect_last_block()
             .once()
             .in_sequence(&mut seq)
-            .return_const(new_head);
+            .return_const(mined);
 
         mock_tracker.expect_address().return_const(Address::ZERO);
 
@@ -2853,19 +2593,15 @@ mod tests {
 
         let mut sender = new_sender(mock_proposer_t, mock_pool);
 
-        // start in pending state
-        let mut state = SenderMachineState {
-            trigger: mock_trigger,
-            transaction_tracker: mock_tracker,
-            send_bundle_response: None,
-            inner: InnerState::Pending(PendingState {
+        let mut state = new_state_with(
+            mock_trigger,
+            mock_tracker,
+            InnerState::Pending(PendingState {
                 until: 3,
                 fee_increase_count: 0,
             }),
-            requires_reset: false,
-            last_bundle_key: Some((ENTRY_POINT_ADDRESS_V0_6, None)),
-            condition_not_met: false,
-        };
+        );
+        state.last_bundle_key = Some((ENTRY_POINT_ADDRESS_V0_6, None));
 
         // first step has no update
         sender.step_state(&mut state).await.unwrap();
@@ -2989,11 +2725,9 @@ mod tests {
             .once()
             .in_sequence(seq)
             .returning(move || Box::pin(async move { Ok(None) }));
-        mock_trigger.expect_last_block().return_const(NewHead {
-            block_number,
-            block_hash: B256::ZERO,
-            address_updates: vec![],
-        });
+        mock_trigger
+            .expect_last_block()
+            .return_const(new_head(block_number));
     }
 
     fn add_trigger_wait_for_block_last_block(
@@ -3005,15 +2739,7 @@ mod tests {
             .expect_wait_for_block()
             .once()
             .in_sequence(seq)
-            .returning(move || {
-                Box::pin(async move {
-                    Ok(NewHead {
-                        block_number,
-                        block_hash: B256::ZERO,
-                        address_updates: vec![],
-                    })
-                })
-            });
+            .returning(move || Box::pin(async move { Ok(new_head(block_number)) }));
 
         // this gets called twice after a trigger
         for _ in 0..2 {
@@ -3021,16 +2747,101 @@ mod tests {
                 .expect_last_block()
                 .once()
                 .in_sequence(seq)
-                .return_const(NewHead {
-                    block_number,
-                    block_hash: B256::ZERO,
-                    address_updates: vec![],
-                });
+                .return_const(new_head(block_number));
         }
 
         mock_trigger
             .expect_builder_must_wait_for_trigger()
             .return_const(false);
+    }
+
+    fn new_head(block_number: u64) -> NewHead {
+        NewHead {
+            block_number,
+            block_hash: B256::ZERO,
+            address_updates: vec![],
+        }
+    }
+
+    fn new_head_mined(block_number: u64) -> NewHead {
+        NewHead {
+            block_number,
+            block_hash: B256::ZERO,
+            address_updates: vec![AddressUpdate {
+                address: Address::ZERO,
+                nonce: Some(0),
+                balance: U256::ZERO,
+                mined_tx_hashes: vec![B256::ZERO],
+            }],
+        }
+    }
+
+    fn bundle_data(ops: Vec<(Address, B256)>) -> BundleData {
+        BundleData {
+            tx: rundler_provider::TransactionRequest::default(),
+            expected_storage: Default::default(),
+            gas_fees: GasFees::default(),
+            ops,
+            rejected_op_hashes: vec![],
+            entity_updates: vec![],
+        }
+    }
+
+    fn pool_op_summary(entry_point: Address, sender: Address) -> PoolOperationSummary {
+        PoolOperationSummary {
+            hash: B256::ZERO,
+            sender,
+            entry_point,
+            sim_block_number: 0,
+            max_fee_per_gas: 0,
+            max_priority_fee_per_gas: 0,
+            gas_limit: 0,
+            bundler_sponsorship_max_cost: None,
+        }
+    }
+
+    fn mock_make_bundle(
+        proposer: &mut MockBundleProposerT,
+        times: usize,
+        ops: Vec<(Address, B256)>,
+    ) {
+        proposer
+            .expect_make_bundle()
+            .times(times)
+            .returning(move |_, _, _, _, _, _, _, _, _| {
+                let ops = ops.clone();
+                Box::pin(async { Ok(bundle_data(ops)) })
+            });
+    }
+
+    fn setup_tracker_default(mock_tracker: &mut MockTransactionTracker) {
+        mock_tracker.expect_get_state().returning(|| {
+            Ok(TrackerState {
+                nonce: 0,
+                balance: U256::ZERO,
+                required_fees: None,
+            })
+        });
+        mock_tracker.expect_address().return_const(Address::ZERO);
+        mock_tracker
+            .expect_num_pending_transactions()
+            .return_const(0_usize);
+    }
+
+    fn new_state_with(
+        trigger: MockTrigger,
+        tracker: MockTransactionTracker,
+        inner: InnerState,
+    ) -> SenderMachineState<MockTransactionTracker, MockTrigger> {
+        SenderMachineState {
+            trigger,
+            transaction_tracker: tracker,
+            send_bundle_response: None,
+            inner,
+            requires_reset: false,
+            last_bundle_key: None,
+            condition_not_met: false,
+        }
     }
 
     fn demo_pool_op() -> PoolOperation {
