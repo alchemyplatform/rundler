@@ -295,7 +295,9 @@ where
             self.entry_point_router
                 .get_mined_from_tx_receipt(&entry_point, uo_hash, tx_receipt);
 
-        let (uo, receipt) = future::try_join(uo_fut, receipt_fut).await?;
+        let (uo_result, receipt_result) = future::join(uo_fut, receipt_fut).await;
+        let uo = uo_result.map_err(EthRpcError::from)?;
+        let receipt = receipt_result.map_err(EthRpcError::from)?;
 
         match (uo, receipt) {
             (Some(uo), Some(mut receipt)) => {
@@ -319,22 +321,39 @@ where
             .await
             .map_err(EthRpcError::from)?;
 
-        let preconf_transaction: Option<B256> = if self.chain_spec.flashblocks_enabled {
-            op_status
-                .as_ref()
-                .and_then(|s| s.preconf_info.as_ref())
-                .map(|info| info.tx_hash)
+        // Fetch mined UO + receipt.
+        // If preconfirmed, we know the entry point so query it directly.
+        // Otherwise, fan out to all entry points.
+        let mined_results = if let Some(pool_status) = op_status.as_ref()
+            && self.chain_spec.flashblocks_enabled
+            && let Some(preconf_info) = &pool_status.preconf_info
+        {
+            let ret = self
+                .entry_point_router
+                .get_mined_and_receipt(
+                    &pool_status.entry_point,
+                    uo_hash,
+                    Some(preconf_info.tx_hash),
+                )
+                .await;
+            match ret {
+                Ok(result) => vec![result],
+                Err(e) => {
+                    tracing::warn!(
+                        "failed to retrieve receipt for preconfirmed UO {uo_hash}: {e}. Treating as pending."
+                    );
+                    vec![]
+                }
+            }
         } else {
-            None
+            let mined_futs = self.entry_point_router.entry_points().map(|ep| {
+                self.entry_point_router
+                    .get_mined_and_receipt(ep, uo_hash, None)
+            });
+            future::try_join_all(mined_futs)
+                .await
+                .map_err(EthRpcError::from)?
         };
-
-        // Fetch mined UO + receipt from all entry points
-        let mined_futs = self.entry_point_router.entry_points().map(|ep| {
-            self.entry_point_router
-                .get_mined_and_receipt(ep, uo_hash, preconf_transaction)
-        });
-
-        let mined_results = future::try_join_all(mined_futs).await?;
 
         // Check for mined/preconfirmed receipt first (includes user operation)
         if let Some((uo_by_hash, receipt)) = mined_results.into_iter().find_map(|r| r) {

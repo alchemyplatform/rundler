@@ -27,7 +27,10 @@ use rundler_types::{
 };
 use serde::Serialize;
 
-use crate::error::{rpc_err, rpc_err_with_data};
+use crate::{
+    error::{rpc_err, rpc_err_with_data},
+    eth::events::EventProviderError,
+};
 
 // Error codes borrowed from jsonrpsee
 // INVALID_REQUEST_CODE = -32600
@@ -472,6 +475,7 @@ struct ProviderErrorWithContext {
 
 impl From<ProviderErrorWithContext> for EthRpcError {
     fn from(e: ProviderErrorWithContext) -> Self {
+        // Log the full error details at ERROR level for debugging
         let inner_msg = match &e.error {
             ProviderError::RPC(rpc_error) => match rpc_error {
                 RpcError::ErrorResp(error_payload) => {
@@ -498,15 +502,16 @@ impl From<ProviderErrorWithContext> for EthRpcError {
                 format!("other error: {}", error)
             }
         };
-        if let Some(context_msg) = e.context {
-            Self::Internal(anyhow::anyhow!(
-                "{}: provider error: {}",
-                context_msg,
-                inner_msg
-            ))
+
+        // Log full error details for debugging
+        if let Some(context_msg) = &e.context {
+            tracing::error!("{}: provider error: {}", context_msg, inner_msg);
         } else {
-            Self::Internal(anyhow::anyhow!("provider error: {}", inner_msg))
+            tracing::error!("provider error: {}", inner_msg);
         }
+
+        // Return generic error message to user
+        Self::Internal(anyhow::anyhow!("internal error: rpc provider error"))
     }
 }
 
@@ -518,6 +523,24 @@ impl From<ProviderError> for ProviderErrorWithContext {
         }
     }
 }
+
+impl From<EventProviderError> for EthRpcError {
+    fn from(e: EventProviderError) -> Self {
+        match e {
+            // Reuse existing ProviderError conversion for all provider errors
+            EventProviderError::Provider(provider_err) => Self::from(ProviderErrorWithContext {
+                error: provider_err,
+                context: None,
+            }),
+            // Log full details server-side, return generic message to user
+            other => {
+                tracing::error!("event provider error: {}", other);
+                Self::Internal(anyhow::anyhow!("internal error: event provider error"))
+            }
+        }
+    }
+}
+
 impl From<GasEstimationError> for EthRpcError {
     fn from(e: GasEstimationError) -> Self {
         match e {

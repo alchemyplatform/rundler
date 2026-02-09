@@ -12,8 +12,8 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_primitives::{Address, B256};
-use anyhow::bail;
-use rundler_provider::{Log, TransactionReceipt};
+use rundler_provider::{Log, ProviderError, TransactionReceipt};
+use thiserror::Error;
 use tracing::instrument;
 
 use crate::types::{RpcUserOperationByHash, RpcUserOperationReceipt};
@@ -27,28 +27,31 @@ pub(crate) use v0_7::UserOperationEventProviderV0_7;
 
 #[async_trait::async_trait]
 pub(crate) trait UserOperationEventProvider: Send + Sync {
-    async fn get_mined_by_hash(&self, hash: B256)
-    -> anyhow::Result<Option<RpcUserOperationByHash>>;
+    async fn get_mined_by_hash(
+        &self,
+        hash: B256,
+    ) -> EventProviderResult<Option<RpcUserOperationByHash>>;
 
     async fn get_mined_from_tx_receipt(
         &self,
         uo_hash: B256,
         tx_receipt: TransactionReceipt,
-    ) -> anyhow::Result<Option<RpcUserOperationByHash>>;
+    ) -> EventProviderResult<Option<RpcUserOperationByHash>>;
 
-    async fn get_receipt(&self, hash: B256) -> anyhow::Result<Option<RpcUserOperationReceipt>>;
+    async fn get_receipt(&self, hash: B256)
+    -> EventProviderResult<Option<RpcUserOperationReceipt>>;
 
     async fn get_receipt_from_tx_hash(
         &self,
         hash: B256,
         bundle_transaction: B256,
-    ) -> anyhow::Result<Option<RpcUserOperationReceipt>>;
+    ) -> EventProviderResult<Option<RpcUserOperationReceipt>>;
 
     async fn get_receipt_from_tx_receipt(
         &self,
         uo_hash: B256,
         tx_receipt: TransactionReceipt,
-    ) -> anyhow::Result<Option<RpcUserOperationReceipt>>;
+    ) -> EventProviderResult<Option<RpcUserOperationReceipt>>;
 
     /// Get both the mined user operation and receipt in a single call,
     /// sharing the logs RPC call between both operations.
@@ -56,8 +59,43 @@ pub(crate) trait UserOperationEventProvider: Send + Sync {
         &self,
         hash: B256,
         bundle_transaction: Option<B256>,
-    ) -> anyhow::Result<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>>;
+    ) -> EventProviderResult<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>>;
 }
+
+/// Errors that can occur while querying user operation events from the blockchain
+#[derive(Debug, Error)]
+pub enum EventProviderError {
+    /// Provider RPC call failed (includes event queries, traces, missing 'to' field, etc.)
+    #[error("provider error: {0}")]
+    Provider(#[from] ProviderError),
+
+    /// Transaction not found (includes missing tx hash, tx not found)
+    #[error("transaction {0} not found")]
+    TransactionNotFound(B256),
+
+    /// Transaction receipt not found
+    #[error("transaction receipt for {0} not found")]
+    ReceiptNotFound(B256),
+
+    /// User operation not found in receipt logs
+    #[error("user operation {uo_hash} not found in transaction {tx_hash}")]
+    UserOpNotInReceipt { uo_hash: B256, tx_hash: B256 },
+
+    /// User operation not found in transaction data
+    #[error("user operation {uo_hash} not found in transaction data for {tx_hash}")]
+    UserOpNotInTransaction { uo_hash: B256, tx_hash: B256 },
+
+    /// User operation not found in transaction trace
+    #[error("user operation {uo_hash} not found in trace for transaction {tx_hash}")]
+    UserOpNotInTrace { uo_hash: B256, tx_hash: B256 },
+
+    /// Error processing logs (includes invalid sequence, no matching logs, decode failures)
+    #[error("log processing error: {0}")]
+    LogProcessingError(String),
+}
+
+/// Type alias for results from event provider operations
+pub(crate) type EventProviderResult<T> = Result<T, EventProviderError>;
 
 // This method takes a user operation event and a transaction receipt and filters out all the logs
 // relevant to the user operation. Since there are potentially many user operations in a transaction,
@@ -77,7 +115,7 @@ fn filter_receipt_logs_matching_user_op(
     before_execution_topic: B256,
     reference_log: &Log,
     tx_receipt: &TransactionReceipt,
-) -> anyhow::Result<Vec<Log>> {
+) -> EventProviderResult<Vec<Log>> {
     let logs = tx_receipt.inner.inner.logs();
 
     let is_ref_user_op = |log: &Log| {
@@ -105,7 +143,10 @@ fn filter_receipt_logs_matching_user_op(
             start_idx = Some(i + 1);
         } else if is_ref_user_op(&logs[i]) {
             let Some(start_idx) = start_idx else {
-                bail!("invalid sequence of logs. found ref user op before BeforeExecution event");
+                return Err(EventProviderError::LogProcessingError(
+                    "invalid log sequence: found user operation event before BeforeExecution event"
+                        .into(),
+                ));
             };
             return Ok(logs[start_idx..=i].to_vec());
         }
@@ -113,7 +154,10 @@ fn filter_receipt_logs_matching_user_op(
         i += 1;
     }
 
-    bail!("no matching user op found in tx receipt");
+    let uo_hash = reference_log.topics().get(1).copied().unwrap_or_default();
+    Err(EventProviderError::LogProcessingError(format!(
+        "no matching user operation {uo_hash:?} found in transaction receipt"
+    )))
 }
 
 #[cfg(test)]
