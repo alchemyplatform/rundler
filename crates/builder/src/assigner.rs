@@ -723,6 +723,37 @@ mod tests {
             });
     }
 
+    fn mock_pool_two_eps(ep1_ops: Vec<PoolOperation>, ep2_ops: Vec<PoolOperation>) -> MockPool {
+        let mut mock_pool = MockPool::new();
+        let ep1_ops_clone = ep1_ops.clone();
+        let ep2_ops_clone = ep2_ops.clone();
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(move |ep, _, _| {
+                if ep == TEST_ENTRY_POINT {
+                    Ok(ep1_ops_clone.iter().map(|op| op.into()).collect())
+                } else {
+                    Ok(ep2_ops_clone.iter().map(|op| op.into()).collect())
+                }
+            });
+
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .returning(move |ep, hashes| {
+                let ops = if ep == TEST_ENTRY_POINT {
+                    &ep1_ops
+                } else {
+                    &ep2_ops
+                };
+                Ok(ops
+                    .iter()
+                    .filter(|op| hashes.contains(&op.uo.hash()))
+                    .cloned()
+                    .collect())
+            });
+        mock_pool
+    }
+
     fn test_entrypoints() -> Vec<EntrypointInfo> {
         vec![EntrypointInfo {
             address: TEST_ENTRY_POINT,
@@ -737,16 +768,30 @@ mod tests {
         }
     }
 
+    async fn assign_default(assigner: &Assigner, builder: Address) -> AssignmentResult {
+        assigner
+            .assign_work(builder, u64::MAX, GasFees::default())
+            .await
+            .unwrap()
+    }
+
+    async fn assign_expect_default(assigner: &Assigner, builder: Address) -> WorkAssignment {
+        expect_assigned(assign_default(assigner, builder).await)
+    }
+
+    async fn assign_cycle(assigner: &Assigner, builder: Address) -> WorkAssignment {
+        let assignment = assign_expect_default(assigner, builder).await;
+        assigner.release_all(builder);
+        assignment
+    }
+
     #[tokio::test]
     async fn test_no_operations() {
         let mut mock_pool = MockPool::new();
         mock_pool_get_ops(&mut mock_pool, vec![]);
         let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
 
-        let result = assigner
-            .assign_work(address(0), u64::MAX, GasFees::default())
-            .await
-            .unwrap();
+        let result = assign_default(&assigner, address(0)).await;
         assert!(matches!(result, AssignmentResult::NoOperations));
     }
 
@@ -757,12 +802,7 @@ mod tests {
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
         let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
-        let assignment = expect_assigned(
-            assigner
-                .assign_work(address(0), u64::MAX, GasFees::default())
-                .await
-                .unwrap(),
-        );
+        let assignment = assign_expect_default(&assigner, address(0)).await;
         assert_eq!(assignment.operations.len(), 2);
         assert_eq!(assignment.operations[0].uo.sender(), address(1));
         assert_eq!(assignment.operations[1].uo.sender(), address(2));
@@ -776,25 +816,14 @@ mod tests {
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
         let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
-        let _ = assigner
-            .assign_work(address(0), u64::MAX, GasFees::default())
-            .await
-            .unwrap();
+        let _ = assign_default(&assigner, address(0)).await;
 
         // Same builder address should assign again
-        let assignment = expect_assigned(
-            assigner
-                .assign_work(address(0), u64::MAX, GasFees::default())
-                .await
-                .unwrap(),
-        );
+        let assignment = assign_expect_default(&assigner, address(0)).await;
         assert_eq!(assignment.operations.len(), 2);
 
         // Different builder address should not assign (ops locked to builder 0)
-        let result = assigner
-            .assign_work(address(1), u64::MAX, GasFees::default())
-            .await
-            .unwrap();
+        let result = assign_default(&assigner, address(1)).await;
         assert!(matches!(result, AssignmentResult::NoOperations));
     }
 
@@ -805,21 +834,13 @@ mod tests {
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
         let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
-        let _ = assigner
-            .assign_work(address(0), u64::MAX, GasFees::default())
-            .await
-            .unwrap();
+        let _ = assign_default(&assigner, address(0)).await;
 
         // Confirm sender 1, drop sender 2
         assigner.confirm_senders_drop_unused(address(0), &[address(1)]);
 
         // Different builder should be able to receive address(2)
-        let assignment = expect_assigned(
-            assigner
-                .assign_work(address(1), u64::MAX, GasFees::default())
-                .await
-                .unwrap(),
-        );
+        let assignment = assign_expect_default(&assigner, address(1)).await;
         assert_eq!(assignment.operations.len(), 1);
         assert_eq!(assignment.operations[0].uo.sender(), address(2));
     }
@@ -831,21 +852,13 @@ mod tests {
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
         let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
-        let _ = assigner
-            .assign_work(address(0), u64::MAX, GasFees::default())
-            .await
-            .unwrap();
+        let _ = assign_default(&assigner, address(0)).await;
 
         // Release all locks
         assigner.release_all(address(0));
 
         // Different builder should get all ops
-        let assignment = expect_assigned(
-            assigner
-                .assign_work(address(1), u64::MAX, GasFees::default())
-                .await
-                .unwrap(),
-        );
+        let assignment = assign_expect_default(&assigner, address(1)).await;
         assert_eq!(assignment.operations.len(), 2);
         assert_eq!(assignment.operations[0].uo.sender(), address(1));
         assert_eq!(assignment.operations[1].uo.sender(), address(2));
@@ -858,10 +871,7 @@ mod tests {
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
         let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
-        let _ = assigner
-            .assign_work(address(0), u64::MAX, GasFees::default())
-            .await
-            .unwrap();
+        let _ = assign_default(&assigner, address(0)).await;
 
         // confirm address(1)
         assigner.confirm_senders_drop_unused(address(0), &[address(1)]);
@@ -869,12 +879,7 @@ mod tests {
         assigner.confirm_senders_drop_unused(address(0), &[]);
 
         // Different builder should only get address(2)
-        let assignment = expect_assigned(
-            assigner
-                .assign_work(address(1), u64::MAX, GasFees::default())
-                .await
-                .unwrap(),
-        );
+        let assignment = assign_expect_default(&assigner, address(1)).await;
         assert_eq!(assignment.operations.len(), 1);
         assert_eq!(assignment.operations[0].uo.sender(), address(2));
     }
@@ -906,10 +911,7 @@ mod tests {
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
         let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
-        let _ = assigner
-            .assign_work(address(0), u64::MAX, GasFees::default())
-            .await
-            .unwrap();
+        let _ = assign_default(&assigner, address(0)).await;
 
         assigner.confirm_senders_drop_unused(address(1), &[address(1)]);
     }
@@ -933,10 +935,11 @@ mod tests {
         ]
     }
 
-    /// Create test ops for a specific entrypoint
-    fn create_test_ops_for_entrypoint(
+    fn create_test_ops_inner(
         senders: &[Address],
         entry_point: Address,
+        max_fee_per_gas: u128,
+        max_priority_fee_per_gas: u128,
     ) -> Vec<PoolOperation> {
         senders
             .iter()
@@ -945,6 +948,8 @@ mod tests {
                     &ChainSpec::default(),
                     UserOperationRequiredFields {
                         sender: *sender,
+                        max_fee_per_gas,
+                        max_priority_fee_per_gas,
                         ..Default::default()
                     },
                 )
@@ -969,6 +974,13 @@ mod tests {
             .collect()
     }
 
+    fn create_test_ops_for_entrypoint(
+        senders: &[Address],
+        entry_point: Address,
+    ) -> Vec<PoolOperation> {
+        create_test_ops_inner(senders, entry_point, 0, 0)
+    }
+
     #[tokio::test]
     async fn test_tiebreak_by_last_selected() {
         // EP1 and EP2 both have 3 ops (equal eligible count).
@@ -982,82 +994,31 @@ mod tests {
             TEST_ENTRY_POINT_2,
         );
 
-        let mut mock_pool = MockPool::new();
-        let ep1_ops_clone = ep1_ops.clone();
-        let ep2_ops_clone = ep2_ops.clone();
-        mock_pool
-            .expect_get_ops_summaries()
-            .returning(move |ep, _, _| {
-                if ep == TEST_ENTRY_POINT {
-                    Ok(ep1_ops_clone.iter().map(|op| op.into()).collect())
-                } else {
-                    Ok(ep2_ops_clone.iter().map(|op| op.into()).collect())
-                }
-            });
-
-        let ep1_ops_for_hashes = ep1_ops.clone();
-        let ep2_ops_for_hashes = ep2_ops.clone();
-        mock_pool
-            .expect_get_ops_by_hashes()
-            .returning(move |ep, hashes| {
-                let ops = if ep == TEST_ENTRY_POINT {
-                    &ep1_ops_for_hashes
-                } else {
-                    &ep2_ops_for_hashes
-                };
-                Ok(ops
-                    .iter()
-                    .filter(|op| hashes.contains(&op.uo.hash()))
-                    .cloned()
-                    .collect())
-            });
+        let mock_pool = mock_pool_two_eps(ep1_ops, ep2_ops);
 
         // High starvation ratio so starvation prevention doesn't interfere
         let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
 
         // Cycle 1: Both unseen (last_selected=0). Tertiary tiebreak by config order keeps EP1 first.
-        let r1 = expect_assigned(
-            assigner
-                .assign_work(address(0), u64::MAX, GasFees::default())
-                .await
-                .unwrap(),
-        );
+        let r1 = assign_cycle(&assigner, address(0)).await;
         let first = r1.entry_point;
-        assigner.release_all(address(0));
 
         // Cycle 2: The other EP should win the tiebreak (least recently selected).
-        let r2 = expect_assigned(
-            assigner
-                .assign_work(address(0), u64::MAX, GasFees::default())
-                .await
-                .unwrap(),
-        );
+        let r2 = assign_cycle(&assigner, address(0)).await;
         assert_ne!(
             r2.entry_point, first,
             "Cycle 2: should pick the other EP via tiebreak"
         );
-        assigner.release_all(address(0));
 
         // Cycle 3: Should alternate back to the first EP.
-        let r3 = expect_assigned(
-            assigner
-                .assign_work(address(0), u64::MAX, GasFees::default())
-                .await
-                .unwrap(),
-        );
+        let r3 = assign_cycle(&assigner, address(0)).await;
         assert_eq!(
             r3.entry_point, first,
             "Cycle 3: should alternate back to first EP"
         );
-        assigner.release_all(address(0));
 
         // Cycle 4: Should alternate again.
-        let r4 = expect_assigned(
-            assigner
-                .assign_work(address(0), u64::MAX, GasFees::default())
-                .await
-                .unwrap(),
-        );
+        let r4 = assign_cycle(&assigner, address(0)).await;
         assert_ne!(
             r4.entry_point, first,
             "Cycle 4: should alternate to other EP"
@@ -1088,86 +1049,34 @@ mod tests {
         let ep2_ops =
             create_test_ops_for_entrypoint(&[address(20), address(21)], TEST_ENTRY_POINT_2);
 
-        let mut mock_pool = MockPool::new();
-        let ep1_ops_clone = ep1_ops.clone();
-        let ep2_ops_clone = ep2_ops.clone();
-
-        mock_pool
-            .expect_get_ops_summaries()
-            .returning(move |ep, _, _| {
-                if ep == TEST_ENTRY_POINT {
-                    Ok(ep1_ops_clone.iter().map(|op| op.into()).collect())
-                } else {
-                    Ok(ep2_ops_clone.iter().map(|op| op.into()).collect())
-                }
-            });
-
-        let ep1_ops_for_hashes = ep1_ops.clone();
-        let ep2_ops_for_hashes = ep2_ops.clone();
-        mock_pool
-            .expect_get_ops_by_hashes()
-            .returning(move |ep, hashes| {
-                let ops = if ep == TEST_ENTRY_POINT {
-                    &ep1_ops_for_hashes
-                } else {
-                    &ep2_ops_for_hashes
-                };
-                Ok(ops
-                    .iter()
-                    .filter(|op| hashes.contains(&op.uo.hash()))
-                    .cloned()
-                    .collect())
-            });
+        let mock_pool = mock_pool_two_eps(ep1_ops, ep2_ops);
 
         // 4 signers = threshold of 2 cycles
         let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 0.50);
 
         // Cycle 1: EP1 should be selected (more ops)
-        let result = expect_assigned(
-            assigner
-                .assign_work(address(0), u64::MAX, GasFees::default())
-                .await
-                .unwrap(),
-        );
+        let result = assign_cycle(&assigner, address(0)).await;
         assert_eq!(
             result.entry_point, TEST_ENTRY_POINT,
             "Cycle 1: EP1 expected"
         );
-        assigner.release_all(address(0));
 
         // Cycle 2: EP1 still has more ops, should still be selected
-        let result = expect_assigned(
-            assigner
-                .assign_work(address(0), u64::MAX, GasFees::default())
-                .await
-                .unwrap(),
-        );
+        let result = assign_cycle(&assigner, address(0)).await;
         assert_eq!(
             result.entry_point, TEST_ENTRY_POINT,
             "Cycle 2: EP1 expected"
         );
-        assigner.release_all(address(0));
 
         // Cycle 3: EP2 hasn't been selected in 2 cycles (threshold), should be force-selected
-        let result = expect_assigned(
-            assigner
-                .assign_work(address(0), u64::MAX, GasFees::default())
-                .await
-                .unwrap(),
-        );
+        let result = assign_cycle(&assigner, address(0)).await;
         assert_eq!(
             result.entry_point, TEST_ENTRY_POINT_2,
             "Cycle 3: EP2 expected (starvation prevention)"
         );
-        assigner.release_all(address(0));
 
         // Cycle 4: EP2 was just selected, back to normal - EP1 has more ops
-        let result = expect_assigned(
-            assigner
-                .assign_work(address(0), u64::MAX, GasFees::default())
-                .await
-                .unwrap(),
-        );
+        let result = assign_expect_default(&assigner, address(0)).await;
         assert_eq!(
             result.entry_point, TEST_ENTRY_POINT,
             "Cycle 4: EP1 expected"
@@ -1211,12 +1120,7 @@ mod tests {
 
         let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
 
-        let result = expect_assigned(
-            assigner
-                .assign_work(address(0), u64::MAX, GasFees::default())
-                .await
-                .unwrap(),
-        );
+        let result = assign_expect_default(&assigner, address(0)).await;
 
         assert_eq!(
             result.entry_point, TEST_ENTRY_POINT_2,
@@ -1226,43 +1130,17 @@ mod tests {
         assert_eq!(result.operations[0].uo.sender(), address(20));
     }
 
-    /// Create test ops with specific fees
     fn create_test_ops_with_fees(
         senders: &[Address],
         max_fee_per_gas: u128,
         max_priority_fee_per_gas: u128,
     ) -> Vec<PoolOperation> {
-        senders
-            .iter()
-            .map(|sender| {
-                let uo = UserOperationBuilder::new(
-                    &ChainSpec::default(),
-                    UserOperationRequiredFields {
-                        sender: *sender,
-                        max_fee_per_gas,
-                        max_priority_fee_per_gas,
-                        ..Default::default()
-                    },
-                )
-                .build()
-                .into();
-                PoolOperation {
-                    uo,
-                    expected_code_hash: B256::ZERO,
-                    entry_point: TEST_ENTRY_POINT,
-                    sim_block_hash: B256::ZERO,
-                    sim_block_number: 0,
-                    account_is_staked: false,
-                    valid_time_range: ValidTimeRange::default(),
-                    entity_infos: EntityInfos::default(),
-                    aggregator: None,
-                    da_gas_data: Default::default(),
-                    filter_id: None,
-                    perms: UserOperationPermissions::default(),
-                    sender_is_7702: false,
-                }
-            })
-            .collect()
+        create_test_ops_inner(
+            senders,
+            TEST_ENTRY_POINT,
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+        )
     }
 
     #[tokio::test]
@@ -1338,35 +1216,7 @@ mod tests {
             TEST_ENTRY_POINT_2,
         );
 
-        let mut mock_pool = MockPool::new();
-        let ep1_ops_clone = ep1_ops.clone();
-        let ep2_ops_clone = ep2_ops.clone();
-        mock_pool
-            .expect_get_ops_summaries()
-            .returning(move |ep, _, _| {
-                if ep == TEST_ENTRY_POINT {
-                    Ok(ep1_ops_clone.iter().map(|op| op.into()).collect())
-                } else {
-                    Ok(ep2_ops_clone.iter().map(|op| op.into()).collect())
-                }
-            });
-
-        let ep1_ops_for_hashes = ep1_ops.clone();
-        let ep2_ops_for_hashes = ep2_ops.clone();
-        mock_pool
-            .expect_get_ops_by_hashes()
-            .returning(move |ep, hashes| {
-                let ops = if ep == TEST_ENTRY_POINT {
-                    &ep1_ops_for_hashes
-                } else {
-                    &ep2_ops_for_hashes
-                };
-                Ok(ops
-                    .iter()
-                    .filter(|op| hashes.contains(&op.uo.hash()))
-                    .cloned()
-                    .collect())
-            });
+        let mock_pool = mock_pool_two_eps(ep1_ops, ep2_ops);
 
         let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
 
