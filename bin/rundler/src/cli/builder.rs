@@ -199,23 +199,13 @@ pub struct BuilderArgs {
     assigner_max_ops_per_request: u64,
 
     /// Starvation multiplier for the assigner (applied to `num_signers` before force-selecting a starved entrypoint).
-    /// Must be between 0.0 and 100.0.
     #[arg(
         long = "builder.assigner_starvation_ratio",
         name = "builder.assigner_starvation_ratio",
         env = "BUILDER_ASSIGNER_STARVATION_RATIO",
-        default_value = "0.50",
-        value_parser = parse_starvation_ratio
+        default_value = "0.50"
     )]
     assigner_starvation_ratio: f64,
-}
-
-fn parse_starvation_ratio(s: &str) -> Result<f64, String> {
-    let val: f64 = s.parse().map_err(|e| format!("{e}"))?;
-    if !val.is_finite() || !(0.0..=100.0).contains(&val) {
-        return Err("assigner_starvation_ratio must be between 0.0 and 100.0".to_string());
-    }
-    Ok(val)
 }
 
 impl BuilderArgs {
@@ -251,7 +241,13 @@ impl BuilderArgs {
                         })
                         .collect()
                 })
-                .unwrap_or_default();
+                .unwrap_or_else(|| {
+                    // no explicit builder settings set for this entry point, use default
+                    vec![BuilderSettings {
+                        filter_id: None,
+                        submission_proxy: None,
+                    }]
+                });
 
             entry_points.push(EntryPointBuilderSettings {
                 address: ep_address,
@@ -366,10 +362,8 @@ pub(crate) struct EntryPointBuilderConfig {
     pub(crate) builders: Vec<BuilderConfig>,
 }
 
-// deny_unknown_fields is intentional: catch typos/misconfigurations in per-builder JSON config
-// early rather than silently ignoring unknown keys.
 #[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct BuilderConfig {
     // Filter ID to use for this builder (for pool filtering)
     pub(crate) filter_id: Option<String>,
