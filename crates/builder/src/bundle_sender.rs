@@ -278,30 +278,30 @@ where
         debug!("Building bundle on block {}", block_number);
         let result = self.send_bundle(state, inner.fee_increase_count).await;
 
-        // handle result
         match result {
             Ok(SendBundleAttemptResult::Success(_)) => {
-                // sent the bundle
+                // Senders confirmed in send_bundle, no lock release needed
                 info!("Bundle sent successfully");
                 state.update(InnerState::Pending(inner.to_pending(
                     block_number + self.settings.max_blocks_to_wait_for_mine,
                 )));
             }
-            Ok(SendBundleAttemptResult::NoOperationsInitially) => {
-                debug!("No operations available initially");
-                if inner.fee_increase_count > 0 {
-                    state.transaction_tracker.abandon();
-                }
-                state.no_operations();
-            }
-            Ok(SendBundleAttemptResult::NoOperationsAfterSimulation) => {
-                debug!("No operations available after simulation");
+            Ok(SendBundleAttemptResult::NoOperationsInitially)
+            | Ok(SendBundleAttemptResult::NoOperationsAfterSimulation) => {
+                // Release all locks — cycle ending
+                self.assigner.release_all(self.sender_eoa);
+                debug!("No operations available");
                 if inner.fee_increase_count > 0 {
                     state.transaction_tracker.abandon();
                 }
                 state.no_operations();
             }
             Ok(SendBundleAttemptResult::NoOperationsAfterFeeFilter) => {
+                // Release locks only when nothing is pending (continuing)
+                if state.transaction_tracker.num_pending_transactions() == 0 {
+                    self.assigner.release_all(self.sender_eoa);
+                    state.last_bundle_key = None;
+                }
                 debug!("No operations to bundle after fee filtering");
                 if let Some(underpriced_info) = inner.underpriced_info {
                     // If we are here, there are UOs in the pool that may be correctly priced, but are being blocked by an underpriced replacement
@@ -349,11 +349,16 @@ where
                 }
             }
             Ok(SendBundleAttemptResult::NonceTooLow) => {
-                // reset the transaction tracker and try again
+                // Release all locks — cycle ending
+                self.assigner.release_all(self.sender_eoa);
                 info!("Nonce too low, starting new bundle attempt");
                 state.reset();
             }
             Ok(SendBundleAttemptResult::Underpriced) => {
+                // Release locks only when nothing is pending (continuing)
+                if state.transaction_tracker.num_pending_transactions() == 0 {
+                    self.assigner.release_all(self.sender_eoa);
+                }
                 info!(
                     "Bundle underpriced, marking as underpriced. Num fee increases {:?}",
                     inner.fee_increase_count
@@ -361,6 +366,10 @@ where
                 state.update(InnerState::Building(inner.underpriced(block_number)));
             }
             Ok(SendBundleAttemptResult::ReplacementUnderpriced) => {
+                // Release locks only when nothing is pending (continuing)
+                if state.transaction_tracker.num_pending_transactions() == 0 {
+                    self.assigner.release_all(self.sender_eoa);
+                }
                 info!(
                     "Replacement transaction underpriced, marking as underpriced. Num fee increases {:?}",
                     inner.fee_increase_count
@@ -370,19 +379,28 @@ where
                 state.update(InnerState::Building(inner.underpriced(block_number)));
             }
             Ok(SendBundleAttemptResult::ConditionNotMet) => {
+                // Release locks only when nothing is pending (continuing)
+                if state.transaction_tracker.num_pending_transactions() == 0 {
+                    self.assigner.release_all(self.sender_eoa);
+                }
                 info!("Condition not met, will re-check conditions on next bundle attempt");
                 // Set flag to pass to proposer on next make_bundle call
                 state.condition_not_met = true;
                 state.update(InnerState::Building(inner.retry()));
             }
             Ok(SendBundleAttemptResult::InsufficientFunds) => {
-                // Insufficient funds
+                // Release all locks — cycle ending
+                self.assigner.release_all(self.sender_eoa);
                 info!(
                     "Insufficient funds sending bundle, resetting state and starting new bundle attempt"
                 );
                 state.reset();
             }
             Ok(SendBundleAttemptResult::Rejected) => {
+                // Release locks only when nothing is pending (continuing)
+                if state.transaction_tracker.num_pending_transactions() == 0 {
+                    self.assigner.release_all(self.sender_eoa);
+                }
                 // Bundle was rejected, try with a higher price
                 // May want to consider a simple retry instead of increasing fees, but this should be rare
                 info!(
@@ -392,6 +410,8 @@ where
                 state.update(InnerState::Building(inner.underpriced(block_number)));
             }
             Err(error) => {
+                // Release all locks — cycle ending
+                self.assigner.release_all(self.sender_eoa);
                 error!("Bundle send error {error:?}");
                 self.increment_counter("builder_bundle_txns_failed", &state.last_bundle_key, 1);
                 state.bundle_error(error);
@@ -742,115 +762,79 @@ where
                 .await?
         };
 
-        let assignment = match assignment {
-            AssignmentResult::Assigned(assignment) => assignment,
-            AssignmentResult::NoOperations => {
-                // No work available from any entrypoint
-                self.assigner.release_all(self.sender_eoa);
-                if state.transaction_tracker.num_pending_transactions() == 0 {
-                    state.last_bundle_key = None;
-                }
-                return Ok(SendBundleAttemptResult::NoOperationsInitially);
-            }
-            AssignmentResult::NoOperationsAfterFeeFilter => {
-                // Keep confirmed locks when a pending tx exists; only drop unconfirmed.
-                if state.transaction_tracker.num_pending_transactions() == 0 {
-                    self.assigner.release_all(self.sender_eoa);
-                    state.last_bundle_key = None;
+        let result = match assignment {
+            AssignmentResult::Assigned(assignment) => {
+                let entry_point = assignment.entry_point;
+                let filter_id = assignment.filter_id;
+                let ops = assignment.operations;
+
+                // Build and send bundle. Keep this as a single result path so assigner
+                // cleanup runs for all outcomes, including hard errors.
+                let proposer_key = (entry_point, filter_id.clone());
+                if let Some(proposer) = self.proposers.get(&proposer_key) {
+                    // Clear condition_not_met once make_bundle completes (success or
+                    // NoOperationsAfterFeeFilter), and keep it set for hard failures so the
+                    // next attempt still re-checks conditions.
+                    let condition_not_met = state.condition_not_met;
+                    match proposer
+                        .make_bundle(
+                            ops,
+                            self.sender_eoa,
+                            nonce,
+                            state.block_hash(),
+                            balance,
+                            bundle_fees,
+                            base_fee,
+                            required_op_fees,
+                            condition_not_met,
+                        )
+                        .await
+                    {
+                        Ok(bundle_data) => {
+                            // Pin to this entrypoint only after make_bundle succeeds, so hard
+                            // errors never leave a stale pin.
+                            state.last_bundle_key = Some(proposer_key);
+                            state.condition_not_met = false;
+                            self.send_bundle_from_data(
+                                state,
+                                entry_point,
+                                bundle_data,
+                                nonce,
+                                fee_increase_count,
+                            )
+                            .await
+                        }
+                        Err(BundleProposerError::NoOperationsAfterFeeFilter) => {
+                            state.condition_not_met = false;
+                            Ok(SendBundleAttemptResult::NoOperationsAfterFeeFilter)
+                        }
+                        Err(e) => Err(anyhow::anyhow!("Failed to make bundle: {e:?}")),
+                    }
                 } else {
-                    self.assigner
-                        .confirm_senders_drop_unused(self.sender_eoa, &[]);
-                }
-                return Ok(SendBundleAttemptResult::NoOperationsAfterFeeFilter);
-            }
-        };
-
-        let entry_point = assignment.entry_point;
-        let filter_id = assignment.filter_id;
-        let ops = assignment.operations;
-
-        // Build and send bundle. Keep this as a single result path so assigner
-        // cleanup runs for all outcomes, including hard errors.
-        let proposer_key = (entry_point, filter_id.clone());
-        let result = if let Some(proposer) = self.proposers.get(&proposer_key) {
-            // Clear condition_not_met once make_bundle completes (success or
-            // NoOperationsAfterFeeFilter), and keep it set for hard failures so the
-            // next attempt still re-checks conditions.
-            let condition_not_met = state.condition_not_met;
-            match proposer
-                .make_bundle(
-                    ops,
-                    self.sender_eoa,
-                    nonce,
-                    state.block_hash(),
-                    balance,
-                    bundle_fees,
-                    base_fee,
-                    required_op_fees,
-                    condition_not_met,
-                )
-                .await
-            {
-                Ok(bundle_data) => {
-                    // Pin to this entrypoint only after make_bundle succeeds, so hard
-                    // errors never leave a stale pin.
-                    state.last_bundle_key = Some(proposer_key.clone());
-                    state.condition_not_met = false;
-                    self.send_bundle_from_data(
-                        state,
+                    Err(anyhow::anyhow!(
+                        "Unknown entrypoint config: {:?}, filter_id: {:?}",
                         entry_point,
-                        bundle_data,
-                        nonce,
-                        fee_increase_count,
-                    )
-                    .await
+                        filter_id
+                    ))
                 }
-                Err(BundleProposerError::NoOperationsAfterFeeFilter) => {
-                    state.last_bundle_key = Some(proposer_key.clone());
-                    state.condition_not_met = false;
-                    Ok(SendBundleAttemptResult::NoOperationsAfterFeeFilter)
-                }
-                Err(e) => Err(anyhow::anyhow!("Failed to make bundle: {e:?}")),
             }
-        } else {
-            Err(anyhow::anyhow!(
-                "Unknown entrypoint config: {:?}, filter_id: {:?}",
-                entry_point,
-                filter_id
-            ))
+            AssignmentResult::NoOperations => Ok(SendBundleAttemptResult::NoOperationsInitially),
+            AssignmentResult::NoOperationsAfterFeeFilter => {
+                Ok(SendBundleAttemptResult::NoOperationsAfterFeeFilter)
+            }
         };
 
-        // Handle assigner confirmations based on result
+        // Confirm senders used in successful bundles, drop all unused locks.
+        // Lock release policy (release_all vs keep-for-retry) is handled by
+        // handle_building_state which has state-machine context.
         match &result {
             Ok(SendBundleAttemptResult::Success(ops)) => {
                 self.assigner
                     .confirm_senders_drop_unused(self.sender_eoa, ops.iter().map(|op| &op.0));
             }
-            Ok(SendBundleAttemptResult::NonceTooLow) => {
-                self.assigner.release_all(self.sender_eoa);
-            }
-            Ok(SendBundleAttemptResult::NoOperationsAfterFeeFilter) => {
-                if state.transaction_tracker.num_pending_transactions() == 0 {
-                    self.assigner.release_all(self.sender_eoa);
-                    state.last_bundle_key = None;
-                } else {
-                    self.assigner
-                        .confirm_senders_drop_unused(self.sender_eoa, &[]);
-                }
-            }
-            Ok(SendBundleAttemptResult::NoOperationsAfterSimulation) => {
-                self.assigner.release_all(self.sender_eoa);
-                if state.transaction_tracker.num_pending_transactions() == 0 {
-                    state.last_bundle_key = None;
-                }
-            }
             _ => {
-                if state.transaction_tracker.num_pending_transactions() == 0 {
-                    self.assigner.release_all(self.sender_eoa);
-                } else {
-                    self.assigner
-                        .confirm_senders_drop_unused(self.sender_eoa, &[]);
-                }
+                self.assigner
+                    .confirm_senders_drop_unused(self.sender_eoa, &[]);
             }
         }
 
@@ -1929,10 +1913,6 @@ mod tests {
                 required_fees: None,
             })
         });
-        mock_tracker
-            .expect_num_pending_transactions()
-            .times(2)
-            .return_const(0_usize);
 
         let expected_filter = filter_id.clone();
         mock_pool
@@ -1989,11 +1969,19 @@ mod tests {
         state.last_bundle_key = Some((pinned_entry_point, filter_id));
 
         // First attempt is pinned and produces no bundle ops.
-        let first = sender.send_bundle(&mut state, 0).await.unwrap();
-        assert!(matches!(
-            first,
-            SendBundleAttemptResult::NoOperationsAfterSimulation
-        ));
+        // Route through handle_building_state so that the state machine clears
+        // last_bundle_key via no_operations() (lock management now lives there).
+        sender
+            .handle_building_state(
+                &mut state,
+                BuildingState {
+                    wait_for_trigger: false,
+                    fee_increase_count: 0,
+                    underpriced_info: None,
+                },
+            )
+            .await
+            .unwrap();
         assert_eq!(state.last_bundle_key, None);
 
         // Second attempt should no longer be pinned and can select the other entrypoint.
@@ -2301,10 +2289,6 @@ mod tests {
                 required_fees: None,
             })
         });
-        mock_tracker
-            .expect_num_pending_transactions()
-            .times(1)
-            .return_const(0_usize);
 
         mock_pool
             .expect_get_ops_summaries()
@@ -2370,10 +2354,6 @@ mod tests {
                 }),
             })
         });
-        mock_tracker
-            .expect_num_pending_transactions()
-            .times(1)
-            .return_const(1_usize);
 
         mock_pool
             .expect_get_ops_summaries()
