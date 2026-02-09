@@ -28,9 +28,11 @@ use linked_hash_map::LinkedHashMap;
 use metrics::{Counter, Histogram};
 use metrics_derive::Metrics;
 use rundler_provider::{
-    BundleHandler, DAGasOracleSync, DAGasProvider, EntryPoint, EvmProvider, HandleOpsOut,
-    ProvidersWithEntryPointT, TransactionRequest, decode_v0_6_handle_ops_revert,
-    decode_v0_6_ops_from_calldata, decode_v0_7_handle_ops_revert, decode_v0_7_ops_from_calldata,
+    BundleHandler, DAGasOracleSync, DAGasProvider, EntryPoint, EvmProvider,
+    GethDebugBuiltInTracerType, GethDebugTracerCallConfig, GethDebugTracerType,
+    GethDebugTracingOptions, HandleOpsOut, ProvidersWithEntryPointT, TransactionRequest,
+    decode_v0_6_handle_ops_revert, decode_v0_6_ops_from_calldata, decode_v0_7_handle_ops_revert,
+    decode_v0_7_ops_from_calldata, get_auth_list_from_transaction,
 };
 use rundler_sim::{SimulationError, SimulationResult, Simulator, ViolationError};
 use rundler_types::{
@@ -387,11 +389,6 @@ where
     }
 
     async fn process_revert(&self, tx_hash: B256) -> anyhow::Result<Vec<B256>> {
-        use rundler_provider::{
-            GethDebugBuiltInTracerType, GethDebugTracerCallConfig, GethDebugTracerType,
-            GethDebugTracingOptions, get_auth_list_from_transaction,
-        };
-
         let address = *self.ep_providers.entry_point().address();
         let chain_spec = &self.settings.chain_spec;
 

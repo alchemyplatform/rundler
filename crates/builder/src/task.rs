@@ -201,55 +201,37 @@ where
         let mut entrypoint_infos: Vec<crate::assigner::EntrypointInfo> = vec![];
         let mut proposers: HashMap<ProposerKey, Box<dyn BundleProposerT>> = HashMap::new();
         for ep in &self.args.entry_points {
-            if ep.builders.is_empty() {
-                // No builders configured - create a default entry with no filter/proxy
-                let proposer_key = (ep.address, None);
+            // Enforce unique filter_ids per entrypoint
+            let mut seen_filter_ids: HashSet<Option<String>> = HashSet::new();
+            for builder in &ep.builders {
+                if !seen_filter_ids.insert(builder.filter_id.clone()) {
+                    return Err(anyhow::anyhow!(
+                        "Entry point {:?} has duplicate builder config for filter_id {:?}",
+                        ep.address,
+                        builder.filter_id
+                    ));
+                }
+            }
+
+            // Create an assigner entry and proposer for each builder configuration
+            for builder in &ep.builders {
+                // Submission proxies are not supported for v0.9+ entrypoints
+                if builder.submission_proxy.is_some() && ep.version >= EntryPointVersion::V0_9 {
+                    return Err(anyhow::anyhow!(
+                        "Submission proxies are not supported for entry point v0.9+ ({:?})",
+                        ep.address
+                    ));
+                }
+
+                let proposer_key = (ep.address, builder.filter_id.clone());
 
                 entrypoint_infos.push(crate::assigner::EntrypointInfo {
                     address: ep.address,
-                    filter_id: None,
+                    filter_id: proposer_key.1.clone(),
                 });
-                let builder_tag = proposer_tag(&ep.address, None, None);
-                let proposer = self
-                    .create_proposer_for_entrypoint(ep, None, builder_tag)
-                    .await?;
-                proposers.insert(proposer_key, proposer);
-                info!(
-                    "Registered proposer for entrypoint {:?} (version {:?})",
-                    ep.address, ep.version
-                );
-            } else {
-                // Enforce unique filter_ids per entrypoint
-                let mut seen_filter_ids: HashSet<Option<String>> = HashSet::new();
-                for builder in &ep.builders {
-                    if !seen_filter_ids.insert(builder.filter_id.clone()) {
-                        return Err(anyhow::anyhow!(
-                            "Entry point {:?} has duplicate builder config for filter_id {:?}",
-                            ep.address,
-                            builder.filter_id
-                        ));
-                    }
-                }
 
-                // Create an assigner entry and proposer for each builder configuration
-                for builder in &ep.builders {
-                    // Submission proxies are not supported for v0.9+ entrypoints
-                    if builder.submission_proxy.is_some() && ep.version >= EntryPointVersion::V0_9 {
-                        return Err(anyhow::anyhow!(
-                            "Submission proxies are not supported for entry point v0.9+ ({:?})",
-                            ep.address
-                        ));
-                    }
-
-                    let proposer_key = (ep.address, builder.filter_id.clone());
-
-                    entrypoint_infos.push(crate::assigner::EntrypointInfo {
-                        address: ep.address,
-                        filter_id: proposer_key.1.clone(),
-                    });
-
-                    // Look up the submission proxy from chain_spec if configured
-                    let submission_proxy = builder
+                // Look up the submission proxy from chain_spec if configured
+                let submission_proxy = builder
                         .submission_proxy
                         .map(|proxy_address| {
                             self.args
@@ -264,21 +246,20 @@ where
                                 })
                         })
                         .transpose()?;
-                    let builder_tag = proposer_tag(
-                        &ep.address,
-                        builder.filter_id.as_deref(),
-                        builder.submission_proxy,
-                    );
+                let builder_tag = proposer_tag(
+                    &ep.address,
+                    builder.filter_id.as_deref(),
+                    builder.submission_proxy,
+                );
 
-                    let proposer = self
-                        .create_proposer_for_entrypoint(ep, submission_proxy, builder_tag)
-                        .await?;
-                    proposers.insert(proposer_key, proposer);
-                    info!(
-                        "Registered proposer for entrypoint {:?} (version {:?}, filter_id: {:?}, proxy: {:?})",
-                        ep.address, ep.version, builder.filter_id, builder.submission_proxy
-                    );
-                }
+                let proposer = self
+                    .create_proposer_for_entrypoint(ep, submission_proxy, builder_tag)
+                    .await?;
+                proposers.insert(proposer_key, proposer);
+                info!(
+                    "Registered proposer for entrypoint {:?} (version {:?}, filter_id: {:?}, proxy: {:?})",
+                    ep.address, ep.version, builder.filter_id, builder.submission_proxy
+                );
             }
         }
 
