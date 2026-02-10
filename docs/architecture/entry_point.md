@@ -41,10 +41,10 @@ Rundler uses the same API interface for both v0.6 and v0.7 ABIs. It determines w
 
 See the version of the spec associated with the entry point version for the expected schemas.
 
-- [v0.6.0](https://github.com/eth-infinitism/account-abstraction/blob/v0.6.0/eip/EIPS/eip-4337.md#rpc-methods-eth-namespace)
-- [v0.7.0](https://github.com/eth-infinitism/account-abstraction/blob/v0.7.0/erc/ERCS/erc-4337.md#rpc-methods-eth-namespace)
-- [v0.8.0](https://github.com/eth-infinitism/account-abstraction/blob/v0.8.0/erc/ERCS/erc-4337.md#rpc-methods-eth-namespace)
-- [v0.9.0](https://github.com/eth-infinitism/account-abstraction/blob/v0.9.0/erc/ERCS/erc-4337.md#rpc-methods-eth-namespace)
+- [v0.6.0](https://github.com/eth-infinitism/account-abstraction/releases/tag/v0.6.0)
+- [v0.7.0](https://github.com/eth-infinitism/account-abstraction/releases/tag/v0.7.0)
+- [v0.8.0](https://github.com/eth-infinitism/account-abstraction/releases/tag/v0.8.0)
+- [v0.9.0](https://github.com/eth-infinitism/account-abstraction/releases/tag/v0.9.0)
 
 ## Internals
 
