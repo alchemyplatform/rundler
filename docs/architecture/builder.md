@@ -98,7 +98,7 @@ The Assigner component is responsible for coordinating work distribution among w
 
 ### Proposers
 
-Proposers are stored in a shared `HashMap<(Address, Option<String>), BundleProposerT>` keyed by `(entrypoint address, filter_id)`. Each proposer handles bundle construction, fee estimation, and revert processing for its entrypoint configuration. Workers look up the appropriate proposer after the Assigner selects an entrypoint.
+Proposers are stored in a shared `HashMap<(Address, Option<String>), Box<dyn BundleProposerT>>` keyed by `(entrypoint address, filter_id)`. Each proposer handles bundle construction and revert processing for its entrypoint configuration. Fee estimation is performed by the worker before invoking the proposer. Workers look up the appropriate proposer after the Assigner selects an entrypoint.
 
 ## Sender State Machine
 

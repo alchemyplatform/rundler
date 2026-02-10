@@ -107,17 +107,17 @@ pub(crate) enum BundleProposerError {
 #[derive(Debug)]
 pub(crate) struct BundleData {
     /// The transaction to send
-    pub tx: rundler_provider::TransactionRequest,
+    pub(crate) tx: rundler_provider::TransactionRequest,
     /// Expected storage for conditional submission
-    pub expected_storage: ExpectedStorage,
+    pub(crate) expected_storage: ExpectedStorage,
     /// Gas fees used for this bundle
-    pub gas_fees: GasFees,
+    pub(crate) gas_fees: GasFees,
     /// Hashes of operations in the bundle (sender, hash) pairs
-    pub ops: Vec<(Address, B256)>,
+    pub(crate) ops: Vec<(Address, B256)>,
     /// Hashes of rejected operations to remove from pool
-    pub rejected_op_hashes: Vec<B256>,
+    pub(crate) rejected_op_hashes: Vec<B256>,
     /// Entity updates to apply to pool
-    pub entity_updates: Vec<EntityUpdate>,
+    pub(crate) entity_updates: Vec<EntityUpdate>,
 }
 
 impl BundleData {
@@ -127,9 +127,31 @@ impl BundleData {
     }
 }
 
+/// Request parameters for building a bundle.
+#[derive(Debug)]
+pub(crate) struct BundleProposalRequest {
+    /// Operations to include in the bundle
+    pub(crate) ops: Vec<PoolOperation>,
+    /// The sender EOA address for the bundle transaction
+    pub(crate) sender_eoa: Address,
+    /// The nonce for the bundle transaction
+    pub(crate) nonce: u64,
+    /// The block hash to build against
+    pub(crate) block_hash: B256,
+    /// The maximum fee the bundle can spend (signer balance)
+    pub(crate) max_bundle_fee: U256,
+    /// Gas fees for the bundle transaction
+    pub(crate) bundle_fees: GasFees,
+    /// The current base fee
+    pub(crate) base_fee: u128,
+    /// Required minimum fees for operations
+    pub(crate) required_op_fees: GasFees,
+    /// Whether to re-check conditions for operations
+    pub(crate) condition_not_met: bool,
+}
+
 /// Type-erased bundle proposer trait.
 /// Allows workers to build bundles without knowing the specific entrypoint version.
-#[allow(clippy::too_many_arguments)]
 #[async_trait]
 #[cfg_attr(test, mockall::automock)]
 pub(crate) trait BundleProposerT: Send + Sync {
@@ -137,18 +159,8 @@ pub(crate) trait BundleProposerT: Send + Sync {
     ///
     /// If `condition_not_met` is true, the proposer will re-check all conditions
     /// for operations in the bundle, rejecting any whose conditions are no longer met.
-    async fn make_bundle(
-        &self,
-        ops: Vec<PoolOperation>,
-        sender_eoa: Address,
-        nonce: u64,
-        block_hash: B256,
-        max_bundle_fee: U256,
-        bundle_fees: GasFees,
-        base_fee: u128,
-        required_op_fees: GasFees,
-        condition_not_met: bool,
-    ) -> BundleProposerResult<BundleData>;
+    async fn make_bundle(&self, request: BundleProposalRequest)
+    -> BundleProposerResult<BundleData>;
 
     /// Process a reverted bundle transaction and return op hashes to remove from pool.
     /// Fetches the trace and transaction internally, then decodes and processes the revert.
@@ -183,15 +195,19 @@ where
     #[allow(clippy::too_many_arguments)]
     async fn propose_typed_bundle(
         &self,
-        sender_eoa: Address,
-        ops: Vec<PoolOperation>,
-        block_hash: B256,
-        max_bundle_fee: U256,
-        bundle_fees: GasFees,
-        base_fee: u128,
-        required_op_fees: GasFees,
-        condition_not_met: bool,
+        request: BundleProposalRequest,
     ) -> BundleProposerResult<Bundle<EP::UO>> {
+        let BundleProposalRequest {
+            ops,
+            sender_eoa,
+            nonce: _,
+            block_hash,
+            max_bundle_fee,
+            bundle_fees,
+            base_fee,
+            required_op_fees,
+            condition_not_met,
+        } = request;
         let timer = Instant::now();
         let all_paymaster_addresses = ops
             .iter()
@@ -332,29 +348,13 @@ where
 {
     async fn make_bundle(
         &self,
-        ops: Vec<PoolOperation>,
-        sender_eoa: Address,
-        nonce: u64,
-        block_hash: B256,
-        max_bundle_fee: U256,
-        bundle_fees: GasFees,
-        base_fee: u128,
-        required_op_fees: GasFees,
-        condition_not_met: bool,
+        request: BundleProposalRequest,
     ) -> BundleProposerResult<BundleData> {
+        let nonce = request.nonce;
+        let sender_eoa = request.sender_eoa;
+
         // Build typed bundle, then erase types into BundleData
-        let bundle = self
-            .propose_typed_bundle(
-                sender_eoa,
-                ops,
-                block_hash,
-                max_bundle_fee,
-                bundle_fees,
-                base_fee,
-                required_op_fees,
-                condition_not_met,
-            )
-            .await?;
+        let bundle = self.propose_typed_bundle(request).await?;
 
         // Collect op info before building transaction
         let ops: Vec<_> = bundle
@@ -4481,16 +4481,17 @@ mod tests {
         );
 
         proposer
-            .propose_typed_bundle(
-                sender_eoa,
+            .propose_typed_bundle(BundleProposalRequest {
                 ops,
-                current_block_hash,
+                sender_eoa,
+                nonce: 0,
+                block_hash: current_block_hash,
                 max_bundle_fee,
                 bundle_fees,
                 base_fee,
                 required_op_fees,
-                notify_condition_not_met,
-            )
+                condition_not_met: notify_condition_not_met,
+            })
             .await
     }
 

@@ -42,7 +42,7 @@ use tracing::{debug, error, info, instrument, warn};
 use crate::{
     ProposerKey,
     assigner::{Assigner, AssignmentResult},
-    bundle_proposer::{BundleData, BundleProposerError, BundleProposerT},
+    bundle_proposer::{BundleData, BundleProposalRequest, BundleProposerError, BundleProposerT},
     emit::{BuilderEvent, BundleTxDetails},
     transaction_tracker::{
         TrackerState, TrackerUpdate, TransactionTracker, TransactionTrackerError,
@@ -736,17 +736,17 @@ where
                     // next attempt still re-checks conditions.
                     let condition_not_met = state.condition_not_met;
                     match proposer
-                        .make_bundle(
+                        .make_bundle(BundleProposalRequest {
                             ops,
-                            self.sender_eoa,
+                            sender_eoa: self.sender_eoa,
                             nonce,
-                            state.block_hash(),
-                            balance,
+                            block_hash: state.block_hash(),
+                            max_bundle_fee: balance,
                             bundle_fees,
                             base_fee,
                             required_op_fees,
                             condition_not_met,
-                        )
+                        })
                         .await
                     {
                         Ok(bundle_data) => {
@@ -1137,7 +1137,9 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
     }
 
     // Resets the state and transaction tracker, doesn't wait for next trigger.
-    // Callers must call `assigner.release_all()` before this to avoid leaking sender locks.
+    // Callers must ensure `assigner.release_all()` is called in the same iteration
+    // to avoid leaking sender locks. The release may happen before or after this call
+    // since reset is lazy (it sets a flag that takes effect in `wait_for_trigger`).
     fn reset(&mut self) {
         self.requires_reset = true;
         self.condition_not_met = false;
@@ -2757,7 +2759,7 @@ mod tests {
         proposer
             .expect_make_bundle()
             .times(times)
-            .returning(move |_, _, _, _, _, _, _, _, _| {
+            .returning(move |_| {
                 let ops = ops.clone();
                 Box::pin(async { Ok(bundle_data(ops)) })
             });
