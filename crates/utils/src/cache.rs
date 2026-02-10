@@ -34,7 +34,7 @@ where
 
 impl<K, V, L, S> Debug for LruMap<K, V, L, S>
 where
-    K: Hash + PartialEq + Display,
+    K: Hash + PartialEq + Debug,
     V: Debug,
     L: Limiter<K, V> + Debug,
     S: BuildHasher,
@@ -48,7 +48,9 @@ where
             "res_fn_iter",
             &format_args!(
                 "Iter: {{{} }}",
-                self.iter().map(|(k, v)| format!(" {k}: {v:?}")).format(",")
+                self.iter()
+                    .map(|(k, v)| format!(" {k:?}: {v:?}"))
+                    .format(",")
             ),
         );
 
