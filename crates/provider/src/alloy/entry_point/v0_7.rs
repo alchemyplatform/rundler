@@ -782,7 +782,7 @@ pub fn decode_handle_ops_revert(revert_data: &Option<Bytes>) -> Option<HandleOps
                 inner,
             }) => HandleOpsOut::FailedOp(
                 opIndex.try_into().unwrap_or(usize::MAX),
-                format!("{}:{}", reason, inner),
+                format!("{reason}:{inner}"),
             ),
             IEntryPointErrors::SignatureValidationFailed(failure) => {
                 HandleOpsOut::SignatureValidationFailed(failure.aggregator)

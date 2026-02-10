@@ -17,6 +17,7 @@ use std::{
 };
 
 use alloy_primitives::{Address, U256};
+use anyhow::bail;
 use metrics::{Counter, Gauge};
 use metrics_derive::Metrics;
 use rundler_types::{
@@ -239,8 +240,7 @@ impl Assigner {
                 AssignmentResult::NoOperationsAfterFeeFilter
             } else {
                 tracing::debug!(
-                    "Builder Assigner: no eligible ops for builder {:?}",
-                    builder_address
+                    "Builder Assigner: no eligible ops for builder {builder_address:?}"
                 );
                 AssignmentResult::NoOperations
             });
@@ -281,11 +281,10 @@ impl Assigner {
                 });
 
             if let Some((pos, c, gap)) = starved {
+                let ep_address = c.ep.address;
+                let ep_filter = &c.ep.filter_id;
                 tracing::info!(
-                    "Builder Assigner: Force-selecting starved entrypoint {:?} (filter: {:?}) - gap: {} cycles",
-                    c.ep.address,
-                    c.ep.filter_id,
-                    gap
+                    "Builder Assigner: Force-selecting starved entrypoint {ep_address:?} (filter: {ep_filter:?}) - gap: {gap} cycles"
                 );
                 ep_metrics_for(&c.ep).ep_starvation_wakeups.increment(1);
                 let starved_candidate = candidates.remove(pos);
@@ -316,14 +315,12 @@ impl Assigner {
 
         let total_candidates = candidates.len();
         for (candidate_idx, candidate) in candidates.into_iter().enumerate() {
+            let ep_address = candidate.ep.address;
+            let ep_filter = &candidate.ep.filter_id;
+            let candidate_num = candidate_idx + 1;
+            let num_summaries = candidate.ops.len();
             tracing::info!(
-                "Builder Assigner: selected_ep: {:?} (filter: {:?}) for builder {:?}, candidate {}/{}, num pool summaries: {:?}",
-                candidate.ep.address,
-                candidate.ep.filter_id,
-                builder_address,
-                candidate_idx + 1,
-                total_candidates,
-                candidate.ops.len()
+                "Builder Assigner: selected_ep: {ep_address:?} (filter: {ep_filter:?}) for builder {builder_address:?}, candidate {candidate_num}/{total_candidates}, num pool summaries: {num_summaries}"
             );
 
             // Assign operations from selected entrypoint
@@ -339,9 +336,7 @@ impl Assigner {
 
             if assigned_ops.is_empty() {
                 tracing::info!(
-                    "Builder Assigner: no assigned ops for ep {:?} (filter: {:?}) after selection",
-                    candidate.ep.address,
-                    candidate.ep.filter_id
+                    "Builder Assigner: no assigned ops for ep {ep_address:?} (filter: {ep_filter:?}) after selection"
                 );
                 continue;
             }
@@ -505,11 +500,9 @@ impl Assigner {
             let total_cost = U256::from(op.gas_limit) * U256::from(required_fees.max_fee_per_gas);
             if total_cost > max_cost {
                 if log {
+                    let hash = op.hash;
                     tracing::info!(
-                        "Builder Assigner: op {:?} doesn't meet bundler sponsorship requirements: total_cost: {:?}, max_cost: {:?}",
-                        op.hash,
-                        total_cost,
-                        max_cost
+                        "Builder Assigner: op {hash:?} doesn't meet bundler sponsorship requirements: total_cost: {total_cost:?}, max_cost: {max_cost:?}"
                     );
                 }
                 return false;
@@ -521,12 +514,11 @@ impl Assigner {
             || op.max_fee_per_gas < required_fees.max_fee_per_gas
         {
             if log {
+                let hash = op.hash;
+                let max_priority = op.max_priority_fee_per_gas;
+                let max_fee = op.max_fee_per_gas;
                 tracing::info!(
-                    "Builder Assigner: op {:?} doesn't meet fee requirements: max_priority_fee_per_gas: {:?}, max_fee_per_gas: {:?}, required_fees: {:?}",
-                    op.hash,
-                    op.max_priority_fee_per_gas,
-                    op.max_fee_per_gas,
-                    required_fees
+                    "Builder Assigner: op {hash:?} doesn't meet fee requirements: max_priority_fee_per_gas: {max_priority:?}, max_fee_per_gas: {max_fee:?}, required_fees: {required_fees:?}"
                 );
             }
             return false;
@@ -559,11 +551,10 @@ impl Assigner {
                     .uo_sender_to_builder_state
                     .entry(op.sender)
                     .or_insert_with(|| {
+                        let hash = op.hash;
+                        let sender = op.sender;
                         tracing::debug!(
-                            "op {:?} sender {:?} assigned to builder {:?}",
-                            op.hash,
-                            op.sender,
-                            builder_address
+                            "op {hash:?} sender {sender:?} assigned to builder {builder_address:?}"
                         );
                         per_builder_metrics.senders_assigned.increment(1);
                         per_ep_metrics.ep_senders_assigned.increment(1);
@@ -571,11 +562,10 @@ impl Assigner {
                     });
 
                 if *locked_builder_address != builder_address {
+                    let hash = op.hash;
+                    let sender = op.sender;
                     tracing::debug!(
-                        "op {:?} sender {:?} already assigned to another builder {:?}, skipping",
-                        op.hash,
-                        op.sender,
-                        locked_builder_address
+                        "op {hash:?} sender {sender:?} already assigned to another builder {locked_builder_address:?}, skipping"
                     );
                     continue;
                 }
@@ -618,16 +608,16 @@ impl Assigner {
     //
     // This method is typically called when the builder is done forming and sending a bundle. Confirmed senders are the senders that were included in the bundle.
     //
-    // PANICS:
-    // - If the confirmed_sender is not found in the state, the builder must have been assigned this sender via the assign_work method.
-    // - If the confirmed_sender is assigned to another builder, the builder must have been assigned this sender via the assign_work method.
-    // - If the builder_address is not found in the state, the builder must have been assigned via the assign_work method.
-    // - If the builder is assigned a sender that is not found in the uo_sender_to_builder_state map, this is an internal error.
+    // Returns an error if a confirmed sender is not found in the state or is assigned to a
+    // different builder — both indicate a broken lock contract.
+    //
+    // If builder_address has no entry in builder_to_uo_senders (e.g. called with an
+    // unknown builder or after all senders were already released), this is a no-op.
     pub(crate) fn confirm_senders_drop_unused<'a>(
         &self,
         builder_address: Address,
         confirmed_senders: impl IntoIterator<Item = &'a Address>,
-    ) {
+    ) -> anyhow::Result<()> {
         let mut state = self.state.lock().unwrap();
         let per_builder_metrics =
             PerBuilderMetrics::new_with_labels(&[("builder_address", builder_address.to_string())]);
@@ -638,24 +628,24 @@ impl Assigner {
 
         // Confirm all of the senders in state
         for confirmed_sender in confirmed_senders.into_iter() {
-            let (locked_builder_address, lock_state) = state
-                .uo_sender_to_builder_state
-                .get_mut(confirmed_sender)
-                .expect("BUG: confirmed_sender not found in state, lock contract broken");
+            let Some((locked_builder_address, lock_state)) =
+                state.uo_sender_to_builder_state.get_mut(confirmed_sender)
+            else {
+                bail!(
+                    "confirmed_sender {confirmed_sender:?} not found in state, lock contract broken"
+                );
+            };
 
             if *locked_builder_address != builder_address {
-                panic!(
-                    "BUG: confirmed_sender {:?} is assigned to another builder expected: {:?} found: {:?}, lock contract broken",
-                    confirmed_sender, builder_address, locked_builder_address
+                bail!(
+                    "confirmed_sender {confirmed_sender:?} is assigned to builder {locked_builder_address:?}, expected {builder_address:?}, lock contract broken"
                 );
             }
 
             // Confirm the sender to the builder
             if *lock_state == LockState::Assigned {
                 tracing::debug!(
-                    "confirmed_sender {:?} confirmed to builder {:?}",
-                    confirmed_sender,
-                    builder_address
+                    "confirmed_sender {confirmed_sender:?} confirmed to builder {builder_address:?}"
                 );
                 per_builder_metrics.senders_confirmed.increment(1);
                 per_builder_metrics.senders_assigned.decrement(1);
@@ -669,16 +659,17 @@ impl Assigner {
 
         // Drop locks for all senders that are still in the assigned state
         let Some(builder_senders) = state.builder_to_uo_senders.get(&builder_address) else {
-            return;
+            return Ok(());
         };
 
         let mut to_remove = Vec::new();
 
         for sender in builder_senders.iter() {
-            let entry = state
-                .uo_sender_to_builder_state
-                .get(sender)
-                .expect("BUG: sender not found in state, lock contract broken");
+            let Some(entry) = state.uo_sender_to_builder_state.get(sender) else {
+                bail!(
+                    "sender {sender:?} in builder_to_uo_senders but not in uo_sender_to_builder_state, lock contract broken"
+                );
+            };
             if entry.1 != LockState::Confirmed {
                 to_remove.push(*sender);
             }
@@ -691,11 +682,7 @@ impl Assigner {
                 .get_mut(&builder_address)
                 .unwrap();
             builder_senders.remove(&sender);
-            tracing::debug!(
-                "sender {:?} removed from builder {:?}",
-                sender,
-                builder_address
-            );
+            tracing::debug!("sender {sender:?} removed from builder {builder_address:?}");
             per_builder_metrics.senders_assigned.decrement(1);
             if let Some(ref ep_m) = per_ep_metrics {
                 ep_m.ep_senders_assigned.decrement(1);
@@ -707,6 +694,8 @@ impl Assigner {
                 state.builder_to_pinned_proposer.remove(&builder_address);
             }
         }
+
+        Ok(())
     }
 
     /// Returns the proposer key that the builder is currently pinned to, if any.
@@ -984,7 +973,9 @@ mod tests {
         let _ = assign_default(&assigner, address(0)).await;
 
         // Confirm sender 1, drop sender 2
-        assigner.confirm_senders_drop_unused(address(0), &[address(1)]);
+        assigner
+            .confirm_senders_drop_unused(address(0), &[address(1)])
+            .unwrap();
 
         // Different builder should be able to receive address(2)
         let assignment = assign_expect_default(&assigner, address(1)).await;
@@ -1021,9 +1012,13 @@ mod tests {
         let _ = assign_default(&assigner, address(0)).await;
 
         // confirm address(1)
-        assigner.confirm_senders_drop_unused(address(0), &[address(1)]);
+        assigner
+            .confirm_senders_drop_unused(address(0), &[address(1)])
+            .unwrap();
         // this should not drop lock on address(1)
-        assigner.confirm_senders_drop_unused(address(0), &[]);
+        assigner
+            .confirm_senders_drop_unused(address(0), &[])
+            .unwrap();
 
         // Different builder should only get address(2)
         let assignment = assign_expect_default(&assigner, address(1)).await;
@@ -1032,26 +1027,35 @@ mod tests {
     }
 
     #[tokio::test]
-    #[should_panic]
     async fn test_try_confirm_unknown_sender() {
         let mut mock_pool = MockPool::new();
         let ops = create_test_ops(&[address(1), address(2)]);
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
         let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
-        assigner.confirm_senders_drop_unused(address(0), &[address(3)]);
+        let err = assigner
+            .confirm_senders_drop_unused(address(0), &[address(3)])
+            .expect_err("should error on unknown sender");
+        assert!(
+            err.to_string().contains("not found in state"),
+            "unexpected error: {err:#}"
+        );
     }
 
     #[tokio::test]
-    #[should_panic]
     async fn test_try_confirm_sender_not_assigned() {
         let mock_pool = MockPool::new();
         let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
-        assigner.confirm_senders_drop_unused(address(1), &[address(1)]);
+        let err = assigner
+            .confirm_senders_drop_unused(address(1), &[address(1)])
+            .expect_err("should error on unassigned sender");
+        assert!(
+            err.to_string().contains("not found in state"),
+            "unexpected error: {err:#}"
+        );
     }
 
     #[tokio::test]
-    #[should_panic]
     async fn test_try_confirm_sender_assigned_to_other_builder() {
         let mut mock_pool = MockPool::new();
         let ops = create_test_ops(&[address(1), address(2)]);
@@ -1060,7 +1064,13 @@ mod tests {
         let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
         let _ = assign_default(&assigner, address(0)).await;
 
-        assigner.confirm_senders_drop_unused(address(1), &[address(1)]);
+        let err = assigner
+            .confirm_senders_drop_unused(address(1), &[address(1)])
+            .expect_err("should error on sender assigned to other builder");
+        assert!(
+            err.to_string().contains("lock contract broken"),
+            "unexpected error: {err:#}"
+        );
     }
 
     fn address(i: u64) -> Address {
@@ -1175,7 +1185,7 @@ mod tests {
     #[tokio::test]
     async fn test_starvation_prevention() {
         // EP1 always has 10 ops, EP2 always has 2 ops
-        // With num_signers=4, threshold = 4/2 = 2 cycles
+        // With num_signers=4 and starvation_ratio=0.50, threshold = 4 * 0.50 = 2 cycles
         // EP1 should be selected first (more ops), but after 2 cycles EP2 should be force-selected
 
         let ep1_ops = create_test_ops_for_entrypoint(
@@ -1374,7 +1384,9 @@ mod tests {
 
         // Confirm senders to create confirmed locks
         let senders: Vec<Address> = result.operations.iter().map(|op| op.uo.sender()).collect();
-        assigner.confirm_senders_drop_unused(address(0), &senders);
+        assigner
+            .confirm_senders_drop_unused(address(0), &senders)
+            .unwrap();
 
         // Verify pin is set
         assert_eq!(
@@ -1437,7 +1449,9 @@ mod tests {
         // First: assign and confirm to establish pin
         let result = assign_expect_default(&assigner, address(0)).await;
         let senders: Vec<Address> = result.operations.iter().map(|op| op.uo.sender()).collect();
-        assigner.confirm_senders_drop_unused(address(0), &senders);
+        assigner
+            .confirm_senders_drop_unused(address(0), &senders)
+            .unwrap();
 
         // Second call: pinned EP has no ops
         let result2 = assign_default(&assigner, address(0)).await;
@@ -1467,7 +1481,9 @@ mod tests {
         assert!(assigner.pinned_proposer(address(0)).is_some());
 
         // Confirm with empty list — drops all assigned senders
-        assigner.confirm_senders_drop_unused(address(0), &[]);
+        assigner
+            .confirm_senders_drop_unused(address(0), &[])
+            .unwrap();
 
         // Pin should be cleared because the builder has no remaining senders
         assert_eq!(assigner.pinned_proposer(address(0)), None);

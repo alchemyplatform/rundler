@@ -238,25 +238,33 @@ where
         state: &mut SenderMachineState<T, TRIG>,
     ) -> anyhow::Result<()> {
         let tracker_update = state.wait_for_trigger().await?;
+        let has_tracker_update = tracker_update.is_some();
 
         // Snapshot the pinned proposer before release_all clears it.
         // Handlers use this snapshot for metrics, revert processing, and event emission.
         let pinned = self.assigner.pinned_proposer(self.sender_eoa);
 
-        if tracker_update.is_some() {
-            // release all operations on any tracker update as all tracker updates mean that there are no longer any valid pending transactions
-            self.assigner.release_all(self.sender_eoa);
-        }
-
         match state.inner {
             InnerState::Building(building_state) => {
+                if has_tracker_update {
+                    // Building state has no tracker-dependent cleanup, so release immediately.
+                    self.assigner.release_all(self.sender_eoa);
+                }
                 self.handle_building_state(state, building_state).await?;
             }
             InnerState::Pending(pending_state) => {
                 self.handle_pending_state(state, pending_state, tracker_update, pinned)
                     .await?;
+                if has_tracker_update {
+                    // Defer lock release until after pending handling so reverted bundles
+                    // are cleaned from the pool before senders become assignable again.
+                    self.assigner.release_all(self.sender_eoa);
+                }
             }
             InnerState::Cancelling(cancelling_state) => {
+                if has_tracker_update {
+                    self.assigner.release_all(self.sender_eoa);
+                }
                 self.handle_cancelling_state(state, cancelling_state)
                     .await?;
             }
@@ -268,6 +276,9 @@ where
                     pinned,
                 )
                 .await?;
+                if has_tracker_update {
+                    self.assigner.release_all(self.sender_eoa);
+                }
             }
         }
 
@@ -286,7 +297,7 @@ where
 
         // send bundle
         let block_number = state.block_number();
-        debug!("Building bundle on block {}", block_number);
+        debug!("Building bundle on block {block_number}");
         let result = self.send_bundle(state, inner.fee_increase_count).await;
 
         // Snapshot pinned proposer after send_bundle (pin is set during assignment)
@@ -368,9 +379,9 @@ where
                 if state.transaction_tracker.num_pending_transactions() == 0 {
                     self.assigner.release_all(self.sender_eoa);
                 }
+                let fee_increases = inner.fee_increase_count;
                 info!(
-                    "Bundle underpriced, marking as underpriced. Num fee increases {:?}",
-                    inner.fee_increase_count
+                    "Bundle underpriced, marking as underpriced. Num fee increases {fee_increases}"
                 );
                 state.update(InnerState::Building(inner.underpriced(block_number)));
             }
@@ -379,9 +390,9 @@ where
                 if state.transaction_tracker.num_pending_transactions() == 0 {
                     self.assigner.release_all(self.sender_eoa);
                 }
+                let fee_increases = inner.fee_increase_count;
                 info!(
-                    "Replacement transaction underpriced, marking as underpriced. Num fee increases {:?}",
-                    inner.fee_increase_count
+                    "Replacement transaction underpriced, marking as underpriced. Num fee increases {fee_increases}"
                 );
                 // unabandon to allow fee estimation to consider any submitted transactions, wait for next trigger
                 state.transaction_tracker.unabandon();
@@ -412,10 +423,8 @@ where
                 }
                 // Bundle was rejected, try with a higher price
                 // May want to consider a simple retry instead of increasing fees, but this should be rare
-                info!(
-                    "Bundle rejected, assuming underpriced. Num fee increases {:?}",
-                    inner.fee_increase_count
-                );
+                let fee_increases = inner.fee_increase_count;
+                info!("Bundle rejected, assuming underpriced. Num fee increases {fee_increases}");
                 state.update(InnerState::Building(inner.underpriced(block_number)));
             }
             Err(error) => {
@@ -638,7 +647,7 @@ where
                         self.increment_counter(
                             "builder_cancellation_txns_total_fee",
                             &pinned,
-                            fee as u64,
+                            fee.min(u64::MAX as u128) as u64,
                         );
                     };
                 }
@@ -755,9 +764,7 @@ where
                     }
                 } else {
                     Err(anyhow::anyhow!(
-                        "Unknown entrypoint config: {:?}, filter_id: {:?}",
-                        entry_point,
-                        filter_id
+                        "Unknown entrypoint config: {entry_point:?}, filter_id: {filter_id:?}"
                     ))
                 }
             }
@@ -773,11 +780,11 @@ where
         match &result {
             Ok(SendBundleAttemptResult::Success(ops)) => {
                 self.assigner
-                    .confirm_senders_drop_unused(self.sender_eoa, ops.iter().map(|op| &op.0));
+                    .confirm_senders_drop_unused(self.sender_eoa, ops.iter().map(|op| &op.0))?;
             }
             _ => {
                 self.assigner
-                    .confirm_senders_drop_unused(self.sender_eoa, &[]);
+                    .confirm_senders_drop_unused(self.sender_eoa, &[])?;
             }
         }
 
@@ -849,13 +856,10 @@ where
         let gas_fees = bundle_data.gas_fees;
         let ops = bundle_data.ops;
 
+        let num_rejected = bundle_data.rejected_op_hashes.len();
+        let num_updated_entities = bundle_data.entity_updates.len();
         info!(
-            "Selected bundle for {:?}: nonce: {:?}. Ops: {:?}. Num rejected: {:?}. Num updated entities: {:?}",
-            entry_point,
-            nonce,
-            ops,
-            bundle_data.rejected_op_hashes.len(),
-            bundle_data.entity_updates.len()
+            "Selected bundle for {entry_point:?}: nonce: {nonce:?}. Ops: {ops:?}. Num rejected: {num_rejected}. Num updated entities: {num_updated_entities}"
         );
 
         // Send the transaction
@@ -1066,9 +1070,9 @@ where
             .context("No entry point for revert processing")?;
         let ep_address = proposer_key.0;
 
+        let filter_id = &proposer_key.1;
         let proposer = self.proposers.get(&proposer_key).context(format!(
-            "Unknown entry point config: {:?}, filter_id: {:?}",
-            proposer_key.0, proposer_key.1
+            "Unknown entry point config: {ep_address:?}, filter_id: {filter_id:?}"
         ))?;
 
         let to_remove = proposer.process_revert(tx_hash).await?;
@@ -2331,7 +2335,8 @@ mod tests {
         assert_eq!(initial_assignment.operations.len(), 1);
         sender_impl
             .assigner
-            .confirm_senders_drop_unused(sender, &[sender]);
+            .confirm_senders_drop_unused(sender, &[sender])
+            .unwrap();
 
         let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
         let result = sender_impl.send_bundle(&mut state, 0).await.unwrap();

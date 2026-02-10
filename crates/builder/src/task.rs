@@ -31,6 +31,7 @@ use rundler_sim::{
 use rundler_task::TaskSpawnerExt;
 use rundler_types::{
     EntryPointAbiVersion, EntryPointVersion, chain::ChainSpec, pool::Pool as PoolT,
+    proxy::SubmissionProxy,
 };
 use rundler_utils::emit::WithEntryPoint;
 use tokio::sync::{broadcast, mpsc};
@@ -38,7 +39,7 @@ use tracing::info;
 
 use crate::{
     ProposerKey,
-    assigner::Assigner,
+    assigner::{Assigner, EntrypointInfo},
     bundle_proposer::{self, BundleProposerImpl, BundleProposerProviders, BundleProposerT},
     bundle_sender::{self, BundleSender, BundleSenderAction, BundleSenderImpl},
     emit::BuilderEvent,
@@ -114,7 +115,7 @@ fn proposer_tag(
 ) -> String {
     let filter = filter_id.unwrap_or("any");
     let proxy = submission_proxy.map_or_else(|| "none".to_string(), |addr| addr.to_string());
-    format!("proposer:{}:{}:{}", entry_point_address, filter, proxy)
+    format!("proposer:{entry_point_address}:{filter}:{proxy}")
 }
 
 /// Builder settings for an entrypoint
@@ -198,7 +199,7 @@ where
 
         // Build entrypoint info (for assigner) and registry (for proposers) in a single pass.
         // Each (address, filter_id) combination is a separate "virtual entrypoint".
-        let mut entrypoint_infos: Vec<crate::assigner::EntrypointInfo> = vec![];
+        let mut entrypoint_infos: Vec<EntrypointInfo> = vec![];
         let mut proposers: HashMap<ProposerKey, Box<dyn BundleProposerT>> = HashMap::new();
         for ep in &self.args.entry_points {
             // Enforce unique filter_ids per entrypoint
@@ -225,7 +226,7 @@ where
 
                 let proposer_key = (ep.address, builder.filter_id.clone());
 
-                entrypoint_infos.push(crate::assigner::EntrypointInfo {
+                entrypoint_infos.push(EntrypointInfo {
                     address: ep.address,
                     filter_id: proposer_key.1.clone(),
                 });
@@ -320,7 +321,7 @@ where
     async fn create_proposer_for_entrypoint(
         &self,
         ep: &EntryPointBuilderSettings,
-        submission_proxy: Option<Arc<dyn rundler_types::proxy::SubmissionProxy>>,
+        submission_proxy: Option<Arc<dyn SubmissionProxy>>,
         builder_tag: String,
     ) -> anyhow::Result<Box<dyn BundleProposerT>> {
         let proposer_settings = bundle_proposer::Settings {
@@ -475,7 +476,7 @@ where
         };
 
         // Builder tag now uses just the sender address since workers handle all entrypoints
-        let builder_tag = format!("0x{:x}", sender_eoa);
+        let builder_tag = format!("0x{sender_eoa:x}");
 
         let transaction_tracker = TransactionTrackerImpl::new(
             self.providers.evm().clone(),
