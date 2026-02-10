@@ -123,7 +123,16 @@ pub async fn run() -> anyhow::Result<()> {
             rpc::spawn_tasks(task_spawner.clone(), cs, args, opt.common, providers).await?
         }
         Command::Builder(args) => {
-            builder::spawn_tasks(task_spawner.clone(), cs, args, opt.common, providers).await?
+            builder::spawn_tasks(
+                task_spawner.clone(),
+                cs,
+                args,
+                opt.common,
+                providers,
+                mempool_configs,
+                entry_point_builders,
+            )
+            .await?
         }
         Command::Admin(args) => {
             admin::run(args, cs, providers, task_spawner).await?;

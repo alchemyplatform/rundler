@@ -53,11 +53,11 @@ struct LocalBuilderMetrics {
 impl LocalBuilderBuilder {
     /// Create a new local builder server builder
     pub fn new(
-        request_capcity: usize,
+        request_capacity: usize,
         signer_manager: Arc<dyn SignerManager>,
         pool: Arc<dyn Pool>,
     ) -> Self {
-        let (req_sender, req_receiver) = mpsc::channel(request_capcity);
+        let (req_sender, req_receiver) = mpsc::channel(request_capacity);
         Self {
             req_sender,
             req_receiver,
