@@ -538,11 +538,17 @@ where
         // Use the tracker's required_fees as a floor so the cancellation tx
         // is priced above any pending transaction (avoids a wasted ReplacementUnderpriced round-trip).
         let required_fees = state.transaction_tracker.get_state()?.required_fees;
-        let (estimated_fees, _) = self
+        let (estimated_fees, _) = match self
             .fee_estimator
             .required_bundle_fees(state.block_hash(), required_fees)
             .await
-            .unwrap_or_default();
+        {
+            Ok(fees) => fees,
+            Err(e) => {
+                warn!("Fee estimation failed during cancellation, using defaults: {e:?}");
+                Default::default()
+            }
+        };
 
         let cancel_res = state
             .transaction_tracker

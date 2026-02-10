@@ -516,7 +516,6 @@ where
     EP: ProvidersWithEntryPointT,
     BP: BundleProposerProvidersT,
 {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         builder_tag: String,
         ep_providers: EP,

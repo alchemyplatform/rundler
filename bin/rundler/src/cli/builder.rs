@@ -429,6 +429,8 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     builder_args: BuilderCliArgs,
     common_args: CommonArgs,
     providers: impl Providers + 'static,
+    mempool_configs: Option<MempoolConfigs>,
+    entry_point_builders: Option<EntryPointBuilderConfigs>,
 ) -> anyhow::Result<()> {
     let BuilderCliArgs {
         builder: builder_args,
@@ -444,14 +446,12 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
         )),
     );
 
-    let (mempool_config, entry_point_builders) = super::load_configs(&common_args).await?;
-
     let task_args = builder_args
         .to_args(
             chain_spec.clone(),
             &common_args,
             Some(format_socket_addr(&builder_args.host, builder_args.port).parse()?),
-            mempool_config,
+            mempool_configs,
             entry_point_builders,
         )
         .await?;
