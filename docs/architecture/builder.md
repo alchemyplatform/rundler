@@ -18,11 +18,11 @@ The bundle sender module is the main state machine that runs the bundle building
 
 The bundle proposer module's main responsibility is to construct a valid bundle transaction.
 
-The proposer asks the `Pool` for pending user operations sorted by priority fee, filters them for profitability, re-simulates them and rejects invalid UOs, then optionally calculates any aggregated signatures.
+The proposer receives candidate user operations (already assigned by the [Assigner](#assigner) and fetched from the pool by the worker), filters them for profitability, re-simulates them and rejects invalid UOs, then optionally calculates any aggregated signatures.
 
 ### Required Fees
 
-The proposer first estimates the required fees for the bundle transaction and then calculates the minimum required fees for a user operation. This calculation is based on a configuration option and is one of:
+The worker estimates the required fees for the bundle transaction before invoking the proposer. The minimum required fees for a user operation are calculated based on a configuration option and are one of:
 
 - **Priority Fee Increase Percent**: Require the UO priority fee to be N% higher than the bundle priority fee.
   - Configured via `--priority_fee_mode_kind=priority_fee_increase_percent --priority_fee_mode_value=N`
@@ -46,9 +46,11 @@ After 2nd simulation the entire bundle is validated via an `eth_call`, and ops t
 
 ## Transaction Signers
 
-The bundle builder supports a signer interface used for transaction signing. There are currently 2 implementations:
+The bundle builder supports a signer interface used for transaction signing. There are currently 3 implementations:
 
 - **Private Key**: Rundler is configured with a private key via a CLI variable directly.
+
+- **Mnemonic**: Rundler derives signing keys from a BIP-39 mnemonic phrase configured via `--signer.mnemonic`.
 
 - [**KMS**](#kms-with-key-leasing): AWS KMS is used for signing.
 
