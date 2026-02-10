@@ -224,11 +224,12 @@ where
                     ));
                 }
 
-                let proposer_key = (ep.address, builder.filter_id.clone());
+                let filter_id = builder.filter_id.clone();
+                let proposer_key = (ep.address, filter_id.clone());
 
                 entrypoint_infos.push(EntrypointInfo {
                     address: ep.address,
-                    filter_id: proposer_key.1.clone(),
+                    filter_id,
                 });
 
                 // Look up the submission proxy from chain_spec if configured

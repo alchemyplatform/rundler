@@ -332,7 +332,7 @@ impl BuilderArgs {
             }
             TransactionSenderKind::Bloxroute => {
                 if !chain_spec.bloxroute_enabled {
-                    return Err(anyhow::anyhow!("Flashbots sender is not enabled for chain"));
+                    return Err(anyhow::anyhow!("Bloxroute sender is not enabled for chain"));
                 }
 
                 Ok(TransactionSenderArgs::Bloxroute(BloxrouteSenderArgs {
