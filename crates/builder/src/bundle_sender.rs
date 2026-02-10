@@ -240,10 +240,6 @@ where
         let tracker_update = state.wait_for_trigger().await?;
         let has_tracker_update = tracker_update.is_some();
 
-        // Snapshot the pinned proposer before release_all clears it.
-        // Handlers use this snapshot for metrics, revert processing, and event emission.
-        let pinned = self.assigner.pinned_proposer(self.sender_eoa);
-
         match state.inner {
             InnerState::Building(building_state) => {
                 if has_tracker_update {
@@ -253,7 +249,7 @@ where
                 self.handle_building_state(state, building_state).await?;
             }
             InnerState::Pending(pending_state) => {
-                self.handle_pending_state(state, pending_state, tracker_update, pinned)
+                self.handle_pending_state(state, pending_state, tracker_update)
                     .await?;
                 if has_tracker_update {
                     // Defer lock release until after pending handling so reverted bundles
@@ -269,13 +265,8 @@ where
                     .await?;
             }
             InnerState::CancelPending(cancel_pending_state) => {
-                self.handle_cancel_pending_state(
-                    state,
-                    cancel_pending_state,
-                    tracker_update,
-                    pinned,
-                )
-                .await?;
+                self.handle_cancel_pending_state(state, cancel_pending_state, tracker_update)
+                    .await?;
                 if has_tracker_update {
                     self.assigner.release_all(self.sender_eoa);
                 }
@@ -445,8 +436,9 @@ where
         state: &mut SenderMachineState<T, TRIG>,
         inner: PendingState,
         tracker_update: Option<TrackerUpdate>,
-        pinned: Option<ProposerKey>,
     ) -> anyhow::Result<()> {
+        let pinned = self.assigner.pinned_proposer(self.sender_eoa);
+
         if let Some(update) = tracker_update {
             match update {
                 TrackerUpdate::Mined {
@@ -586,6 +578,7 @@ where
                         inner.fee_increase_count
                     );
                     self.increment_counter("builder_cancellations_abandoned", &pinned, 1);
+                    self.assigner.release_all(self.sender_eoa);
                     state.reset();
                 } else {
                     // Increase fees again
@@ -599,11 +592,13 @@ where
             Err(TransactionTrackerError::NonceTooLow) => {
                 // reset the transaction tracker and try again
                 info!("Nonce too low during cancellation, starting new bundle attempt");
+                self.assigner.release_all(self.sender_eoa);
                 state.reset();
             }
             Err(TransactionTrackerError::InsufficientFunds) => {
                 error!("Insufficient funds during cancellation, starting new bundle attempt");
                 self.increment_counter("builder_cancellation_txns_failed", &pinned, 1);
+                self.assigner.release_all(self.sender_eoa);
                 state.reset();
             }
             Err(TransactionTrackerError::ConditionNotMet) => {
@@ -611,11 +606,13 @@ where
                     "Unexpected condition not met during cancellation, starting new bundle attempt"
                 );
                 self.increment_counter("builder_cancellation_txns_failed", &pinned, 1);
+                self.assigner.release_all(self.sender_eoa);
                 state.reset();
             }
             Err(TransactionTrackerError::Other(e)) => {
                 error!("Failed to cancel transaction, moving back to building state: {e:#?}");
                 self.increment_counter("builder_cancellation_txns_failed", &pinned, 1);
+                self.assigner.release_all(self.sender_eoa);
                 state.reset();
             }
         }
@@ -628,8 +625,9 @@ where
         state: &mut SenderMachineState<T, TRIG>,
         inner: CancelPendingState,
         tracker_update: Option<TrackerUpdate>,
-        pinned: Option<ProposerKey>,
     ) -> anyhow::Result<()> {
+        let pinned = self.assigner.pinned_proposer(self.sender_eoa);
+
         // check for transaction update
         if let Some(update) = tracker_update {
             match update {
@@ -1132,7 +1130,8 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
         self.inner = InnerState::new();
     }
 
-    // Resets the state and transaction tracker, doesn't wait for next trigger
+    // Resets the state and transaction tracker, doesn't wait for next trigger.
+    // Callers must call `assigner.release_all()` before this to avoid leaking sender locks.
     fn reset(&mut self) {
         self.requires_reset = true;
         self.condition_not_met = false;
@@ -1594,6 +1593,7 @@ impl BundleSenderTrigger {
 mod tests {
     use alloy_primitives::{U256, address};
     use mockall::Sequence;
+    use rundler_provider::LatestFeeEstimate;
     use rundler_types::{
         EntityInfos, GasFees, UserOperationPermissions, ValidTimeRange,
         chain::ChainSpec,
@@ -1628,8 +1628,8 @@ mod tests {
             Ok((GasFees::default(), 0))
         }
 
-        async fn latest_fee_estimate(&self) -> anyhow::Result<rundler_provider::LatestFeeEstimate> {
-            Ok(rundler_provider::LatestFeeEstimate {
+        async fn latest_fee_estimate(&self) -> anyhow::Result<LatestFeeEstimate> {
+            Ok(LatestFeeEstimate {
                 block_number: 0,
                 base_fee: 0,
                 required_base_fee: 0,

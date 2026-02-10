@@ -725,11 +725,7 @@ impl Assigner {
 
         for sender in builder_senders {
             if let Some((_, lock_state)) = state.uo_sender_to_builder_state.remove(&sender) {
-                tracing::debug!(
-                    "sender {:?} removed from builder {:?}",
-                    sender,
-                    builder_address
-                );
+                tracing::debug!("sender {sender:?} removed from builder {builder_address:?}");
                 match lock_state {
                     LockState::Assigned => {
                         per_builder_metrics.senders_assigned.decrement(1);
@@ -817,7 +813,10 @@ fn ep_metrics_for(ep: &EntrypointInfo) -> PerEntrypointMetrics {
 
 fn ep_metrics_for_key(key: &ProposerKey) -> PerEntrypointMetrics {
     let label = match &key.1 {
-        Some(filter_id) => format!("{}:{filter_id}", key.0),
+        Some(filter_id) => {
+            let ep = key.0;
+            format!("{ep}:{filter_id}")
+        }
         None => key.0.to_string(),
     };
     PerEntrypointMetrics::new_with_labels(&[("entry_point", label)])

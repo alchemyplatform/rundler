@@ -214,7 +214,7 @@ List of command line options for configuring the Pool.
 
 List of command line options for configuring the Builder.
 
-- `--builder.port`: Port to listen on for gRPC requests (default: `50052`)
+- `--builder.port`: Port to listen on for gRPC requests (default: `50051`)
   - env: _BUILDER_PORT_
   - _Only required when running in distributed mode_
 - `--builder.host`: Host to listen on for gRPC requests (default: `127.0.0.1`)
@@ -242,7 +242,7 @@ List of command line options for configuring the Builder.
   - env: _BUILDER_FLASHBOTS_RELAY_AUTH_KEY_
 - `--builder.bloxroute_auth_header`: Only used/required if builder.sender == "polygon_bloxroute." If using the bloxroute transaction sender on Polygon, this is the auth header to supply with the requests. (default: None)
   - env: _BUILDER_BLOXROUTE_AUTH_HEADER_
-- `--builder.pool_url`: If running in distributed mode, the URL of the pool server to use.
+- `--builder.pool_url`: If running in distributed mode, the URL of the pool server to use. (default: `http://localhost:50051`)
   - env: _BUILDER_POOL_URL_
   - _Only required when running in distributed mode_
 - `--builder.assigner_max_ops_per_request`: Maximum number of operations requested from the mempool per entrypoint query. (default: `1024`)
