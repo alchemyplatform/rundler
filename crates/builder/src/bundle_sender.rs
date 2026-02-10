@@ -154,7 +154,8 @@ where
         loop {
             if let Err(e) = self.step_state(&mut state).await {
                 error!("Error in bundle sender loop: {e:#?}");
-                self.increment_counter("builder_state_machine_errors", &state.last_bundle_key, 1);
+                let pinned = self.assigner.pinned_proposer(self.sender_eoa);
+                self.increment_counter("builder_state_machine_errors", &pinned, 1);
                 // release all operations, this may orphan an outstanding transaction and
                 // cause an onchain collision. Errors should be rare.
                 self.assigner.release_all(self.sender_eoa);
@@ -208,10 +209,10 @@ where
     fn increment_counter(
         &self,
         name: &'static str,
-        last_bundle_key: &Option<ProposerKey>,
+        pinned_proposer: &Option<ProposerKey>,
         value: u64,
     ) {
-        let ep = last_bundle_key
+        let ep = pinned_proposer
             .as_ref()
             .map(|(addr, _)| addr.to_string())
             .unwrap_or_else(|| "unknown".to_string());
@@ -237,6 +238,11 @@ where
         state: &mut SenderMachineState<T, TRIG>,
     ) -> anyhow::Result<()> {
         let tracker_update = state.wait_for_trigger().await?;
+
+        // Snapshot the pinned proposer before release_all clears it.
+        // Handlers use this snapshot for metrics, revert processing, and event emission.
+        let pinned = self.assigner.pinned_proposer(self.sender_eoa);
+
         if tracker_update.is_some() {
             // release all operations on any tracker update as all tracker updates mean that there are no longer any valid pending transactions
             self.assigner.release_all(self.sender_eoa);
@@ -247,7 +253,7 @@ where
                 self.handle_building_state(state, building_state).await?;
             }
             InnerState::Pending(pending_state) => {
-                self.handle_pending_state(state, pending_state, tracker_update)
+                self.handle_pending_state(state, pending_state, tracker_update, pinned)
                     .await?;
             }
             InnerState::Cancelling(cancelling_state) => {
@@ -255,8 +261,13 @@ where
                     .await?;
             }
             InnerState::CancelPending(cancel_pending_state) => {
-                self.handle_cancel_pending_state(state, cancel_pending_state, tracker_update)
-                    .await?;
+                self.handle_cancel_pending_state(
+                    state,
+                    cancel_pending_state,
+                    tracker_update,
+                    pinned,
+                )
+                .await?;
             }
         }
 
@@ -277,6 +288,9 @@ where
         let block_number = state.block_number();
         debug!("Building bundle on block {}", block_number);
         let result = self.send_bundle(state, inner.fee_increase_count).await;
+
+        // Snapshot pinned proposer after send_bundle (pin is set during assignment)
+        let pinned = self.assigner.pinned_proposer(self.sender_eoa);
 
         match result {
             Ok(SendBundleAttemptResult::Success(_)) => {
@@ -300,7 +314,6 @@ where
                 // Release locks only when nothing is pending (continuing)
                 if state.transaction_tracker.num_pending_transactions() == 0 {
                     self.assigner.release_all(self.sender_eoa);
-                    state.last_bundle_key = None;
                 }
                 debug!("No operations to bundle after fee filtering");
                 if let Some(underpriced_info) = inner.underpriced_info {
@@ -331,11 +344,7 @@ where
                         "Abandoning bundle after {} fee increases, no operations available after fee increase",
                         inner.fee_increase_count
                     );
-                    self.increment_counter(
-                        "builder_bundle_txns_abandoned",
-                        &state.last_bundle_key,
-                        1,
-                    );
+                    self.increment_counter("builder_bundle_txns_abandoned", &pinned, 1);
 
                     // abandon the bundle by starting a new bundle process
                     // If the node we are using still has the transaction in the mempool, its
@@ -413,7 +422,7 @@ where
                 // Release all locks — cycle ending
                 self.assigner.release_all(self.sender_eoa);
                 error!("Bundle send error {error:?}");
-                self.increment_counter("builder_bundle_txns_failed", &state.last_bundle_key, 1);
+                self.increment_counter("builder_bundle_txns_failed", &pinned, 1);
                 state.bundle_error(error);
                 state.transaction_tracker.reset().await;
             }
@@ -427,6 +436,7 @@ where
         state: &mut SenderMachineState<T, TRIG>,
         inner: PendingState,
         tracker_update: Option<TrackerUpdate>,
+        pinned: Option<ProposerKey>,
     ) -> anyhow::Result<()> {
         if let Some(update) = tracker_update {
             match update {
@@ -445,36 +455,18 @@ where
                     );
 
                     if is_success {
-                        self.increment_counter(
-                            "builder_bundle_txns_success",
-                            &state.last_bundle_key,
-                            1,
-                        );
+                        self.increment_counter("builder_bundle_txns_success", &pinned, 1);
                     } else {
-                        self.increment_counter(
-                            "builder_bundle_txns_reverted",
-                            &state.last_bundle_key,
-                            1,
-                        );
+                        self.increment_counter("builder_bundle_txns_reverted", &pinned, 1);
                     }
                     if let Some(limit) = gas_limit {
-                        self.increment_counter(
-                            "builder_bundle_gas_limit",
-                            &state.last_bundle_key,
-                            limit,
-                        );
+                        self.increment_counter("builder_bundle_gas_limit", &pinned, limit);
                     }
                     if let Some(used) = gas_used {
-                        self.increment_counter(
-                            "builder_bundle_gas_used",
-                            &state.last_bundle_key,
-                            used,
-                        );
+                        self.increment_counter("builder_bundle_gas_used", &pinned, used);
                     }
 
-                    if !is_success
-                        && let Err(e) = self.process_revert(tx_hash, &state.last_bundle_key).await
-                    {
+                    if !is_success && let Err(e) = self.process_revert(tx_hash, &pinned).await {
                         warn!(
                             "Failed to process revert for bundle transaction {tx_hash:?}: {e:#?}"
                         );
@@ -487,7 +479,7 @@ where
                             nonce,
                             block_number,
                         ),
-                        &state.last_bundle_key,
+                        &pinned,
                     );
                     state.bundle_mined(block_number, attempt_number, tx_hash);
                 }
@@ -495,13 +487,9 @@ where
                     info!("Latest transaction dropped, starting new bundle attempt");
                     self.emit(
                         BuilderEvent::latest_transaction_dropped(self.builder_tag.clone(), nonce),
-                        &state.last_bundle_key,
+                        &pinned,
                     );
-                    self.increment_counter(
-                        "builder_bundle_txns_dropped",
-                        &state.last_bundle_key,
-                        1,
-                    );
+                    self.increment_counter("builder_bundle_txns_dropped", &pinned, 1);
                     // try again, increasing fees
                     state.update(InnerState::Building(inner.to_building()));
                 }
@@ -512,13 +500,9 @@ where
                             self.builder_tag.clone(),
                             nonce,
                         ),
-                        &state.last_bundle_key,
+                        &pinned,
                     );
-                    self.increment_counter(
-                        "builder_bundle_txns_nonce_used",
-                        &state.last_bundle_key,
-                        1,
-                    );
+                    self.increment_counter("builder_bundle_txns_nonce_used", &pinned, 1);
                     state.reset();
                 }
             }
@@ -531,11 +515,7 @@ where
                 self.settings.max_blocks_to_wait_for_mine,
                 inner.fee_increase_count + 1
             );
-            self.increment_counter(
-                "builder_bundle_txn_fee_increases",
-                &state.last_bundle_key,
-                1,
-            );
+            self.increment_counter("builder_bundle_txn_fee_increases", &pinned, 1);
             state.update(InnerState::Building(inner.to_building()))
         }
 
@@ -547,6 +527,8 @@ where
         state: &mut SenderMachineState<T, TRIG>,
         inner: CancellingState,
     ) -> anyhow::Result<()> {
+        let pinned = self.assigner.pinned_proposer(self.sender_eoa);
+
         info!(
             "Cancelling last transaction, attempt {}",
             inner.fee_increase_count
@@ -569,7 +551,7 @@ where
         match cancel_res {
             Ok(Some(_)) => {
                 info!("Cancellation transaction sent, waiting for confirmation");
-                self.increment_counter("builder_cancellation_txns_sent", &state.last_bundle_key, 1);
+                self.increment_counter("builder_cancellation_txns_sent", &pinned, 1);
 
                 state.update(InnerState::CancelPending(inner.to_cancel_pending(
                     state.block_number() + self.settings.max_blocks_to_wait_for_mine,
@@ -579,7 +561,7 @@ where
                 info!("Soft cancellation or no transaction to cancel, starting new bundle attempt");
                 // release all operations after the soft cancellation
                 self.assigner.release_all(self.sender_eoa);
-                self.increment_counter("builder_soft_cancellations", &state.last_bundle_key, 1);
+                self.increment_counter("builder_soft_cancellations", &pinned, 1);
                 state.reset();
             }
             Err(TransactionTrackerError::Rejected)
@@ -594,11 +576,7 @@ where
                         "Abandoning cancellation after max fee increases {}, starting new bundle attempt",
                         inner.fee_increase_count
                     );
-                    self.increment_counter(
-                        "builder_cancellations_abandoned",
-                        &state.last_bundle_key,
-                        1,
-                    );
+                    self.increment_counter("builder_cancellations_abandoned", &pinned, 1);
                     state.reset();
                 } else {
                     // Increase fees again
@@ -616,31 +594,19 @@ where
             }
             Err(TransactionTrackerError::InsufficientFunds) => {
                 error!("Insufficient funds during cancellation, starting new bundle attempt");
-                self.increment_counter(
-                    "builder_cancellation_txns_failed",
-                    &state.last_bundle_key,
-                    1,
-                );
+                self.increment_counter("builder_cancellation_txns_failed", &pinned, 1);
                 state.reset();
             }
             Err(TransactionTrackerError::ConditionNotMet) => {
                 error!(
                     "Unexpected condition not met during cancellation, starting new bundle attempt"
                 );
-                self.increment_counter(
-                    "builder_cancellation_txns_failed",
-                    &state.last_bundle_key,
-                    1,
-                );
+                self.increment_counter("builder_cancellation_txns_failed", &pinned, 1);
                 state.reset();
             }
             Err(TransactionTrackerError::Other(e)) => {
                 error!("Failed to cancel transaction, moving back to building state: {e:#?}");
-                self.increment_counter(
-                    "builder_cancellation_txns_failed",
-                    &state.last_bundle_key,
-                    1,
-                );
+                self.increment_counter("builder_cancellation_txns_failed", &pinned, 1);
                 state.reset();
             }
         }
@@ -653,6 +619,7 @@ where
         state: &mut SenderMachineState<T, TRIG>,
         inner: CancelPendingState,
         tracker_update: Option<TrackerUpdate>,
+        pinned: Option<ProposerKey>,
     ) -> anyhow::Result<()> {
         // check for transaction update
         if let Some(update) = tracker_update {
@@ -666,15 +633,11 @@ where
                         .zip(gas_price)
                         .map(|(used, price)| used as u128 * price);
                     info!("Cancellation transaction mined. Price (wei) {fee:?}");
-                    self.increment_counter(
-                        "builder_cancellation_txns_mined",
-                        &state.last_bundle_key,
-                        1,
-                    );
+                    self.increment_counter("builder_cancellation_txns_mined", &pinned, 1);
                     if let Some(fee) = fee {
                         self.increment_counter(
                             "builder_cancellation_txns_total_fee",
-                            &state.last_bundle_key,
+                            &pinned,
                             fee as u64,
                         );
                     };
@@ -700,11 +663,7 @@ where
                     "Abandoning cancellation after max fee increases {}, starting new bundle attempt",
                     inner.fee_increase_count
                 );
-                self.increment_counter(
-                    "builder_cancellations_abandoned",
-                    &state.last_bundle_key,
-                    1,
-                );
+                self.increment_counter("builder_cancellations_abandoned", &pinned, 1);
                 state.reset();
             } else {
                 // start replacement, don't wait for trigger
@@ -744,23 +703,10 @@ where
         } else {
             self.fee_estimator.required_op_fees(bundle_fees)
         };
-        let assignment = if let Some((entry_point, filter_id)) = state.last_bundle_key.clone() {
-            // Pinned: use the same entrypoint for replacement
-            self.assigner
-                .assign_work_for_entrypoint(
-                    self.sender_eoa,
-                    state.block_number(),
-                    required_op_fees,
-                    entry_point,
-                    filter_id,
-                )
-                .await?
-        } else {
-            // Fresh: let assigner pick best entrypoint
-            self.assigner
-                .assign_work(self.sender_eoa, state.block_number(), required_op_fees)
-                .await?
-        };
+        let assignment = self
+            .assigner
+            .assign_work(self.sender_eoa, state.block_number(), required_op_fees)
+            .await?;
 
         let result = match assignment {
             AssignmentResult::Assigned(assignment) => {
@@ -791,9 +737,6 @@ where
                         .await
                     {
                         Ok(bundle_data) => {
-                            // Pin to this entrypoint only after make_bundle succeeds, so hard
-                            // errors never leave a stale pin.
-                            state.last_bundle_key = Some(proposer_key);
                             state.condition_not_met = false;
                             self.send_bundle_from_data(
                                 state,
@@ -1114,11 +1057,11 @@ where
     async fn process_revert(
         &self,
         tx_hash: B256,
-        last_bundle_key: &Option<ProposerKey>,
+        pinned_proposer: &Option<ProposerKey>,
     ) -> anyhow::Result<()> {
         warn!("Bundle transaction {tx_hash:?} reverted onchain");
 
-        let proposer_key = last_bundle_key
+        let proposer_key = pinned_proposer
             .clone()
             .context("No entry point for revert processing")?;
         let ep_address = proposer_key.0;
@@ -1134,9 +1077,9 @@ where
             .await
     }
 
-    fn emit(&self, event: BuilderEvent, last_bundle_key: &Option<ProposerKey>) {
-        // Use the last bundle entry point, defaulting to zero address if none
-        let entry_point = last_bundle_key
+    fn emit(&self, event: BuilderEvent, pinned_proposer: &Option<ProposerKey>) {
+        // Use the pinned proposer entry point, defaulting to zero address if none
+        let entry_point = pinned_proposer
             .as_ref()
             .map(|(addr, _)| *addr)
             .unwrap_or(Address::ZERO);
@@ -1152,8 +1095,6 @@ struct SenderMachineState<T, TRIG> {
     send_bundle_response: Option<oneshot::Sender<SendBundleResult>>,
     inner: InnerState,
     requires_reset: bool,
-    /// Last bundle proposer key (address, filter_id) - used for revert processing and emit
-    last_bundle_key: Option<ProposerKey>,
     /// Flag indicating a condition was not met on last bundle attempt
     /// Passed to proposer on next make_bundle call to re-check conditions
     condition_not_met: bool,
@@ -1167,7 +1108,6 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
             send_bundle_response: None,
             inner: InnerState::new(),
             requires_reset: false,
-            last_bundle_key: None,
             condition_not_met: false,
         }
     }
@@ -1183,9 +1123,7 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
 
     // Move to the initial state, will wait for the next trigger.
     // Preserves the transaction tracker state.
-    // Clears entrypoint pinning so the next attempt uses priority-based selection.
     fn initial(&mut self) {
-        self.last_bundle_key = None;
         self.condition_not_met = false;
         self.inner = InnerState::new();
     }
@@ -1193,7 +1131,6 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
     // Resets the state and transaction tracker, doesn't wait for next trigger
     fn reset(&mut self) {
         self.requires_reset = true;
-        self.last_bundle_key = None;
         self.condition_not_met = false;
         let building_state = BuildingState {
             wait_for_trigger: false,
@@ -1223,10 +1160,6 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
             attempt_number,
             tx_hash,
         });
-        // Clear last_bundle_key so the next bundle attempt can pick any entrypoint
-        // via the assigner's priority selection, rather than staying pinned to the
-        // old entrypoint.
-        self.last_bundle_key = None;
         self.condition_not_met = false;
         self.update(InnerState::Building(BuildingState {
             wait_for_trigger: self.trigger.builder_must_wait_for_trigger(),
@@ -1237,10 +1170,8 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
 
     // No operations are available, send result, move to initial state
     // Preserves fee/underpriced info for further rounds.
-    // Clears entrypoint pin since any pending tx was already abandoned by the caller.
     fn no_operations(&mut self) {
         self.send_result(SendBundleResult::NoOperationsInitially);
-        self.last_bundle_key = None;
         self.condition_not_met = false;
 
         self.inner = match &self.inner {
@@ -1845,6 +1776,8 @@ mod tests {
         let other_entry_point = ENTRY_POINT_ADDRESS_V0_7;
         let expected_filter = filter_id.clone();
 
+        // The pinned EP is queried once for the replacement attempt (via assign_work_for_entrypoint).
+        // The other EP is never queried since the builder is pinned.
         mock_pool
             .expect_get_ops_summaries()
             .withf(move |entry_point, _, filter| {
@@ -1884,8 +1817,15 @@ mod tests {
 
         let mut sender = new_sender_with_entrypoints(mock_pool, entrypoints, proposers);
 
+        // Pre-establish pin by confirming sender locks in the assigner.
+        // This simulates a prior successful bundle on the pinned EP.
+        sender.assigner.test_establish_pin(
+            Address::default(), // matches sender_eoa
+            &[Address::ZERO],
+            (pinned_entry_point, filter_id),
+        );
+
         let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
-        state.last_bundle_key = Some((pinned_entry_point, filter_id));
 
         let result = sender.send_bundle(&mut state, 1).await.unwrap();
         assert!(matches!(
@@ -1915,6 +1855,8 @@ mod tests {
         });
 
         let expected_filter = filter_id.clone();
+        // Pinned EP queried once (for the pinned attempt), then again for the fresh attempt
+        // along with the other EP.
         mock_pool
             .expect_get_ops_summaries()
             .withf(move |entry_point, _, filter| {
@@ -1965,12 +1907,18 @@ mod tests {
         ];
 
         let mut sender = new_sender_with_entrypoints(mock_pool, entrypoints, proposers);
-        let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
-        state.last_bundle_key = Some((pinned_entry_point, filter_id));
 
-        // First attempt is pinned and produces no bundle ops.
-        // Route through handle_building_state so that the state machine clears
-        // last_bundle_key via no_operations() (lock management now lives there).
+        // Pre-establish pin in the assigner (simulates prior successful bundle)
+        sender.assigner.test_establish_pin(
+            Address::default(),
+            &[Address::ZERO],
+            (pinned_entry_point, filter_id),
+        );
+
+        let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
+
+        // First attempt: pinned, produces empty bundle after make_bundle.
+        // Route through handle_building_state so release_all clears the pin.
         sender
             .handle_building_state(
                 &mut state,
@@ -1982,9 +1930,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(state.last_bundle_key, None);
+        // Pin should be cleared by release_all
+        assert_eq!(sender.assigner.pinned_proposer(Address::default()), None);
 
-        // Second attempt should no longer be pinned and can select the other entrypoint.
+        // Second attempt: no longer pinned, can select the other entrypoint.
         let second = sender.send_bundle(&mut state, 0).await.unwrap();
         assert!(matches!(
             second,
@@ -2212,10 +2161,15 @@ mod tests {
                 fee_increase_count: 0,
             }),
         );
-        // Set last_bundle_key so the cancellation code can find the proposer
-        state.last_bundle_key = Some((ENTRY_POINT_ADDRESS_V0_6, None));
 
         let mut sender = new_sender(mock_proposer_t, mock_pool);
+
+        // Establish pin for metrics (cancellation doesn't need it functionally)
+        sender.assigner.test_establish_pin(
+            Address::default(),
+            &[Address::ZERO],
+            (ENTRY_POINT_ADDRESS_V0_6, None),
+        );
 
         sender.step_state(&mut state).await.unwrap();
         assert!(matches!(
@@ -2258,11 +2212,9 @@ mod tests {
                 fee_increase_count: 0,
             }),
         );
-        // Unknown key — cancellation now uses the sender's fee_estimator directly,
-        // so it doesn't need to find a matching proposer.
-        state.last_bundle_key = Some((ENTRY_POINT_ADDRESS_V0_7, Some("missing".to_string())));
 
         let mut sender = new_sender(mock_proposer_t, mock_pool);
+        // No pin established — cancellation still works (uses pinned_proposer for metrics only)
         sender.step_state(&mut state).await.unwrap();
 
         assert!(matches!(
@@ -2573,6 +2525,13 @@ mod tests {
 
         let mut sender = new_sender(mock_proposer_t, mock_pool);
 
+        // Establish pin so process_revert can find the proposer
+        sender.assigner.test_establish_pin(
+            Address::default(),
+            &[Address::ZERO],
+            (ENTRY_POINT_ADDRESS_V0_6, None),
+        );
+
         let mut state = new_state_with(
             mock_trigger,
             mock_tracker,
@@ -2581,7 +2540,6 @@ mod tests {
                 fee_increase_count: 0,
             }),
         );
-        state.last_bundle_key = Some((ENTRY_POINT_ADDRESS_V0_6, None));
 
         // first step has no update
         sender.step_state(&mut state).await.unwrap();
@@ -2819,7 +2777,6 @@ mod tests {
             send_bundle_response: None,
             inner,
             requires_reset: false,
-            last_bundle_key: None,
             condition_not_met: false,
         }
     }

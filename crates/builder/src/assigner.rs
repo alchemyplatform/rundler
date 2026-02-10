@@ -17,7 +17,7 @@ use std::{
 };
 
 use alloy_primitives::{Address, U256};
-use metrics::Gauge;
+use metrics::{Counter, Gauge};
 use metrics_derive::Metrics;
 use rundler_types::{
     GasFees,
@@ -93,6 +93,8 @@ struct State {
     global_cycle: u64,
     /// Tracks when each entrypoint was last selected (by cycle number)
     entrypoint_last_selected: HashMap<ProposerKey, u64>,
+    /// Tracks which entrypoint a builder is pinned to for replacement attempts
+    builder_to_pinned_proposer: HashMap<Address, ProposerKey>,
 }
 
 /// A candidate entrypoint for assignment, used during priority-based selection.
@@ -152,6 +154,40 @@ impl Assigner {
         max_sim_block_number: u64,
         required_fees: GasFees,
     ) -> anyhow::Result<AssignmentResult> {
+        // If builder has confirmed locks, stay pinned to the same entrypoint.
+        // This skips the all-entrypoint pool queries and candidate sorting.
+        let pinned_target = {
+            let state = self.state.lock().unwrap();
+            state
+                .builder_to_pinned_proposer
+                .get(&builder_address)
+                .cloned()
+                .filter(|_| {
+                    state
+                        .builder_to_uo_senders
+                        .get(&builder_address)
+                        .is_some_and(|senders| {
+                            senders.iter().any(|s| {
+                                state
+                                    .uo_sender_to_builder_state
+                                    .get(s)
+                                    .is_some_and(|(_, ls)| *ls == LockState::Confirmed)
+                            })
+                        })
+                })
+        };
+        if let Some(pinned_proposer) = pinned_target {
+            return self
+                .assign_work_for_entrypoint(
+                    builder_address,
+                    max_sim_block_number,
+                    required_fees,
+                    pinned_proposer.0,
+                    pinned_proposer.1,
+                )
+                .await;
+        }
+
         // Query all entrypoints in parallel for pending ops, then count eligible ones.
         //
         // NOTE: There is a deliberate TOCTOU gap between counting eligible ops here
@@ -184,6 +220,8 @@ impl Assigner {
             let ops = result?;
             let (assignable_count, eligible_count) =
                 self.count_ops(&ops, builder_address, max_sim_block_number, &required_fees);
+            let ep_metrics = ep_metrics_for(ep);
+            ep_metrics.ep_eligible_ops.set(eligible_count as f64);
             if eligible_count > 0 {
                 candidates.push(Candidate {
                     config_index: entrypoint_idx,
@@ -249,6 +287,7 @@ impl Assigner {
                     c.ep.filter_id,
                     gap
                 );
+                ep_metrics_for(&c.ep).ep_starvation_wakeups.increment(1);
                 let starved_candidate = candidates.remove(pos);
                 candidates.insert(0, starved_candidate);
             } else {
@@ -291,7 +330,7 @@ impl Assigner {
             let assigned_ops = self
                 .assign_ops_internal(
                     builder_address,
-                    candidate.ep.address,
+                    &candidate.ep,
                     candidate.ops,
                     max_sim_block_number,
                     &required_fees,
@@ -315,7 +354,12 @@ impl Assigner {
                 state
                     .entrypoint_last_selected
                     .insert(candidate.ep.key(), current_cycle);
+                // Pin builder to this entrypoint for replacement attempts
+                state
+                    .builder_to_pinned_proposer
+                    .insert(builder_address, candidate.ep.key());
             }
+            ep_metrics_for(&candidate.ep).ep_assignments.increment(1);
 
             return Ok(AssignmentResult::Assigned(WorkAssignment {
                 entry_point: candidate.ep.address,
@@ -329,8 +373,8 @@ impl Assigner {
 
     /// Assigns work for a specific entrypoint configuration.
     ///
-    /// This is used for replacement attempts to ensure the entrypoint does not change.
-    pub(crate) async fn assign_work_for_entrypoint(
+    /// This is used internally for replacement attempts to ensure the entrypoint does not change.
+    async fn assign_work_for_entrypoint(
         &self,
         builder_address: Address,
         max_sim_block_number: u64,
@@ -350,6 +394,13 @@ impl Assigner {
         let (assignable_count, eligible_count) =
             self.count_ops(&ops, builder_address, max_sim_block_number, &required_fees);
 
+        let ep_info = EntrypointInfo {
+            address: entry_point,
+            filter_id: filter_id.clone(),
+        };
+        let ep_metrics = ep_metrics_for(&ep_info);
+        ep_metrics.ep_eligible_ops.set(eligible_count as f64);
+
         // Always update starvation tracking, even with no eligible ops.
         // This intentionally inflates the starvation counter for this entrypoint during
         // replacement attempts, which is acceptable: the entrypoint is actively being
@@ -358,13 +409,9 @@ impl Assigner {
             let mut state = self.state.lock().unwrap();
             state.global_cycle += 1;
             let global_cycle = state.global_cycle;
-            let ep = EntrypointInfo {
-                address: entry_point,
-                filter_id: filter_id.clone(),
-            };
             state
                 .entrypoint_last_selected
-                .insert(ep.key(), global_cycle);
+                .insert(ep_info.key(), global_cycle);
         }
 
         if assignable_count == 0 {
@@ -378,7 +425,7 @@ impl Assigner {
         let assigned_ops = self
             .assign_ops_internal(
                 builder_address,
-                entry_point,
+                &ep_info,
                 ops,
                 max_sim_block_number,
                 &required_fees,
@@ -388,6 +435,15 @@ impl Assigner {
         if assigned_ops.is_empty() {
             return Ok(AssignmentResult::NoOperations);
         }
+
+        // Pin builder to this entrypoint (may already be pinned)
+        {
+            let mut state = self.state.lock().unwrap();
+            state
+                .builder_to_pinned_proposer
+                .insert(builder_address, (entry_point, filter_id.clone()));
+        }
+        ep_metrics.ep_assignments.increment(1);
 
         Ok(AssignmentResult::Assigned(WorkAssignment {
             entry_point,
@@ -482,13 +538,14 @@ impl Assigner {
     async fn assign_ops_internal(
         &self,
         builder_address: Address,
-        entry_point: Address,
+        ep: &EntrypointInfo,
         ops: Vec<PoolOperationSummary>,
         max_sim_block_number: u64,
         required_fees: &GasFees,
     ) -> anyhow::Result<Vec<PoolOperation>> {
         let per_builder_metrics =
             PerBuilderMetrics::new_with_labels(&[("builder_address", builder_address.to_string())]);
+        let per_ep_metrics = ep_metrics_for(ep);
         let mut return_ops_summaries = Vec::new();
 
         {
@@ -509,6 +566,7 @@ impl Assigner {
                             builder_address
                         );
                         per_builder_metrics.senders_assigned.increment(1);
+                        per_ep_metrics.ep_senders_assigned.increment(1);
                         (builder_address, LockState::Assigned)
                     });
 
@@ -545,7 +603,7 @@ impl Assigner {
         let return_ops = self
             .pool
             .get_ops_by_hashes(
-                entry_point,
+                ep.address,
                 return_ops_summaries.iter().map(|op| op.hash).collect(),
             )
             .await?;
@@ -573,6 +631,10 @@ impl Assigner {
         let mut state = self.state.lock().unwrap();
         let per_builder_metrics =
             PerBuilderMetrics::new_with_labels(&[("builder_address", builder_address.to_string())]);
+        let per_ep_metrics = state
+            .builder_to_pinned_proposer
+            .get(&builder_address)
+            .map(ep_metrics_for_key);
 
         // Confirm all of the senders in state
         for confirmed_sender in confirmed_senders.into_iter() {
@@ -597,6 +659,10 @@ impl Assigner {
                 );
                 per_builder_metrics.senders_confirmed.increment(1);
                 per_builder_metrics.senders_assigned.decrement(1);
+                if let Some(ref ep_m) = per_ep_metrics {
+                    ep_m.ep_senders_confirmed.increment(1);
+                    ep_m.ep_senders_assigned.decrement(1);
+                }
                 *lock_state = LockState::Confirmed;
             }
         }
@@ -631,18 +697,37 @@ impl Assigner {
                 builder_address
             );
             per_builder_metrics.senders_assigned.decrement(1);
+            if let Some(ref ep_m) = per_ep_metrics {
+                ep_m.ep_senders_assigned.decrement(1);
+            }
 
             if builder_senders.is_empty() {
                 self.metrics.active_builders.decrement(1);
                 state.builder_to_uo_senders.remove(&builder_address);
+                state.builder_to_pinned_proposer.remove(&builder_address);
             }
         }
+    }
+
+    /// Returns the proposer key that the builder is currently pinned to, if any.
+    pub(crate) fn pinned_proposer(&self, builder_address: Address) -> Option<ProposerKey> {
+        self.state
+            .lock()
+            .unwrap()
+            .builder_to_pinned_proposer
+            .get(&builder_address)
+            .cloned()
     }
 
     // This method releases all of the senders assigned to the builder.
     // This is typically done when the builder is done forming a bundle and is ready to start forming the next bundle.
     pub(crate) fn release_all(&self, builder_address: Address) {
         let mut state = self.state.lock().unwrap();
+        let per_ep_metrics = state
+            .builder_to_pinned_proposer
+            .get(&builder_address)
+            .map(ep_metrics_for_key);
+        state.builder_to_pinned_proposer.remove(&builder_address);
         let Some(builder_senders) = state.builder_to_uo_senders.remove(&builder_address) else {
             return;
         };
@@ -650,24 +735,57 @@ impl Assigner {
             PerBuilderMetrics::new_with_labels(&[("builder_address", builder_address.to_string())]);
 
         for sender in builder_senders {
-            if let Some((_, state)) = state.uo_sender_to_builder_state.remove(&sender) {
+            if let Some((_, lock_state)) = state.uo_sender_to_builder_state.remove(&sender) {
                 tracing::debug!(
                     "sender {:?} removed from builder {:?}",
                     sender,
                     builder_address
                 );
-                match state {
+                match lock_state {
                     LockState::Assigned => {
                         per_builder_metrics.senders_assigned.decrement(1);
+                        if let Some(ref ep_m) = per_ep_metrics {
+                            ep_m.ep_senders_assigned.decrement(1);
+                        }
                     }
                     LockState::Confirmed => {
                         per_builder_metrics.senders_confirmed.decrement(1);
+                        if let Some(ref ep_m) = per_ep_metrics {
+                            ep_m.ep_senders_confirmed.decrement(1);
+                        }
                     }
                 }
             }
         }
 
         self.metrics.active_builders.decrement(1);
+    }
+}
+
+#[cfg(test)]
+impl Assigner {
+    /// Test helper: establish confirmed sender locks and pin a builder to a proposer key.
+    /// This simulates the state after a successful bundle send.
+    pub(crate) fn test_establish_pin(
+        &self,
+        builder_address: Address,
+        senders: &[Address],
+        proposer_key: ProposerKey,
+    ) {
+        let mut state = self.state.lock().unwrap();
+        for sender in senders {
+            state
+                .uo_sender_to_builder_state
+                .insert(*sender, (builder_address, LockState::Confirmed));
+            state
+                .builder_to_uo_senders
+                .entry(builder_address)
+                .or_default()
+                .insert(*sender);
+        }
+        state
+            .builder_to_pinned_proposer
+            .insert(builder_address, proposer_key);
     }
 }
 
@@ -685,6 +803,35 @@ struct PerBuilderMetrics {
     senders_assigned: Gauge,
     #[metric(describe = "the count of senders confirmed to a builder.")]
     senders_confirmed: Gauge,
+}
+
+#[derive(Metrics)]
+#[metrics(scope = "builder_assigner")]
+struct PerEntrypointMetrics {
+    #[metric(describe = "the count of senders assigned to builders for this entrypoint.")]
+    ep_senders_assigned: Gauge,
+    #[metric(describe = "the count of senders confirmed to builders for this entrypoint.")]
+    ep_senders_confirmed: Gauge,
+    #[metric(describe = "the total number of successful assignments from this entrypoint.")]
+    ep_assignments: Counter,
+    #[metric(
+        describe = "the number of times this entrypoint was force-selected due to starvation."
+    )]
+    ep_starvation_wakeups: Counter,
+    #[metric(describe = "the last-seen eligible op count for this entrypoint.")]
+    ep_eligible_ops: Gauge,
+}
+
+fn ep_metrics_for(ep: &EntrypointInfo) -> PerEntrypointMetrics {
+    ep_metrics_for_key(&ep.key())
+}
+
+fn ep_metrics_for_key(key: &ProposerKey) -> PerEntrypointMetrics {
+    let label = match &key.1 {
+        Some(filter_id) => format!("{}:{filter_id}", key.0),
+        None => key.0.to_string(),
+    };
+    PerEntrypointMetrics::new_with_labels(&[("entry_point", label)])
 }
 
 #[cfg(test)]
@@ -1207,9 +1354,101 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_assign_work_for_entrypoint_returns_ops_for_pinned_ep() {
-        // assign_work_for_entrypoint should return ops only from the specified entrypoint,
-        // update starvation tracking, and support the replacement (fee escalation) flow.
+    async fn test_pinned_builder_stays_on_same_entrypoint() {
+        // When a builder has confirmed locks, assign_work should delegate to the
+        // pinned entrypoint rather than re-querying all entrypoints.
+        let ep1_ops = create_test_ops_for_entrypoint(&[address(10), address(11)], TEST_ENTRY_POINT);
+        let ep2_ops = create_test_ops_for_entrypoint(
+            &[address(20), address(21), address(22)],
+            TEST_ENTRY_POINT_2,
+        );
+
+        let mock_pool = mock_pool_two_eps(ep1_ops, ep2_ops);
+
+        // High starvation ratio so starvation prevention doesn't interfere
+        let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
+
+        // First assignment: EP2 has more ops so it should be selected
+        let result = assign_expect_default(&assigner, address(0)).await;
+        assert_eq!(result.entry_point, TEST_ENTRY_POINT_2);
+
+        // Confirm senders to create confirmed locks
+        let senders: Vec<Address> = result.operations.iter().map(|op| op.uo.sender()).collect();
+        assigner.confirm_senders_drop_unused(address(0), &senders);
+
+        // Verify pin is set
+        assert_eq!(
+            assigner.pinned_proposer(address(0)),
+            Some((TEST_ENTRY_POINT_2, None))
+        );
+
+        // Second assignment should stay pinned to EP2
+        let result2 = assign_expect_default(&assigner, address(0)).await;
+        assert_eq!(result2.entry_point, TEST_ENTRY_POINT_2);
+    }
+
+    #[tokio::test]
+    async fn test_pinned_builder_no_ops_returns_no_operations() {
+        // A pinned builder with no available ops should get NoOperations.
+        // First establish a pin, then clear all ops.
+        let ep1_ops = create_test_ops_for_entrypoint(&[address(10)], TEST_ENTRY_POINT);
+        let ep2_ops = create_test_ops_for_entrypoint(&[address(20)], TEST_ENTRY_POINT_2);
+
+        let mut mock_pool = MockPool::new();
+        let ep1_ops_clone = ep1_ops.clone();
+        let ep2_ops_clone = ep2_ops.clone();
+        let call_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let call_count_clone = call_count.clone();
+
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(move |ep, _, _| {
+                let count = call_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if count < 2 {
+                    // First call (assign_work queries both EPs): return ops
+                    if ep == TEST_ENTRY_POINT {
+                        Ok(ep1_ops_clone.iter().map(|op| op.into()).collect())
+                    } else {
+                        Ok(ep2_ops_clone.iter().map(|op| op.into()).collect())
+                    }
+                } else {
+                    // Subsequent calls: return empty (simulating no ops for pinned EP)
+                    Ok(vec![])
+                }
+            });
+
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .returning(move |ep, hashes| {
+                let ops = if ep == TEST_ENTRY_POINT {
+                    &ep1_ops
+                } else {
+                    &ep2_ops
+                };
+                Ok(ops
+                    .iter()
+                    .filter(|op| hashes.contains(&op.uo.hash()))
+                    .cloned()
+                    .collect())
+            });
+
+        let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
+
+        // First: assign and confirm to establish pin
+        let result = assign_expect_default(&assigner, address(0)).await;
+        let senders: Vec<Address> = result.operations.iter().map(|op| op.uo.sender()).collect();
+        assigner.confirm_senders_drop_unused(address(0), &senders);
+
+        // Second call: pinned EP has no ops
+        let result2 = assign_default(&assigner, address(0)).await;
+        assert!(matches!(result2, AssignmentResult::NoOperations));
+    }
+
+    #[tokio::test]
+    async fn test_confirm_drop_all_senders_clears_pin() {
+        // When confirm_senders_drop_unused drops all remaining senders (none
+        // confirmed), the pin should be cleared so the builder can select a
+        // different entrypoint on the next cycle.
         let ep1_ops = create_test_ops_for_entrypoint(&[address(10), address(11)], TEST_ENTRY_POINT);
         let ep2_ops = create_test_ops_for_entrypoint(
             &[address(20), address(21), address(22)],
@@ -1220,44 +1459,23 @@ mod tests {
 
         let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
 
-        // Pin to EP2 (as if doing a replacement for an existing bundle on EP2)
-        let result = assigner
-            .assign_work_for_entrypoint(
-                address(0),
-                u64::MAX,
-                GasFees::default(),
-                TEST_ENTRY_POINT_2,
-                None,
-            )
-            .await
-            .unwrap();
+        // First assignment: EP2 has more ops so it should be selected
+        let result = assign_expect_default(&assigner, address(0)).await;
+        assert_eq!(result.entry_point, TEST_ENTRY_POINT_2);
 
-        let assignment = expect_assigned(result);
-        assert_eq!(assignment.entry_point, TEST_ENTRY_POINT_2);
-        assert_eq!(assignment.operations.len(), 3);
-    }
+        // Pin should be set after assignment
+        assert!(assigner.pinned_proposer(address(0)).is_some());
 
-    #[tokio::test]
-    async fn test_assign_work_for_entrypoint_no_ops_returns_no_operations() {
-        let mut mock_pool = MockPool::new();
-        mock_pool
-            .expect_get_ops_summaries()
-            .returning(|_, _, _| Ok(vec![]));
+        // Confirm with empty list — drops all assigned senders
+        assigner.confirm_senders_drop_unused(address(0), &[]);
 
-        let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
+        // Pin should be cleared because the builder has no remaining senders
+        assert_eq!(assigner.pinned_proposer(address(0)), None);
 
-        let result = assigner
-            .assign_work_for_entrypoint(
-                address(0),
-                u64::MAX,
-                GasFees::default(),
-                TEST_ENTRY_POINT_2,
-                None,
-            )
-            .await
-            .unwrap();
-
-        assert!(matches!(result, AssignmentResult::NoOperations));
+        // Next assignment should be free to select any entrypoint (EP2 again,
+        // since it still has more ops)
+        let result2 = assign_expect_default(&assigner, address(0)).await;
+        assert_eq!(result2.entry_point, TEST_ENTRY_POINT_2);
     }
 
     #[tokio::test]
