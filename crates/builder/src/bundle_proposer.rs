@@ -1765,7 +1765,10 @@ impl<UO: UserOperation> ProposalContext<UO> {
                 calldata_floor_gas_limit.saturating_add(sim_op.op.calldata_floor_gas_limit());
 
             if include_da_gas {
-                da_gas_limit = da_gas_limit.saturating_add(sim_op.sponsored_da_gas);
+                da_gas_limit = da_gas_limit.saturating_add(
+                    sim_op.op.pre_verification_da_gas_limit(chain_spec, None)
+                        + sim_op.sponsored_da_gas,
+                );
             }
         }
 
