@@ -1749,6 +1749,14 @@ impl<UO: UserOperation> ProposalContext<UO> {
             // from the UOs (on chains that have DA gas in gas limit). This is enforced during fee check phase.
         }
 
+        // EIP-7702 authorization list gas is part of intrinsic gas and must be included
+        // regardless of whether the calldata floor or execution gas path wins.
+        // Calculated separately so it applies on top of the max() below.
+        let authorization_gas: u128 = self
+            .iter_ops_with_simulations()
+            .map(|sim_op| sim_op.op.authorization_gas_limit())
+            .sum();
+
         // per UO gas, bundle_size == None to signal to exclude shared gas
         gas_limit += self
             .iter_ops_with_simulations()
@@ -1769,7 +1777,10 @@ impl<UO: UserOperation> ProposalContext<UO> {
                 .sum::<u128>();
 
         if calldata_floor_gas_limit > gas_limit {
-            return calldata_floor_gas_limit;
+            // When the calldata floor wins, add back the authorization gas that
+            // would otherwise be missing. The execution gas path already includes
+            // it via pre_verification_execution_gas_limit, so only add it here.
+            return calldata_floor_gas_limit + authorization_gas;
         }
 
         gas_limit
