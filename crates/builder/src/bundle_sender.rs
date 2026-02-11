@@ -967,88 +967,17 @@ where
         }
     }
 
-<<<<<<< HEAD
     fn is_intrinsic_gas_too_low_error(error: &anyhow::Error) -> bool {
         format!("{error:#}")
             .to_lowercase()
             .contains("intrinsic gas too low")
     }
 
-    /// Builds a bundle and returns some metadata and the transaction to send
-    /// it, or `None` if there are no valid operations available.
-    async fn get_bundle_tx(
-        &mut self,
-        nonce: u64,
-        bundle: Bundle<EP::UO>,
-    ) -> anyhow::Result<Option<BundleTx>> {
-        let remove_ops_future = async {
-            if bundle.rejected_ops.is_empty() {
-                return;
-            }
-
-            let result = self.remove_ops_from_pool(&bundle.rejected_ops).await;
-            if let Err(error) = result {
-                error!("Failed to remove rejected ops from pool: {error}");
-            }
-        };
-
-        let update_entities_future = async {
-            if bundle.entity_updates.is_empty() {
-                return;
-            }
-
-            let result = self.update_entities_in_pool(&bundle.entity_updates).await;
-            if let Err(error) = result {
-                error!("Failed to update entities in pool: {error}");
-            }
-        };
-
-        join!(remove_ops_future, update_entities_future);
-
-        if bundle.is_empty() {
-            if !bundle.rejected_ops.is_empty() || !bundle.entity_updates.is_empty() {
-                info!(
-                    "Empty bundle with {} rejected ops and {} rejected entities. Removing them from pool.",
-                    bundle.rejected_ops.len(),
-                    bundle.entity_updates.len()
-                );
-            }
-            return Ok(None);
-        }
-        let ops: Vec<_> = bundle
-            .iter_ops()
-            .map(|op| (op.sender(), op.hash()))
-            .collect();
-
-        let mut tx = self.ep_providers.entry_point().get_send_bundle_transaction(
-            bundle.ops_per_aggregator,
-            self.sender_eoa,
-            bundle.gas_estimate,
-            bundle.gas_fees,
-            self.submission_proxy.as_ref().map(|p| p.address()),
-        );
-        tx = tx.nonce(nonce);
-
-        info!(
-            "Selected bundle: nonce: {:?}. Ops: {:?}. Num rejected ops: {:?}. Num updated entities: {:?}",
-            nonce,
-            ops,
-            bundle.rejected_ops.len(),
-            bundle.entity_updates.len()
-        );
-
-        Ok(Some(BundleTx {
-            tx,
-            expected_storage: bundle.expected_storage,
-            ops,
-        }))
-=======
     /// Emits an event for a specific entrypoint (used for shared signer support)
     fn emit_for_entrypoint(&self, entry_point: Address, event: BuilderEvent) {
         let _ = self
             .event_sender
             .send(WithEntryPoint { entry_point, event });
->>>>>>> 20e4b8a9 (feat(builder): implement signer sharing in builder)
     }
 
     async fn remove_ops_from_pool_by_hash(
