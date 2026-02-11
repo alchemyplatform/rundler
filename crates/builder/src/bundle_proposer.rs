@@ -3096,6 +3096,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_bundle_gas_limit_calldata_floor_with_authorization() {
+        // Enable EIP-7623 so the calldata floor is non-zero
+        let cs = ChainSpec {
+            eip7623_enabled: true,
+            ..Default::default()
+        };
+
+        // Create an op with an authorization tuple
+        let op = UserOperationBuilder::new(
+            &cs,
+            UserOperationRequiredFields {
+                // Use small gas limits so the calldata floor wins over execution gas
+                pre_verification_gas: 1_000,
+                call_gas_limit: 1_000,
+                verification_gas_limit: 1_000,
+                // Large calldata to ensure the calldata floor exceeds execution gas
+                call_data: Bytes::from(vec![1u8; 4096]),
+                ..Default::default()
+            },
+        )
+        .authorization_tuple(rundler_types::authorization::Eip7702Auth::new_dummy(
+            cs.id, address(1),
+        ))
+        .build();
+
+        let auth_gas = op.authorization_gas_limit();
+        assert!(auth_gas > 0, "op must have authorization gas");
+
+        let mut groups_by_aggregator = LinkedHashMap::new();
+        groups_by_aggregator.insert(
+            Address::ZERO,
+            AggregatorGroup {
+                ops_with_simulations: vec![OpWithSimulation {
+                    op: op.clone(),
+                    simulation: SimulationResult {
+                        requires_post_op: false,
+                        ..Default::default()
+                    },
+                    sponsored_da_gas: 0,
+                }],
+                signature: Default::default(),
+            },
+        );
+        let context = ProposalContext {
+            groups_by_aggregator,
+            rejected_ops: vec![],
+            entity_updates: BTreeMap::new(),
+            bundle_expected_storage: BundleExpectedStorage::default(),
+        };
+
+        let gas_limit = context.get_bundle_gas_limit(&cs);
+
+        // Verify the calldata floor path is being taken by checking that
+        // the gas limit is higher than what execution gas alone would give
+        let execution_gas = op.bundle_gas_limit(&cs, None) + rundler_types::bundle_shared_gas(&cs);
+        let calldata_floor = context.bundle_overhead_bytes(&cs)
+            * cs.calldata_floor_non_zero_byte_gas()
+            + op.calldata_floor_gas_limit();
+        assert!(
+            calldata_floor > execution_gas,
+            "calldata floor ({calldata_floor}) must exceed execution gas ({execution_gas}) for this test to be valid"
+        );
+
+        // The gas limit must include authorization gas even when calldata floor wins
+        assert_eq!(gas_limit, calldata_floor + auth_gas);
+    }
+
+    #[tokio::test]
     async fn test_post_op_revert() {
         let op1 = op_with_sender(address(1));
         let bundle = mock_make_bundle(
