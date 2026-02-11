@@ -13,7 +13,7 @@
 
 use std::{pin::Pin, sync::Arc, time::Duration};
 
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{Address, B256, hex};
 use anyhow::{Context, bail};
 use async_trait::async_trait;
 use futures::Stream;
@@ -701,7 +701,6 @@ where
             }
             Err(e) => bail!("Failed to make bundle: {e:?}"),
         };
-
         let Some(bundle_tx) = self.get_bundle_tx(nonce, bundle).await? else {
             self.emit(BuilderEvent::formed_bundle(
                 self.builder_tag.clone(),
@@ -798,9 +797,24 @@ where
             }
             Err(TransactionTrackerError::Other(e)) => {
                 error!("Failed to send bundle with unexpected error: {e:?}");
+                if Self::is_intrinsic_gas_too_low_error(&e) {
+                    let tx_bytes = tx.input.input().map_or_else(
+                        || String::from("0x"),
+                        |data| format!("0x{}", hex::encode(data)),
+                    );
+                    error!(
+                        "Bundle transaction bytes for intrinsic gas too low: tx_bytes={tx_bytes}"
+                    );
+                }
                 Err(e)
             }
         }
+    }
+
+    fn is_intrinsic_gas_too_low_error(error: &anyhow::Error) -> bool {
+        format!("{error:#}")
+            .to_lowercase()
+            .contains("intrinsic gas too low")
     }
 
     /// Builds a bundle and returns some metadata and the transaction to send

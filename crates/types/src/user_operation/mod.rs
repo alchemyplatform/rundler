@@ -412,8 +412,7 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// Returns the gas limit for the authorization
     fn authorization_gas_limit(&self) -> u128 {
         if self.authorization_tuple().is_some() {
-            alloy_eips::eip7702::constants::PER_AUTH_BASE_COST as u128
-                + alloy_eips::eip7702::constants::PER_EMPTY_ACCOUNT_COST as u128
+            alloy_eips::eip7702::constants::PER_EMPTY_ACCOUNT_COST as u128
         } else {
             0
         }

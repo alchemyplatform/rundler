@@ -1732,7 +1732,10 @@ impl<UO: UserOperation> ProposalContext<UO> {
     }
 
     fn get_bundle_gas_limit_inner(&self, chain_spec: &ChainSpec, include_da_gas: bool) -> u128 {
-        let mut gas_limit = rundler_types::bundle_shared_gas(chain_spec);
+        let mut authorization_gas = 0_u128;
+        let mut standard_gas_limit = 0_u128;
+        let mut calldata_floor_gas_limit = 0_u128;
+        let mut da_gas_limit = 0_u128;
 
         // Per aggregator fixed gas
         for agg in self.groups_by_aggregator.keys() {
@@ -1743,36 +1746,45 @@ impl<UO: UserOperation> ProposalContext<UO> {
                 // this should be checked prior to calling this function
                 panic!("BUG: aggregator {agg:?} not found in chain spec");
             };
-            gas_limit += agg.costs().execution_fixed_gas;
+            standard_gas_limit = standard_gas_limit.saturating_add(agg.costs().execution_fixed_gas);
 
             // NOTE: this assumes that the DA cost for the aggregated signature is covered by the gas limits
             // from the UOs (on chains that have DA gas in gas limit). This is enforced during fee check phase.
         }
 
-        // per UO gas, bundle_size == None to signal to exclude shared gas
-        gas_limit += self
-            .iter_ops_with_simulations()
-            .map(|sim_op| {
-                if include_da_gas {
-                    sim_op.op.bundle_gas_limit(chain_spec, None) + sim_op.sponsored_da_gas
-                } else {
-                    sim_op.op.bundle_computation_gas_limit(chain_spec, None)
-                }
-            })
-            .sum::<u128>();
+        for sim_op in self.iter_ops_with_simulations() {
+            let op_authorization_gas = sim_op.op.authorization_gas_limit();
+            authorization_gas = authorization_gas.saturating_add(op_authorization_gas);
 
-        let calldata_floor_gas_limit = self.bundle_overhead_bytes(chain_spec)
-            * chain_spec.calldata_floor_non_zero_byte_gas()
-            + self
-                .iter_ops_with_simulations()
-                .map(|sim_op| sim_op.op.calldata_floor_gas_limit())
-                .sum::<u128>();
+            // EIP-7623 calculations require this to be done without the EIP-7702 intrinsic gas. Its added later in the final calculation.
+            standard_gas_limit = standard_gas_limit.saturating_add(
+                sim_op.op.bundle_computation_gas_limit(chain_spec, None) - op_authorization_gas,
+            );
 
-        if calldata_floor_gas_limit > gas_limit {
-            return calldata_floor_gas_limit;
+            calldata_floor_gas_limit =
+                calldata_floor_gas_limit.saturating_add(sim_op.op.calldata_floor_gas_limit());
+
+            if include_da_gas {
+                da_gas_limit = da_gas_limit.saturating_add(
+                    sim_op.op.pre_verification_da_gas_limit(chain_spec, None)
+                        + sim_op.sponsored_da_gas,
+                );
+            }
         }
 
-        gas_limit
+        calldata_floor_gas_limit = calldata_floor_gas_limit.saturating_add(
+            self.bundle_overhead_bytes(chain_spec)
+                .saturating_mul(chain_spec.calldata_floor_non_zero_byte_gas()),
+        );
+
+        // EIP-7623 maximum between standard and calldata floor
+        let execution_gas_limit = standard_gas_limit.max(calldata_floor_gas_limit);
+
+        chain_spec
+            .transaction_intrinsic_gas()
+            .saturating_add(authorization_gas)
+            .saturating_add(da_gas_limit)
+            .saturating_add(execution_gas_limit)
     }
 
     fn iter_ops_with_simulations(&self) -> impl Iterator<Item = &OpWithSimulation<UO>> + '_ {
@@ -3082,6 +3094,148 @@ mod tests {
             + rundler_types::bundle_shared_gas(&cs);
 
         assert_eq!(gas_limit, expected_gas_limit);
+    }
+
+    #[tokio::test]
+    async fn test_bundle_gas_limit_calldata_floor_with_authorization() {
+        // Enable EIP-7623 so the calldata floor is non-zero
+        let cs = ChainSpec {
+            eip7623_enabled: true,
+            ..Default::default()
+        };
+
+        // Create an op with an authorization tuple
+        let op = UserOperationBuilder::new(
+            &cs,
+            UserOperationRequiredFields {
+                // Use small gas limits so the calldata floor wins over execution gas
+                pre_verification_gas: 1_000,
+                call_gas_limit: 1_000,
+                verification_gas_limit: 1_000,
+                // Large calldata to ensure the calldata floor exceeds execution gas
+                call_data: Bytes::from(vec![1u8; 4096]),
+                ..Default::default()
+            },
+        )
+        .authorization_tuple(rundler_types::authorization::Eip7702Auth::new_dummy(
+            cs.id,
+            address(1),
+        ))
+        .build();
+
+        let auth_gas = op.authorization_gas_limit();
+        assert!(auth_gas > 0, "op must have authorization gas");
+
+        let mut groups_by_aggregator = LinkedHashMap::new();
+        groups_by_aggregator.insert(
+            Address::ZERO,
+            AggregatorGroup {
+                ops_with_simulations: vec![OpWithSimulation {
+                    op: op.clone(),
+                    simulation: SimulationResult {
+                        requires_post_op: false,
+                        ..Default::default()
+                    },
+                    sponsored_da_gas: 0,
+                }],
+                signature: Default::default(),
+            },
+        );
+        let context = ProposalContext {
+            groups_by_aggregator,
+            rejected_ops: vec![],
+            entity_updates: BTreeMap::new(),
+            bundle_expected_storage: BundleExpectedStorage::default(),
+        };
+
+        let gas_limit = context.get_bundle_gas_limit(&cs);
+
+        // Verify the calldata floor path is being taken by checking that
+        // the gas limit is higher than what execution gas alone would give
+        let execution_gas = op.bundle_gas_limit(&cs, None) + rundler_types::bundle_shared_gas(&cs);
+        let calldata_floor = context.bundle_overhead_bytes(&cs)
+            * cs.calldata_floor_non_zero_byte_gas()
+            + op.calldata_floor_gas_limit();
+        assert!(
+            calldata_floor > execution_gas,
+            "calldata floor ({calldata_floor}) must exceed execution gas ({execution_gas}) for this test to be valid"
+        );
+
+        // The gas limit must include transaction intrinsic and authorization gas
+        // even when calldata floor wins.
+        assert_eq!(
+            gas_limit,
+            cs.transaction_intrinsic_gas() + calldata_floor + auth_gas
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bundle_gas_limit_authorization_delta_is_empty_account_cost() {
+        let cs = ChainSpec::default();
+        let required = UserOperationRequiredFields {
+            pre_verification_gas: 100_000,
+            call_gas_limit: 100_000,
+            verification_gas_limit: 100_000,
+            ..Default::default()
+        };
+
+        let op_without_authorization = UserOperationBuilder::new(&cs, required.clone()).build();
+        let op_with_authorization = UserOperationBuilder::new(&cs, required)
+            .authorization_tuple(rundler_types::authorization::Eip7702Auth::new_dummy(
+                cs.id,
+                address(1),
+            ))
+            .build();
+
+        assert_eq!(op_without_authorization.authorization_gas_limit(), 0);
+        assert_eq!(op_with_authorization.authorization_gas_limit(), 25_000);
+
+        let mut groups_without_authorization = LinkedHashMap::new();
+        groups_without_authorization.insert(
+            Address::ZERO,
+            AggregatorGroup {
+                ops_with_simulations: vec![OpWithSimulation {
+                    op: op_without_authorization,
+                    simulation: SimulationResult::default(),
+                    sponsored_da_gas: 0,
+                }],
+                signature: Default::default(),
+            },
+        );
+        let context_without_authorization = ProposalContext {
+            groups_by_aggregator: groups_without_authorization,
+            rejected_ops: vec![],
+            entity_updates: BTreeMap::new(),
+            bundle_expected_storage: BundleExpectedStorage::default(),
+        };
+
+        let mut groups_with_authorization = LinkedHashMap::new();
+        groups_with_authorization.insert(
+            Address::ZERO,
+            AggregatorGroup {
+                ops_with_simulations: vec![OpWithSimulation {
+                    op: op_with_authorization,
+                    simulation: SimulationResult::default(),
+                    sponsored_da_gas: 0,
+                }],
+                signature: Default::default(),
+            },
+        );
+        let context_with_authorization = ProposalContext {
+            groups_by_aggregator: groups_with_authorization,
+            rejected_ops: vec![],
+            entity_updates: BTreeMap::new(),
+            bundle_expected_storage: BundleExpectedStorage::default(),
+        };
+
+        let gas_without_authorization = context_without_authorization.get_bundle_gas_limit(&cs);
+        let gas_with_authorization = context_with_authorization.get_bundle_gas_limit(&cs);
+
+        assert_eq!(
+            gas_with_authorization - gas_without_authorization,
+            25_000,
+            "authorization should add only EIP-7702 empty account intrinsic gas"
+        );
     }
 
     #[tokio::test]

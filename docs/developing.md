@@ -12,13 +12,13 @@ git submodule update --init --recursive
 
 2. Install prerequisites
 
-* [Rust/Cargo](https://www.rust-lang.org/tools/install): 1.85 or higher with nightly 
-* [Cocogitto](https://github.com/cocogitto/cocogitto): Commit linting
-* [Docker](https://docs.docker.com/engine/install/): Run spec tests
-* [PDM](https://pdm.fming.dev/latest/#installation): Run spec tests
-* [Protoc](https://grpc.io/docs/protoc-installation/): Compile protobuf
-* [Buf](https://buf.build/docs/installation): Protobuf linting
-* [Foundry ^0.3.0](https://book.getfoundry.sh/getting-started/installation): Compile contracts
+- [Rust/Cargo](https://www.rust-lang.org/tools/install): 1.85 or higher with nightly
+- [Cocogitto](https://github.com/cocogitto/cocogitto): Commit linting
+- [Docker](https://docs.docker.com/engine/install/): Run spec tests
+- [PDM](https://pdm.fming.dev/latest/#installation): Run spec tests
+- [Protoc](https://grpc.io/docs/protoc-installation/): Compile protobuf
+- [Buf](https://buf.build/docs/cli/installation/): Protobuf linting
+- [Foundry ^0.3.0](https://book.getfoundry.sh/getting-started/installation): Compile contracts
 
 ## Build & Test
 
@@ -26,7 +26,7 @@ Rundler contains a `Makefile` to simplify common build/test commands
 
 ```
 # build rundler
-$ make build 
+$ make build
 
 # run unit tests
 $ make test-unit
