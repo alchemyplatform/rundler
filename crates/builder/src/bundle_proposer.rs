@@ -3309,6 +3309,7 @@ mod tests {
             },
         );
         let context = ProposalContext {
+            sender_eoa: Address::ZERO,
             groups_by_aggregator,
             rejected_ops: vec![],
             entity_updates: BTreeMap::new(),
@@ -3370,6 +3371,7 @@ mod tests {
             },
         );
         let context_without_authorization = ProposalContext {
+            sender_eoa: Address::ZERO,
             groups_by_aggregator: groups_without_authorization,
             rejected_ops: vec![],
             entity_updates: BTreeMap::new(),
@@ -3389,6 +3391,7 @@ mod tests {
             },
         );
         let context_with_authorization = ProposalContext {
+            sender_eoa: Address::ZERO,
             groups_by_aggregator: groups_with_authorization,
             rejected_ops: vec![],
             entity_updates: BTreeMap::new(),
