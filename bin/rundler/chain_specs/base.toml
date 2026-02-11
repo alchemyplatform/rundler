@@ -12,4 +12,5 @@ min_max_priority_fee_per_gas = 1000000
 block_gas_limit = 140000000
 transaction_gas_limit = 16777216
 eip7702_enabled = true
+eip7623_enabled = true
 flashblocks_enabled = true
