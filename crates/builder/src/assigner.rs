@@ -440,11 +440,14 @@ impl Assigner {
         }
         ep_metrics.ep_assignments.increment(1);
 
-        Ok(AssignmentResult::Assigned(WorkAssignment {
+        let assignment = WorkAssignment {
             entry_point,
             filter_id,
             operations: assigned_ops,
-        }))
+        };
+        tracing::info!("Builder Assigner: assignment: {assignment:?}");
+
+        Ok(AssignmentResult::Assigned(assignment))
     }
 
     /// Count ops in a single pass under one lock acquisition.
@@ -473,7 +476,7 @@ impl Assigner {
                 continue;
             }
             assignable += 1;
-            if self.op_meets_fee_requirements(op, required_fees, false) {
+            if self.op_meets_fee_requirements(op, required_fees, true) {
                 eligible += 1;
             }
         }

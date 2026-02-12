@@ -121,6 +121,7 @@ impl MempoolFilter {
     fn apply(&self, operation: &UserOperationVariant) -> bool {
         match &self.filter {
             Filter::Aggregator(address) => operation.aggregator().is_some_and(|a| a == *address),
+            Filter::Sender(address) => operation.sender() == *address,
         }
     }
 }
@@ -131,6 +132,8 @@ impl MempoolFilter {
 enum Filter {
     /// Filter operations by aggregator address
     Aggregator(Address),
+    /// Filter by sender address
+    Sender(Address),
 }
 
 /// An allowlist rule.
