@@ -263,6 +263,7 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
         self.total_verification_gas_limit()
             + self.required_pre_execution_buffer()
             + self.call_gas_limit()
+            + self.paymaster_post_op_gas_limit()
     }
 
     /// Returns the gas limit that applies to the computation portion of a bundle's gas limit
