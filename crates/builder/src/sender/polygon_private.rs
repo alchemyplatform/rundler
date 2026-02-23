@@ -44,7 +44,7 @@ where
 
         let tx_hash = self
             .submit_provider
-            .request("eth_sendRawTransactionPrivate", raw_tx)
+            .request("eth_sendRawTransactionPrivate", (raw_tx,))
             .await?;
 
         Ok(tx_hash)
