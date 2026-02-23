@@ -28,8 +28,8 @@ pub use emit::{BuilderEvent, BuilderEventKind};
 
 mod sender;
 pub use sender::{
-    BloxrouteSenderArgs, FlashbotsSenderArgs, RawSenderArgs, TransactionSenderArgs,
-    TransactionSenderKind,
+    BloxrouteSenderArgs, FlashbotsSenderArgs, PolygonPrivateArgs, RawSenderArgs,
+    TransactionSenderArgs, TransactionSenderKind,
 };
 
 mod server;

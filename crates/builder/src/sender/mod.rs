@@ -13,6 +13,7 @@
 
 mod bloxroute;
 mod flashbots;
+mod polygon_private;
 mod raw;
 
 use alloy_primitives::{Address, B256};
@@ -27,6 +28,8 @@ use rundler_provider::{AlloyNetworkConfig, EvmProvider, ProviderError, Transacti
 use rundler_signer::SignerLease;
 use rundler_types::{ExpectedStorage, GasFees};
 use secrecy::SecretString;
+
+use crate::sender::polygon_private::PolygonPrivateSender;
 
 #[derive(Debug)]
 pub(crate) struct CancelTxInfo {
@@ -96,6 +99,7 @@ pub(crate) enum TransactionSenderEnum<P: EvmProvider> {
     Raw(RawTransactionSender<P>),
     Flashbots(FlashbotsTransactionSender),
     PolygonBloxroute(PolygonBloxrouteTransactionSender<P>),
+    PolygonPrivate(PolygonPrivateSender<P>),
 }
 
 /// Transaction sender types
@@ -108,6 +112,8 @@ pub enum TransactionSenderKind {
     Flashbots,
     /// Bloxroute transaction sender
     Bloxroute,
+    /// Polygon private transaction sender
+    PolygonPrivate,
 }
 
 /// Transaction sender types
@@ -119,6 +125,8 @@ pub enum TransactionSenderArgs {
     Flashbots(FlashbotsSenderArgs),
     /// Bloxroute transaction sender
     Bloxroute(BloxrouteSenderArgs),
+    /// Polygon private transaction sender
+    PolygonPrivate(PolygonPrivateArgs),
 }
 
 /// Raw sender arguments
@@ -135,6 +143,13 @@ pub struct RawSenderArgs {
 pub struct BloxrouteSenderArgs {
     /// The auth header to use
     pub header: SecretString,
+}
+
+/// Polygon private sender arguments
+#[derive(Debug, Clone)]
+pub struct PolygonPrivateArgs {
+    /// Submit URL
+    pub submit_url: String,
 }
 
 /// Flashbots sender arguments
@@ -177,6 +192,18 @@ impl TransactionSenderArgs {
             Self::Bloxroute(args) => TransactionSenderEnum::PolygonBloxroute(
                 PolygonBloxrouteTransactionSender::new(provider, &args.header)?,
             ),
+            Self::PolygonPrivate(args) => {
+                let config = AlloyNetworkConfig {
+                    rpc_url: args
+                        .submit_url
+                        .parse()
+                        .context("invalid builder submit URL")?,
+                    ..config.clone()
+                };
+                let submitter = rundler_provider::new_alloy_evm_provider(&config)?;
+
+                TransactionSenderEnum::PolygonPrivate(PolygonPrivateSender::new(submitter))
+            }
         };
         Ok(sender)
     }
