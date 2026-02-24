@@ -13,11 +13,11 @@ Rundler's entry point support is controlled by the following CLI options:
 
 - `--enabled_entry_points`
 
-Modify the number of builders (and thus keys) associated with each entry point:
+Set the number of shared signer workers:
 
-- `--num_builders_v0_6`
-- `--num_builders_v0_7`
-- TODO(entrypoints): builder support
+- `--num_signers`
+
+Each worker handles all enabled entry points via the [signer sharing architecture](./builder.md#signer-sharing-architecture).
 
 Rundler expects that the entry point contract is deployed at a deterministic address. It defaults to:
 
@@ -41,8 +41,10 @@ Rundler uses the same API interface for both v0.6 and v0.7 ABIs. It determines w
 
 See the version of the spec associated with the entry point version for the expected schemas.
 
-- [v0.6.0](https://github.com/eth-infinitism/account-abstraction/blob/v0.6.0/eip/EIPS/eip-4337.md#rpc-methods-eth-namespace)
-- [v0.7.0](https://github.com/eth-infinitism/account-abstraction/blob/v0.7.0/erc/ERCS/erc-4337.md#rpc-methods-eth-namespace)
+- [v0.6.0](https://github.com/eth-infinitism/account-abstraction/releases/tag/v0.6.0)
+- [v0.7.0](https://github.com/eth-infinitism/account-abstraction/releases/tag/v0.7.0)
+- [v0.8.0](https://github.com/eth-infinitism/account-abstraction/releases/tag/v0.8.0)
+- [v0.9.0](https://github.com/eth-infinitism/account-abstraction/releases/tag/v0.9.0)
 
 ## Internals
 
@@ -65,7 +67,7 @@ Rundler will run a separate mempool for each enabled entry point. These pools ar
 
 ### Builder
 
-Rundler will run independent bundle builders for each entry point. Each builder will only interact with the mempool of its same version.
+Rundler runs a shared pool of bundle sender workers that dynamically select an entry point on each cycle based on mempool state. Each worker can build bundles for any enabled entry point. See [signer sharing architecture](./builder.md#signer-sharing-architecture) for details.
 
 ### RPC
 

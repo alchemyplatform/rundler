@@ -13,7 +13,7 @@
 
 use std::pin::Pin;
 
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{Address, B256, U256};
 use futures_util::Stream;
 
 use super::{
@@ -41,6 +41,14 @@ pub struct PoolOperationSummary {
     pub sender: Address,
     /// Sim block number of the operation
     pub sim_block_number: u64,
+    /// Max fee per gas of the operation
+    pub max_fee_per_gas: u128,
+    /// Max priority fee per gas of the operation
+    pub max_priority_fee_per_gas: u128,
+    /// Total gas limit the operation can consume
+    pub gas_limit: u128,
+    /// Maximum WEI the bundler will pay for this operation (None if not sponsored)
+    pub bundler_sponsorship_max_cost: Option<U256>,
 }
 
 /// Pool server trait
@@ -185,6 +193,10 @@ impl From<&PoolOperation> for PoolOperationSummary {
             hash: op.uo.hash(),
             sender: op.uo.sender(),
             sim_block_number: op.sim_block_number,
+            max_fee_per_gas: op.uo.max_fee_per_gas(),
+            max_priority_fee_per_gas: op.uo.max_priority_fee_per_gas(),
+            gas_limit: op.uo.total_gas_limit(),
+            bundler_sponsorship_max_cost: op.perms.bundler_sponsorship.as_ref().map(|s| s.max_cost),
         }
     }
 }

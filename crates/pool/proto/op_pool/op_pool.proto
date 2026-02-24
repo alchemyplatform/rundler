@@ -220,6 +220,14 @@ message PoolOperationSummary {
   bytes sender = 3;
   // The sim block number of the UserOperation
   uint64 sim_block_number = 4;
+  // Maximum fee per gas (similar to EIP-1559 max_fee_per_gas)
+  bytes max_fee_per_gas = 5;
+  // Maximum priority fee per gas (similar to EIP-1559 max_priority_fee_per_gas)
+  bytes max_priority_fee_per_gas = 6;
+  // Total gas limit the operation can consume
+  bytes gas_limit = 7;
+  // Maximum WEI the bundler will pay (empty if not sponsored)
+  bytes bundler_sponsorship_max_cost = 8;
 }
 
 // Data associated with a user operation for DA gas calculations

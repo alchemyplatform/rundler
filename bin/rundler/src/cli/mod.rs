@@ -123,7 +123,16 @@ pub async fn run() -> anyhow::Result<()> {
             rpc::spawn_tasks(task_spawner.clone(), cs, args, opt.common, providers).await?
         }
         Command::Builder(args) => {
-            builder::spawn_tasks(task_spawner.clone(), cs, args, opt.common, providers).await?
+            builder::spawn_tasks(
+                task_spawner.clone(),
+                cs,
+                args,
+                opt.common,
+                providers,
+                mempool_configs,
+                entry_point_builders,
+            )
+            .await?
         }
         Command::Admin(args) => {
             admin::run(args, cs, providers, task_spawner).await?;
@@ -476,49 +485,17 @@ pub struct CommonArgs {
     )]
     pub enabled_entry_points: Vec<EntryPointVersion>,
 
-    // Ignored if v0.6 is not enabled
-    // Ignored if entry_point_builders_path is set
+    /// Number of signers (and workers) to use for bundle building.
+    /// Each signer handles all configured entrypoints.
     #[arg(
-        long = "num_builders_v0_6",
-        name = "num_builders_v0_6",
-        env = "NUM_BUILDERS_V0_6",
+        long = "num_signers",
+        name = "num_signers",
+        env = "NUM_SIGNERS",
         default_value = "1",
-        global = true
+        global = true,
+        value_parser = clap::value_parser!(u64).range(1..)
     )]
-    pub num_builders_v0_6: u64,
-
-    // Ignored if v0.7 is not enabled
-    // Ignored if entry_point_builders_path is set
-    #[arg(
-        long = "num_builders_v0_7",
-        name = "num_builders_v0_7",
-        env = "NUM_BUILDERS_V0_7",
-        default_value = "1",
-        global = true
-    )]
-    pub num_builders_v0_7: u64,
-
-    // Ignored if v0.8 is not enabled
-    // Ignored if entry_point_builders_path is set
-    #[arg(
-        long = "num_builders_v0_8",
-        name = "num_builders_v0_8",
-        env = "NUM_BUILDERS_V0_8",
-        default_value = "1",
-        global = true
-    )]
-    pub num_builders_v0_8: u64,
-
-    // Ignored if v0.9 is not enabled
-    // Ignored if entry_point_builders_path is set
-    #[arg(
-        long = "num_builders_v0_9",
-        name = "num_builders_v0_9",
-        env = "NUM_BUILDERS_V0_9",
-        default_value = "1",
-        global = true
-    )]
-    pub num_builders_v0_9: u64,
+    pub num_signers: u64,
 
     #[arg(
         long = "da_gas_tracking_enabled",
@@ -599,15 +576,6 @@ impl CommonArgs {
                 .transaction_gas_limit_mult(self.target_bundle_transaction_gas_limit_ratio),
             max_bundle_execution_gas_limit: chain_spec
                 .transaction_gas_limit_mult(self.max_bundle_transaction_gas_limit_ratio),
-        }
-    }
-
-    pub fn num_builders_for_entry_point(&self, entry_point_version: EntryPointVersion) -> u64 {
-        match entry_point_version {
-            EntryPointVersion::V0_6 => self.num_builders_v0_6,
-            EntryPointVersion::V0_7 => self.num_builders_v0_7,
-            EntryPointVersion::V0_8 => self.num_builders_v0_8,
-            EntryPointVersion::V0_9 => self.num_builders_v0_9,
         }
     }
 }

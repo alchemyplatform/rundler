@@ -83,26 +83,17 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - This path can either be a local file path or an S3 url. If using an S3 url, Make sure your machine has access to this file.
   - env: _MEMPOOL_CONFIG_PATH_
   - See [here](./architecture/pool.md#alternative-mempools-in-preview) for details.
-- `--entry_point_builders_path`: Path to the entry point builders configuration file (example: `builders.json`, `s3://my-bucket/builders.json`). (default: `None`)
+- `--builders_config_path`: Path to the entry point builders configuration file (example: `builders.json`, `s3://my-bucket/builders.json`). (default: `None`)
   - This path can either be a local file path or an S3 url. If using an S3 url, Make sure your machine has access to this file.
-  - env: _ENTRY_POINT_BUILDERS_PATH_
+  - env: _BUILDERS_CONFIG_PATH_
   - NOTE: most deployments can ignore this and use the settings below.
   - See [here](./architecture/builder.md#custom) for details.
 - `--enabled_entry_points`: Enabled entry point versions. (default: `v0.7`)
   - env: _ENABLED_ENTRY_POINTS_
   - Options: `v0.6, v0.7, v0.8, v0.9`
-- `--num_builders_v0_6`: The number of bundle builders to run on entry point v0.6 (default: `1`)
-  - env: _NUM_BUILDERS_V0_6_
-  - NOTE: ignored if `entry_point_builders_path` is set
-- `--num_builders_v0_7`: The number of bundle builders to run on entry point v0.7 (default: `1`)
-  - env: _NUM_BUILDERS_V0_7_
-  - NOTE: ignored if `entry_point_builders_path` is set
-- `--num_builders_v0_8`: The number of bundle builders to run on entry point v0.8 (default: `1`)
-  - env: _NUM_BUILDERS_V0_8_
-  - NOTE: ignored if `entry_point_builders_path` is set
-- `--num_builders_v0_9`: The number of bundle builders to run on entry point v0.9 (default: `1`)
-  - env: _NUM_BUILDERS_V0_9_
-  - NOTE: ignored if `entry_point_builders_path` is set
+- `--num_signers`: Number of signers (and workers) to use for bundle building. Each worker handles all configured entrypoints via the shared signer architecture. (default: `1`)
+  - env: _NUM_SIGNERS_
+  - NOTE: Workers share signers and dynamically select entrypoints based on mempool state. See [builder architecture](./architecture/builder.md#signer-sharing-architecture) for details.
 - `--da_gas_tracking_enabled`: Enable the DA gas tracking feature of the mempool (default: `false`)
   - env: _DA_GAS_TRACKING_ENABLED_
 - `--max_expected_storage_slots`: Optionally set the maximum number of expected storage slots to submit with a conditional transaction. (default: `None`)
@@ -223,7 +214,7 @@ List of command line options for configuring the Pool.
 
 List of command line options for configuring the Builder.
 
-- `--builder.port`: Port to listen on for gRPC requests (default: `50052`)
+- `--builder.port`: Port to listen on for gRPC requests (default: `50051`)
   - env: _BUILDER_PORT_
   - _Only required when running in distributed mode_
 - `--builder.host`: Host to listen on for gRPC requests (default: `127.0.0.1`)
@@ -251,9 +242,13 @@ List of command line options for configuring the Builder.
   - env: _BUILDER_FLASHBOTS_RELAY_AUTH_KEY_
 - `--builder.bloxroute_auth_header`: Only used/required if builder.sender == "polygon_bloxroute." If using the bloxroute transaction sender on Polygon, this is the auth header to supply with the requests. (default: None)
   - env: _BUILDER_BLOXROUTE_AUTH_HEADER_
-- `--builder.pool_url`: If running in distributed mode, the URL of the pool server to use.
+- `--builder.pool_url`: If running in distributed mode, the URL of the pool server to use. (default: `http://localhost:50051`)
   - env: _BUILDER_POOL_URL_
   - _Only required when running in distributed mode_
+- `--builder.assigner_max_ops_per_request`: Maximum number of operations requested from the mempool per entrypoint query. (default: `1024`)
+  - env: _BUILDER_ASSIGNER_MAX_OPS_PER_REQUEST_
+- `--builder.assigner_starvation_ratio`: Starvation ratio for the assigner. This value acts as a multiplier on signer count (`num_signers * starvation_ratio`) before force-selecting a starved entrypoint. For example, with 4 signers and the default ratio of 0.50, an entrypoint is force-selected after 2 idle cycles. (default: `0.50`)
+  - env: _BUILDER_ASSIGNER_STARVATION_RATIO_
 
 ## Signer Options
 

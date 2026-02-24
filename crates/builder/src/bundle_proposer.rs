@@ -27,19 +27,21 @@ use futures::future;
 use linked_hash_map::LinkedHashMap;
 use metrics::{Counter, Histogram};
 use metrics_derive::Metrics;
-#[cfg(test)]
-use mockall::automock;
 use rundler_provider::{
-    BundleHandler, DAGasOracleSync, DAGasProvider, EntryPoint, EvmProvider, FeeEstimator,
-    HandleOpsOut, ProvidersWithEntryPointT,
+    BundleHandler, DAGasOracleSync, DAGasProvider, EntryPoint, EvmProvider,
+    GethDebugBuiltInTracerType, GethDebugTracerCallConfig, GethDebugTracerType,
+    GethDebugTracingOptions, HandleOpsOut, ProvidersWithEntryPointT, TransactionRequest,
+    decode_v0_6_handle_ops_revert, decode_v0_6_ops_from_calldata, decode_v0_7_handle_ops_revert,
+    decode_v0_7_ops_from_calldata, get_auth_list_from_transaction,
 };
 use rundler_sim::{SimulationError, SimulationResult, Simulator, ViolationError};
 use rundler_types::{
     BUNDLE_BYTE_OVERHEAD, BundleExpectedStorage, Entity, EntityInfo, EntityInfos, EntityType,
-    EntityUpdate, EntityUpdateType, EntryPointVersion, ExpectedStorage, GasFees, TIME_RANGE_BUFFER,
-    Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator, ValidTimeRange,
-    ValidationRevert,
+    EntityUpdate, EntityUpdateType, EntryPointAbiVersion, EntryPointVersion, ExpectedStorage,
+    GasFees, TIME_RANGE_BUFFER, Timestamp, UserOperation, UserOperationVariant,
+    UserOpsPerAggregator, ValidTimeRange, ValidationRevert,
     aggregator::SignatureAggregatorResult,
+    authorization::Eip7702Auth,
     chain::ChainSpec,
     da::{DAGasBlockData, DAGasData},
     pool::{PoolOperation, SimulationViolation},
@@ -87,37 +89,6 @@ impl<UO: UserOperation> Bundle<UO> {
     }
 }
 
-#[async_trait]
-#[cfg_attr(test, automock(type UO = rundler_types::v0_6::UserOperation;))]
-pub(crate) trait BundleProposer: Send + Sync {
-    type UO: UserOperation;
-
-    /// Constructs the next bundle
-    ///
-    /// If `min_fees` is `Some`, the proposer will ensure the bundle has
-    /// at least `min_fees`.
-    async fn make_bundle(
-        &mut self,
-        ops: Vec<PoolOperation>,
-        block_hash: B256,
-        max_bundle_fee: U256,
-        min_gas_fees: Option<GasFees>,
-        is_replacement: bool,
-    ) -> BundleProposerResult<Bundle<<Self as BundleProposer>::UO>>;
-
-    /// Gets the current gas fees
-    ///
-    /// If `min_fees` is `Some`, the proposer will ensure the gas fees returned are at least `min_fees`.
-    async fn estimate_gas_fees(
-        &self,
-        block_hash: B256,
-        min_fees: Option<GasFees>,
-    ) -> BundleProposerResult<(GasFees, u128)>;
-
-    /// Notifies the proposer that a condition was not met during the last bundle proposal
-    fn notify_condition_not_met(&mut self);
-}
-
 pub(crate) type BundleProposerResult<T> = std::result::Result<T, BundleProposerError>;
 
 #[derive(Debug, thiserror::Error)]
@@ -131,13 +102,77 @@ pub(crate) enum BundleProposerError {
     Other(#[from] anyhow::Error),
 }
 
+/// Version-agnostic bundle data for transaction submission.
+/// This is the type-erased result of bundle proposal.
+#[derive(Debug)]
+pub(crate) struct BundleData {
+    /// The transaction to send
+    pub(crate) tx: rundler_provider::TransactionRequest,
+    /// Expected storage for conditional submission
+    pub(crate) expected_storage: ExpectedStorage,
+    /// Gas fees used for this bundle
+    pub(crate) gas_fees: GasFees,
+    /// Hashes of operations in the bundle (sender, hash) pairs
+    pub(crate) ops: Vec<(Address, B256)>,
+    /// Hashes of rejected operations to remove from pool
+    pub(crate) rejected_op_hashes: Vec<B256>,
+    /// Entity updates to apply to pool
+    pub(crate) entity_updates: Vec<EntityUpdate>,
+}
+
+impl BundleData {
+    /// Returns true if the bundle has no operations
+    pub(crate) fn is_empty(&self) -> bool {
+        self.ops.is_empty()
+    }
+}
+
+/// Request parameters for building a bundle.
+#[derive(Debug)]
+pub(crate) struct BundleProposalRequest {
+    /// Operations to include in the bundle
+    pub(crate) ops: Vec<PoolOperation>,
+    /// The sender EOA address for the bundle transaction
+    pub(crate) sender_eoa: Address,
+    /// The nonce for the bundle transaction
+    pub(crate) nonce: u64,
+    /// The block hash to build against
+    pub(crate) block_hash: B256,
+    /// The maximum fee the bundle can spend (signer balance)
+    pub(crate) max_bundle_fee: U256,
+    /// Gas fees for the bundle transaction
+    pub(crate) bundle_fees: GasFees,
+    /// The current base fee
+    pub(crate) base_fee: u128,
+    /// Required minimum fees for operations
+    pub(crate) required_op_fees: GasFees,
+    /// Whether to re-check conditions for operations
+    pub(crate) condition_not_met: bool,
+}
+
+/// Type-erased bundle proposer trait.
+/// Allows workers to build bundles without knowing the specific entrypoint version.
+#[async_trait]
+#[cfg_attr(test, mockall::automock)]
+pub(crate) trait BundleProposerT: Send + Sync {
+    /// Constructs the next bundle and returns a transaction-ready result.
+    ///
+    /// If `condition_not_met` is true, the proposer will re-check all conditions
+    /// for operations in the bundle, rejecting any whose conditions are no longer met.
+    async fn make_bundle(&self, request: BundleProposalRequest)
+    -> BundleProposerResult<BundleData>;
+
+    /// Process a reverted bundle transaction and return op hashes to remove from pool.
+    /// Fetches the trace and transaction internally, then decodes and processes the revert.
+    async fn process_revert(&self, tx_hash: B256) -> anyhow::Result<Vec<B256>>;
+}
+
 pub(crate) struct BundleProposerImpl<EP, BP> {
     builder_tag: String,
     settings: Settings,
     ep_providers: EP,
     bundle_providers: BP,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
-    condition_not_met_notified: bool,
     metrics: BuilderProposerMetrics,
 }
 
@@ -146,57 +181,34 @@ pub(crate) struct Settings {
     pub(crate) chain_spec: ChainSpec,
     pub(crate) target_bundle_gas: u128,
     pub(crate) max_bundle_gas: u128,
-    pub(crate) sender_eoa: Address,
     pub(crate) da_gas_tracking_enabled: bool,
     pub(crate) max_expected_storage_slots: usize,
     pub(crate) verification_gas_limit_efficiency_reject_threshold: f64,
     pub(crate) submission_proxy: Option<Arc<dyn SubmissionProxy>>,
 }
 
-#[async_trait]
-impl<EP, BP> BundleProposer for BundleProposerImpl<EP, BP>
+impl<EP, BP> BundleProposerImpl<EP, BP>
 where
     EP: ProvidersWithEntryPointT,
     BP: BundleProposerProvidersT,
 {
-    type UO = EP::UO;
-
-    async fn estimate_gas_fees(
+    #[allow(clippy::too_many_arguments)]
+    async fn propose_typed_bundle(
         &self,
-        block_hash: B256,
-        required_fees: Option<GasFees>,
-    ) -> BundleProposerResult<(GasFees, u128)> {
-        Ok(self
-            .ep_providers
-            .fee_estimator()
-            .required_bundle_fees(block_hash, required_fees)
-            .await?)
-    }
-
-    fn notify_condition_not_met(&mut self) {
-        self.condition_not_met_notified = true;
-    }
-
-    async fn make_bundle(
-        &mut self,
-        ops: Vec<PoolOperation>,
-        block_hash: B256,
-        max_bundle_fee: U256,
-        min_gas_fees: Option<GasFees>,
-        is_replacement: bool,
-    ) -> BundleProposerResult<Bundle<Self::UO>> {
+        request: BundleProposalRequest,
+    ) -> BundleProposerResult<Bundle<EP::UO>> {
+        let BundleProposalRequest {
+            ops,
+            sender_eoa,
+            nonce: _,
+            block_hash,
+            max_bundle_fee,
+            bundle_fees,
+            base_fee,
+            required_op_fees,
+            condition_not_met,
+        } = request;
         let timer = Instant::now();
-        let (bundle_fees, base_fee) = self.estimate_gas_fees(block_hash, min_gas_fees).await?;
-
-        // (0) Determine fees required for ops to be included in a bundle
-        // if replacing, just require bundle fees increase chances of unsticking
-        let required_op_fees = if is_replacement {
-            bundle_fees
-        } else {
-            self.ep_providers
-                .fee_estimator()
-                .required_op_fees(bundle_fees)
-        };
         let all_paymaster_addresses = ops
             .iter()
             .filter_map(|op| op.uo.paymaster())
@@ -274,6 +286,7 @@ where
             .collect::<Vec<_>>();
         let mut context = self
             .assemble_context(
+                sender_eoa,
                 max_bundle_fee,
                 bundle_fees.max_fee_per_gas,
                 ops_with_simulations,
@@ -291,10 +304,9 @@ where
                     gas_estimate
                 );
 
-                // If recently notified that a bundle condition was not met, check each of
-                // the conditions again to ensure if they are met, rejecting OPs if they are not.
-                if self.condition_not_met_notified {
-                    self.condition_not_met_notified = false;
+                // If a previous bundle condition was not met, check each of
+                // the conditions again to ensure they are met, rejecting OPs if they are not.
+                if condition_not_met {
                     self.check_conditions_met(&mut context).await?;
                     if context.is_empty() {
                         break;
@@ -328,6 +340,164 @@ where
     }
 }
 
+#[async_trait]
+impl<EP, BP> BundleProposerT for BundleProposerImpl<EP, BP>
+where
+    EP: ProvidersWithEntryPointT,
+    BP: BundleProposerProvidersT,
+{
+    async fn make_bundle(
+        &self,
+        request: BundleProposalRequest,
+    ) -> BundleProposerResult<BundleData> {
+        let nonce = request.nonce;
+        let sender_eoa = request.sender_eoa;
+
+        // Build typed bundle, then erase types into BundleData
+        let bundle = self.propose_typed_bundle(request).await?;
+
+        // Collect op info before building transaction
+        let ops: Vec<_> = bundle
+            .iter_ops()
+            .map(|op| (op.sender(), op.hash()))
+            .collect();
+        let rejected_op_hashes: Vec<_> = bundle.rejected_ops.iter().map(|op| op.hash()).collect();
+
+        // Build the transaction if bundle is not empty
+        let tx = if bundle.is_empty() {
+            TransactionRequest::default()
+        } else {
+            let mut tx = self.ep_providers.entry_point().get_send_bundle_transaction(
+                bundle.ops_per_aggregator,
+                sender_eoa,
+                bundle.gas_estimate,
+                bundle.gas_fees,
+                self.settings.submission_proxy.as_ref().map(|p| p.address()),
+            );
+            tx = tx.nonce(nonce);
+            tx
+        };
+
+        Ok(BundleData {
+            tx,
+            expected_storage: bundle.expected_storage,
+            gas_fees: bundle.gas_fees,
+            ops,
+            rejected_op_hashes,
+            entity_updates: bundle.entity_updates,
+        })
+    }
+
+    async fn process_revert(&self, tx_hash: B256) -> anyhow::Result<Vec<B256>> {
+        let address = *self.ep_providers.entry_point().address();
+        let chain_spec = &self.settings.chain_spec;
+
+        // Fetch trace and transaction from provider
+        let trace_options = GethDebugTracingOptions::new_tracer(
+            GethDebugTracerType::BuiltInTracer(GethDebugBuiltInTracerType::CallTracer),
+        )
+        .with_call_config(GethDebugTracerCallConfig::default().only_top_call());
+
+        let evm = self.ep_providers.evm();
+        let trace_fut = evm.debug_trace_transaction(tx_hash, trace_options);
+        let get_fut = evm.get_transaction_by_hash(tx_hash);
+        let (trace, tx) = tokio::try_join!(trace_fut, get_fut)
+            .context("should have fetched trace and tx from provider")?;
+
+        let auth_list: Vec<Eip7702Auth> = if let Some(tx) = tx {
+            get_auth_list_from_transaction(&tx)
+        } else {
+            warn!(
+                "Transaction {tx_hash:?} not found during revert processing, using empty auth list"
+            );
+            vec![]
+        };
+
+        let frame = trace
+            .try_into_call_frame()
+            .context("trace is not a call tracer")?;
+
+        let calldata = &frame.input;
+        let revert_message = frame.error.as_ref().map_or("", |e| e);
+        let revert_data = &frame.output;
+
+        // Decode ops from calldata using version-specific decoding
+        let ops: Vec<UserOpsPerAggregator<UserOperationVariant>> =
+            match self.ep_providers.entry_point().version().abi_version() {
+                EntryPointAbiVersion::V0_6 => {
+                    decode_v0_6_ops_from_calldata(chain_spec, address, calldata)
+                        .into_iter()
+                        .map(|ops| ops.into_uo_variants())
+                        .collect()
+                }
+                EntryPointAbiVersion::V0_7 => {
+                    decode_v0_7_ops_from_calldata(chain_spec, address, calldata, &auth_list)
+                        .into_iter()
+                        .map(|ops| ops.into_uo_variants())
+                        .collect()
+                }
+            };
+
+        let Some(revert_data) = revert_data else {
+            // No revert data - remove all ops
+            return Ok(ops
+                .iter()
+                .flat_map(|ops| ops.user_ops.iter().map(|op| op.hash()))
+                .collect());
+        };
+
+        // If we have a submission proxy, use it to process the revert first
+        if let Some(proxy) = &self.settings.submission_proxy {
+            let to_remove = proxy.process_revert(revert_data, &ops).await;
+            if !to_remove.is_empty() {
+                return Ok(to_remove);
+            }
+        }
+
+        // Decode the revert using version-specific decoding
+        let handle_ops_out = match self.ep_providers.entry_point().version().abi_version() {
+            EntryPointAbiVersion::V0_6 => {
+                decode_v0_6_handle_ops_revert(revert_message, &Some(revert_data.clone()))
+            }
+            EntryPointAbiVersion::V0_7 => decode_v0_7_handle_ops_revert(&Some(revert_data.clone())),
+        };
+        warn!("Onchain revert data for {tx_hash:?}: {revert_data:?}");
+        warn!("decoded handle ops out: {handle_ops_out:?}");
+
+        match handle_ops_out {
+            Some(HandleOpsOut::Success) => {
+                anyhow::bail!("handle ops returned success");
+            }
+            Some(HandleOpsOut::FailedOp(index, _)) => {
+                warn!("removing op from pool for reverted bundle op index {index:?}");
+                Ok(ops
+                    .iter()
+                    .flat_map(|ops| ops.user_ops.iter())
+                    .nth(index)
+                    .map(|op| vec![op.hash()])
+                    .unwrap_or_default())
+            }
+            Some(HandleOpsOut::SignatureValidationFailed(aggregator)) => {
+                warn!(
+                    "removing all ops from pool for reverted bundle for aggregator {aggregator:?}"
+                );
+                Ok(ops
+                    .iter()
+                    .find(|op| op.aggregator == aggregator)
+                    .map(|ops| ops.user_ops.iter().map(|op| op.hash()).collect())
+                    .unwrap_or_default())
+            }
+            None | Some(HandleOpsOut::Revert(_)) | Some(HandleOpsOut::PostOpRevert) => {
+                warn!("removing all ops from pool for reverted bundle");
+                Ok(ops
+                    .iter()
+                    .flat_map(|ops| ops.user_ops.iter().map(|op| op.hash()))
+                    .collect())
+            }
+        }
+    }
+}
+
 #[derive(Metrics)]
 #[metrics(scope = "builder_proposer")]
 struct BuilderProposerMetrics {
@@ -346,7 +516,6 @@ where
     EP: ProvidersWithEntryPointT,
     BP: BundleProposerProvidersT,
 {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         builder_tag: String,
         ep_providers: EP,
@@ -360,7 +529,6 @@ where
             bundle_providers,
             settings,
             event_sender,
-            condition_not_met_notified: false,
             metrics: BuilderProposerMetrics::default(),
         }
     }
@@ -585,6 +753,7 @@ where
 
     async fn assemble_context(
         &self,
+        sender_eoa: Address,
         max_bundle_fee: U256,
         gas_price: u128,
         ops_with_simulations: Vec<(
@@ -592,10 +761,10 @@ where
             Result<SimulationResult, SimulationError>,
         )>,
         mut balances_by_paymaster: HashMap<Address, U256>,
-    ) -> ProposalContext<<Self as BundleProposer>::UO> {
+    ) -> ProposalContext<EP::UO> {
         if max_bundle_fee == U256::ZERO {
             warn!("Max bundle fee is zero, skipping bundle");
-            return ProposalContext::<<Self as BundleProposer>::UO>::new();
+            return ProposalContext::<EP::UO>::new(sender_eoa);
         }
         let buffered_max_bundle_fee = max_bundle_fee
             * U256::from(100 - BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT * 2) // slight over-buffer to account for miscalculations
@@ -605,7 +774,7 @@ where
             .iter()
             .map(|(op, _)| op.op.uo.sender())
             .collect();
-        let mut context = ProposalContext::<<Self as BundleProposer>::UO>::new();
+        let mut context = ProposalContext::<EP::UO>::new(sender_eoa);
         let mut paymasters_to_reject = Vec::<EntityInfo>::new();
         let mut passed_target = false;
 
@@ -652,10 +821,7 @@ where
             } else if let Some(bundler_sponsorship) = &po.op.perms.bundler_sponsorship {
                 let valid_time_range =
                     ValidTimeRange::from_genesis(bundler_sponsorship.valid_until.into());
-                if !simulation
-                    .valid_time_range
-                    .contains(Timestamp::now(), TIME_RANGE_BUFFER)
-                {
+                if !valid_time_range.contains(Timestamp::now(), TIME_RANGE_BUFFER) {
                     self.emit(BuilderEvent::rejected_op(
                         self.builder_tag.clone(),
                         op.hash(),
@@ -819,7 +985,7 @@ where
 
     async fn check_conditions_met(
         &self,
-        context: &mut ProposalContext<<Self as BundleProposer>::UO>,
+        context: &mut ProposalContext<EP::UO>,
     ) -> anyhow::Result<()> {
         let futs = context
             .iter_ops_with_simulations()
@@ -888,15 +1054,11 @@ where
         None
     }
 
-    async fn reject_bundle(&self, context: &mut ProposalContext<<Self as BundleProposer>::UO>) {
+    async fn reject_bundle(&self, context: &mut ProposalContext<EP::UO>) {
         context.reject_all();
     }
 
-    async fn reject_hash(
-        &self,
-        context: &mut ProposalContext<<Self as BundleProposer>::UO>,
-        hash: B256,
-    ) -> bool {
+    async fn reject_hash(&self, context: &mut ProposalContext<EP::UO>, hash: B256) -> bool {
         let Some(index) = context.get_op_index(hash) else {
             return false;
         };
@@ -907,7 +1069,7 @@ where
 
     async fn reject_index(
         &self,
-        context: &mut ProposalContext<<Self as BundleProposer>::UO>,
+        context: &mut ProposalContext<EP::UO>,
         i: usize,
         paymaster_amendment: bool,
     ) {
@@ -918,7 +1080,7 @@ where
 
     async fn reject_entity(
         &self,
-        context: &mut ProposalContext<<Self as BundleProposer>::UO>,
+        context: &mut ProposalContext<EP::UO>,
         entity: Entity,
         is_staked: bool,
     ) {
@@ -927,10 +1089,7 @@ where
             .await;
     }
 
-    async fn compute_all_aggregator_signatures(
-        &self,
-        context: &mut ProposalContext<<Self as BundleProposer>::UO>,
-    ) {
+    async fn compute_all_aggregator_signatures(&self, context: &mut ProposalContext<EP::UO>) {
         let aggregators: Vec<_> = context.groups_by_aggregator.keys().copied().collect();
         self.compute_aggregator_signatures(context, &aggregators)
             .await;
@@ -938,7 +1097,7 @@ where
 
     async fn compute_aggregator_signatures<'a>(
         &self,
-        context: &mut ProposalContext<<Self as BundleProposer>::UO>,
+        context: &mut ProposalContext<EP::UO>,
         aggregators: impl IntoIterator<Item = &'a Address>,
     ) {
         let signature_futures = aggregators.into_iter().filter_map(|&aggregator| {
@@ -962,7 +1121,7 @@ where
     /// op(s) caused the failure.
     async fn estimate_gas_rejecting_failed_ops(
         &self,
-        context: &mut ProposalContext<<Self as BundleProposer>::UO>,
+        context: &mut ProposalContext<EP::UO>,
         bundle_fees: GasFees,
     ) -> BundleProposerResult<Option<u64>> {
         // sum up the gas needed for all the ops in the bundle
@@ -995,7 +1154,7 @@ where
             .entry_point()
             .call_handle_ops(
                 context.to_ops_per_aggregator(),
-                self.settings.sender_eoa,
+                context.sender_eoa,
                 gas_limit,
                 bundle_fees,
                 self.settings.submission_proxy.as_ref().map(|p| p.address()),
@@ -1092,7 +1251,7 @@ where
     async fn aggregate_signatures(
         &self,
         aggregator: Address,
-        group: &AggregatorGroup<<Self as BundleProposer>::UO>,
+        group: &AggregatorGroup<EP::UO>,
     ) -> (Address, SignatureAggregatorResult<Bytes>) {
         let Some(agg) = self
             .settings
@@ -1122,7 +1281,7 @@ where
 
     async fn process_failed_op(
         &self,
-        context: &mut ProposalContext<<Self as BundleProposer>::UO>,
+        context: &mut ProposalContext<EP::UO>,
         index: usize,
         message: String,
     ) -> anyhow::Result<()> {
@@ -1186,7 +1345,7 @@ where
     // from the bundle and from the pool.
     async fn process_post_op_revert(
         &self,
-        context: &mut ProposalContext<<Self as BundleProposer>::UO>,
+        context: &mut ProposalContext<EP::UO>,
         gas_limit: u64,
         bundle_fees: GasFees,
     ) -> anyhow::Result<()> {
@@ -1199,6 +1358,7 @@ where
             if agg_group.aggregator.is_zero() {
                 for op in agg_group.user_ops {
                     futures.push(Box::pin(self.check_for_post_op_revert_single_op(
+                        context.sender_eoa,
                         op,
                         op_index,
                         gas_limit,
@@ -1210,6 +1370,7 @@ where
                 // For aggregated ops, re-simulate the group
                 let len = agg_group.user_ops.len();
                 futures.push(Box::pin(self.check_for_post_op_revert_agg_ops(
+                    context.sender_eoa,
                     agg_group,
                     op_index,
                     gas_limit,
@@ -1246,7 +1407,8 @@ where
 
     async fn check_for_post_op_revert_single_op(
         &self,
-        op: <Self as BundleProposer>::UO,
+        sender_eoa: Address,
+        op: EP::UO,
         op_index: usize,
         gas_limit: u64,
         bundle_fees: GasFees,
@@ -1262,7 +1424,7 @@ where
             .entry_point()
             .call_handle_ops(
                 bundle,
-                self.settings.sender_eoa,
+                sender_eoa,
                 gas_limit,
                 bundle_fees,
                 self.settings.submission_proxy.as_ref().map(|p| p.address()),
@@ -1291,7 +1453,8 @@ where
 
     async fn check_for_post_op_revert_agg_ops(
         &self,
-        group: UserOpsPerAggregator<<Self as BundleProposer>::UO>,
+        sender_eoa: Address,
+        group: UserOpsPerAggregator<EP::UO>,
         start_index: usize,
         gas_limit: u64,
         bundle_fees: GasFees,
@@ -1304,7 +1467,7 @@ where
             .entry_point()
             .call_handle_ops(
                 bundle,
-                self.settings.sender_eoa,
+                sender_eoa,
                 gas_limit,
                 bundle_fees,
                 self.settings.submission_proxy.as_ref().map(|p| p.address()),
@@ -1438,6 +1601,7 @@ struct OpWithSimulation<UO> {
 /// point, but contains extra context needed for the computation.
 #[derive(Debug, Clone)]
 struct ProposalContext<UO> {
+    sender_eoa: Address,
     groups_by_aggregator: LinkedHashMap<Address, AggregatorGroup<UO>>,
     rejected_ops: Vec<(UO, EntityInfos)>,
     // This is a BTreeMap so that the conversion to a Vec<EntityUpdate> is deterministic, mainly for tests
@@ -1461,8 +1625,9 @@ impl<UO> Default for AggregatorGroup<UO> {
 }
 
 impl<UO: UserOperation> ProposalContext<UO> {
-    fn new() -> Self {
+    fn new(sender_eoa: Address) -> Self {
         Self {
+            sender_eoa,
             groups_by_aggregator: LinkedHashMap::<Address, AggregatorGroup<UO>>::new(),
             rejected_ops: Vec::<(UO, EntityInfos)>::new(),
             entity_updates: BTreeMap::new(),
@@ -3034,6 +3199,7 @@ mod tests {
             },
         );
         let context = ProposalContext {
+            sender_eoa: Address::ZERO,
             groups_by_aggregator,
             rejected_ops: vec![],
             entity_updates: BTreeMap::new(),
@@ -3082,6 +3248,7 @@ mod tests {
             },
         );
         let context = ProposalContext {
+            sender_eoa: Address::ZERO,
             groups_by_aggregator,
             rejected_ops: vec![],
             entity_updates: BTreeMap::new(),
@@ -3142,6 +3309,7 @@ mod tests {
             },
         );
         let context = ProposalContext {
+            sender_eoa: Address::ZERO,
             groups_by_aggregator,
             rejected_ops: vec![],
             entity_updates: BTreeMap::new(),
@@ -3203,6 +3371,7 @@ mod tests {
             },
         );
         let context_without_authorization = ProposalContext {
+            sender_eoa: Address::ZERO,
             groups_by_aggregator: groups_without_authorization,
             rejected_ops: vec![],
             entity_updates: BTreeMap::new(),
@@ -3222,6 +3391,7 @@ mod tests {
             },
         );
         let context_with_authorization = ProposalContext {
+            sender_eoa: Address::ZERO,
             groups_by_aggregator: groups_with_authorization,
             rejected_ops: vec![],
             entity_updates: BTreeMap::new(),
@@ -4234,24 +4404,13 @@ mod tests {
             .expect_get_latest_block_hash_and_number()
             .returning(move || Ok((current_block_hash, 0)));
 
-        let mut fee_estimator = MockFeeEstimator::new();
-        fee_estimator
-            .expect_required_bundle_fees()
-            .returning(move |_, _| {
-                Ok((
-                    GasFees {
-                        max_fee_per_gas: base_fee + max_priority_fee_per_gas,
-                        max_priority_fee_per_gas,
-                    },
-                    base_fee,
-                ))
-            });
-        fee_estimator
-            .expect_required_op_fees()
-            .returning(move |_| GasFees {
-                max_fee_per_gas: base_fee + max_priority_fee_per_gas,
-                max_priority_fee_per_gas,
-            });
+        let bundle_fees = GasFees {
+            max_fee_per_gas: base_fee + max_priority_fee_per_gas,
+            max_priority_fee_per_gas,
+        };
+        let required_op_fees = bundle_fees;
+
+        let fee_estimator = MockFeeEstimator::new();
 
         if notify_condition_not_met {
             for (addr, slots) in actual_storage.0.into_iter() {
@@ -4303,7 +4462,7 @@ mod tests {
         let submission_proxy: Option<Arc<dyn SubmissionProxy>> =
             proxy.map(|p| Arc::new(p) as Arc<dyn SubmissionProxy>);
 
-        let mut proposer = BundleProposerImpl::new(
+        let proposer = BundleProposerImpl::new(
             "test".to_string(),
             ProvidersWithEntryPoint::new(
                 Arc::new(provider),
@@ -4316,7 +4475,6 @@ mod tests {
                 chain_spec,
                 target_bundle_gas: 10_000_000,
                 max_bundle_gas: 25_000_000,
-                sender_eoa,
                 da_gas_tracking_enabled,
                 max_expected_storage_slots: MAX_EXPECTED_STORAGE_SLOTS,
                 verification_gas_limit_efficiency_reject_threshold: 0.5,
@@ -4325,12 +4483,18 @@ mod tests {
             event_sender,
         );
 
-        if notify_condition_not_met {
-            proposer.notify_condition_not_met();
-        }
-
         proposer
-            .make_bundle(ops, current_block_hash, max_bundle_fee, None, false)
+            .propose_typed_bundle(BundleProposalRequest {
+                ops,
+                sender_eoa,
+                nonce: 0,
+                block_hash: current_block_hash,
+                max_bundle_fee,
+                bundle_fees,
+                base_fee,
+                required_op_fees,
+                condition_not_met: notify_condition_not_met,
+            })
             .await
     }
 

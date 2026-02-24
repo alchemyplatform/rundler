@@ -53,11 +53,11 @@ struct LocalBuilderMetrics {
 impl LocalBuilderBuilder {
     /// Create a new local builder server builder
     pub fn new(
-        request_capcity: usize,
+        request_capacity: usize,
         signer_manager: Arc<dyn SignerManager>,
         pool: Arc<dyn Pool>,
     ) -> Self {
-        let (req_sender, req_receiver) = mpsc::channel(request_capcity);
+        let (req_sender, req_receiver) = mpsc::channel(request_capacity);
         Self {
             req_sender,
             req_receiver,
@@ -171,7 +171,7 @@ impl Builder for LocalBuilderHandle {
 #[async_trait]
 impl HealthCheck for LocalBuilderHandle {
     fn name(&self) -> &'static str {
-        "LocalPoolServer"
+        "LocalBuilderServer"
     }
 
     async fn status(&self) -> ServerStatus {
@@ -225,10 +225,11 @@ impl LocalBuilderServerRunner {
                         tracing::error!("new head stream closed");
                         panic!("new head stream closed");
                     };
-                    tracing::info!("received new head: {:?}", new_head);
-
-                    let balances = new_head.address_updates.iter().map(|update| (update.address, update.balance)).collect();
-                    self.signer_manager.update_balances(balances);
+                    if !new_head.address_updates.is_empty() {
+                        tracing::info!("received new head with address updates: {:?}", new_head);
+                        let balances = new_head.address_updates.iter().map(|update| (update.address, update.balance)).collect();
+                        self.signer_manager.update_balances(balances);
+                    }
                 }
                 Some(req) = self.req_receiver.recv() => {
                     let resp: BuilderResult<ServerResponse> = 'a:  {
@@ -263,7 +264,6 @@ impl LocalBuilderServerRunner {
                                     SendBundleResult::NoOperationsInitially => {
                                         Err(BuilderError::NoOperationsToSend)
                                     },
-                                    SendBundleResult::StalledAtMaxFeeIncreases => Err(anyhow::anyhow!("stalled at max fee increases").into()),
                                     SendBundleResult::Error(e) => Err(anyhow::anyhow!("send bundle error: {e:?}").into()),
                                 }
                             },

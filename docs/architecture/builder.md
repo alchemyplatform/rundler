@@ -4,23 +4,25 @@ The builder task is responsible for creating bundle transactions, signing them, 
 
 ## Bundle Sender
 
-The bundle sender module is the main state machine that runs the bundle building logic. It follows the following steps:
+The bundle sender module is the main state machine that runs the bundle building logic. Each worker runs its own bundle sender instance. The sender follows these steps:
 
 1. Wait for a new block event from the `Pool`.
-2. Request a new bundle from the [bundle proposer](#bundle-proposer).
-3. Create and [sign](#transaction-signers) the bundle transaction.
-4. Submit the transaction through a [transaction sender](#transaction-senders).
-5. [Track](#transaction-tracking) the status of the bundle transaction, re-submitting if needed, until either the transaction is minded, or it is abandoned. Then return to 1.
+2. Request work assignment from the [Assigner](#assigner), which selects an entrypoint and assigns eligible operations.
+3. Request a new bundle from the [bundle proposer](#bundle-proposer) for the assigned entrypoint.
+4. Create and [sign](#transaction-signers) the bundle transaction.
+5. Submit the transaction through a [transaction sender](#transaction-senders).
+6. [Track](#transaction-tracking) the status of the bundle transaction, re-submitting if needed, until either the transaction is mined, or it is abandoned.
+7. Notify the Assigner of bundle completion (success or failure) to release sender assignments. Then return to 1.
 
 ## Bundle Proposer
 
 The bundle proposer module's main responsibility is to construct a valid bundle transaction.
 
-The proposer asks the `Pool` for pending user operations sorted by priority fee, filters them for profitability, re-simulates them and rejects invalid UOs, then optionally calculates any aggregated signatures.
+The proposer receives candidate user operations (already assigned by the [Assigner](#assigner) and fetched from the pool by the worker), filters them for profitability, re-simulates them and rejects invalid UOs, then optionally calculates any aggregated signatures.
 
 ### Required Fees
 
-The proposer first estimates the required fees for the bundle transaction and then calculates the minimum required fees for a user operation. This calculation is based on a configuration option and is one of:
+The worker estimates the required fees for the bundle transaction before invoking the proposer. The minimum required fees for a user operation are calculated based on a configuration option and are one of:
 
 - **Priority Fee Increase Percent**: Require the UO priority fee to be N% higher than the bundle priority fee.
   - Configured via `--priority_fee_mode_kind=priority_fee_increase_percent --priority_fee_mode_value=N`
@@ -42,13 +44,13 @@ Once a candidate bundle is constructed, each UO is re-simulated and validation r
 
 After 2nd simulation the entire bundle is validated via an `eth_call`, and ops that fail validation are again removed from the bundle. This process is repeated until the entire bundle passes validation.
 
-NOTE: This procedure implements an old version of the spec and will be updated to conform soon. See [here](https://eips.ethereum.org/EIPS/eip-4337#bundling) for more details on the new implementation.
-
 ## Transaction Signers
 
-The bundle builder supports a signer interface used for transaction signing. There are currently 2 implementations:
+The bundle builder supports a signer interface used for transaction signing. There are currently 3 implementations:
 
 - **Private Key**: Rundler is configured with a private key via a CLI variable directly.
+
+- **Mnemonic**: Rundler derives signing keys from a BIP-39 mnemonic phrase configured via `--signer.mnemonic`.
 
 - [**KMS**](#kms-with-key-leasing): AWS KMS is used for signing.
 
@@ -67,13 +69,38 @@ The builder supports multiple sender implementations to support bundle transacti
 
 - **Bloxroute**: Submit bundles via Bloxroute's Polygon Private Transaction endpoint. Only supported on polygon.
 
-## N-Senders
+## Signer Sharing Architecture
 
-Rundler has the ability to run N bundle sender state machines in parallel, each configured with their own distinct signer/account for bundle submission.
+Rundler supports running multiple bundle sender workers with a shared pool of signers. This architecture enables efficient resource utilization across multiple entry points and configurations.
 
-In order for bundle proposers to avoid attempting to bundle the same UO, the sender is configured with a mempool shard index that is added to the request to the pool. This shard index is used by the pool to always return a disjoint set of UOs to each sender.
+### Workers and Signers
 
-N-senders can be useful to increase bundler gas throughput.
+Each worker (bundle sender) is paired 1:1 with a signer. However, each worker handles ALL configured entry points rather than being dedicated to a single one. The Assigner dynamically selects which entrypoint a worker builds for on each cycle based on mempool state. This means:
+
+- Every worker can service any configured entry point or filter configuration
+- Work is distributed across workers based on which entrypoints have the most pending operations
+- Starvation prevention ensures all entrypoints get serviced even under uneven load
+
+The number of workers is controlled via `--num_signers`.
+
+### Assigner
+
+The Assigner component is responsible for coordinating work distribution among workers:
+
+1. **Entrypoint Selection**: Uses a priority-based strategy with starvation prevention
+   - Primary: Select the entrypoint with the most eligible operations (throughput-optimized)
+   - Starvation prevention: If any entrypoint hasn't been selected in `num_signers * starvation_ratio` cycles, force-select the most starved one. Here `starvation_ratio` acts as a multiplier on signer count. For example, with 4 signers and the default ratio of 0.50, an entrypoint is force-selected after 2 idle cycles.
+
+2. **Operation Assignment**: Ensures no two workers attempt to bundle operations from the same sender simultaneously
+   - Tracks sender-to-worker assignments
+   - Filters out operations assigned to other workers
+   - Releases assignments when bundles complete
+
+3. **Virtual Entrypoints**: Supports multiple configurations per entry point address via `filter_id`, creating "virtual entrypoints" that workers can build for independently
+
+### Proposers
+
+Proposers are stored in a shared `HashMap<(Address, Option<String>), Box<dyn BundleProposerT>>` keyed by `(entrypoint address, filter_id)`. Each proposer handles bundle construction and revert processing for its entrypoint configuration. Fee estimation is performed by the worker before invoking the proposer. Workers look up the appropriate proposer after the Assigner selects an entrypoint.
 
 ## Sender State Machine
 
@@ -138,32 +165,42 @@ stateDiagram-v2
 
 ## Builders Configuration
 
-Rundler supports running multiple builder instances per entry point, per node. To configure set `--num_builders_v0_7` (or corresponding for other entry point) to the number of builders the node should run. Ensure that you have provisioned enough private or KMS keys such that at each builder has access to a distinct key.
+Rundler supports running multiple builder workers per node. To configure the number of workers, set `--num_signers` to the desired count. Ensure that you have provisioned enough private or KMS keys for the configured number of workers.
 
-NOTE: builder servers must be 1:1 with mempools or builders may invalidate each other's bundles.
+Each worker is paired 1:1 with a leased signer. The Assigner coordinates which entrypoint each worker builds for on each cycle, ensuring no two workers attempt to bundle operations from the same sender simultaneously.
 
 ### Custom
 
-Most deployments of Rundler should be able to use the configuration above. Rundler does support more detailed configuration for certain use cases. See [`EntryPointBuilderConfigs`](../../bin/rundler/src/cli/builder.rs) for the exact schema of the custom configuration file. Set the path for this file via `--entry_point_builders_path`. When this feature is used the normal CLI-based configuration options are ignored and Rundler will configure builders according to the file.
+Most deployments of Rundler should be able to use the simple `--num_signers` configuration. For advanced use cases requiring per-entrypoint builder configurations, Rundler supports a custom configuration file.
 
-Example:
+See [`EntryPointBuilderConfigs`](../../bin/rundler/src/cli/builder.rs) for the exact schema. Set the path via `--builders_config_path`. When this file is provided, the normal CLI-based options are ignored.
 
-```
+#### Configuration Schema
+
+```json
 {
     "entryPoints": [
         {
             "address": "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
             "builders": [
                 {
-                    "count": 1,
-                    "proxy": "0xA7BD3A9Eb1238842DDB86458aF7dd2a9e166747A"
-                    "filterId": "my-mempool-filter"
+                    "filterId": "my-mempool-filter",
+                    "proxy": "0xA7BD3A9Eb1238842DDB86458aF7dd2a9e166747A",
+                    "proxyType": "passthrough"
                 }
             ]
         }
     ]
 }
 ```
+
+#### Fields
+
+- **address** (required): The entry point contract address. This is used to match the configuration to the correct entry point.
+- **builders**: Array of builder configurations for this entry point
+  - **filterId** (optional): Associates this builder with a specific [mempool filter](./pool.md#filtering)
+  - **proxy** (optional): Submission proxy contract address
+  - **proxyType** (optional): Type of proxy implementation (see [Proxies](#proxies))
 
 #### Affinity
 

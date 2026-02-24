@@ -92,7 +92,7 @@ pub(crate) struct PoolInner<D> {
     /// Preconfirmed UO to bundle transaction mapping.
     preconfirmed_uos_bundle_mapping: HashMap<B256, B256>,
     /// Preconfirmed uos at block number
-    preconfiemed_uos_at_block_number: HashMap<u64, Vec<B256>>,
+    preconfirmed_uos_at_block_number: HashMap<u64, Vec<B256>>,
     /// Mapping from UO hash to pending bundle info
     pending_bundles_by_uo: HashMap<B256, PendingBundleInfo>,
     /// Mapping from builder address to (tx_hash, set of UO hashes) in their pending bundle
@@ -133,7 +133,7 @@ where
             mined_at_block_number_by_hash: HashMap::new(),
             mined_hashes_with_block_numbers: BTreeSet::new(),
             preconfirmed_uos_bundle_mapping: HashMap::new(),
-            preconfiemed_uos_at_block_number: HashMap::new(),
+            preconfirmed_uos_at_block_number: HashMap::new(),
             pending_bundles_by_uo: HashMap::new(),
             pending_bundles_by_builder: HashMap::new(),
             count_by_address: HashMap::new(),
@@ -236,7 +236,7 @@ where
         self.preconfirmed_uos_bundle_mapping.keys().cloned()
     }
 
-    pub(crate) fn preconfirm_txns(&mut self, txn_to_uos: &Vec<(B256, Vec<B256>)>) {
+    pub(crate) fn preconfirm_txns(&mut self, block_number: u64, txn_to_uos: &[(B256, Vec<B256>)]) {
         for (txn, uos) in txn_to_uos {
             for uo in uos {
                 if self.get_operation_by_hash(*uo).is_some() {
@@ -244,21 +244,15 @@ where
                 }
             }
         }
-    }
 
-    pub(crate) fn preconfirm_txns_at_block_number(
-        &mut self,
-        txn_to_uos: &[(B256, Vec<B256>)],
-        block_number: u64,
-    ) {
-        self.preconfiemed_uos_at_block_number.insert(
+        self.preconfirmed_uos_at_block_number.insert(
             block_number,
             txn_to_uos.iter().flat_map(|(_, uos)| uos.clone()).collect(),
         );
     }
 
     pub(crate) fn remove_out_of_date_preconfirmed_uos(&mut self, block_number: u64) {
-        self.preconfiemed_uos_at_block_number
+        self.preconfirmed_uos_at_block_number
             .iter()
             .for_each(|(bn, uos)| {
                 if *bn <= block_number {
@@ -267,7 +261,7 @@ where
                     }
                 }
             });
-        self.preconfiemed_uos_at_block_number
+        self.preconfirmed_uos_at_block_number
             .retain(|bn, _| *bn > block_number);
     }
 
