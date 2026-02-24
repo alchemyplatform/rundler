@@ -19,7 +19,7 @@ use clap::Args;
 use rundler_builder::{
     self, BloxrouteSenderArgs, BuilderEvent, BuilderEventKind, BuilderSettings, BuilderTask,
     BuilderTaskArgs, EntryPointBuilderSettings, FlashbotsSenderArgs, LocalBuilderBuilder,
-    RawSenderArgs, TransactionSenderArgs, TransactionSenderKind,
+    PolygonPrivateArgs, RawSenderArgs, TransactionSenderArgs, TransactionSenderKind,
 };
 use rundler_pbh::PbhSubmissionProxy;
 use rundler_pool::RemotePoolClient;
@@ -303,6 +303,11 @@ impl BuilderArgs {
                 submit_url: self.submit_url.clone().unwrap_or_else(|| rpc_url.into()),
                 use_conditional_rpc: self.use_conditional_rpc,
             })),
+            TransactionSenderKind::PolygonPrivate => {
+                Ok(TransactionSenderArgs::PolygonPrivate(PolygonPrivateArgs {
+                    submit_url: self.submit_url.clone().unwrap_or_else(|| rpc_url.into()),
+                }))
+            }
             TransactionSenderKind::Flashbots => {
                 if !chain_spec.flashbots_enabled {
                     return Err(anyhow::anyhow!("Flashbots sender is not enabled for chain"));
