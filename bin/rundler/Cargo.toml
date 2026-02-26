@@ -20,7 +20,7 @@ alloy-primitives.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 aws-config.workspace = true
-aws-sdk-s3 = { version = "1.52", default-features = false }
+aws-sdk-s3 = { version = "1.78", default-features = false }
 clap = { version = "4.5.16", features = ["derive", "env"] }
 config = "0.14.0"
 dotenvy = "0.15.7"
