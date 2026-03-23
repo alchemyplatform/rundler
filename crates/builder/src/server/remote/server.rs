@@ -14,15 +14,18 @@
 use std::net::SocketAddr;
 
 use rundler_task::GracefulShutdown;
-use rundler_types::builder::Builder;
+use rundler_types::{authorization::Eip7702Auth, builder::Builder};
 use tonic::{Request, Response, Status, async_trait, transport::Server};
 
 use super::protos::{
     BUILDER_FILE_DESCRIPTOR_SET, BundlingMode, DebugSendBundleNowRequest,
     DebugSendBundleNowResponse, DebugSetBundlingModeRequest, DebugSetBundlingModeResponse,
     DebugSetBundlingModeSuccess, GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse,
+    SendSponsoredUndelegationRequest, SendSponsoredUndelegationResponse,
+    SendSponsoredUndelegationSuccess,
     builder_server::{Builder as GrpcBuilder, BuilderServer as GrpcBuilderServer},
     debug_send_bundle_now_response, debug_set_bundling_mode_response,
+    send_sponsored_undelegation_response,
 };
 use crate::server::{local::LocalBuilderHandle, remote::protos::DebugSendBundleNowSuccess};
 
@@ -111,6 +114,35 @@ impl GrpcBuilder for GrpcBuilderServerImpl {
             Err(e) => {
                 return Err(Status::internal(format!("Failed to send bundle: {e}")));
             }
+        };
+
+        Ok(Response::new(resp))
+    }
+
+    async fn send_sponsored_undelegation(
+        &self,
+        request: Request<SendSponsoredUndelegationRequest>,
+    ) -> tonic::Result<Response<SendSponsoredUndelegationResponse>> {
+        let inner = request.into_inner();
+
+        let auth_tuple = inner.auth.ok_or_else(|| {
+            Status::invalid_argument("missing auth field in SendSponsoredUndelegationRequest")
+        })?;
+        let auth = Eip7702Auth::from(auth_tuple);
+
+        let resp = match self.local_builder.send_sponsored_undelegation(auth).await {
+            Ok(tx_hash) => SendSponsoredUndelegationResponse {
+                result: Some(send_sponsored_undelegation_response::Result::Success(
+                    SendSponsoredUndelegationSuccess {
+                        transaction_hash: tx_hash.to_vec(),
+                    },
+                )),
+            },
+            Err(e) => SendSponsoredUndelegationResponse {
+                result: Some(send_sponsored_undelegation_response::Result::Failure(
+                    e.into(),
+                )),
+            },
         };
 
         Ok(Response::new(resp))

@@ -19,7 +19,10 @@ use rundler_task::{
     grpc::protos::{ConversionError, from_bytes},
     server::{HealthCheck, ServerStatus},
 };
-use rundler_types::builder::{Builder, BuilderError, BuilderResult, BundlingMode};
+use rundler_types::{
+    authorization::Eip7702Auth,
+    builder::{Builder, BuilderError, BuilderResult, BundlingMode},
+};
 use tonic::transport::{Channel, Uri};
 use tonic_health::{
     ServingStatus,
@@ -27,9 +30,10 @@ use tonic_health::{
 };
 
 use super::protos::{
-    BundlingMode as ProtoBundlingMode, DebugSendBundleNowRequest, DebugSetBundlingModeRequest,
-    GetSupportedEntryPointsRequest, builder_client::BuilderClient, debug_send_bundle_now_response,
-    debug_set_bundling_mode_response,
+    AuthorizationTuple, BundlingMode as ProtoBundlingMode, DebugSendBundleNowRequest,
+    DebugSetBundlingModeRequest, GetSupportedEntryPointsRequest, SendSponsoredUndelegationRequest,
+    builder_client::BuilderClient, debug_send_bundle_now_response,
+    debug_set_bundling_mode_response, send_sponsored_undelegation_response,
 };
 
 /// Remote builder client, used for communicating with a remote builder server
@@ -84,6 +88,32 @@ impl Builder for RemoteBuilderClient {
                 Ok((B256::from_slice(&s.transaction_hash), s.block_number))
             }
             Some(debug_send_bundle_now_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(BuilderError::Other(anyhow::anyhow!(
+                "should have received result from builder"
+            )))?,
+        }
+    }
+
+    async fn send_sponsored_undelegation(
+        &self,
+        auth: Eip7702Auth,
+    ) -> BuilderResult<alloy_primitives::B256> {
+        let res = self
+            .grpc_client
+            .clone()
+            .send_sponsored_undelegation(SendSponsoredUndelegationRequest {
+                auth: Some(AuthorizationTuple::from(auth)),
+            })
+            .await
+            .map_err(anyhow::Error::from)?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(send_sponsored_undelegation_response::Result::Success(s)) => {
+                Ok(alloy_primitives::B256::from_slice(&s.transaction_hash))
+            }
+            Some(send_sponsored_undelegation_response::Result::Failure(f)) => Err(f.try_into()?),
             None => Err(BuilderError::Other(anyhow::anyhow!(
                 "should have received result from builder"
             )))?,

@@ -10,6 +10,8 @@ publish = false
 [dependencies]
 
 alloy-consensus.workspace = true
+alloy-eips.workspace = true
+alloy-network.workspace = true
 alloy-primitives.workspace = true
 alloy-signer.workspace = true
 alloy-signer-local.workspace = true
@@ -44,7 +46,6 @@ tonic-reflection.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-alloy-network.workspace = true
 alloy-rpc-types-eth.workspace = true
 mockall.workspace = true
 rundler-provider = { workspace = true, features = ["test-utils"] }

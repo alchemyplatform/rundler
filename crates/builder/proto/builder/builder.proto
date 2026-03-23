@@ -37,6 +37,8 @@ service Builder {
     // Sets bundling mode. After setting mode to “manual”, an explicit call to
     // debug_bundler_sendBundleNow is required to send a bundle.
     rpc DebugSetBundlingMode(DebugSetBundlingModeRequest) returns (DebugSetBundlingModeResponse);
+    // Submits a bundler-sponsored EIP-7702 undelegation transaction on behalf of a user.
+    rpc SendSponsoredUndelegation(SendSponsoredUndelegationRequest) returns (SendSponsoredUndelegationResponse);
 }
 
 message GetSupportedEntryPointsRequest {}
@@ -78,3 +80,28 @@ message BuilderError {
 }
 
 message NoOperationsToSendError {}
+
+// EIP-7702 signed authorization tuple
+message AuthorizationTuple {
+    uint64 chain_id = 1;
+    uint64 nonce = 2;
+    bytes address = 3;
+    uint32 y_parity = 4;
+    bytes r = 5;
+    bytes s = 6;
+}
+
+message SendSponsoredUndelegationRequest {
+    AuthorizationTuple auth = 1;
+}
+
+message SendSponsoredUndelegationResponse {
+    oneof result {
+        SendSponsoredUndelegationSuccess success = 1;
+        BuilderError failure = 2;
+    }
+}
+
+message SendSponsoredUndelegationSuccess {
+    bytes transaction_hash = 1;
+}

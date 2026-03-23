@@ -16,18 +16,22 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use alloy_network::TransactionBuilder7702;
 use alloy_primitives::{Address, B256};
+use anyhow::Context;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use futures_util::StreamExt;
 use metrics::Histogram;
 use metrics_derive::Metrics;
+use rundler_provider::{EvmProvider, FeeEstimator, TransactionRequest};
 use rundler_signer::SignerManager;
 use rundler_task::{
     GracefulShutdown,
     server::{HealthCheck, ServerStatus},
 };
 use rundler_types::{
+    authorization::Eip7702Auth,
     builder::{Builder, BuilderError, BuilderResult, BundlingMode},
     pool::Pool,
 };
@@ -42,6 +46,10 @@ pub struct LocalBuilderBuilder {
     signer_manager: Arc<dyn SignerManager>,
     pool: Arc<dyn Pool>,
 }
+
+/// Gas limit for sponsored undelegation transactions (type-4).
+/// Base intrinsic (21k) + per-auth EIP-7702 cost (25k) + buffer.
+const UNDELEGATION_GAS_LIMIT: u64 = 100_000;
 
 #[derive(Metrics, Clone)]
 #[metrics(scope = "builder_internal")]
@@ -74,19 +82,31 @@ impl LocalBuilderBuilder {
         }
     }
 
-    /// Run the local builder server, consuming the builder
-    pub fn run(
+    /// Run the local builder server, consuming the builder.
+    ///
+    /// `evm_provider` and `fee_estimator` are used exclusively by
+    /// [`Builder::send_sponsored_undelegation`] to query on-chain nonces, fetch current
+    /// gas prices, and submit the resulting type-4 transaction.
+    pub fn run<E, F>(
         self,
         bundle_sender_actions: Vec<mpsc::Sender<BundleSenderAction>>,
         entry_points: Vec<Address>,
+        evm_provider: E,
+        fee_estimator: F,
         shutdown: GracefulShutdown,
-    ) -> BoxFuture<'static, ()> {
+    ) -> BoxFuture<'static, ()>
+    where
+        E: EvmProvider + Send + Sync + 'static,
+        F: FeeEstimator + Send + Sync + 'static,
+    {
         let runner = LocalBuilderServerRunner::new(
             self.req_receiver,
             bundle_sender_actions,
             entry_points,
             self.signer_manager,
             self.pool,
+            evm_provider,
+            fee_estimator,
         );
         Box::pin(runner.run(shutdown))
     }
@@ -99,12 +119,14 @@ pub struct LocalBuilderHandle {
     metric: LocalBuilderMetrics,
 }
 
-struct LocalBuilderServerRunner {
+struct LocalBuilderServerRunner<E, F> {
     req_receiver: mpsc::Receiver<ServerRequest>,
     bundle_sender_actions: Vec<mpsc::Sender<BundleSenderAction>>,
     entry_points: Vec<Address>,
     signer_manager: Arc<dyn SignerManager>,
     pool: Arc<dyn Pool>,
+    evm_provider: E,
+    fee_estimator: F,
 }
 
 impl LocalBuilderHandle {
@@ -166,6 +188,15 @@ impl Builder for LocalBuilderHandle {
             _ => Err(BuilderError::UnexpectedResponse),
         }
     }
+
+    async fn send_sponsored_undelegation(&self, auth: Eip7702Auth) -> BuilderResult<B256> {
+        let req = ServerRequestKind::SendSponsoredUndelegation { auth };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::SendSponsoredUndelegation { tx_hash } => Ok(tx_hash),
+            _ => Err(BuilderError::UnexpectedResponse),
+        }
+    }
 }
 
 #[async_trait]
@@ -192,13 +223,20 @@ impl HealthCheck for LocalBuilderHandle {
     }
 }
 
-impl LocalBuilderServerRunner {
+impl<E, F> LocalBuilderServerRunner<E, F>
+where
+    E: EvmProvider + Send + Sync,
+    F: FeeEstimator + Send + Sync,
+{
+    #[allow(clippy::too_many_arguments)]
     fn new(
         req_receiver: mpsc::Receiver<ServerRequest>,
         bundle_sender_actions: Vec<mpsc::Sender<BundleSenderAction>>,
         entry_points: Vec<Address>,
         signer_manager: Arc<dyn SignerManager>,
         pool: Arc<dyn Pool>,
+        evm_provider: E,
+        fee_estimator: F,
     ) -> Self {
         Self {
             req_receiver,
@@ -206,6 +244,8 @@ impl LocalBuilderServerRunner {
             entry_points,
             signer_manager,
             pool,
+            evm_provider,
+            fee_estimator,
         }
     }
 
@@ -227,12 +267,12 @@ impl LocalBuilderServerRunner {
                     };
                     if !new_head.address_updates.is_empty() {
                         tracing::info!("received new head with address updates: {:?}", new_head);
-                        let balances = new_head.address_updates.iter().map(|update| (update.address, update.balance)).collect();
+                        let balances = new_head.address_updates.iter().map(|update| (update.address, update.balance)).collect::<Vec<_>>();
                         self.signer_manager.update_balances(balances);
                     }
                 }
                 Some(req) = self.req_receiver.recv() => {
-                    let resp: BuilderResult<ServerResponse> = 'a:  {
+                    let resp: BuilderResult<ServerResponse> = 'a: {
                         match req.request {
                             ServerRequestKind::GetSupportedEntryPoints => {
                                 Ok(ServerResponse::GetSupportedEntryPoints {
@@ -279,6 +319,12 @@ impl LocalBuilderServerRunner {
 
                                 Ok(ServerResponse::DebugSetBundlingMode)
                             },
+                            ServerRequestKind::SendSponsoredUndelegation { auth } => {
+                                match self.handle_send_sponsored_undelegation(auth).await {
+                                    Ok(tx_hash) => Ok(ServerResponse::SendSponsoredUndelegation { tx_hash }),
+                                    Err(e) => Err(e.into()),
+                                }
+                            },
                         }
                     };
 
@@ -289,6 +335,64 @@ impl LocalBuilderServerRunner {
             }
         }
     }
+
+    async fn handle_send_sponsored_undelegation(&self, auth: Eip7702Auth) -> anyhow::Result<B256> {
+        // Lease an available signer. This requires at least one spare signer beyond the
+        // N bundle-sender signers. If none is available, the call returns an error.
+        let signer = self.signer_manager.lease_signer().ok_or_else(|| {
+            anyhow::anyhow!(
+                "no signer available for sponsored undelegation; configure an additional signer"
+            )
+        })?;
+
+        // Get the bundler EOA's current nonce for the transaction.
+        let bundler_nonce = self
+            .evm_provider
+            .get_transaction_count(signer.address())
+            .await
+            .context("failed to get bundler nonce")?;
+
+        // Fetch current gas fees.
+        let (gas_fees, _base_fee) = self
+            .fee_estimator
+            .latest_bundle_fees()
+            .await
+            .context("failed to get bundle fees")?;
+
+        // Recover the EOA from the authorization signature so we can address the tx.
+        let eoa = auth
+            .recover_authority()
+            .context("failed to recover EOA from authorization signature")?;
+
+        // Build the type-4 (EIP-7702) transaction.
+        // The authorization_list clears the EOA's code (address == zero).
+        // The tx is sent to the EOA itself (zero-value, no calldata).
+        // TODO: replace `to` with the UndelegationRegistry contract address once deployed,
+        // passing `request_id` as calldata so billing indexers can correlate via eth_getLogs.
+        let tx = TransactionRequest::default()
+            .to(eoa)
+            .nonce(bundler_nonce)
+            .gas_limit(UNDELEGATION_GAS_LIMIT)
+            .max_fee_per_gas(gas_fees.max_fee_per_gas)
+            .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
+            .with_authorization_list(vec![(*auth).clone()]);
+
+        let raw_tx = signer
+            .sign_tx_raw(tx)
+            .await
+            .context("failed to sign undelegation transaction")?;
+
+        let tx_hash = self
+            .evm_provider
+            .send_raw_transaction(raw_tx)
+            .await
+            .context("failed to submit undelegation transaction")?;
+
+        self.signer_manager.return_lease(signer);
+
+        tracing::info!("sent sponsored undelegation for eoa {eoa} tx_hash {tx_hash}");
+        Ok(tx_hash)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -296,6 +400,7 @@ enum ServerRequestKind {
     GetSupportedEntryPoints,
     DebugSendBundleNow,
     DebugSetBundlingMode { mode: BundlingMode },
+    SendSponsoredUndelegation { auth: Eip7702Auth },
 }
 
 #[derive(Debug)]
@@ -309,4 +414,5 @@ enum ServerResponse {
     GetSupportedEntryPoints { entry_points: Vec<Address> },
     DebugSendBundleNow { hash: B256, block_number: u64 },
     DebugSetBundlingMode,
+    SendSponsoredUndelegation { tx_hash: B256 },
 }

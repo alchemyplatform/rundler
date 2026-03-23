@@ -291,11 +291,18 @@ where
 
         let builder_handle = self.builder_builder.get_handle();
 
+        let evm_provider = self.providers.evm().clone();
+        let fee_estimator = self.providers.fee_estimator().clone();
         task_spawner.spawn_critical_with_graceful_shutdown_signal(
             "local builder server",
             |shutdown| {
-                self.builder_builder
-                    .run(bundle_sender_actions, supported_entry_points, shutdown)
+                self.builder_builder.run(
+                    bundle_sender_actions,
+                    supported_entry_points,
+                    evm_provider,
+                    fee_estimator,
+                    shutdown,
+                )
             },
         );
 

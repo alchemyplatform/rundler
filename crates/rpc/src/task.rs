@@ -294,6 +294,7 @@ where
                     self.pool.clone(),
                     fee_estimator,
                     self.providers.evm().clone(),
+                    std::sync::Arc::new(self.builder.clone()),
                     self.args.rundler_api_settings,
                 )
                 .into_rpc(),

@@ -11,6 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use std::sync::Arc;
+
 use alloy_primitives::{Address, B256, U64, U128, U256};
 use anyhow::Context;
 use async_trait::async_trait;
@@ -18,7 +20,8 @@ use futures_util::future;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_provider::{EvmProvider, FeeEstimator};
 use rundler_types::{
-    GasFees, UserOperation, UserOperationId, UserOperationVariant, chain::ChainSpec, pool::Pool,
+    GasFees, UserOperation, UserOperationId, UserOperationVariant, authorization::Eip7702Auth,
+    builder::Builder as BuilderT, chain::ChainSpec, pool::Pool,
 };
 use tracing::instrument;
 
@@ -94,6 +97,13 @@ pub trait RundlerApi {
     /// Returns suggested gas prices for user operations
     #[method(name = "getUserOperationGasPrice")]
     async fn get_user_operation_gas_price(&self) -> RpcResult<RpcUserOperationGasPrice>;
+
+    /// Sponsor an EIP-7702 undelegation on behalf of the caller.
+    ///
+    /// The authorization tuple must set `address` to the zero address (clearing the EOA's
+    /// delegation). The bundler pays the gas cost and returns the resulting transaction hash.
+    #[method(name = "sendSponsoredUndelegation")]
+    async fn send_sponsored_undelegation(&self, auth: Eip7702Auth) -> RpcResult<B256>;
 }
 
 pub(crate) struct RundlerApi<P, F, E> {
@@ -102,6 +112,7 @@ pub(crate) struct RundlerApi<P, F, E> {
     pool_server: P,
     entry_point_router: EntryPointRouter,
     evm_provider: E,
+    builder: Arc<dyn BuilderT>,
     settings: RundlerApiSettings,
 }
 
@@ -181,6 +192,15 @@ where
         )
         .await
     }
+
+    #[instrument(skip_all, fields(rpc_method = "rundler_sendSponsoredUndelegation"))]
+    async fn send_sponsored_undelegation(&self, auth: Eip7702Auth) -> RpcResult<B256> {
+        utils::safe_call_rpc_handler(
+            "rundler_sendSponsoredUndelegation",
+            RundlerApi::send_sponsored_undelegation(self, auth),
+        )
+        .await
+    }
 }
 
 impl<P, F, E> RundlerApi<P, F, E>
@@ -195,6 +215,7 @@ where
         pool_server: P,
         fee_estimator: F,
         evm_provider: E,
+        builder: Arc<dyn BuilderT>,
         settings: RundlerApiSettings,
     ) -> Self {
         Self {
@@ -203,6 +224,7 @@ where
             pool_server,
             fee_estimator,
             evm_provider,
+            builder,
             settings,
         }
     }
@@ -402,6 +424,49 @@ where
             .map_err(EthRpcError::from)?;
 
         Ok(uo.map(|uo| uo.uo.into()))
+    }
+
+    async fn send_sponsored_undelegation(&self, auth: Eip7702Auth) -> EthResult<B256> {
+        // Validate: authorization must clear the delegation (address == zero).
+        if auth.address != Address::ZERO {
+            Err(EthRpcError::InvalidParams(
+                "authorization address must be zero for undelegation".to_string(),
+            ))?;
+        }
+
+        // Validate: chain ID must match.
+        let expected_chain_id = U256::from(self.chain_spec.id);
+        if auth.chain_id != expected_chain_id {
+            Err(EthRpcError::InvalidParams(format!(
+                "authorization chain_id {} does not match expected {}",
+                auth.chain_id, expected_chain_id
+            )))?;
+        }
+
+        // Validate: signature must be recoverable.
+        let eoa = auth.recover_authority().map_err(|e| {
+            EthRpcError::InvalidParams(format!("invalid authorization signature: {e}"))
+        })?;
+
+        // Validate: EOA must currently be delegated (has code).
+        let code = self
+            .evm_provider
+            .get_code(eoa, None)
+            .await
+            .context("failed to check EOA code")?;
+        if code.is_empty() {
+            Err(EthRpcError::InvalidParams(
+                "EOA is not currently delegated".to_string(),
+            ))?;
+        }
+
+        let tx_hash = self
+            .builder
+            .send_sponsored_undelegation(auth)
+            .await
+            .map_err(|e| anyhow::anyhow!("builder error: {e:?}"))?;
+
+        Ok(tx_hash)
     }
 
     #[instrument(skip_all)]

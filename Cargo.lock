@@ -5353,6 +5353,7 @@ name = "rundler-builder"
 version = "0.11.0"
 dependencies = [
  "alloy-consensus",
+ "alloy-eips",
  "alloy-network",
  "alloy-primitives",
  "alloy-rpc-types-eth",

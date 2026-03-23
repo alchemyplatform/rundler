@@ -16,6 +16,7 @@ use alloy_primitives::{Address, B256};
 use mockall::automock;
 
 use super::{error::BuilderError, types::BundlingMode};
+use crate::authorization::Eip7702Auth;
 
 /// Builder result
 pub type BuilderResult<T> = std::result::Result<T, BuilderError>;
@@ -34,4 +35,11 @@ pub trait Builder: Send + Sync {
 
     /// Set the bundling mode
     async fn debug_set_bundling_mode(&self, mode: BundlingMode) -> BuilderResult<()>;
+
+    /// Send a sponsored EIP-7702 undelegation transaction.
+    ///
+    /// Validates that the authorization clears the EOA's delegation (address == zero),
+    /// builds a type-4 transaction signed by the bundler, and submits it on behalf of
+    /// the user. Returns the transaction hash.
+    async fn send_sponsored_undelegation(&self, auth: Eip7702Auth) -> BuilderResult<B256>;
 }
