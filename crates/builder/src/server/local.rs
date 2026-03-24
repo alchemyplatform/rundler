@@ -345,6 +345,17 @@ where
             )
         })?;
 
+        // Perform all fallible work first, then always return the lease regardless of outcome.
+        let result = self.build_and_submit_undelegation(&signer, auth).await;
+        self.signer_manager.return_lease(signer);
+        result
+    }
+
+    async fn build_and_submit_undelegation(
+        &self,
+        signer: &rundler_signer::SignerLease,
+        auth: Eip7702Auth,
+    ) -> anyhow::Result<B256> {
         // Get the bundler EOA's current nonce for the transaction.
         let bundler_nonce = self
             .evm_provider
@@ -367,15 +378,13 @@ where
         // Build the type-4 (EIP-7702) transaction.
         // The authorization_list clears the EOA's code (address == zero).
         // The tx is sent to the EOA itself (zero-value, no calldata).
-        // TODO: replace `to` with the UndelegationRegistry contract address once deployed,
-        // passing `request_id` as calldata so billing indexers can correlate via eth_getLogs.
         let tx = TransactionRequest::default()
             .to(eoa)
             .nonce(bundler_nonce)
             .gas_limit(UNDELEGATION_GAS_LIMIT)
             .max_fee_per_gas(gas_fees.max_fee_per_gas)
             .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
-            .with_authorization_list(vec![(*auth).clone()]);
+            .with_authorization_list(vec![auth.clone().into()]);
 
         let raw_tx = signer
             .sign_tx_raw(tx)
@@ -387,8 +396,6 @@ where
             .send_raw_transaction(raw_tx)
             .await
             .context("failed to submit undelegation transaction")?;
-
-        self.signer_manager.return_lease(signer);
 
         tracing::info!("sent sponsored undelegation for eoa {eoa} tx_hash {tx_hash}");
         Ok(tx_hash)
