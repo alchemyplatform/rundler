@@ -11,6 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use std::sync::Arc;
+
 use alloy_consensus::Transaction;
 use alloy_primitives::{Address, B256, I256, U256};
 use anyhow::bail;
@@ -20,7 +22,7 @@ use metrics_derive::Metrics;
 #[cfg(test)]
 use mockall::automock;
 use rundler_provider::{EvmProvider, ReceiptResponse, TransactionRequest};
-use rundler_signer::SignerLease;
+use rundler_signer::{SignerLease, SignerManager};
 use rundler_types::{ExpectedStorage, GasFees, pool::AddressUpdate};
 use tokio::time::Instant;
 use tracing::{info, warn};
@@ -89,6 +91,15 @@ pub(crate) trait TransactionTracker: Send + Sync {
 
     /// Returns the address of the account being tracked
     fn address(&self) -> Address;
+
+    /// Lease the address-specific signer from the pool and fetch nonce/balance
+    /// to begin a work cycle. Idempotent: no-op if a signer is already held.
+    async fn begin_cycle(&mut self) -> anyhow::Result<()>;
+
+    /// Return the signer to the pool when no transactions are pending.
+    /// Returns `true` if the signer was released, `false` if kept because
+    /// pending transactions still exist.
+    fn end_cycle(&mut self) -> bool;
 }
 
 /// Errors that can occur while using a `TransactionTracker`.
@@ -134,11 +145,13 @@ pub(crate) enum TrackerUpdate {
     },
 }
 
-#[derive(Debug)]
 pub(crate) struct TransactionTrackerImpl<P, T> {
     provider: P,
     sender: T,
-    signer: SignerLease,
+    signer_manager: Arc<dyn SignerManager>,
+    /// The leased signer, held only during an active work cycle.
+    /// The address of this signer is the sender's identity for the duration of the cycle.
+    signer: Option<SignerLease>,
     settings: Settings,
     nonce: u64,
     balance: U256,
@@ -146,6 +159,17 @@ pub(crate) struct TransactionTrackerImpl<P, T> {
     has_abandoned: bool,
     attempt_count: u64,
     metrics: TransactionTrackerMetrics,
+}
+
+impl<P: std::fmt::Debug, T: std::fmt::Debug> std::fmt::Debug for TransactionTrackerImpl<P, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransactionTrackerImpl")
+            .field("address", &self.signer.as_ref().map(|s| s.address()))
+            .field("nonce", &self.nonce)
+            .field("balance", &self.balance)
+            .field("transactions", &self.transactions)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -169,17 +193,18 @@ where
     P: EvmProvider,
     T: TransactionSender,
 {
-    pub(crate) async fn new(
+    pub(crate) fn new(
         provider: P,
         sender: T,
-        signer: SignerLease,
+        signer_manager: Arc<dyn SignerManager>,
         settings: Settings,
         builder_tag: String,
-    ) -> anyhow::Result<Self> {
-        let mut this = Self {
+    ) -> Self {
+        Self {
             provider,
             sender,
-            signer,
+            signer_manager,
+            signer: None,
             settings,
             nonce: 0,
             balance: U256::ZERO,
@@ -187,11 +212,7 @@ where
             has_abandoned: false,
             attempt_count: 0,
             metrics: TransactionTrackerMetrics::new_with_labels(&[("builder_tag", builder_tag)]),
-        };
-
-        this.reset().await;
-
-        Ok(this)
+        }
     }
 
     fn set_nonce_and_clear_state(&mut self, nonce: u64) {
@@ -302,7 +323,10 @@ where
     T: TransactionSender,
 {
     fn address(&self) -> Address {
-        self.signer.address()
+        self.signer
+            .as_ref()
+            .map(|s| s.address())
+            .unwrap_or(Address::ZERO)
     }
 
     fn get_state(&self) -> TransactionTrackerResult<TrackerState> {
@@ -352,10 +376,15 @@ where
             )));
         };
 
+        let signer = self
+            .signer
+            .as_ref()
+            .expect("send_transaction requires an active cycle (call begin_cycle first)");
+
         let sent_at_time = Instant::now();
         let tx_hash = self
             .sender
-            .send_transaction(tx, expected_storage, &self.signer)
+            .send_transaction(tx, expected_storage, signer)
             .await;
 
         self.update_metrics();
@@ -434,9 +463,14 @@ where
             None => (B256::ZERO, estimated_fees),
         };
 
+        let signer = self
+            .signer
+            .as_ref()
+            .expect("cancel_transaction requires an active cycle (call begin_cycle first)");
+
         let cancel_res = self
             .sender
-            .cancel_transaction(tx_hash, self.nonce, gas_fees, &self.signer)
+            .cancel_transaction(tx_hash, self.nonce, gas_fees, signer)
             .await;
 
         match cancel_res {
@@ -560,8 +594,13 @@ where
     }
 
     async fn reset(&mut self) {
-        let nonce_fut = self.provider.get_transaction_count(self.signer.address());
-        let balance_fut = self.provider.get_balance(self.signer.address(), None);
+        let addr = self
+            .signer
+            .as_ref()
+            .expect("reset() requires an active cycle (call begin_cycle first)")
+            .address();
+        let nonce_fut = self.provider.get_transaction_count(addr);
+        let balance_fut = self.provider.get_balance(addr, None);
         let (nonce, balance) =
             tokio::try_join!(nonce_fut, balance_fut).unwrap_or((self.nonce, self.balance));
 
@@ -585,6 +624,30 @@ where
 
     fn unabandon(&mut self) {
         self.has_abandoned = false;
+    }
+
+    async fn begin_cycle(&mut self) -> anyhow::Result<()> {
+        if self.signer.is_some() {
+            return Ok(());
+        }
+        let signer = self
+            .signer_manager
+            .lease_signer()
+            .ok_or_else(|| anyhow::anyhow!("no signer available"))?;
+        self.signer = Some(signer);
+        self.reset().await;
+        Ok(())
+    }
+
+    fn end_cycle(&mut self) -> bool {
+        if !self.transactions.is_empty() {
+            return false;
+        }
+        if let Some(signer) = self.signer.take() {
+            self.signer_manager.return_lease(signer);
+            return true;
+        }
+        false
     }
 }
 
@@ -628,7 +691,10 @@ struct TransactionTrackerMetrics {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
 
     use alloy_consensus::{Signed, TxEip1559, transaction::Recovered};
     use alloy_network::TxSigner;
@@ -643,6 +709,63 @@ mod tests {
 
     use super::*;
     use crate::sender::MockTransactionSender;
+
+    /// Single-signer manager for unit tests.
+    struct TestSignerManager {
+        signer: Arc<dyn TxSigner<Signature> + Send + Sync + 'static>,
+        chain_id: u64,
+        available: AtomicBool,
+    }
+
+    impl TestSignerManager {
+        fn new(signer: Arc<dyn TxSigner<Signature> + Send + Sync + 'static>) -> Arc<Self> {
+            Arc::new(Self {
+                signer,
+                chain_id: 1,
+                available: AtomicBool::new(true),
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SignerManager for TestSignerManager {
+        fn addresses(&self) -> Vec<Address> {
+            vec![self.signer.address()]
+        }
+
+        fn available(&self) -> usize {
+            if self.available.load(Ordering::Relaxed) {
+                1
+            } else {
+                0
+            }
+        }
+
+        async fn wait_for_available(&self, _: usize) -> rundler_signer::Result<()> {
+            Ok(())
+        }
+
+        fn lease_signer(&self) -> Option<SignerLease> {
+            self.lease_signer_by_address(&self.signer.address())
+        }
+
+        fn lease_signer_by_address(&self, _: &Address) -> Option<SignerLease> {
+            self.available
+                .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
+                .ok()
+                .map(|_| SignerLease::new(self.signer.clone(), self.chain_id))
+        }
+
+        fn return_lease(&self, _: SignerLease) {
+            self.available.store(true, Ordering::Release);
+        }
+
+        fn update_balances(&self, _: Vec<(Address, U256)>) {}
+
+        fn fund_signers(&self) -> rundler_signer::Result<()> {
+            Ok(())
+        }
+    }
 
     struct MockTxSigner {}
 
@@ -686,13 +809,21 @@ mod tests {
             replacement_fee_percent_increase: 5,
         };
 
-        let lease = SignerLease::new(Arc::new(signer), 1);
+        let signer_arc: Arc<dyn TxSigner<Signature> + Send + Sync + 'static> = Arc::new(signer);
+        let signer_manager: Arc<dyn SignerManager> = TestSignerManager::new(signer_arc);
 
-        let tracker: TransactionTrackerImpl<MockEvmProvider, MockTransactionSender> =
-            TransactionTrackerImpl::new(provider, sender, lease, settings, "test".to_string())
-                .await
-                .unwrap();
+        let mut tracker = TransactionTrackerImpl::new(
+            provider,
+            sender,
+            signer_manager,
+            settings,
+            "test".to_string(),
+        );
 
+        tracker
+            .begin_cycle()
+            .await
+            .expect("failed to begin cycle in test");
         tracker
     }
 

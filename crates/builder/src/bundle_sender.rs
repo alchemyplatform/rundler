@@ -67,7 +67,11 @@ pub(crate) struct BundleSenderImpl<T, C> {
     builder_tag: String,
     bundle_action_receiver: Option<mpsc::Receiver<BundleSenderAction>>,
     chain_spec: ChainSpec,
+    /// The EOA address for the current work cycle. Starts as zero and is updated
+    /// to the leased signer's address after each successful `begin_cycle()`.
     sender_eoa: Address,
+    /// All signer addresses managed by the signer pool, used for pool subscription.
+    all_signer_addresses: Vec<Address>,
     transaction_tracker: Option<T>,
     fee_estimator: Box<dyn FeeEstimator>,
     assigner: Arc<Assigner>,
@@ -142,7 +146,7 @@ where
             &self.pool,
             self.bundle_action_receiver.take().unwrap(),
             Duration::from_millis(self.chain_spec.bundle_max_send_interval_millis),
-            self.sender_eoa,
+            self.all_signer_addresses.clone(),
         )
         .await
         .expect("Failed to create bundle sender trigger");
@@ -152,7 +156,43 @@ where
             SenderMachineState::new(sender_trigger, self.transaction_tracker.take().unwrap());
 
         loop {
-            if let Err(e) = self.step_state(&mut state).await {
+            // Release the signer before blocking if we are idle: no pending transactions
+            // and waiting for the next block trigger. The signing key is not needed
+            // during the wait, so it is returned to the pool where it can be borrowed
+            // for other work such as sponsored undelegation.
+            if state.is_waiting_for_trigger() {
+                state.transaction_tracker.end_cycle();
+            }
+
+            // Block until the next trigger or block event arrives.
+            // The signer may be free (released above) during this entire wait.
+            let tracker_update = match state.wait_for_trigger().await {
+                Ok(u) => u,
+                Err(e) => {
+                    error!("Error waiting for trigger in bundle sender loop: {e:#?}");
+                    let pinned = self.assigner.pinned_proposer(self.sender_eoa);
+                    self.increment_counter("builder_state_machine_errors", &pinned, 1);
+                    self.assigner.release_all(self.sender_eoa);
+                    state.reset();
+                    continue;
+                }
+            };
+
+            // Re-acquire the signer now that there is work to do. This is a no-op
+            // when the signer was kept (pending transactions existed). If all signers
+            // are temporarily borrowed (e.g. for undelegation), we wait here.
+            while let Err(e) = state.transaction_tracker.begin_cycle().await {
+                warn!("No signer available for bundle sender, retrying: {e}",);
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            // Update sender_eoa to match the signer leased for this cycle. On the first
+            // cycle this moves from Address::ZERO to the actual signer address; on subsequent
+            // cycles it stays the same unless the signer manager assigned a different key
+            // (e.g. because the prior address hit NeedsFunding).
+            self.sender_eoa = state.transaction_tracker.address();
+
+            // Execute state machine work for this trigger (build, send, cancel, etc.).
+            if let Err(e) = self.step_after_trigger(&mut state, tracker_update).await {
                 error!("Error in bundle sender loop: {e:#?}");
                 let pinned = self.assigner.pinned_proposer(self.sender_eoa);
                 self.increment_counter("builder_state_machine_errors", &pinned, 1);
@@ -182,7 +222,7 @@ where
         builder_tag: String,
         bundle_action_receiver: mpsc::Receiver<BundleSenderAction>,
         chain_spec: ChainSpec,
-        sender_eoa: Address,
+        all_signer_addresses: Vec<Address>,
         transaction_tracker: T,
         fee_estimator: Box<dyn FeeEstimator>,
         assigner: Arc<Assigner>,
@@ -195,7 +235,8 @@ where
             builder_tag,
             bundle_action_receiver: Some(bundle_action_receiver),
             chain_spec,
-            sender_eoa,
+            sender_eoa: Address::ZERO,
+            all_signer_addresses,
             transaction_tracker: Some(transaction_tracker),
             fee_estimator,
             assigner,
@@ -230,6 +271,8 @@ where
             .record(value);
     }
 
+    /// Drive one full step of the state machine: wait for a trigger, then act.
+    /// Used by tests which call this directly.
     #[instrument(skip_all, fields(
         tag = self.builder_tag,
     ))]
@@ -238,6 +281,17 @@ where
         state: &mut SenderMachineState<T, TRIG>,
     ) -> anyhow::Result<()> {
         let tracker_update = state.wait_for_trigger().await?;
+        self.step_after_trigger(state, tracker_update).await
+    }
+
+    /// Handle the state machine work that follows a trigger. Separated so that
+    /// `send_bundles_in_loop` can release the signer during the blocking wait
+    /// and re-acquire it here before any signing is required.
+    async fn step_after_trigger<TRIG: Trigger>(
+        &mut self,
+        state: &mut SenderMachineState<T, TRIG>,
+        tracker_update: Option<TrackerUpdate>,
+    ) -> anyhow::Result<()> {
         let has_tracker_update = tracker_update.is_some();
 
         match state.inner {
@@ -1058,6 +1112,19 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
      * Reset moves
      */
 
+    /// Returns true when the sender is idle: no pending transactions and waiting
+    /// for the next block trigger before attempting another bundle. This is the
+    /// only state in which the signer can be safely released.
+    fn is_waiting_for_trigger(&self) -> bool {
+        matches!(
+            self.inner,
+            InnerState::Building(BuildingState {
+                wait_for_trigger: true,
+                ..
+            })
+        ) && !self.requires_reset
+    }
+
     // Move to the initial state, will wait for the next trigger.
     // Preserves the transaction tracker state.
     fn initial(&mut self) {
@@ -1461,9 +1528,9 @@ impl BundleSenderTrigger {
         pool_client: &P,
         bundle_action_receiver: mpsc::Receiver<BundleSenderAction>,
         timer_interval: Duration,
-        sender_eoa: Address,
+        addresses: Vec<Address>,
     ) -> anyhow::Result<Self> {
-        let Ok(new_heads) = pool_client.subscribe_new_heads(vec![sender_eoa]).await else {
+        let Ok(new_heads) = pool_client.subscribe_new_heads(addresses).await else {
             error!("Failed to subscribe to new blocks");
             bail!("failed to subscribe to new blocks");
         };
@@ -2540,7 +2607,7 @@ mod tests {
             "test-builder".to_string(),
             mpsc::channel(1000).1,
             ChainSpec::default(),
-            Address::default(),
+            vec![],
             MockTransactionTracker::new(),
             Box::new(TestFeeEstimator),
             Arc::new(Assigner::new(
@@ -2573,7 +2640,7 @@ mod tests {
             "test-builder".to_string(),
             mpsc::channel(1000).1,
             ChainSpec::default(),
-            Address::default(),
+            vec![],
             MockTransactionTracker::new(),
             Box::new(TestFeeEstimator),
             Arc::new(Assigner::new(

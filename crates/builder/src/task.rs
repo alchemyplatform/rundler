@@ -441,13 +441,14 @@ where
     {
         let mut bundle_sender_actions = vec![];
 
-        for _ in 0..self.args.num_signers {
+        for i in 0..self.args.num_signers {
             let bundle_sender_action = self
                 .create_bundle_builder(
                     task_spawner,
                     signer_manager,
                     assigner.clone(),
                     proposers.clone(),
+                    i as usize,
                 )
                 .await?;
             bundle_sender_actions.push(bundle_sender_action);
@@ -461,17 +462,12 @@ where
         signer_manager: &Arc<dyn SignerManager>,
         assigner: Arc<Assigner>,
         proposers: Arc<HashMap<ProposerKey, Box<dyn BundleProposerT>>>,
+        index: usize,
     ) -> anyhow::Result<mpsc::Sender<BundleSenderAction>>
     where
         T: TaskSpawnerExt,
     {
         let (send_bundle_tx, send_bundle_rx) = mpsc::channel(1);
-
-        let Some(signer) = signer_manager.lease_signer() else {
-            return Err(anyhow::anyhow!("No signer available"));
-        };
-
-        let sender_eoa = signer.address();
 
         let transaction_sender = self
             .args
@@ -483,17 +479,16 @@ where
             replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,
         };
 
-        // Builder tag now uses just the sender address since workers handle all entrypoints
-        let builder_tag = format!("0x{sender_eoa:x}");
+        // Tag identifies this sender slot by index since the signing address is dynamic.
+        let builder_tag = format!("sender_{index}");
 
         let transaction_tracker = TransactionTrackerImpl::new(
             self.providers.evm().clone(),
             transaction_sender,
-            signer,
+            signer_manager.clone(),
             tracker_settings,
             builder_tag.clone(),
-        )
-        .await?;
+        );
 
         let sender_settings = bundle_sender::Settings {
             max_replacement_underpriced_blocks: self.args.max_replacement_underpriced_blocks,
@@ -503,11 +498,15 @@ where
 
         let fee_estimator: Box<dyn FeeEstimator> = Box::new(self.providers.fee_estimator().clone());
 
+        // Pass all signer addresses so the pool subscription tracks nonce/balance changes
+        // for whichever address this sender leases each cycle.
+        let all_signer_addresses = signer_manager.addresses();
+
         let builder = BundleSenderImpl::new(
             builder_tag,
             send_bundle_rx,
             self.args.chain_spec.clone(),
-            sender_eoa,
+            all_signer_addresses,
             transaction_tracker,
             fee_estimator,
             assigner,

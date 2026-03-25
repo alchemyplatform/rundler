@@ -337,11 +337,29 @@ where
     }
 
     async fn handle_send_sponsored_undelegation(&self, auth: Eip7702Auth) -> anyhow::Result<B256> {
-        // Lease an available signer. This requires at least one spare signer beyond the
-        // N bundle-sender signers. If none is available, the call returns an error.
-        let signer = self.signer_manager.lease_signer().ok_or_else(|| {
+        // Bundle senders release their signer between work cycles (roughly every block, ~2s).
+        // Retry for up to 30 seconds before giving up.
+        const MAX_ATTEMPTS: usize = 60;
+        const RETRY_INTERVAL_MS: u64 = 500;
+
+        let mut acquired = None;
+        for attempt in 0..MAX_ATTEMPTS {
+            if let Some(s) = self.signer_manager.lease_signer() {
+                acquired = Some(s);
+                break;
+            }
+            if attempt == 0 {
+                tracing::debug!(
+                    "no signer immediately available for undelegation, waiting for a bundle sender idle period"
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(RETRY_INTERVAL_MS)).await;
+        }
+
+        let signer = acquired.ok_or_else(|| {
             anyhow::anyhow!(
-                "no signer available for sponsored undelegation; configure an additional signer"
+                "no signer available for sponsored undelegation after {}ms; all signers are busy",
+                MAX_ATTEMPTS as u64 * RETRY_INTERVAL_MS,
             )
         })?;
 
