@@ -11,13 +11,11 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use alloy_primitives::{Address, B256, hex};
 use anyhow::{Context, bail};
 use async_trait::async_trait;
-use futures::Stream;
-use futures_util::StreamExt;
 #[cfg(test)]
 use mockall::automock;
 use rand::Rng;
@@ -70,8 +68,9 @@ pub(crate) struct BundleSenderImpl<T, C> {
     /// The EOA address for the current work cycle. Starts as zero and is updated
     /// to the leased signer's address after each successful `begin_cycle()`.
     sender_eoa: Address,
-    /// All signer addresses managed by the signer pool, used for pool subscription.
-    all_signer_addresses: Vec<Address>,
+    /// Receiver end of the shared broadcast channel that delivers new-head events
+    /// to all bundle senders from a single pool subscription.
+    heads_rx: broadcast::Receiver<Arc<NewHead>>,
     transaction_tracker: Option<T>,
     fee_estimator: Box<dyn FeeEstimator>,
     assigner: Arc<Assigner>,
@@ -143,10 +142,9 @@ where
         // trigger for sending bundles
         let sender_trigger = BundleSenderTrigger::new(
             &task_spawner,
-            &self.pool,
             self.bundle_action_receiver.take().unwrap(),
             Duration::from_millis(self.chain_spec.bundle_max_send_interval_millis),
-            self.all_signer_addresses.clone(),
+            self.heads_rx.resubscribe(),
         )
         .await
         .expect("Failed to create bundle sender trigger");
@@ -222,7 +220,7 @@ where
         builder_tag: String,
         bundle_action_receiver: mpsc::Receiver<BundleSenderAction>,
         chain_spec: ChainSpec,
-        all_signer_addresses: Vec<Address>,
+        heads_rx: broadcast::Receiver<Arc<NewHead>>,
         transaction_tracker: T,
         fee_estimator: Box<dyn FeeEstimator>,
         assigner: Arc<Assigner>,
@@ -236,7 +234,7 @@ where
             bundle_action_receiver: Some(bundle_action_receiver),
             chain_spec,
             sender_eoa: Address::ZERO,
-            all_signer_addresses,
+            heads_rx,
             transaction_tracker: Some(transaction_tracker),
             fee_estimator,
             assigner,
@@ -1523,22 +1521,17 @@ impl Trigger for BundleSenderTrigger {
 }
 
 impl BundleSenderTrigger {
-    async fn new<P: Pool, T: TaskSpawner>(
+    async fn new<T: TaskSpawner>(
         task_spawner: &T,
-        pool_client: &P,
         bundle_action_receiver: mpsc::Receiver<BundleSenderAction>,
         timer_interval: Duration,
-        addresses: Vec<Address>,
+        heads_rx: broadcast::Receiver<Arc<NewHead>>,
     ) -> anyhow::Result<Self> {
-        let Ok(new_heads) = pool_client.subscribe_new_heads(addresses).await else {
-            error!("Failed to subscribe to new blocks");
-            bail!("failed to subscribe to new blocks");
-        };
         let (block_tx, block_rx) = mpsc::unbounded_channel();
 
         task_spawner.spawn_critical(
             "block stream",
-            Box::pin(Self::block_stream_task(new_heads, block_tx)),
+            Box::pin(Self::block_stream_task(heads_rx, block_tx)),
         );
 
         Ok(Self {
@@ -1555,20 +1548,28 @@ impl BundleSenderTrigger {
     }
 
     async fn block_stream_task(
-        mut new_heads: Pin<Box<dyn Stream<Item = NewHead> + Send>>,
+        mut heads_rx: broadcast::Receiver<Arc<NewHead>>,
         block_tx: UnboundedSender<NewHead>,
     ) {
         loop {
-            match new_heads.next().await {
-                Some(b) => {
-                    if block_tx.send(b).is_err() {
+            match heads_rx.recv().await {
+                Ok(head) => {
+                    // Arc::unwrap_or_clone avoids a heap allocation when this is
+                    // the last receiver to consume this particular head.
+                    if block_tx.send(Arc::unwrap_or_clone(head)).is_err() {
                         error!("Failed to buffer new block for bundle sender");
                         return;
                     }
                 }
-                None => {
-                    error!("Block stream ended");
+                Err(broadcast::error::RecvError::Closed) => {
+                    error!("Shared new-heads broadcast closed");
                     return;
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    // Lagging means we missed some blocks. The sender will act
+                    // on the next block it receives; missing a notification is
+                    // safe and self-correcting.
+                    warn!("Bundle sender new-heads receiver lagged by {n} blocks");
                 }
             }
         }
@@ -2607,7 +2608,7 @@ mod tests {
             "test-builder".to_string(),
             mpsc::channel(1000).1,
             ChainSpec::default(),
-            vec![],
+            broadcast::channel(1).0.subscribe(),
             MockTransactionTracker::new(),
             Box::new(TestFeeEstimator),
             Arc::new(Assigner::new(
@@ -2640,7 +2641,7 @@ mod tests {
             "test-builder".to_string(),
             mpsc::channel(1000).1,
             ChainSpec::default(),
-            vec![],
+            broadcast::channel(1).0.subscribe(),
             MockTransactionTracker::new(),
             Box::new(TestFeeEstimator),
             Arc::new(Assigner::new(

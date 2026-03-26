@@ -594,11 +594,20 @@ where
     }
 
     async fn reset(&mut self) {
-        let addr = self
-            .signer
-            .as_ref()
-            .expect("reset() requires an active cycle (call begin_cycle first)")
-            .address();
+        // reset metrics when tracker reset.
+        self.metrics.num_pending_transactions.set(0);
+        self.metrics.current_max_fee_per_gas.set(0);
+        self.metrics.max_priority_fee_per_gas.set(0);
+
+        let Some(signer) = self.signer.as_ref() else {
+            // No signer held; clear local state only. begin_cycle() will fetch
+            // fresh nonce/balance from chain when it acquires the signer.
+            self.set_nonce_and_clear_state(0);
+            self.balance = U256::ZERO;
+            return;
+        };
+
+        let addr = signer.address();
         let nonce_fut = self.provider.get_transaction_count(addr);
         let balance_fut = self.provider.get_balance(addr, None);
         let (nonce, balance) =
@@ -606,11 +615,6 @@ where
 
         self.set_nonce_and_clear_state(nonce);
         self.balance = balance;
-
-        // reset metrics when tracker reset.
-        self.metrics.num_pending_transactions.set(0);
-        self.metrics.current_max_fee_per_gas.set(0);
-        self.metrics.max_priority_fee_per_gas.set(0);
     }
 
     fn abandon(&mut self) {

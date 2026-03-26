@@ -30,19 +30,24 @@ impl From<RpcBundlingMode> for BundlingMode {
     }
 }
 
-impl From<AuthorizationTuple> for Eip7702Auth {
-    fn from(value: AuthorizationTuple) -> Self {
-        SignedAuthorization::new_unchecked(
+impl TryFrom<AuthorizationTuple> for Eip7702Auth {
+    type Error = ConversionError;
+
+    fn try_from(value: AuthorizationTuple) -> Result<Self, Self::Error> {
+        if value.y_parity > 1 {
+            return Err(ConversionError::InvalidEnumValue(value.y_parity as i32));
+        }
+        Ok(SignedAuthorization::new_unchecked(
             Authorization {
                 chain_id: U256::from(value.chain_id),
-                address: from_bytes(&value.address).unwrap_or_default(),
+                address: from_bytes(&value.address)?,
                 nonce: value.nonce,
             },
             value.y_parity as u8,
-            from_bytes(&value.r).unwrap_or_default(),
-            from_bytes(&value.s).unwrap_or_default(),
+            from_bytes(&value.r)?,
+            from_bytes(&value.s)?,
         )
-        .into()
+        .into())
     }
 }
 

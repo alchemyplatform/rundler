@@ -337,6 +337,13 @@ where
     }
 
     async fn handle_send_sponsored_undelegation(&self, auth: Eip7702Auth) -> anyhow::Result<B256> {
+        // Validate: authorization must clear the delegation (address == zero).
+        // This check applies to all callers (RPC and gRPC), ensuring the endpoint
+        // cannot be used to set a new delegation instead of removing one.
+        if auth.address != Address::ZERO {
+            anyhow::bail!("authorization address must be zero for undelegation");
+        }
+
         // Bundle senders release their signer between work cycles (roughly every block, ~2s).
         // Retry for up to 30 seconds before giving up.
         const MAX_ATTEMPTS: usize = 60;
@@ -402,7 +409,7 @@ where
             .gas_limit(UNDELEGATION_GAS_LIMIT)
             .max_fee_per_gas(gas_fees.max_fee_per_gas)
             .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
-            .with_authorization_list(vec![auth.clone().into()]);
+            .with_authorization_list(vec![auth.into()]);
 
         let raw_tx = signer
             .sign_tx_raw(tx)

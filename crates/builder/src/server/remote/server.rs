@@ -128,7 +128,8 @@ impl GrpcBuilder for GrpcBuilderServerImpl {
         let auth_tuple = inner.auth.ok_or_else(|| {
             Status::invalid_argument("missing auth field in SendSponsoredUndelegationRequest")
         })?;
-        let auth = Eip7702Auth::from(auth_tuple);
+        let auth = Eip7702Auth::try_from(auth_tuple)
+            .map_err(|e| Status::invalid_argument(format!("invalid authorization tuple: {e}")))?;
 
         let resp = match self.local_builder.send_sponsored_undelegation(auth).await {
             Ok(tx_hash) => SendSponsoredUndelegationResponse {

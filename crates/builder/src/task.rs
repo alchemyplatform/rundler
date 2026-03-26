@@ -20,6 +20,7 @@ use std::{
 
 use alloy_primitives::{Address, B256};
 use anyhow::Context;
+use futures_util::StreamExt;
 use rundler_provider::{
     AlloyNetworkConfig, FeeEstimator, Providers as ProvidersT, ProvidersWithEntryPointT,
 };
@@ -30,7 +31,9 @@ use rundler_sim::{
 };
 use rundler_task::TaskSpawnerExt;
 use rundler_types::{
-    EntryPointAbiVersion, EntryPointVersion, chain::ChainSpec, pool::Pool as PoolT,
+    EntryPointAbiVersion, EntryPointVersion,
+    chain::ChainSpec,
+    pool::{NewHead, Pool as PoolT},
     proxy::SubmissionProxy,
 };
 use rundler_utils::emit::WithEntryPoint;
@@ -439,8 +442,33 @@ where
     where
         T: TaskSpawnerExt,
     {
-        let mut bundle_sender_actions = vec![];
+        // One pool subscription covers all signer addresses. A single broadcast channel
+        // fans out new-head events to every bundle sender, keeping pool-side work O(N)
+        // instead of O(N²) (one subscription per sender × N addresses each).
+        let all_signer_addresses = signer_manager.addresses();
+        let shared_heads = self
+            .pool
+            .subscribe_new_heads(all_signer_addresses)
+            .await
+            .context("failed to subscribe to new heads for bundle senders")?;
 
+        let (heads_tx, _) = broadcast::channel::<Arc<NewHead>>(16);
+        let heads_tx_fwd = heads_tx.clone();
+        task_spawner.spawn_critical(
+            "new-heads-fanout",
+            Box::pin(async move {
+                let mut stream = shared_heads;
+                while let Some(head) = stream.next().await {
+                    if heads_tx_fwd.send(Arc::new(head)).is_err() {
+                        // All receivers dropped — senders have shut down.
+                        break;
+                    }
+                }
+                tracing::error!("shared new-heads stream closed");
+            }),
+        );
+
+        let mut bundle_sender_actions = vec![];
         for i in 0..self.args.num_signers {
             let bundle_sender_action = self
                 .create_bundle_builder(
@@ -449,6 +477,7 @@ where
                     assigner.clone(),
                     proposers.clone(),
                     i as usize,
+                    heads_tx.subscribe(),
                 )
                 .await?;
             bundle_sender_actions.push(bundle_sender_action);
@@ -463,6 +492,7 @@ where
         assigner: Arc<Assigner>,
         proposers: Arc<HashMap<ProposerKey, Box<dyn BundleProposerT>>>,
         index: usize,
+        heads_rx: broadcast::Receiver<Arc<NewHead>>,
     ) -> anyhow::Result<mpsc::Sender<BundleSenderAction>>
     where
         T: TaskSpawnerExt,
@@ -498,15 +528,11 @@ where
 
         let fee_estimator: Box<dyn FeeEstimator> = Box::new(self.providers.fee_estimator().clone());
 
-        // Pass all signer addresses so the pool subscription tracks nonce/balance changes
-        // for whichever address this sender leases each cycle.
-        let all_signer_addresses = signer_manager.addresses();
-
         let builder = BundleSenderImpl::new(
             builder_tag,
             send_bundle_rx,
             self.args.chain_spec.clone(),
-            all_signer_addresses,
+            heads_rx,
             transaction_tracker,
             fee_estimator,
             assigner,
