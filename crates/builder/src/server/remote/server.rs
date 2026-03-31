@@ -21,11 +21,11 @@ use super::protos::{
     BUILDER_FILE_DESCRIPTOR_SET, BundlingMode, DebugSendBundleNowRequest,
     DebugSendBundleNowResponse, DebugSetBundlingModeRequest, DebugSetBundlingModeResponse,
     DebugSetBundlingModeSuccess, GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse,
-    SendSponsoredUndelegationRequest, SendSponsoredUndelegationResponse,
-    SendSponsoredUndelegationSuccess,
+    SendSponsoredDelegationRequest, SendSponsoredDelegationResponse,
+    SendSponsoredDelegationSuccess,
     builder_server::{Builder as GrpcBuilder, BuilderServer as GrpcBuilderServer},
     debug_send_bundle_now_response, debug_set_bundling_mode_response,
-    send_sponsored_undelegation_response,
+    send_sponsored_delegation_response,
 };
 use crate::server::{local::LocalBuilderHandle, remote::protos::DebugSendBundleNowSuccess};
 
@@ -119,28 +119,28 @@ impl GrpcBuilder for GrpcBuilderServerImpl {
         Ok(Response::new(resp))
     }
 
-    async fn send_sponsored_undelegation(
+    async fn send_sponsored_delegation(
         &self,
-        request: Request<SendSponsoredUndelegationRequest>,
-    ) -> tonic::Result<Response<SendSponsoredUndelegationResponse>> {
+        request: Request<SendSponsoredDelegationRequest>,
+    ) -> tonic::Result<Response<SendSponsoredDelegationResponse>> {
         let inner = request.into_inner();
 
         let auth_tuple = inner.auth.ok_or_else(|| {
-            Status::invalid_argument("missing auth field in SendSponsoredUndelegationRequest")
+            Status::invalid_argument("missing auth field in SendSponsoredDelegationRequest")
         })?;
         let auth = Eip7702Auth::try_from(auth_tuple)
             .map_err(|e| Status::invalid_argument(format!("invalid authorization tuple: {e}")))?;
 
-        let resp = match self.local_builder.send_sponsored_undelegation(auth).await {
-            Ok(tx_hash) => SendSponsoredUndelegationResponse {
-                result: Some(send_sponsored_undelegation_response::Result::Success(
-                    SendSponsoredUndelegationSuccess {
+        let resp = match self.local_builder.send_sponsored_delegation(auth).await {
+            Ok(tx_hash) => SendSponsoredDelegationResponse {
+                result: Some(send_sponsored_delegation_response::Result::Success(
+                    SendSponsoredDelegationSuccess {
                         transaction_hash: tx_hash.to_vec(),
                     },
                 )),
             },
-            Err(e) => SendSponsoredUndelegationResponse {
-                result: Some(send_sponsored_undelegation_response::Result::Failure(
+            Err(e) => SendSponsoredDelegationResponse {
+                result: Some(send_sponsored_delegation_response::Result::Failure(
                     e.into(),
                 )),
             },

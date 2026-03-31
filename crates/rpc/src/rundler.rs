@@ -98,12 +98,12 @@ pub trait RundlerApi {
     #[method(name = "getUserOperationGasPrice")]
     async fn get_user_operation_gas_price(&self) -> RpcResult<RpcUserOperationGasPrice>;
 
-    /// Sponsor an EIP-7702 undelegation on behalf of the caller.
+    /// Sponsor an EIP-7702 delegation on behalf of the caller.
     ///
-    /// The authorization tuple must set `address` to the zero address (clearing the EOA's
-    /// delegation). The bundler pays the gas cost and returns the resulting transaction hash.
-    #[method(name = "sendSponsoredUndelegation")]
-    async fn send_sponsored_undelegation(&self, auth: Eip7702Auth) -> RpcResult<B256>;
+    /// The bundler pays the gas cost and returns the resulting transaction hash.
+    /// To undelegate, set `address` to the zero address.
+    #[method(name = "sendSponsoredDelegation")]
+    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> RpcResult<B256>;
 }
 
 pub(crate) struct RundlerApi<P, F, E> {
@@ -193,11 +193,11 @@ where
         .await
     }
 
-    #[instrument(skip_all, fields(rpc_method = "rundler_sendSponsoredUndelegation"))]
-    async fn send_sponsored_undelegation(&self, auth: Eip7702Auth) -> RpcResult<B256> {
+    #[instrument(skip_all, fields(rpc_method = "rundler_sendSponsoredDelegation"))]
+    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> RpcResult<B256> {
         utils::safe_call_rpc_handler(
-            "rundler_sendSponsoredUndelegation",
-            RundlerApi::send_sponsored_undelegation(self, auth),
+            "rundler_sendSponsoredDelegation",
+            RundlerApi::send_sponsored_delegation(self, auth),
         )
         .await
     }
@@ -426,14 +426,7 @@ where
         Ok(uo.map(|uo| uo.uo.into()))
     }
 
-    async fn send_sponsored_undelegation(&self, auth: Eip7702Auth) -> EthResult<B256> {
-        // Validate: authorization must clear the delegation (address == zero).
-        if auth.address != Address::ZERO {
-            Err(EthRpcError::InvalidParams(
-                "authorization address must be zero for undelegation".to_string(),
-            ))?;
-        }
-
+    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> EthResult<B256> {
         // Validate: chain ID must match.
         let expected_chain_id = U256::from(self.chain_spec.id);
         if auth.chain_id != expected_chain_id {
@@ -444,25 +437,13 @@ where
         }
 
         // Validate: signature must be recoverable.
-        let eoa = auth.recover_authority().map_err(|e| {
+        auth.recover_authority().map_err(|e| {
             EthRpcError::InvalidParams(format!("invalid authorization signature: {e}"))
         })?;
 
-        // Validate: EOA must currently be delegated (has code).
-        let code = self
-            .evm_provider
-            .get_code(eoa, None)
-            .await
-            .context("failed to check EOA code")?;
-        if code.is_empty() {
-            Err(EthRpcError::InvalidParams(
-                "EOA is not currently delegated".to_string(),
-            ))?;
-        }
-
         let tx_hash = self
             .builder
-            .send_sponsored_undelegation(auth)
+            .send_sponsored_delegation(auth)
             .await
             .map_err(|e| anyhow::anyhow!("builder error: {e:?}"))?;
 

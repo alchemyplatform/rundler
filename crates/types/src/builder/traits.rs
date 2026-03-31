@@ -36,10 +36,9 @@ pub trait Builder: Send + Sync {
     /// Set the bundling mode
     async fn debug_set_bundling_mode(&self, mode: BundlingMode) -> BuilderResult<()>;
 
-    /// Send a sponsored EIP-7702 undelegation transaction.
+    /// Send a sponsored EIP-7702 delegation transaction.
     ///
-    /// Validates that the authorization clears the EOA's delegation (address == zero),
-    /// builds a type-4 transaction signed by the bundler, and submits it on behalf of
+    /// Builds a type-4 transaction signed by the bundler and submits it on behalf of
     /// the user. Returns the transaction hash.
-    async fn send_sponsored_undelegation(&self, auth: Eip7702Auth) -> BuilderResult<B256>;
+    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> BuilderResult<B256>;
 }

@@ -31,9 +31,9 @@ use tonic_health::{
 
 use super::protos::{
     AuthorizationTuple, BundlingMode as ProtoBundlingMode, DebugSendBundleNowRequest,
-    DebugSetBundlingModeRequest, GetSupportedEntryPointsRequest, SendSponsoredUndelegationRequest,
+    DebugSetBundlingModeRequest, GetSupportedEntryPointsRequest, SendSponsoredDelegationRequest,
     builder_client::BuilderClient, debug_send_bundle_now_response,
-    debug_set_bundling_mode_response, send_sponsored_undelegation_response,
+    debug_set_bundling_mode_response, send_sponsored_delegation_response,
 };
 
 /// Remote builder client, used for communicating with a remote builder server
@@ -94,14 +94,14 @@ impl Builder for RemoteBuilderClient {
         }
     }
 
-    async fn send_sponsored_undelegation(
+    async fn send_sponsored_delegation(
         &self,
         auth: Eip7702Auth,
     ) -> BuilderResult<alloy_primitives::B256> {
         let res = self
             .grpc_client
             .clone()
-            .send_sponsored_undelegation(SendSponsoredUndelegationRequest {
+            .send_sponsored_delegation(SendSponsoredDelegationRequest {
                 auth: Some(AuthorizationTuple::from(auth)),
             })
             .await
@@ -110,10 +110,10 @@ impl Builder for RemoteBuilderClient {
             .result;
 
         match res {
-            Some(send_sponsored_undelegation_response::Result::Success(s)) => {
+            Some(send_sponsored_delegation_response::Result::Success(s)) => {
                 Ok(alloy_primitives::B256::from_slice(&s.transaction_hash))
             }
-            Some(send_sponsored_undelegation_response::Result::Failure(f)) => Err(f.try_into()?),
+            Some(send_sponsored_delegation_response::Result::Failure(f)) => Err(f.try_into()?),
             None => Err(BuilderError::Other(anyhow::anyhow!(
                 "should have received result from builder"
             )))?,

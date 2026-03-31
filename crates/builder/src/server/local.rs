@@ -47,9 +47,9 @@ pub struct LocalBuilderBuilder {
     pool: Arc<dyn Pool>,
 }
 
-/// Gas limit for sponsored undelegation transactions (type-4).
+/// Gas limit for sponsored delegation transactions (type-4).
 /// Base intrinsic (21k) + per-auth EIP-7702 cost (25k) + buffer.
-const UNDELEGATION_GAS_LIMIT: u64 = 100_000;
+const DELEGATION_GAS_LIMIT: u64 = 100_000;
 
 #[derive(Metrics, Clone)]
 #[metrics(scope = "builder_internal")]
@@ -85,7 +85,7 @@ impl LocalBuilderBuilder {
     /// Run the local builder server, consuming the builder.
     ///
     /// `evm_provider` and `fee_estimator` are used exclusively by
-    /// [`Builder::send_sponsored_undelegation`] to query on-chain nonces, fetch current
+    /// [`Builder::send_sponsored_delegation`] to query on-chain nonces, fetch current
     /// gas prices, and submit the resulting type-4 transaction.
     pub fn run<E, F>(
         self,
@@ -189,11 +189,11 @@ impl Builder for LocalBuilderHandle {
         }
     }
 
-    async fn send_sponsored_undelegation(&self, auth: Eip7702Auth) -> BuilderResult<B256> {
-        let req = ServerRequestKind::SendSponsoredUndelegation { auth };
+    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> BuilderResult<B256> {
+        let req = ServerRequestKind::SendSponsoredDelegation { auth };
         let resp = self.send(req).await?;
         match resp {
-            ServerResponse::SendSponsoredUndelegation { tx_hash } => Ok(tx_hash),
+            ServerResponse::SendSponsoredDelegation { tx_hash } => Ok(tx_hash),
             _ => Err(BuilderError::UnexpectedResponse),
         }
     }
@@ -319,9 +319,9 @@ where
 
                                 Ok(ServerResponse::DebugSetBundlingMode)
                             },
-                            ServerRequestKind::SendSponsoredUndelegation { auth } => {
-                                match self.handle_send_sponsored_undelegation(auth).await {
-                                    Ok(tx_hash) => Ok(ServerResponse::SendSponsoredUndelegation { tx_hash }),
+                            ServerRequestKind::SendSponsoredDelegation { auth } => {
+                                match self.handle_send_sponsored_delegation(auth).await {
+                                    Ok(tx_hash) => Ok(ServerResponse::SendSponsoredDelegation { tx_hash }),
                                     Err(e) => Err(e.into()),
                                 }
                             },
@@ -336,14 +336,7 @@ where
         }
     }
 
-    async fn handle_send_sponsored_undelegation(&self, auth: Eip7702Auth) -> anyhow::Result<B256> {
-        // Validate: authorization must clear the delegation (address == zero).
-        // This check applies to all callers (RPC and gRPC), ensuring the endpoint
-        // cannot be used to set a new delegation instead of removing one.
-        if auth.address != Address::ZERO {
-            anyhow::bail!("authorization address must be zero for undelegation");
-        }
-
+    async fn handle_send_sponsored_delegation(&self, auth: Eip7702Auth) -> anyhow::Result<B256> {
         // Bundle senders release their signer between work cycles (roughly every block, ~2s).
         // Retry for up to 30 seconds before giving up.
         const MAX_ATTEMPTS: usize = 60;
@@ -357,7 +350,7 @@ where
             }
             if attempt == 0 {
                 tracing::debug!(
-                    "no signer immediately available for undelegation, waiting for a bundle sender idle period"
+                    "no signer immediately available for delegation, waiting for a bundle sender idle period"
                 );
             }
             tokio::time::sleep(Duration::from_millis(RETRY_INTERVAL_MS)).await;
@@ -365,18 +358,18 @@ where
 
         let signer = acquired.ok_or_else(|| {
             anyhow::anyhow!(
-                "no signer available for sponsored undelegation after {}ms; all signers are busy",
+                "no signer available for sponsored delegation after {}ms; all signers are busy",
                 MAX_ATTEMPTS as u64 * RETRY_INTERVAL_MS,
             )
         })?;
 
         // Perform all fallible work first, then always return the lease regardless of outcome.
-        let result = self.build_and_submit_undelegation(&signer, auth).await;
+        let result = self.build_and_submit_delegation(&signer, auth).await;
         self.signer_manager.return_lease(signer);
         result
     }
 
-    async fn build_and_submit_undelegation(
+    async fn build_and_submit_delegation(
         &self,
         signer: &rundler_signer::SignerLease,
         auth: Eip7702Auth,
@@ -401,12 +394,11 @@ where
             .context("failed to recover EOA from authorization signature")?;
 
         // Build the type-4 (EIP-7702) transaction.
-        // The authorization_list clears the EOA's code (address == zero).
         // The tx is sent to the EOA itself (zero-value, no calldata).
         let tx = TransactionRequest::default()
             .to(eoa)
             .nonce(bundler_nonce)
-            .gas_limit(UNDELEGATION_GAS_LIMIT)
+            .gas_limit(DELEGATION_GAS_LIMIT)
             .max_fee_per_gas(gas_fees.max_fee_per_gas)
             .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
             .with_authorization_list(vec![auth.into()]);
@@ -414,15 +406,15 @@ where
         let raw_tx = signer
             .sign_tx_raw(tx)
             .await
-            .context("failed to sign undelegation transaction")?;
+            .context("failed to sign delegation transaction")?;
 
         let tx_hash = self
             .evm_provider
             .send_raw_transaction(raw_tx)
             .await
-            .context("failed to submit undelegation transaction")?;
+            .context("failed to submit delegation transaction")?;
 
-        tracing::info!("sent sponsored undelegation for eoa {eoa} tx_hash {tx_hash}");
+        tracing::info!("sent sponsored delegation for eoa {eoa} tx_hash {tx_hash}");
         Ok(tx_hash)
     }
 }
@@ -432,7 +424,7 @@ enum ServerRequestKind {
     GetSupportedEntryPoints,
     DebugSendBundleNow,
     DebugSetBundlingMode { mode: BundlingMode },
-    SendSponsoredUndelegation { auth: Eip7702Auth },
+    SendSponsoredDelegation { auth: Eip7702Auth },
 }
 
 #[derive(Debug)]
@@ -446,5 +438,5 @@ enum ServerResponse {
     GetSupportedEntryPoints { entry_points: Vec<Address> },
     DebugSendBundleNow { hash: B256, block_number: u64 },
     DebugSetBundlingMode,
-    SendSponsoredUndelegation { tx_hash: B256 },
+    SendSponsoredDelegation { tx_hash: B256 },
 }

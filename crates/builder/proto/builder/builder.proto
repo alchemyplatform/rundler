@@ -37,8 +37,8 @@ service Builder {
     // Sets bundling mode. After setting mode to “manual”, an explicit call to
     // debug_bundler_sendBundleNow is required to send a bundle.
     rpc DebugSetBundlingMode(DebugSetBundlingModeRequest) returns (DebugSetBundlingModeResponse);
-    // Submits a bundler-sponsored EIP-7702 undelegation transaction on behalf of a user.
-    rpc SendSponsoredUndelegation(SendSponsoredUndelegationRequest) returns (SendSponsoredUndelegationResponse);
+    // Submits a bundler-sponsored EIP-7702 delegation transaction on behalf of a user.
+    rpc SendSponsoredDelegation(SendSponsoredDelegationRequest) returns (SendSponsoredDelegationResponse);
 }
 
 message GetSupportedEntryPointsRequest {}
@@ -91,17 +91,17 @@ message AuthorizationTuple {
     bytes s = 6;
 }
 
-message SendSponsoredUndelegationRequest {
+message SendSponsoredDelegationRequest {
     AuthorizationTuple auth = 1;
 }
 
-message SendSponsoredUndelegationResponse {
+message SendSponsoredDelegationResponse {
     oneof result {
-        SendSponsoredUndelegationSuccess success = 1;
+        SendSponsoredDelegationSuccess success = 1;
         BuilderError failure = 2;
     }
 }
 
-message SendSponsoredUndelegationSuccess {
+message SendSponsoredDelegationSuccess {
     bytes transaction_hash = 1;
 }
