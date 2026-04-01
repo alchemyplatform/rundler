@@ -169,9 +169,7 @@ impl GrpcBuilder for GrpcBuilderServerImpl {
                     DelegationStatus::Mined { tx_hash } => {
                         (DelegationStatusKind::Mined as i32, Some(tx_hash.to_vec()))
                     }
-                    DelegationStatus::Unspecified => {
-                        (DelegationStatusKind::Unspecified as i32, None)
-                    }
+                    DelegationStatus::Unknown => (DelegationStatusKind::Unknown as i32, None),
                 };
                 GetDelegationStatusResponse {
                     result: Some(get_delegation_status_response::Result::Success(

@@ -479,7 +479,7 @@ where
         Ok(match status {
             DelegationStatus::Pending => RpcDelegationStatus::Pending,
             DelegationStatus::Mined { tx_hash } => RpcDelegationStatus::Mined { tx_hash },
-            DelegationStatus::Unspecified => RpcDelegationStatus::Unspecified,
+            DelegationStatus::Unknown => RpcDelegationStatus::Unknown,
         })
     }
 

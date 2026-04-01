@@ -428,5 +428,5 @@ pub enum RpcDelegationStatus {
         tx_hash: B256,
     },
     /// Delegation status is unknown.
-    Unspecified,
+    Unknown,
 }

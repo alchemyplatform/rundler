@@ -100,5 +100,5 @@ pub enum DelegationStatus {
         tx_hash: B256,
     },
     /// The delegation ID is not recognized (never submitted, or pruned after mining).
-    Unspecified,
+    Unknown,
 }

@@ -272,7 +272,7 @@ where
                             } else if let Some(&(tx_hash, _)) = self.mined.get(&id) {
                                 DelegationStatus::Mined { tx_hash }
                             } else {
-                                DelegationStatus::Unspecified
+                                DelegationStatus::Unknown
                             };
                             let _ = responder.send(status);
                         }

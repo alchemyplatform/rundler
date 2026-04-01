@@ -145,7 +145,9 @@ impl Builder for RemoteBuilderClient {
                             tx_hash: B256::from_slice(&tx_hash),
                         }
                     }
-                    DelegationStatusKind::Unspecified => DelegationStatus::Unspecified,
+                    DelegationStatusKind::Unspecified | DelegationStatusKind::Unknown => {
+                        DelegationStatus::Unknown
+                    }
                 };
                 Ok(status)
             }
