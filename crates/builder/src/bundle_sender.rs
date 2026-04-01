@@ -269,8 +269,6 @@ where
             .record(value);
     }
 
-    /// Drive one full step of the state machine: wait for a trigger, then act.
-    /// Used by tests which call this directly.
     #[instrument(skip_all, fields(
         tag = self.builder_tag,
     ))]

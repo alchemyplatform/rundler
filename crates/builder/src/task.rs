@@ -45,6 +45,7 @@ use crate::{
     assigner::{Assigner, EntrypointInfo},
     bundle_proposer::{self, BundleProposerImpl, BundleProposerProviders, BundleProposerT},
     bundle_sender::{self, BundleSender, BundleSenderAction, BundleSenderImpl},
+    delegation_sender::{DelegationSender, Settings as DelegationSettings},
     emit::BuilderEvent,
     sender::TransactionSenderArgs,
     server::{self, LocalBuilderBuilder},
@@ -282,7 +283,7 @@ where
             self.args.entry_points.iter().map(|ep| ep.address).collect();
 
         // Create one bundle sender per signer - each handles all entrypoints via the registry
-        let actions = self
+        let (actions, heads_tx) = self
             .create_builders(
                 &task_spawner,
                 &self.signer_manager,
@@ -294,16 +295,25 @@ where
 
         let builder_handle = self.builder_builder.get_handle();
 
-        let evm_provider = self.providers.evm().clone();
-        let fee_estimator = self.providers.fee_estimator().clone();
+        let delegation_sender = DelegationSender::new(
+            self.signer_manager.clone(),
+            self.providers.evm().clone(),
+            self.providers.fee_estimator().clone(),
+            DelegationSettings {
+                max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
+                max_fee_bumps: self.args.max_cancellation_fee_increases,
+                fee_bump_percent: self.args.replacement_fee_percent_increase,
+                signer_wait_timeout_ms: 30_000,
+            },
+        );
         task_spawner.spawn_critical_with_graceful_shutdown_signal(
             "local builder server",
             |shutdown| {
                 self.builder_builder.run(
                     bundle_sender_actions,
                     supported_entry_points,
-                    evm_provider,
-                    fee_estimator,
+                    heads_tx,
+                    delegation_sender,
                     shutdown,
                 )
             },
@@ -438,7 +448,10 @@ where
         signer_manager: &Arc<dyn SignerManager>,
         assigner: Arc<Assigner>,
         proposers: Arc<HashMap<ProposerKey, Box<dyn BundleProposerT>>>,
-    ) -> anyhow::Result<Vec<mpsc::Sender<BundleSenderAction>>>
+    ) -> anyhow::Result<(
+        Vec<mpsc::Sender<BundleSenderAction>>,
+        broadcast::Sender<Arc<NewHead>>,
+    )>
     where
         T: TaskSpawnerExt,
     {
@@ -482,7 +495,7 @@ where
                 .await?;
             bundle_sender_actions.push(bundle_sender_action);
         }
-        Ok(bundle_sender_actions)
+        Ok((bundle_sender_actions, heads_tx))
     }
 
     async fn create_bundle_builder<T>(

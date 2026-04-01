@@ -16,15 +16,13 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use alloy_network::TransactionBuilder7702;
 use alloy_primitives::{Address, B256};
-use anyhow::Context;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use futures_util::StreamExt;
 use metrics::Histogram;
 use metrics_derive::Metrics;
-use rundler_provider::{EvmProvider, FeeEstimator, TransactionRequest};
+use rundler_provider::{EvmProvider, FeeEstimator};
 use rundler_signer::SignerManager;
 use rundler_task::{
     GracefulShutdown,
@@ -33,11 +31,14 @@ use rundler_task::{
 use rundler_types::{
     authorization::Eip7702Auth,
     builder::{Builder, BuilderError, BuilderResult, BundlingMode},
-    pool::Pool,
+    pool::{NewHead, Pool},
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 
-use crate::bundle_sender::{BundleSenderAction, SendBundleRequest, SendBundleResult};
+use crate::{
+    bundle_sender::{BundleSenderAction, SendBundleRequest, SendBundleResult},
+    delegation_sender::DelegationSender,
+};
 
 /// Local builder server builder
 pub struct LocalBuilderBuilder {
@@ -46,10 +47,6 @@ pub struct LocalBuilderBuilder {
     signer_manager: Arc<dyn SignerManager>,
     pool: Arc<dyn Pool>,
 }
-
-/// Gas limit for sponsored delegation transactions (type-4).
-/// Base intrinsic (21k) + per-auth EIP-7702 cost (25k) + buffer.
-const DELEGATION_GAS_LIMIT: u64 = 100_000;
 
 #[derive(Metrics, Clone)]
 #[metrics(scope = "builder_internal")]
@@ -84,20 +81,22 @@ impl LocalBuilderBuilder {
 
     /// Run the local builder server, consuming the builder.
     ///
-    /// `evm_provider` and `fee_estimator` are used exclusively by
-    /// [`Builder::send_sponsored_delegation`] to query on-chain nonces, fetch current
-    /// gas prices, and submit the resulting type-4 transaction.
+    /// `delegation_sender` handles bundler-sponsored EIP-7702 delegation transactions.
+    ///
+    /// `heads_tx` is the shared new-heads broadcast sender; a fresh receiver is
+    /// subscribed for each delegation send so the `DelegationSender` can watch for
+    /// mining without polling.
     pub fn run<E, F>(
         self,
         bundle_sender_actions: Vec<mpsc::Sender<BundleSenderAction>>,
         entry_points: Vec<Address>,
-        evm_provider: E,
-        fee_estimator: F,
+        heads_tx: broadcast::Sender<Arc<NewHead>>,
+        delegation_sender: DelegationSender<E, F>,
         shutdown: GracefulShutdown,
     ) -> BoxFuture<'static, ()>
     where
-        E: EvmProvider + Send + Sync + 'static,
-        F: FeeEstimator + Send + Sync + 'static,
+        E: EvmProvider + Clone + Send + Sync + 'static,
+        F: FeeEstimator + Clone + Send + Sync + 'static,
     {
         let runner = LocalBuilderServerRunner::new(
             self.req_receiver,
@@ -105,8 +104,8 @@ impl LocalBuilderBuilder {
             entry_points,
             self.signer_manager,
             self.pool,
-            evm_provider,
-            fee_estimator,
+            heads_tx,
+            delegation_sender,
         );
         Box::pin(runner.run(shutdown))
     }
@@ -125,8 +124,8 @@ struct LocalBuilderServerRunner<E, F> {
     entry_points: Vec<Address>,
     signer_manager: Arc<dyn SignerManager>,
     pool: Arc<dyn Pool>,
-    evm_provider: E,
-    fee_estimator: F,
+    heads_tx: broadcast::Sender<Arc<NewHead>>,
+    delegation_sender: DelegationSender<E, F>,
 }
 
 impl LocalBuilderHandle {
@@ -225,18 +224,17 @@ impl HealthCheck for LocalBuilderHandle {
 
 impl<E, F> LocalBuilderServerRunner<E, F>
 where
-    E: EvmProvider + Send + Sync,
-    F: FeeEstimator + Send + Sync,
+    E: EvmProvider + Clone + Send + Sync + 'static,
+    F: FeeEstimator + Clone + Send + Sync + 'static,
 {
-    #[allow(clippy::too_many_arguments)]
     fn new(
         req_receiver: mpsc::Receiver<ServerRequest>,
         bundle_sender_actions: Vec<mpsc::Sender<BundleSenderAction>>,
         entry_points: Vec<Address>,
         signer_manager: Arc<dyn SignerManager>,
         pool: Arc<dyn Pool>,
-        evm_provider: E,
-        fee_estimator: F,
+        heads_tx: broadcast::Sender<Arc<NewHead>>,
+        delegation_sender: DelegationSender<E, F>,
     ) -> Self {
         Self {
             req_receiver,
@@ -244,8 +242,8 @@ where
             entry_points,
             signer_manager,
             pool,
-            evm_provider,
-            fee_estimator,
+            heads_tx,
+            delegation_sender,
         }
     }
 
@@ -272,60 +270,64 @@ where
                     }
                 }
                 Some(req) = self.req_receiver.recv() => {
-                    let resp: BuilderResult<ServerResponse> = 'a: {
-                        match req.request {
-                            ServerRequestKind::GetSupportedEntryPoints => {
-                                Ok(ServerResponse::GetSupportedEntryPoints {
-                                    entry_points: self.entry_points.clone()
-                                })
-                            },
-                            ServerRequestKind::DebugSendBundleNow => {
-                                if self.bundle_sender_actions.len() != 1 {
-                                    break 'a Err(anyhow::anyhow!("more than 1 bundle builder not supported in debug mode").into())
-                                }
+                    let resp: BuilderResult<ServerResponse> = match req.request {
+                        // Async: spawned task owns the responder and sends when done.
+                        // `continue` skips the response send at the bottom of the loop.
+                        ServerRequestKind::SendSponsoredDelegation { auth } => {
+                            let sender = self.delegation_sender.clone();
+                            let heads_rx = self.heads_tx.subscribe();
+                            let responder = req.response;
+                            tokio::spawn(async move {
+                                let resp = sender
+                                    .send(auth, heads_rx)
+                                    .await
+                                    .map(|tx_hash| ServerResponse::SendSponsoredDelegation { tx_hash })
+                                    .map_err(Into::into);
+                                let _ = responder.send(resp);
+                            });
+                            continue;
+                        }
 
+                        // Sync: response sent below.
+                        ServerRequestKind::GetSupportedEntryPoints => {
+                            Ok(ServerResponse::GetSupportedEntryPoints {
+                                entry_points: self.entry_points.clone()
+                            })
+                        },
+                        ServerRequestKind::DebugSendBundleNow => {
+                            if self.bundle_sender_actions.len() != 1 {
+                                Err(anyhow::anyhow!("more than 1 bundle builder not supported in debug mode").into())
+                            } else {
                                 let (tx, rx) = oneshot::channel();
                                 match self.bundle_sender_actions[0].send(BundleSenderAction::SendBundle(SendBundleRequest{
                                     responder: tx
                                 })).await {
-                                    Ok(()) => {},
-                                    Err(e) => break 'a Err(anyhow::anyhow!("failed to send send bundle request: {}", e.to_string()).into())
+                                    Err(e) => Err(anyhow::anyhow!("failed to send send bundle request: {}", e.to_string()).into()),
+                                    Ok(()) => match rx.await {
+                                        Err(e) => Err(anyhow::anyhow!("failed to receive bundle result: {e:?}").into()),
+                                        Ok(SendBundleResult::Success { tx_hash, block_number, .. }) => {
+                                            Ok(ServerResponse::DebugSendBundleNow { hash: tx_hash, block_number })
+                                        },
+                                        Ok(SendBundleResult::NoOperationsInitially) => {
+                                            Err(BuilderError::NoOperationsToSend)
+                                        },
+                                        Ok(SendBundleResult::Error(e)) => {
+                                            Err(anyhow::anyhow!("send bundle error: {e:?}").into())
+                                        },
+                                    }
                                 }
-
-                                let result = match rx.await {
-                                    Ok(result) => result,
-                                    Err(e) => break 'a Err(anyhow::anyhow!("failed to receive bundle result: {e:?}").into())
-                                };
-
-                                match result {
-                                    SendBundleResult::Success { tx_hash, block_number, .. } => {
-                                        Ok(ServerResponse::DebugSendBundleNow { hash: tx_hash, block_number })
-                                    },
-                                    SendBundleResult::NoOperationsInitially => {
-                                        Err(BuilderError::NoOperationsToSend)
-                                    },
-                                    SendBundleResult::Error(e) => Err(anyhow::anyhow!("send bundle error: {e:?}").into()),
-                                }
-                            },
-                            ServerRequestKind::DebugSetBundlingMode { mode } => {
-                                if self.bundle_sender_actions.len() != 1 {
-                                    break 'a Err(anyhow::anyhow!("more than 1 bundle builder not supported in debug mode").into())
-                                }
-
+                            }
+                        },
+                        ServerRequestKind::DebugSetBundlingMode { mode } => {
+                            if self.bundle_sender_actions.len() != 1 {
+                                Err(anyhow::anyhow!("more than 1 bundle builder not supported in debug mode").into())
+                            } else {
                                 match self.bundle_sender_actions[0].send(BundleSenderAction::ChangeMode(mode)).await {
-                                    Ok(()) => {},
-                                    Err(e) => break 'a Err(anyhow::anyhow!("failed to change bundler mode: {}", e.to_string()).into())
+                                    Ok(()) => Ok(ServerResponse::DebugSetBundlingMode),
+                                    Err(e) => Err(anyhow::anyhow!("failed to change bundler mode: {}", e.to_string()).into()),
                                 }
-
-                                Ok(ServerResponse::DebugSetBundlingMode)
-                            },
-                            ServerRequestKind::SendSponsoredDelegation { auth } => {
-                                match self.handle_send_sponsored_delegation(auth).await {
-                                    Ok(tx_hash) => Ok(ServerResponse::SendSponsoredDelegation { tx_hash }),
-                                    Err(e) => Err(e.into()),
-                                }
-                            },
-                        }
+                            }
+                        },
                     };
 
                     if let Err(e) = req.response.send(resp) {
@@ -334,88 +336,6 @@ where
                 }
             }
         }
-    }
-
-    async fn handle_send_sponsored_delegation(&self, auth: Eip7702Auth) -> anyhow::Result<B256> {
-        // Bundle senders release their signer between work cycles (roughly every block, ~2s).
-        // Retry for up to 30 seconds before giving up.
-        const MAX_ATTEMPTS: usize = 60;
-        const RETRY_INTERVAL_MS: u64 = 500;
-
-        let mut acquired = None;
-        for attempt in 0..MAX_ATTEMPTS {
-            if let Some(s) = self.signer_manager.lease_signer() {
-                acquired = Some(s);
-                break;
-            }
-            if attempt == 0 {
-                tracing::debug!(
-                    "no signer immediately available for delegation, waiting for a bundle sender idle period"
-                );
-            }
-            tokio::time::sleep(Duration::from_millis(RETRY_INTERVAL_MS)).await;
-        }
-
-        let signer = acquired.ok_or_else(|| {
-            anyhow::anyhow!(
-                "no signer available for sponsored delegation after {}ms; all signers are busy",
-                MAX_ATTEMPTS as u64 * RETRY_INTERVAL_MS,
-            )
-        })?;
-
-        // Perform all fallible work first, then always return the lease regardless of outcome.
-        let result = self.build_and_submit_delegation(&signer, auth).await;
-        self.signer_manager.return_lease(signer);
-        result
-    }
-
-    async fn build_and_submit_delegation(
-        &self,
-        signer: &rundler_signer::SignerLease,
-        auth: Eip7702Auth,
-    ) -> anyhow::Result<B256> {
-        // Get the bundler EOA's current nonce for the transaction.
-        let bundler_nonce = self
-            .evm_provider
-            .get_transaction_count(signer.address())
-            .await
-            .context("failed to get bundler nonce")?;
-
-        // Fetch current gas fees.
-        let (gas_fees, _base_fee) = self
-            .fee_estimator
-            .latest_bundle_fees()
-            .await
-            .context("failed to get bundle fees")?;
-
-        // Recover the EOA from the authorization signature so we can address the tx.
-        let eoa = auth
-            .recover_authority()
-            .context("failed to recover EOA from authorization signature")?;
-
-        // Build the type-4 (EIP-7702) transaction.
-        // The tx is sent to the EOA itself (zero-value, no calldata).
-        let tx = TransactionRequest::default()
-            .to(eoa)
-            .nonce(bundler_nonce)
-            .gas_limit(DELEGATION_GAS_LIMIT)
-            .max_fee_per_gas(gas_fees.max_fee_per_gas)
-            .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
-            .with_authorization_list(vec![auth.into()]);
-
-        let raw_tx = signer
-            .sign_tx_raw(tx)
-            .await
-            .context("failed to sign delegation transaction")?;
-
-        let tx_hash = self
-            .evm_provider
-            .send_raw_transaction(raw_tx)
-            .await
-            .context("failed to submit delegation transaction")?;
-
-        tracing::info!("sent sponsored delegation for eoa {eoa} tx_hash {tx_hash}");
-        Ok(tx_hash)
     }
 }
 

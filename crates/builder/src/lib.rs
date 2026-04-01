@@ -24,6 +24,7 @@ use alloy_primitives::Address;
 mod assigner;
 mod bundle_proposer;
 mod bundle_sender;
+mod delegation_sender;
 
 /// Key for looking up a proposer: (entrypoint address, filter_id)
 pub(crate) type ProposerKey = (Address, Option<String>);
