@@ -45,7 +45,7 @@ use crate::{
     assigner::{Assigner, EntrypointInfo},
     bundle_proposer::{self, BundleProposerImpl, BundleProposerProviders, BundleProposerT},
     bundle_sender::{self, BundleSender, BundleSenderAction, BundleSenderImpl},
-    delegation_sender::{DelegationSender, Settings as DelegationSettings},
+    delegation_sender::{DelegationSenderTask, Settings as DelegationSettings},
     emit::BuilderEvent,
     sender::TransactionSenderArgs,
     server::{self, LocalBuilderBuilder},
@@ -295,7 +295,7 @@ where
 
         let builder_handle = self.builder_builder.get_handle();
 
-        let delegation_sender = DelegationSender::new(
+        let (delegation_task, delegation_handle) = DelegationSenderTask::new(
             self.signer_manager.clone(),
             self.providers.evm().clone(),
             self.providers.fee_estimator().clone(),
@@ -305,15 +305,20 @@ where
                 fee_bump_percent: self.args.replacement_fee_percent_increase,
                 signer_wait_timeout_ms: 30_000,
             },
+            heads_tx.clone(),
         );
+        task_spawner
+            .spawn_critical_with_graceful_shutdown_signal("delegation sender", |shutdown| {
+                delegation_task.run(shutdown)
+            });
         task_spawner.spawn_critical_with_graceful_shutdown_signal(
             "local builder server",
             |shutdown| {
                 self.builder_builder.run(
                     bundle_sender_actions,
                     supported_entry_points,
-                    heads_tx,
-                    delegation_sender,
+                    heads_tx.subscribe(),
+                    delegation_handle,
                     shutdown,
                 )
             },

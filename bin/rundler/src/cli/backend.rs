@@ -15,8 +15,6 @@
 //!
 //! This is useful for running a single-chain backend that the gateway can connect to.
 
-use std::sync::Arc;
-
 use clap::Args;
 use rundler_builder::{BuilderEvent, BuilderEventKind, BuilderTask, LocalBuilderBuilder};
 use rundler_pool::{LocalPoolBuilder, PoolEvent, PoolTask};
@@ -130,11 +128,8 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     )
     .await?;
 
-    let builder_builder = LocalBuilderBuilder::new(
-        REQUEST_CHANNEL_CAPACITY,
-        signer_manager.clone(),
-        Arc::new(pool_handle.clone()),
-    );
+    let builder_builder =
+        LocalBuilderBuilder::new(REQUEST_CHANNEL_CAPACITY, signer_manager.clone());
 
     tracing::info!(
         "Starting pool with gRPC on {}:{}",

@@ -34,6 +34,7 @@ mod health;
 
 mod rundler;
 pub use rundler::{RundlerApiClient, RundlerApiSettings};
+pub use types::RpcDelegationStatus;
 
 mod task;
 pub use task::{Args as RpcTaskArgs, RpcTask};

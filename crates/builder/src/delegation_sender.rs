@@ -11,20 +11,29 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use alloy_network::TransactionBuilder7702;
 use alloy_primitives::B256;
 use anyhow::Context;
 use rundler_provider::{EvmProvider, FeeEstimator, TransactionRequest};
 use rundler_signer::SignerManager;
-use rundler_types::{GasFees, authorization::Eip7702Auth, pool::NewHead};
-use tokio::sync::broadcast;
+use rundler_task::GracefulShutdown;
+use rundler_types::{
+    GasFees,
+    authorization::Eip7702Auth,
+    builder::{BuilderError, BuilderResult, DelegationId, DelegationStatus},
+    pool::NewHead,
+};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{info, warn};
 
 /// Gas limit for a type-4 EIP-7702 delegation transaction.
 /// Base intrinsic (21k) + per-auth cost (25k) + buffer.
 const DELEGATION_GAS_LIMIT: u64 = 100_000;
+
+/// Number of blocks to retain mined delegation records before pruning.
+const MINED_RETENTION_BLOCKS: u64 = 100;
 
 /// Settings for the delegation sender.
 #[derive(Debug, Clone)]
@@ -39,44 +48,203 @@ pub(crate) struct Settings {
     pub signer_wait_timeout_ms: u64,
 }
 
-/// Submits and tracks a single bundler-sponsored EIP-7702 delegation transaction.
+/// Actions that can be sent to the delegation sender task.
+pub(crate) enum DelegationSenderAction {
+    /// Submit a new delegation. The responder receives the [`DelegationId`] immediately;
+    /// use [`DelegationSenderAction::GetStatus`] to poll for the mined tx hash.
+    Send {
+        auth: Eip7702Auth,
+        responder: oneshot::Sender<DelegationId>,
+    },
+    /// Query the current status of a previously submitted delegation.
+    GetStatus {
+        id: DelegationId,
+        responder: oneshot::Sender<DelegationStatus>,
+    },
+}
+
+/// Handle to the long-running delegation sender task.
 ///
-/// Acquires a signer, submits the type-4 tx, then watches the shared head-event
-/// stream to detect mining. If the tx does not mine within `max_blocks_to_wait_for_mine`
-/// blocks it is replaced with bumped fees; after `max_fee_bumps` failed attempts the
-/// call returns an error.
+/// Cheap to clone; all methods communicate through an internal channel.
 #[derive(Clone)]
-pub struct DelegationSender<E, F> {
+pub struct DelegationSenderHandle {
+    action_tx: mpsc::Sender<DelegationSenderAction>,
+}
+
+impl DelegationSenderHandle {
+    pub(crate) async fn send_delegation(&self, auth: Eip7702Auth) -> BuilderResult<DelegationId> {
+        let (tx, rx) = oneshot::channel();
+        self.action_tx
+            .send(DelegationSenderAction::Send {
+                auth,
+                responder: tx,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("delegation sender task closed"))?;
+        rx.await
+            .map_err(|_| BuilderError::Other(anyhow::anyhow!("delegation sender task closed")))
+    }
+
+    pub(crate) async fn get_delegation_status(
+        &self,
+        id: DelegationId,
+    ) -> BuilderResult<DelegationStatus> {
+        let (tx, rx) = oneshot::channel();
+        self.action_tx
+            .send(DelegationSenderAction::GetStatus { id, responder: tx })
+            .await
+            .map_err(|_| anyhow::anyhow!("delegation sender task closed"))?;
+        rx.await
+            .map_err(|_| BuilderError::Other(anyhow::anyhow!("delegation sender task closed")))
+    }
+}
+
+/// Internal completion event sent from a per-delegation sub-task back to the main loop.
+struct CompletionEvent {
+    id: DelegationId,
+    result: anyhow::Result<B256>,
+}
+
+/// Long-running task that owns delegation state and processes requests.
+///
+/// Mirrors the `BundleSender` pattern: callers communicate through a channel
+/// ([`DelegationSenderHandle`]) and this task serialises state updates, so no
+/// shared-memory locks are needed.
+pub(crate) struct DelegationSenderTask<E, F> {
+    action_rx: mpsc::Receiver<DelegationSenderAction>,
+    completion_tx: mpsc::Sender<CompletionEvent>,
+    completion_rx: mpsc::Receiver<CompletionEvent>,
+    /// Delegations that have been submitted and are waiting to mine.
+    pending: HashMap<DelegationId, ()>,
+    /// Delegations that have mined, with their (tx_hash, block_number).
+    /// Entries are pruned after MINED_RETENTION_BLOCKS.
+    mined: HashMap<DelegationId, (B256, u64)>,
+    current_block: u64,
+    /// Shared broadcast sender — used to subscribe a fresh receiver for each delegation sub-task.
+    heads_tx: broadcast::Sender<Arc<NewHead>>,
+    // Core sender dependencies
     signer_manager: Arc<dyn SignerManager>,
     provider: E,
     fee_estimator: F,
     settings: Settings,
 }
 
-impl<E, F> DelegationSender<E, F>
+impl<E, F> DelegationSenderTask<E, F>
 where
-    E: EvmProvider,
-    F: FeeEstimator,
+    E: EvmProvider + Clone + Send + Sync + 'static,
+    F: FeeEstimator + Clone + Send + Sync + 'static,
 {
+    /// Create the task and its associated handle.
     pub(crate) fn new(
         signer_manager: Arc<dyn SignerManager>,
         provider: E,
         fee_estimator: F,
         settings: Settings,
-    ) -> Self {
-        Self {
+        heads_tx: broadcast::Sender<Arc<NewHead>>,
+    ) -> (Self, DelegationSenderHandle) {
+        let (action_tx, action_rx) = mpsc::channel(64);
+        let (completion_tx, completion_rx) = mpsc::channel(64);
+        let task = Self {
+            action_rx,
+            completion_tx,
+            completion_rx,
+            pending: HashMap::new(),
+            mined: HashMap::new(),
+            current_block: 0,
+            heads_tx,
             signer_manager,
             provider,
             fee_estimator,
             settings,
-        }
+        };
+        let handle = DelegationSenderHandle { action_tx };
+        (task, handle)
     }
 
-    /// Submit a delegation and wait for it to be mined.
-    ///
-    /// `heads_rx` must be a fresh subscriber to the shared new-heads broadcast
-    /// channel so that this call receives every block from submission onwards.
-    pub(crate) async fn send(
+    /// Run the delegation sender task until shutdown.
+    pub(crate) async fn run(mut self, shutdown: GracefulShutdown) {
+        let mut heads_rx = self.heads_tx.subscribe();
+
+        loop {
+            tokio::select! {
+                _ = shutdown.clone() => return,
+
+                head = heads_rx.recv() => {
+                    match head {
+                        Ok(h) => {
+                            self.current_block = h.block_number;
+                            let cutoff = self.current_block.saturating_sub(MINED_RETENTION_BLOCKS);
+                            self.mined.retain(|_, (_, mined_block)| *mined_block >= cutoff);
+                        }
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            warn!("delegation sender heads receiver lagged by {n} blocks");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            tracing::error!("heads broadcast closed in delegation sender task");
+                            return;
+                        }
+                    }
+                }
+
+                Some(event) = self.completion_rx.recv() => {
+                    self.pending.remove(&event.id);
+                    if let Ok(tx_hash) = event.result {
+                        self.mined.insert(event.id, (tx_hash, self.current_block));
+                    }
+                }
+
+                Some(action) = self.action_rx.recv() => {
+                    match action {
+                        DelegationSenderAction::Send { auth, responder } => {
+                            let id = DelegationId::from_auth(&auth);
+                            self.pending.insert(id.clone(), ());
+                            let _ = responder.send(id.clone());
+
+                            let core = DelegationSenderCore {
+                                signer_manager: self.signer_manager.clone(),
+                                provider: self.provider.clone(),
+                                fee_estimator: self.fee_estimator.clone(),
+                                settings: self.settings.clone(),
+                            };
+                            let heads_rx = self.heads_tx.subscribe();
+                            let completion_tx = self.completion_tx.clone();
+                            tokio::spawn(async move {
+                                let result = core.send(auth, heads_rx).await;
+                                let _ = completion_tx.send(CompletionEvent { id, result }).await;
+                            });
+                        }
+
+                        DelegationSenderAction::GetStatus { id, responder } => {
+                            let status = if self.pending.contains_key(&id) {
+                                DelegationStatus::Pending
+                            } else if let Some(&(tx_hash, _)) = self.mined.get(&id) {
+                                DelegationStatus::Mined { tx_hash }
+                            } else {
+                                DelegationStatus::Unspecified
+                            };
+                            let _ = responder.send(status);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Core send logic: acquires a signer, submits the delegation tx, and waits for mining.
+struct DelegationSenderCore<E, F> {
+    signer_manager: Arc<dyn SignerManager>,
+    provider: E,
+    fee_estimator: F,
+    settings: Settings,
+}
+
+impl<E, F> DelegationSenderCore<E, F>
+where
+    E: EvmProvider,
+    F: FeeEstimator,
+{
+    async fn send(
         &self,
         auth: Eip7702Auth,
         heads_rx: broadcast::Receiver<Arc<NewHead>>,

@@ -11,8 +11,13 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use std::{fmt, str::FromStr};
+
+use alloy_primitives::{B256, keccak256};
 use parse_display::Display;
 use serde::{Deserialize, Serialize};
+
+use crate::authorization::Eip7702Auth;
 
 /// Builder bundling mode
 #[derive(Display, Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
@@ -27,4 +32,71 @@ pub enum BundlingMode {
     ///
     /// Bundles will be sent automatically.
     Auto,
+}
+
+/// Unique identifier for a sponsored delegation request.
+///
+/// Computed as `keccak256(abi.encode(chainId, delegateAddress, nonce, yParity, r, s))`,
+/// matching how user operation hashes are derived from their exact payload.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct DelegationId(B256);
+
+impl DelegationId {
+    /// Derive an ID from a signed EIP-7702 authorization by hashing its payload.
+    ///
+    /// Computes `keccak256(abi.encode(chainId, delegateAddress, nonce, yParity, r, s))`.
+    /// This is infallible and does not require recovering the signer.
+    pub fn from_auth(auth: &Eip7702Auth) -> Self {
+        let mut buf = [0u8; 6 * 32];
+
+        // chainId: uint256 (32 bytes big-endian)
+        buf[0..32].copy_from_slice(&auth.chain_id.to_be_bytes::<32>());
+
+        // delegateAddress: address (12 zero bytes + 20 address bytes)
+        buf[44..64].copy_from_slice(auth.address.as_slice());
+
+        // nonce: uint64 (24 zero bytes + 8 bytes big-endian)
+        buf[88..96].copy_from_slice(&auth.nonce.to_be_bytes());
+
+        // yParity: uint8 (31 zero bytes + 1 byte)
+        buf[127] = auth.y_parity();
+
+        // r: bytes32
+        buf[128..160].copy_from_slice(&auth.r().to_be_bytes::<32>());
+
+        // s: bytes32
+        buf[160..192].copy_from_slice(&auth.s().to_be_bytes::<32>());
+
+        Self(keccak256(buf))
+    }
+}
+
+impl fmt::Display for DelegationId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl FromStr for DelegationId {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse::<B256>()
+            .map(Self)
+            .map_err(|e| anyhow::anyhow!("invalid delegation ID '{}': {e}", s))
+    }
+}
+
+/// Status of a sponsored delegation request.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum DelegationStatus {
+    /// The delegation transaction has been submitted and is waiting to be mined.
+    Pending,
+    /// The delegation transaction has been mined.
+    Mined {
+        /// Hash of the mined transaction.
+        tx_hash: B256,
+    },
+    /// The delegation ID is not recognized (never submitted, or pruned after mining).
+    Unspecified,
 }

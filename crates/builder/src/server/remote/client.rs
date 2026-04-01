@@ -21,7 +21,7 @@ use rundler_task::{
 };
 use rundler_types::{
     authorization::Eip7702Auth,
-    builder::{Builder, BuilderError, BuilderResult, BundlingMode},
+    builder::{Builder, BuilderError, BuilderResult, BundlingMode, DelegationId, DelegationStatus},
 };
 use tonic::transport::{Channel, Uri};
 use tonic_health::{
@@ -31,9 +31,10 @@ use tonic_health::{
 
 use super::protos::{
     AuthorizationTuple, BundlingMode as ProtoBundlingMode, DebugSendBundleNowRequest,
-    DebugSetBundlingModeRequest, GetSupportedEntryPointsRequest, SendSponsoredDelegationRequest,
-    builder_client::BuilderClient, debug_send_bundle_now_response,
-    debug_set_bundling_mode_response, send_sponsored_delegation_response,
+    DebugSetBundlingModeRequest, DelegationStatusKind, GetDelegationStatusRequest,
+    GetSupportedEntryPointsRequest, SendSponsoredDelegationRequest, builder_client::BuilderClient,
+    debug_send_bundle_now_response, debug_set_bundling_mode_response,
+    get_delegation_status_response, send_sponsored_delegation_response,
 };
 
 /// Remote builder client, used for communicating with a remote builder server
@@ -94,10 +95,7 @@ impl Builder for RemoteBuilderClient {
         }
     }
 
-    async fn send_sponsored_delegation(
-        &self,
-        auth: Eip7702Auth,
-    ) -> BuilderResult<alloy_primitives::B256> {
+    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> BuilderResult<DelegationId> {
         let res = self
             .grpc_client
             .clone()
@@ -110,10 +108,48 @@ impl Builder for RemoteBuilderClient {
             .result;
 
         match res {
-            Some(send_sponsored_delegation_response::Result::Success(s)) => {
-                Ok(alloy_primitives::B256::from_slice(&s.transaction_hash))
-            }
+            Some(send_sponsored_delegation_response::Result::Success(s)) => s
+                .delegation_id
+                .parse::<DelegationId>()
+                .map_err(BuilderError::from),
             Some(send_sponsored_delegation_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(BuilderError::Other(anyhow::anyhow!(
+                "should have received result from builder"
+            )))?,
+        }
+    }
+
+    async fn get_delegation_status(&self, id: DelegationId) -> BuilderResult<DelegationStatus> {
+        let res = self
+            .grpc_client
+            .clone()
+            .get_delegation_status(GetDelegationStatusRequest {
+                delegation_id: id.to_string(),
+            })
+            .await
+            .map_err(anyhow::Error::from)?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(get_delegation_status_response::Result::Success(s)) => {
+                let kind = DelegationStatusKind::try_from(s.status)
+                    .map_err(|e| anyhow::anyhow!("invalid delegation status: {e}"))?;
+                let status = match kind {
+                    DelegationStatusKind::Pending => DelegationStatus::Pending,
+                    DelegationStatusKind::Mined => {
+                        let tx_hash = s
+                            .tx_hash
+                            .ok_or_else(|| anyhow::anyhow!("mined delegation missing tx_hash"))?;
+                        DelegationStatus::Mined {
+                            tx_hash: B256::from_slice(&tx_hash),
+                        }
+                    }
+                    DelegationStatusKind::Unspecified => DelegationStatus::Unspecified,
+                };
+                Ok(status)
+            }
+            Some(get_delegation_status_response::Result::Failure(f)) => Err(f.try_into()?),
             None => Err(BuilderError::Other(anyhow::anyhow!(
                 "should have received result from builder"
             )))?,

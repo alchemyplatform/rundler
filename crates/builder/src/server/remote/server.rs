@@ -14,18 +14,22 @@
 use std::net::SocketAddr;
 
 use rundler_task::GracefulShutdown;
-use rundler_types::{authorization::Eip7702Auth, builder::Builder};
+use rundler_types::{
+    authorization::Eip7702Auth,
+    builder::{Builder, DelegationId, DelegationStatus},
+};
 use tonic::{Request, Response, Status, async_trait, transport::Server};
 
 use super::protos::{
     BUILDER_FILE_DESCRIPTOR_SET, BundlingMode, DebugSendBundleNowRequest,
     DebugSendBundleNowResponse, DebugSetBundlingModeRequest, DebugSetBundlingModeResponse,
-    DebugSetBundlingModeSuccess, GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse,
-    SendSponsoredDelegationRequest, SendSponsoredDelegationResponse,
-    SendSponsoredDelegationSuccess,
+    DebugSetBundlingModeSuccess, DelegationStatusKind, GetDelegationStatusRequest,
+    GetDelegationStatusResponse, GetDelegationStatusSuccess, GetSupportedEntryPointsRequest,
+    GetSupportedEntryPointsResponse, SendSponsoredDelegationRequest,
+    SendSponsoredDelegationResponse, SendSponsoredDelegationSuccess,
     builder_server::{Builder as GrpcBuilder, BuilderServer as GrpcBuilderServer},
     debug_send_bundle_now_response, debug_set_bundling_mode_response,
-    send_sponsored_delegation_response,
+    get_delegation_status_response, send_sponsored_delegation_response,
 };
 use crate::server::{local::LocalBuilderHandle, remote::protos::DebugSendBundleNowSuccess};
 
@@ -132,10 +136,10 @@ impl GrpcBuilder for GrpcBuilderServerImpl {
             .map_err(|e| Status::invalid_argument(format!("invalid authorization tuple: {e}")))?;
 
         let resp = match self.local_builder.send_sponsored_delegation(auth).await {
-            Ok(tx_hash) => SendSponsoredDelegationResponse {
+            Ok(id) => SendSponsoredDelegationResponse {
                 result: Some(send_sponsored_delegation_response::Result::Success(
                     SendSponsoredDelegationSuccess {
-                        transaction_hash: tx_hash.to_vec(),
+                        delegation_id: id.to_string(),
                     },
                 )),
             },
@@ -143,6 +147,43 @@ impl GrpcBuilder for GrpcBuilderServerImpl {
                 result: Some(send_sponsored_delegation_response::Result::Failure(
                     e.into(),
                 )),
+            },
+        };
+
+        Ok(Response::new(resp))
+    }
+
+    async fn get_delegation_status(
+        &self,
+        request: Request<GetDelegationStatusRequest>,
+    ) -> tonic::Result<Response<GetDelegationStatusResponse>> {
+        let id_str = request.into_inner().delegation_id;
+        let id = id_str
+            .parse::<DelegationId>()
+            .map_err(|e| Status::invalid_argument(format!("invalid delegation ID: {e}")))?;
+
+        let resp = match self.local_builder.get_delegation_status(id).await {
+            Ok(status) => {
+                let (kind, tx_hash) = match status {
+                    DelegationStatus::Pending => (DelegationStatusKind::Pending as i32, None),
+                    DelegationStatus::Mined { tx_hash } => {
+                        (DelegationStatusKind::Mined as i32, Some(tx_hash.to_vec()))
+                    }
+                    DelegationStatus::Unspecified => {
+                        (DelegationStatusKind::Unspecified as i32, None)
+                    }
+                };
+                GetDelegationStatusResponse {
+                    result: Some(get_delegation_status_response::Result::Success(
+                        GetDelegationStatusSuccess {
+                            status: kind,
+                            tx_hash,
+                        },
+                    )),
+                }
+            }
+            Err(e) => GetDelegationStatusResponse {
+                result: Some(get_delegation_status_response::Result::Failure(e.into())),
             },
         };
 

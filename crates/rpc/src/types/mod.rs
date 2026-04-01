@@ -415,3 +415,14 @@ pub struct RpcUserOperationGasPrice {
     /// Suggested fees with buffer for faster inclusion
     pub suggested: RpcSuggestedGasFees,
 }
+
+/// Status of a sponsored delegation request returned by `rundler_delegationStatus`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcDelegationStatus {
+    /// Current status: "pending", "mined", or "unknown".
+    pub status: String,
+    /// Hash of the mined transaction. Only set when `status` is `"mined"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<B256>,
+}

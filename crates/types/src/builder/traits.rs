@@ -15,7 +15,10 @@ use alloy_primitives::{Address, B256};
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 
-use super::{error::BuilderError, types::BundlingMode};
+use super::{
+    error::BuilderError,
+    types::{BundlingMode, DelegationId, DelegationStatus},
+};
 use crate::authorization::Eip7702Auth;
 
 /// Builder result
@@ -36,9 +39,12 @@ pub trait Builder: Send + Sync {
     /// Set the bundling mode
     async fn debug_set_bundling_mode(&self, mode: BundlingMode) -> BuilderResult<()>;
 
-    /// Send a sponsored EIP-7702 delegation transaction.
+    /// Submit a bundler-sponsored EIP-7702 delegation transaction asynchronously.
     ///
-    /// Builds a type-4 transaction signed by the bundler and submits it on behalf of
-    /// the user. Returns the transaction hash.
-    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> BuilderResult<B256>;
+    /// Returns a [`DelegationId`] immediately. Use [`Builder::get_delegation_status`]
+    /// to poll for the result.
+    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> BuilderResult<DelegationId>;
+
+    /// Return the current status of a sponsored delegation.
+    async fn get_delegation_status(&self, id: DelegationId) -> BuilderResult<DelegationStatus>;
 }

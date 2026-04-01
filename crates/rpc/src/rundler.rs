@@ -20,16 +20,19 @@ use futures_util::future;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_provider::{EvmProvider, FeeEstimator};
 use rundler_types::{
-    GasFees, UserOperation, UserOperationId, UserOperationVariant, authorization::Eip7702Auth,
-    builder::Builder as BuilderT, chain::ChainSpec, pool::Pool,
+    GasFees, UserOperation, UserOperationId, UserOperationVariant,
+    authorization::Eip7702Auth,
+    builder::{Builder as BuilderT, DelegationStatus},
+    chain::ChainSpec,
+    pool::Pool,
 };
 use tracing::instrument;
 
 use crate::{
     eth::{EntryPointRouter, EthResult, EthRpcError},
     types::{
-        RpcMinedUserOperation, RpcSuggestedGasFees, RpcUserOperation, RpcUserOperationGasPrice,
-        RpcUserOperationStatus, UOStatusEnum, UserOperationStatusEnum,
+        RpcDelegationStatus, RpcMinedUserOperation, RpcSuggestedGasFees, RpcUserOperation,
+        RpcUserOperationGasPrice, RpcUserOperationStatus, UOStatusEnum, UserOperationStatusEnum,
     },
     utils::{self, TryIntoRundlerType},
 };
@@ -100,10 +103,15 @@ pub trait RundlerApi {
 
     /// Sponsor an EIP-7702 delegation on behalf of the caller.
     ///
-    /// The bundler pays the gas cost and returns the resulting transaction hash.
+    /// The bundler pays the gas cost and immediately returns a delegation ID.
+    /// Poll `rundler_delegationStatus` with the returned ID to get the transaction hash.
     /// To undelegate, set `address` to the zero address.
     #[method(name = "sendSponsoredDelegation")]
-    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> RpcResult<B256>;
+    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> RpcResult<String>;
+
+    /// Returns the status of a previously submitted sponsored delegation.
+    #[method(name = "delegationStatus")]
+    async fn delegation_status(&self, delegation_id: String) -> RpcResult<RpcDelegationStatus>;
 }
 
 pub(crate) struct RundlerApi<P, F, E> {
@@ -194,10 +202,19 @@ where
     }
 
     #[instrument(skip_all, fields(rpc_method = "rundler_sendSponsoredDelegation"))]
-    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> RpcResult<B256> {
+    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> RpcResult<String> {
         utils::safe_call_rpc_handler(
             "rundler_sendSponsoredDelegation",
             RundlerApi::send_sponsored_delegation(self, auth),
+        )
+        .await
+    }
+
+    #[instrument(skip_all, fields(rpc_method = "rundler_delegationStatus"))]
+    async fn delegation_status(&self, delegation_id: String) -> RpcResult<RpcDelegationStatus> {
+        utils::safe_call_rpc_handler(
+            "rundler_delegationStatus",
+            RundlerApi::delegation_status(self, delegation_id),
         )
         .await
     }
@@ -426,7 +443,7 @@ where
         Ok(uo.map(|uo| uo.uo.into()))
     }
 
-    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> EthResult<B256> {
+    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> EthResult<String> {
         // Validate: chain ID must match.
         let expected_chain_id = U256::from(self.chain_spec.id);
         if auth.chain_id != expected_chain_id {
@@ -441,13 +458,40 @@ where
             EthRpcError::InvalidParams(format!("invalid authorization signature: {e}"))
         })?;
 
-        let tx_hash = self
+        let id = self
             .builder
             .send_sponsored_delegation(auth)
             .await
             .map_err(|e| anyhow::anyhow!("builder error: {e:?}"))?;
 
-        Ok(tx_hash)
+        Ok(id.to_string())
+    }
+
+    async fn delegation_status(&self, delegation_id: String) -> EthResult<RpcDelegationStatus> {
+        let id = delegation_id
+            .parse()
+            .map_err(|e| EthRpcError::InvalidParams(format!("invalid delegation ID: {e}")))?;
+
+        let status = self
+            .builder
+            .get_delegation_status(id)
+            .await
+            .map_err(|e| anyhow::anyhow!("builder error: {e:?}"))?;
+
+        Ok(match status {
+            DelegationStatus::Pending => RpcDelegationStatus {
+                status: "pending".to_string(),
+                tx_hash: None,
+            },
+            DelegationStatus::Mined { tx_hash } => RpcDelegationStatus {
+                status: "mined".to_string(),
+                tx_hash: Some(tx_hash),
+            },
+            DelegationStatus::Unspecified => RpcDelegationStatus {
+                status: "unspecified".to_string(),
+                tx_hash: None,
+            },
+        })
     }
 
     #[instrument(skip_all)]

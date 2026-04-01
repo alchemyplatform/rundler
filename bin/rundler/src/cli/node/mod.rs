@@ -11,8 +11,6 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::sync::Arc;
-
 use clap::Args;
 use rundler_builder::{BuilderEvent, BuilderTask, LocalBuilderBuilder};
 use rundler_pool::{LocalPoolBuilder, PoolEvent, PoolTask};
@@ -129,11 +127,8 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     )
     .await?;
 
-    let builder_builder = LocalBuilderBuilder::new(
-        REQUEST_CHANNEL_CAPACITY,
-        signer_manager.clone(),
-        Arc::new(pool_handle.clone()),
-    );
+    let builder_builder =
+        LocalBuilderBuilder::new(REQUEST_CHANNEL_CAPACITY, signer_manager.clone());
     let builder_handle = builder_builder.get_handle();
 
     PoolTask::new(

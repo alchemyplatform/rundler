@@ -479,11 +479,8 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     )
     .await?;
 
-    let builder_builder = LocalBuilderBuilder::new(
-        REQUEST_CHANNEL_CAPACITY,
-        signer_manager.clone(),
-        Arc::new(pool.clone()),
-    );
+    let builder_builder =
+        LocalBuilderBuilder::new(REQUEST_CHANNEL_CAPACITY, signer_manager.clone());
 
     BuilderTask::new(
         task_args,

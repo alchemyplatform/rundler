@@ -38,7 +38,10 @@ service Builder {
     // debug_bundler_sendBundleNow is required to send a bundle.
     rpc DebugSetBundlingMode(DebugSetBundlingModeRequest) returns (DebugSetBundlingModeResponse);
     // Submits a bundler-sponsored EIP-7702 delegation transaction on behalf of a user.
+    // Returns a delegation ID immediately; poll GetDelegationStatus for the result.
     rpc SendSponsoredDelegation(SendSponsoredDelegationRequest) returns (SendSponsoredDelegationResponse);
+    // Returns the current status of a previously submitted sponsored delegation.
+    rpc GetDelegationStatus(GetDelegationStatusRequest) returns (GetDelegationStatusResponse);
 }
 
 message GetSupportedEntryPointsRequest {}
@@ -103,5 +106,30 @@ message SendSponsoredDelegationResponse {
 }
 
 message SendSponsoredDelegationSuccess {
-    bytes transaction_hash = 1;
+    // Opaque delegation ID formatted as "{chain_id}:{eoa}:{nonce}:{address}".
+    // Use GetDelegationStatus to poll for the mined transaction hash.
+    string delegation_id = 1;
+}
+
+message GetDelegationStatusRequest {
+    string delegation_id = 1;
+}
+
+message GetDelegationStatusResponse {
+    oneof result {
+        GetDelegationStatusSuccess success = 1;
+        BuilderError failure = 2;
+    }
+}
+
+enum DelegationStatusKind {
+    DELEGATION_STATUS_KIND_UNSPECIFIED = 0;
+    DELEGATION_STATUS_KIND_PENDING = 1;
+    DELEGATION_STATUS_KIND_MINED = 2;
+}
+
+message GetDelegationStatusSuccess {
+    DelegationStatusKind status = 1;
+    // Set when status is DELEGATION_STATUS_MINED.
+    optional bytes tx_hash = 2;
 }
