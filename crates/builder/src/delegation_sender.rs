@@ -87,8 +87,6 @@ where
         result
     }
 
-    // --- private helpers ---
-
     async fn acquire_signer(&self) -> anyhow::Result<rundler_signer::SignerLease> {
         const RETRY_INTERVAL_MS: u64 = 500;
         let max_attempts = (self.settings.signer_wait_timeout_ms / RETRY_INTERVAL_MS).max(1);
