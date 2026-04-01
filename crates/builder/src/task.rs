@@ -477,12 +477,13 @@ where
             Box::pin(async move {
                 let mut stream = shared_heads;
                 while let Some(head) = stream.next().await {
+                    tracing::debug!("new-heads-fanout: block {}", head.block_number);
                     if heads_tx_fwd.send(Arc::new(head)).is_err() {
                         // All receivers dropped — senders have shut down.
                         break;
                     }
                 }
-                tracing::error!("shared new-heads stream closed");
+                tracing::error!("shared new-heads stream closed (shutdown)");
             }),
         );
 

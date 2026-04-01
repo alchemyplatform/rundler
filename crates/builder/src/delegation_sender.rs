@@ -173,6 +173,7 @@ where
                     match head {
                         Ok(h) => {
                             self.current_block = h.block_number;
+                            tracing::debug!("delegation sender: new block {}", h.block_number);
                             let cutoff = self.current_block.saturating_sub(MINED_RETENTION_BLOCKS);
                             self.mined.retain(|_, (_, mined_block)| *mined_block >= cutoff);
                         }

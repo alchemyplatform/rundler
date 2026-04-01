@@ -228,6 +228,7 @@ impl LocalBuilderServerRunner {
                     match head {
                         Ok(new_head) => {
                             if !new_head.address_updates.is_empty() {
+                                tracing::info!("received new head with address updates: {:?}", new_head);
                                 let balances = new_head
                                     .address_updates
                                     .iter()
