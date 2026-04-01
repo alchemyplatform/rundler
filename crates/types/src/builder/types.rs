@@ -13,7 +13,8 @@
 
 use std::{fmt, str::FromStr};
 
-use alloy_primitives::{B256, keccak256};
+use alloy_primitives::{B256, U256, keccak256};
+use alloy_sol_types::SolValue;
 use parse_display::Display;
 use serde::{Deserialize, Serialize};
 
@@ -47,27 +48,16 @@ impl DelegationId {
     /// Computes `keccak256(abi.encode(chainId, delegateAddress, nonce, yParity, r, s))`.
     /// This is infallible and does not require recovering the signer.
     pub fn from_auth(auth: &Eip7702Auth) -> Self {
-        let mut buf = [0u8; 6 * 32];
-
-        // chainId: uint256 (32 bytes big-endian)
-        buf[0..32].copy_from_slice(&auth.chain_id.to_be_bytes::<32>());
-
-        // delegateAddress: address (12 zero bytes + 20 address bytes)
-        buf[44..64].copy_from_slice(auth.address.as_slice());
-
-        // nonce: uint64 (24 zero bytes + 8 bytes big-endian)
-        buf[88..96].copy_from_slice(&auth.nonce.to_be_bytes());
-
-        // yParity: uint8 (31 zero bytes + 1 byte)
-        buf[127] = auth.y_parity();
-
-        // r: bytes32
-        buf[128..160].copy_from_slice(&auth.r().to_be_bytes::<32>());
-
-        // s: bytes32
-        buf[160..192].copy_from_slice(&auth.s().to_be_bytes::<32>());
-
-        Self(keccak256(buf))
+        let encoded = (
+            auth.chain_id,
+            auth.address,
+            auth.nonce,
+            U256::from(auth.y_parity()),
+            auth.r(),
+            auth.s(),
+        )
+            .abi_encode();
+        Self(keccak256(encoded))
     }
 }
 
