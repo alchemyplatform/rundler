@@ -11,7 +11,10 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 
 use alloy_network::TransactionBuilder7702;
 use alloy_primitives::B256;
@@ -28,12 +31,21 @@ use rundler_types::{
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{info, warn};
 
-/// Gas limit for a type-4 EIP-7702 delegation transaction.
-/// Base intrinsic (21k) + per-auth cost (25k) + buffer.
-const DELEGATION_GAS_LIMIT: u64 = 100_000;
+/// EIP-4337 intrinsic gas for a type-4 transaction.
+const DELEGATION_BASE_GAS: u64 = 21_000;
+/// Per-authorization gas cost (EIP-7702).
+const DELEGATION_GAS_PER_AUTH: u64 = 25_000;
+/// Extra buffer added on top of the calculated cost.
+const DELEGATION_GAS_BUFFER: u64 = 50_000;
+/// Maximum number of authorizations to include in a single delegation tx.
+const MAX_BATCH_SIZE: usize = 50;
 
 /// Number of blocks to retain mined delegation records before pruning.
 const MINED_RETENTION_BLOCKS: u64 = 100;
+
+fn delegation_gas_limit(n_auths: usize) -> u64 {
+    DELEGATION_BASE_GAS + n_auths as u64 * DELEGATION_GAS_PER_AUTH + DELEGATION_GAS_BUFFER
+}
 
 /// Settings for the delegation sender.
 #[derive(Debug, Clone)]
@@ -44,8 +56,6 @@ pub(crate) struct Settings {
     pub max_fee_bumps: u64,
     /// Percentage to increase fees on each bump (e.g. 10 = 10 %).
     pub fee_bump_percent: u32,
-    /// How long to wait for a signer to become available, in milliseconds.
-    pub signer_wait_timeout_ms: u64,
 }
 
 /// Actions that can be sent to the delegation sender task.
@@ -99,9 +109,9 @@ impl DelegationSenderHandle {
     }
 }
 
-/// Internal completion event sent from a per-delegation sub-task back to the main loop.
+/// Internal completion event sent from a per-batch sub-task back to the main loop.
 struct CompletionEvent {
-    id: DelegationId,
+    ids: Vec<DelegationId>,
     result: anyhow::Result<B256>,
 }
 
@@ -110,10 +120,19 @@ struct CompletionEvent {
 /// Mirrors the `BundleSender` pattern: callers communicate through a channel
 /// ([`DelegationSenderHandle`]) and this task serialises state updates, so no
 /// shared-memory locks are needed.
+///
+/// Incoming delegations are buffered in a queue. On each new block (and
+/// immediately on receipt) the task attempts to drain the queue by acquiring
+/// a free signer and spawning a [`DelegationSenderCore`] for each batch of up
+/// to [`MAX_BATCH_SIZE`] authorizations.  Multiple authorizations are packed
+/// into a single type-4 transaction, reducing signer contention and cutting
+/// the per-delegation tx-overhead when the system is under load.
 pub(crate) struct DelegationSenderTask<E, F> {
     action_rx: mpsc::Receiver<DelegationSenderAction>,
     completion_tx: mpsc::Sender<CompletionEvent>,
     completion_rx: mpsc::Receiver<CompletionEvent>,
+    /// Incoming delegations waiting for a free signer.
+    queue: VecDeque<(DelegationId, Eip7702Auth)>,
     /// Delegations that have been submitted and are waiting to mine.
     pending: HashMap<DelegationId, ()>,
     /// Delegations that have mined, with their (tx_hash, block_number).
@@ -148,6 +167,7 @@ where
             action_rx,
             completion_tx,
             completion_rx,
+            queue: VecDeque::new(),
             pending: HashMap::new(),
             mined: HashMap::new(),
             current_block: 0,
@@ -159,6 +179,43 @@ where
         };
         let handle = DelegationSenderHandle { action_tx };
         (task, handle)
+    }
+
+    /// Drain as many queued delegations as possible, one signer per batch.
+    ///
+    /// Each call to `lease_signer` is non-blocking; if no signer is free the
+    /// loop stops and the remaining entries stay in the queue for the next
+    /// drain attempt (on the next block or the next `Send` action).
+    fn try_drain_queue(&mut self) {
+        while !self.queue.is_empty() {
+            let Some(signer) = self.signer_manager.lease_signer() else {
+                break;
+            };
+
+            let batch_size = self.queue.len().min(MAX_BATCH_SIZE);
+            let batch: Vec<(DelegationId, Eip7702Auth)> = self.queue.drain(..batch_size).collect();
+            let ids: Vec<DelegationId> = batch.iter().map(|(id, _)| id.clone()).collect();
+            let auths: Vec<Eip7702Auth> = batch.into_iter().map(|(_, auth)| auth).collect();
+
+            tracing::debug!(
+                "delegation sender: draining batch of {} (queue remaining: {})",
+                ids.len(),
+                self.queue.len(),
+            );
+
+            let core = DelegationSenderCore {
+                signer_manager: self.signer_manager.clone(),
+                provider: self.provider.clone(),
+                fee_estimator: self.fee_estimator.clone(),
+                settings: self.settings.clone(),
+            };
+            let heads_rx = self.heads_tx.subscribe();
+            let completion_tx = self.completion_tx.clone();
+            tokio::spawn(async move {
+                let result = core.send(signer, auths, heads_rx).await;
+                let _ = completion_tx.send(CompletionEvent { ids, result }).await;
+            });
+        }
     }
 
     /// Run the delegation sender task until shutdown.
@@ -176,6 +233,7 @@ where
                             tracing::debug!("delegation sender: new block {}", h.block_number);
                             let cutoff = self.current_block.saturating_sub(MINED_RETENTION_BLOCKS);
                             self.mined.retain(|_, (_, mined_block)| *mined_block >= cutoff);
+                            self.try_drain_queue();
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
                             warn!("delegation sender heads receiver lagged by {n} blocks");
@@ -188,9 +246,13 @@ where
                 }
 
                 Some(event) = self.completion_rx.recv() => {
-                    self.pending.remove(&event.id);
+                    for id in &event.ids {
+                        self.pending.remove(id);
+                    }
                     if let Ok(tx_hash) = event.result {
-                        self.mined.insert(event.id, (tx_hash, self.current_block));
+                        for id in event.ids {
+                            self.mined.insert(id, (tx_hash, self.current_block));
+                        }
                     }
                 }
 
@@ -200,19 +262,8 @@ where
                             let id = DelegationId::from_auth(&auth);
                             self.pending.insert(id.clone(), ());
                             let _ = responder.send(id.clone());
-
-                            let core = DelegationSenderCore {
-                                signer_manager: self.signer_manager.clone(),
-                                provider: self.provider.clone(),
-                                fee_estimator: self.fee_estimator.clone(),
-                                settings: self.settings.clone(),
-                            };
-                            let heads_rx = self.heads_tx.subscribe();
-                            let completion_tx = self.completion_tx.clone();
-                            tokio::spawn(async move {
-                                let result = core.send(auth, heads_rx).await;
-                                let _ = completion_tx.send(CompletionEvent { id, result }).await;
-                            });
+                            self.queue.push_back((id, auth));
+                            self.try_drain_queue();
                         }
 
                         DelegationSenderAction::GetStatus { id, responder } => {
@@ -232,7 +283,8 @@ where
     }
 }
 
-/// Core send logic: acquires a signer, submits the delegation tx, and waits for mining.
+/// Core send logic: submits a batch of delegations as a single type-4 tx and
+/// waits for it to mine, with fee-bump retries.
 struct DelegationSenderCore<E, F> {
     signer_manager: Arc<dyn SignerManager>,
     provider: E,
@@ -247,52 +299,21 @@ where
 {
     async fn send(
         &self,
-        auth: Eip7702Auth,
+        signer: rundler_signer::SignerLease,
+        auths: Vec<Eip7702Auth>,
         heads_rx: broadcast::Receiver<Arc<NewHead>>,
     ) -> anyhow::Result<B256> {
-        let signer = self.acquire_signer().await?;
-        let result = self.run(&signer, auth, heads_rx).await;
+        let result = self.run(&signer, auths, heads_rx).await;
         self.signer_manager.return_lease(signer);
         result
-    }
-
-    async fn acquire_signer(&self) -> anyhow::Result<rundler_signer::SignerLease> {
-        const RETRY_INTERVAL_MS: u64 = 500;
-        let max_attempts = (self.settings.signer_wait_timeout_ms / RETRY_INTERVAL_MS).max(1);
-
-        for attempt in 0..max_attempts {
-            if let Some(s) = self.signer_manager.lease_signer() {
-                return Ok(s);
-            }
-            if attempt == 0 {
-                tracing::debug!(
-                    "no signer immediately available for delegation, \
-                     waiting for a bundle sender idle period"
-                );
-            }
-            tokio::time::sleep(Duration::from_millis(RETRY_INTERVAL_MS)).await;
-        }
-
-        tracing::error!(
-            "no signer available for sponsored delegation after {}ms; all signers are busy",
-            self.settings.signer_wait_timeout_ms,
-        );
-        anyhow::bail!(
-            "no signer available for sponsored delegation after {}ms; all signers are busy",
-            self.settings.signer_wait_timeout_ms,
-        )
     }
 
     async fn run(
         &self,
         signer: &rundler_signer::SignerLease,
-        auth: Eip7702Auth,
+        auths: Vec<Eip7702Auth>,
         mut heads_rx: broadcast::Receiver<Arc<NewHead>>,
     ) -> anyhow::Result<B256> {
-        let eoa = auth
-            .recover_authority()
-            .context("failed to recover EOA from authorization")?;
-
         // Nonce the tx will use. Held constant across fee-bump retries so each
         // replacement supersedes the previous pending tx rather than queuing behind it.
         let nonce = self
@@ -319,8 +340,11 @@ where
                 );
             }
 
-            let tx_hash = self.submit_tx(signer, &auth, nonce, current_fees).await?;
-            info!("delegation tx submitted (attempt {attempt}): {tx_hash} for eoa {eoa}");
+            let tx_hash = self.submit_tx(signer, &auths, nonce, current_fees).await?;
+            info!(
+                "delegation batch of {} submitted (attempt {attempt}): {tx_hash}",
+                auths.len(),
+            );
 
             // `until_block` is set lazily on the first head event so the timeout
             // is relative to the block that arrives after submission rather than
@@ -335,7 +359,7 @@ where
                         // We may have missed the mining event. Check the receipt
                         // before continuing to wait.
                         if self.receipt_exists(tx_hash).await {
-                            info!("delegation tx {tx_hash} confirmed (after lag) for eoa {eoa}");
+                            info!("delegation batch {tx_hash} confirmed (after lag)");
                             return Ok(tx_hash);
                         }
                         continue;
@@ -356,9 +380,7 @@ where
                 {
                     // Happy path: pool reported our tx hash in this block's update.
                     if update.mined_tx_hashes.contains(&tx_hash) {
-                        info!(
-                            "delegation tx {tx_hash} mined at block {block_number} for eoa {eoa}"
-                        );
+                        info!("delegation batch {tx_hash} mined at block {block_number}");
                         return Ok(tx_hash);
                     }
 
@@ -369,12 +391,12 @@ where
                     // Fetch the receipt to disambiguate before bailing.
                     if update.nonce.is_some_and(|n| n >= nonce) {
                         if self.receipt_exists(tx_hash).await {
-                            info!("delegation tx {tx_hash} confirmed (via receipt) for eoa {eoa}");
+                            info!("delegation batch {tx_hash} confirmed (via receipt)");
                             return Ok(tx_hash);
                         }
                         anyhow::bail!(
                             "signer nonce {nonce} was consumed by another transaction \
-                             while awaiting delegation for eoa {eoa}"
+                             while awaiting delegation batch"
                         );
                     }
                 }
@@ -386,20 +408,20 @@ where
 
             if timed_out {
                 warn!(
-                    "delegation tx {tx_hash} not mined after {} blocks (attempt {attempt})",
+                    "delegation batch {tx_hash} not mined after {} blocks (attempt {attempt})",
                     self.settings.max_blocks_to_wait_for_mine,
                 );
                 // One last receipt check: the tx may have mined in the window
                 // just before the timeout fired without triggering an update.
                 if self.receipt_exists(tx_hash).await {
-                    info!("delegation tx {tx_hash} confirmed (receipt at timeout) for eoa {eoa}");
+                    info!("delegation batch {tx_hash} confirmed (receipt at timeout)");
                     return Ok(tx_hash);
                 }
             }
         }
 
         anyhow::bail!(
-            "delegation tx for eoa {eoa} not mined after {} fee bump attempts",
+            "delegation batch not mined after {} fee bump attempts",
             self.settings.max_fee_bumps,
         )
     }
@@ -407,7 +429,7 @@ where
     async fn submit_tx(
         &self,
         signer: &rundler_signer::SignerLease,
-        auth: &Eip7702Auth,
+        auths: &[Eip7702Auth],
         nonce: u64,
         fees: GasFees,
     ) -> anyhow::Result<B256> {
@@ -416,10 +438,10 @@ where
         let tx = TransactionRequest::default()
             .to(signer.address())
             .nonce(nonce)
-            .gas_limit(DELEGATION_GAS_LIMIT)
+            .gas_limit(delegation_gas_limit(auths.len()))
             .max_fee_per_gas(fees.max_fee_per_gas)
             .max_priority_fee_per_gas(fees.max_priority_fee_per_gas)
-            .with_authorization_list(vec![auth.clone().into()]);
+            .with_authorization_list(auths.iter().map(|a| a.clone().into()).collect());
 
         let raw_tx = signer
             .sign_tx_raw(tx)

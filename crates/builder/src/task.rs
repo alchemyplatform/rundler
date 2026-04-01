@@ -303,7 +303,6 @@ where
                 max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
                 max_fee_bumps: self.args.max_cancellation_fee_increases,
                 fee_bump_percent: self.args.replacement_fee_percent_increase,
-                signer_wait_timeout_ms: 30_000,
             },
             heads_tx.clone(),
         );
