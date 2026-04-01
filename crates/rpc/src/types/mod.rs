@@ -416,13 +416,17 @@ pub struct RpcUserOperationGasPrice {
     pub suggested: RpcSuggestedGasFees,
 }
 
-/// Status of a sponsored delegation request returned by `rundler_delegationStatus`.
+/// Current status of a sponsored delegation request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RpcDelegationStatus {
-    /// Current status: "pending", "mined", or "unknown".
-    pub status: String,
-    /// Hash of the mined transaction. Only set when `status` is `"mined"`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tx_hash: Option<B256>,
+#[serde(rename_all = "camelCase", tag = "status")]
+pub enum RpcDelegationStatus {
+    /// Delegation has been submitted but not yet mined.
+    Pending,
+    /// Delegation has been mined.
+    Mined {
+        /// Hash of the mined transaction.
+        tx_hash: B256,
+    },
+    /// Delegation status is unknown.
+    Unspecified,
 }

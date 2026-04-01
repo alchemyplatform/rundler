@@ -107,11 +107,11 @@ pub trait RundlerApi {
     /// Poll `rundler_delegationStatus` with the returned ID to get the transaction hash.
     /// To undelegate, set `address` to the zero address.
     #[method(name = "sendSponsoredDelegation")]
-    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> RpcResult<String>;
+    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> RpcResult<B256>;
 
     /// Returns the status of a previously submitted sponsored delegation.
     #[method(name = "delegationStatus")]
-    async fn delegation_status(&self, delegation_id: String) -> RpcResult<RpcDelegationStatus>;
+    async fn delegation_status(&self, delegation_id: B256) -> RpcResult<RpcDelegationStatus>;
 }
 
 pub(crate) struct RundlerApi<P, F, E> {
@@ -202,7 +202,7 @@ where
     }
 
     #[instrument(skip_all, fields(rpc_method = "rundler_sendSponsoredDelegation"))]
-    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> RpcResult<String> {
+    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> RpcResult<B256> {
         utils::safe_call_rpc_handler(
             "rundler_sendSponsoredDelegation",
             RundlerApi::send_sponsored_delegation(self, auth),
@@ -211,7 +211,7 @@ where
     }
 
     #[instrument(skip_all, fields(rpc_method = "rundler_delegationStatus"))]
-    async fn delegation_status(&self, delegation_id: String) -> RpcResult<RpcDelegationStatus> {
+    async fn delegation_status(&self, delegation_id: B256) -> RpcResult<RpcDelegationStatus> {
         utils::safe_call_rpc_handler(
             "rundler_delegationStatus",
             RundlerApi::delegation_status(self, delegation_id),
@@ -443,7 +443,7 @@ where
         Ok(uo.map(|uo| uo.uo.into()))
     }
 
-    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> EthResult<String> {
+    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> EthResult<B256> {
         // Validate: chain ID must match.
         let expected_chain_id = U256::from(self.chain_spec.id);
         if auth.chain_id != expected_chain_id {
@@ -464,13 +464,11 @@ where
             .await
             .map_err(|e| anyhow::anyhow!("builder error: {e:?}"))?;
 
-        Ok(id.to_string())
+        Ok(id.into())
     }
 
-    async fn delegation_status(&self, delegation_id: String) -> EthResult<RpcDelegationStatus> {
-        let id = delegation_id
-            .parse()
-            .map_err(|e| EthRpcError::InvalidParams(format!("invalid delegation ID: {e}")))?;
+    async fn delegation_status(&self, delegation_id: B256) -> EthResult<RpcDelegationStatus> {
+        let id = delegation_id.into();
 
         let status = self
             .builder
@@ -479,18 +477,9 @@ where
             .map_err(|e| anyhow::anyhow!("builder error: {e:?}"))?;
 
         Ok(match status {
-            DelegationStatus::Pending => RpcDelegationStatus {
-                status: "pending".to_string(),
-                tx_hash: None,
-            },
-            DelegationStatus::Mined { tx_hash } => RpcDelegationStatus {
-                status: "mined".to_string(),
-                tx_hash: Some(tx_hash),
-            },
-            DelegationStatus::Unspecified => RpcDelegationStatus {
-                status: "unspecified".to_string(),
-                tx_hash: None,
-            },
+            DelegationStatus::Pending => RpcDelegationStatus::Pending,
+            DelegationStatus::Mined { tx_hash } => RpcDelegationStatus::Mined { tx_hash },
+            DelegationStatus::Unspecified => RpcDelegationStatus::Unspecified,
         })
     }
 

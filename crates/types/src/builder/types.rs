@@ -77,6 +77,18 @@ impl FromStr for DelegationId {
     }
 }
 
+impl From<DelegationId> for B256 {
+    fn from(id: DelegationId) -> Self {
+        id.0
+    }
+}
+
+impl From<B256> for DelegationId {
+    fn from(hash: B256) -> Self {
+        Self(hash)
+    }
+}
+
 /// Status of a sponsored delegation request.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum DelegationStatus {
