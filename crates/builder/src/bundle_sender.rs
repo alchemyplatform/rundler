@@ -35,7 +35,9 @@ use tokio::{
         oneshot,
     },
 };
-use tracing::{debug, error, info, instrument, warn};
+#[cfg(test)]
+use tracing::instrument;
+use tracing::{debug, error, info, warn};
 
 use crate::{
     ProposerKey,
@@ -158,7 +160,7 @@ where
             // and waiting for the next block trigger. The signing key is not needed
             // during the wait, so it is returned to the pool where it can be borrowed
             // for other work such as sponsored undelegation.
-            if state.is_waiting_for_trigger() {
+            if state.is_signer_releasable() {
                 state.transaction_tracker.end_cycle();
             }
 
@@ -269,6 +271,7 @@ where
             .record(value);
     }
 
+    #[cfg(test)]
     #[instrument(skip_all, fields(
         tag = self.builder_tag,
     ))]
@@ -1111,7 +1114,7 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
     /// Returns true when the sender is idle: no pending transactions and waiting
     /// for the next block trigger before attempting another bundle. This is the
     /// only state in which the signer can be safely released.
-    fn is_waiting_for_trigger(&self) -> bool {
+    fn is_signer_releasable(&self) -> bool {
         matches!(
             self.inner,
             InnerState::Building(BuildingState {

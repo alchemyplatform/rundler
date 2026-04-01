@@ -273,6 +273,10 @@ where
             tokio::time::sleep(Duration::from_millis(RETRY_INTERVAL_MS)).await;
         }
 
+        tracing::error!(
+            "no signer available for sponsored delegation after {}ms; all signers are busy",
+            self.settings.signer_wait_timeout_ms,
+        );
         anyhow::bail!(
             "no signer available for sponsored delegation after {}ms; all signers are busy",
             self.settings.signer_wait_timeout_ms,
