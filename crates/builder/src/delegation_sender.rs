@@ -37,8 +37,6 @@ const DELEGATION_BASE_GAS: u64 = 21_000;
 const DELEGATION_GAS_PER_AUTH: u64 = 25_000;
 /// Extra buffer added on top of the calculated cost.
 const DELEGATION_GAS_BUFFER: u64 = 50_000;
-/// Maximum number of authorizations to include in a single delegation tx.
-const MAX_BATCH_SIZE: usize = 50;
 
 /// Number of blocks to retain mined delegation records before pruning.
 const MINED_RETENTION_BLOCKS: u64 = 100;
@@ -56,6 +54,8 @@ pub(crate) struct Settings {
     pub max_fee_bumps: u64,
     /// Percentage to increase fees on each bump (e.g. 10 = 10 %).
     pub fee_bump_percent: u32,
+    /// Maximum gas per delegation tx — used to cap the number of auths per batch.
+    pub max_delegation_gas: u64,
 }
 
 /// Actions that can be sent to the delegation sender task.
@@ -192,7 +192,13 @@ where
                 break;
             };
 
-            let batch_size = self.queue.len().min(MAX_BATCH_SIZE);
+            let max_auths = ((self
+                .settings
+                .max_delegation_gas
+                .saturating_sub(DELEGATION_BASE_GAS)
+                .saturating_sub(DELEGATION_GAS_BUFFER))
+                / DELEGATION_GAS_PER_AUTH) as usize;
+            let batch_size = self.queue.len().min(max_auths.max(1));
             let batch: Vec<(DelegationId, Eip7702Auth)> = self.queue.drain(..batch_size).collect();
             let ids: Vec<DelegationId> = batch.iter().map(|(id, _)| id.clone()).collect();
             let auths: Vec<Eip7702Auth> = batch.into_iter().map(|(_, auth)| auth).collect();

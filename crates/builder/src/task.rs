@@ -303,6 +303,7 @@ where
                 max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
                 max_fee_bumps: self.args.max_cancellation_fee_increases,
                 fee_bump_percent: self.args.replacement_fee_percent_increase,
+                max_delegation_gas: self.args.max_bundle_gas as u64,
             },
             heads_tx.clone(),
         );
