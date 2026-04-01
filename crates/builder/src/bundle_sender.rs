@@ -35,8 +35,6 @@ use tokio::{
         oneshot,
     },
 };
-#[cfg(test)]
-use tracing::instrument;
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -269,18 +267,6 @@ where
     fn record_histogram_ep(&self, name: &'static str, entry_point: Address, value: f64) {
         metrics::histogram!(name, "sender" => self.sender_eoa.to_string(), "entry_point" => entry_point.to_string())
             .record(value);
-    }
-
-    #[cfg(test)]
-    #[instrument(skip_all, fields(
-        tag = self.builder_tag,
-    ))]
-    async fn step_state<TRIG: Trigger>(
-        &mut self,
-        state: &mut SenderMachineState<T, TRIG>,
-    ) -> anyhow::Result<()> {
-        let tracker_update = state.wait_for_trigger().await?;
-        self.step_after_trigger(state, tracker_update).await
     }
 
     /// Handle the state machine work that follows a trigger. Separated so that
@@ -1689,7 +1675,8 @@ mod tests {
         // start in building state
         let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
 
-        sender.step_state(&mut state).await.unwrap();
+        let update = state.wait_for_trigger().await.unwrap();
+        sender.step_after_trigger(&mut state, update).await.unwrap();
 
         // empty bundle shouldn't move out of building state
         assert!(matches!(
@@ -1745,7 +1732,8 @@ mod tests {
         // start in building state
         let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
 
-        sender.step_state(&mut state).await.unwrap();
+        let update = state.wait_for_trigger().await.unwrap();
+        sender.step_after_trigger(&mut state, update).await.unwrap();
 
         // end in the pending state
         assert!(matches!(
@@ -2011,14 +1999,16 @@ mod tests {
         );
 
         // first step has no update
-        sender.step_state(&mut state).await.unwrap();
+        let update = state.wait_for_trigger().await.unwrap();
+        sender.step_after_trigger(&mut state, update).await.unwrap();
         assert!(matches!(
             state.inner,
             InnerState::Pending(PendingState { until: 3, .. })
         ));
 
         // second step is mined and moves back to building
-        sender.step_state(&mut state).await.unwrap();
+        let update = state.wait_for_trigger().await.unwrap();
+        sender.step_after_trigger(&mut state, update).await.unwrap();
         assert!(matches!(
             state.inner,
             InnerState::Building(BuildingState {
@@ -2056,7 +2046,8 @@ mod tests {
 
         // first and second step has no update
         for _ in 0..2 {
-            sender.step_state(&mut state).await.unwrap();
+            let update = state.wait_for_trigger().await.unwrap();
+            sender.step_after_trigger(&mut state, update).await.unwrap();
             assert!(matches!(
                 state.inner,
                 InnerState::Pending(PendingState { until: 3, .. })
@@ -2064,7 +2055,8 @@ mod tests {
         }
 
         // third step times out and moves back to building with a fee increase
-        sender.step_state(&mut state).await.unwrap();
+        let update = state.wait_for_trigger().await.unwrap();
+        sender.step_after_trigger(&mut state, update).await.unwrap();
         assert!(matches!(
             state.inner,
             InnerState::Building(BuildingState {
@@ -2131,7 +2123,8 @@ mod tests {
         );
 
         // step state, block number should trigger move to cancellation
-        sender.step_state(&mut state).await.unwrap();
+        let update = state.wait_for_trigger().await.unwrap();
+        sender.step_after_trigger(&mut state, update).await.unwrap();
         assert!(matches!(
             state.inner,
             InnerState::Cancelling(CancellingState {
@@ -2181,7 +2174,8 @@ mod tests {
             (ENTRY_POINT_ADDRESS_V0_6, None),
         );
 
-        sender.step_state(&mut state).await.unwrap();
+        let update = state.wait_for_trigger().await.unwrap();
+        sender.step_after_trigger(&mut state, update).await.unwrap();
         assert!(matches!(
             state.inner,
             InnerState::CancelPending(CancelPendingState {
@@ -2225,7 +2219,8 @@ mod tests {
 
         let mut sender = new_sender(mock_proposer_t, mock_pool);
         // No pin established — cancellation still works (uses pinned_proposer for metrics only)
-        sender.step_state(&mut state).await.unwrap();
+        let update = state.wait_for_trigger().await.unwrap();
+        sender.step_after_trigger(&mut state, update).await.unwrap();
 
         assert!(matches!(
             state.inner,
@@ -2389,7 +2384,8 @@ mod tests {
         let mut sender = new_sender(mock_proposer_t, mock_pool);
 
         for _ in 0..2 {
-            sender.step_state(&mut state).await.unwrap();
+            let update = state.wait_for_trigger().await.unwrap();
+            sender.step_after_trigger(&mut state, update).await.unwrap();
             assert!(matches!(
                 state.inner,
                 InnerState::CancelPending(CancelPendingState {
@@ -2399,7 +2395,8 @@ mod tests {
             ));
         }
 
-        sender.step_state(&mut state).await.unwrap();
+        let update = state.wait_for_trigger().await.unwrap();
+        sender.step_after_trigger(&mut state, update).await.unwrap();
         assert!(matches!(
             state.inner,
             InnerState::Cancelling(CancellingState {
@@ -2458,7 +2455,8 @@ mod tests {
 
         let mut sender = new_sender(mock_proposer_t, mock_pool);
 
-        sender.step_state(&mut state).await.unwrap();
+        let update = state.wait_for_trigger().await.unwrap();
+        sender.step_after_trigger(&mut state, update).await.unwrap();
 
         // end back in the building state without waiting for trigger
         assert!(matches!(
@@ -2553,14 +2551,16 @@ mod tests {
         );
 
         // first step has no update
-        sender.step_state(&mut state).await.unwrap();
+        let update = state.wait_for_trigger().await.unwrap();
+        sender.step_after_trigger(&mut state, update).await.unwrap();
         assert!(matches!(
             state.inner,
             InnerState::Pending(PendingState { until: 3, .. })
         ));
 
         // second step is mined, revert processed, and moves back to building
-        sender.step_state(&mut state).await.unwrap();
+        let update = state.wait_for_trigger().await.unwrap();
+        sender.step_after_trigger(&mut state, update).await.unwrap();
         assert!(matches!(
             state.inner,
             InnerState::Building(BuildingState {
