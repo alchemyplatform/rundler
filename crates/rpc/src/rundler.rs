@@ -444,6 +444,12 @@ where
     }
 
     async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> EthResult<B256> {
+        if !self.chain_spec.eip7702_enabled {
+            return Err(EthRpcError::InvalidParams(
+                "EIP-7702 is not enabled on this chain".to_string(),
+            ));
+        }
+
         // Validate: chain ID must match.
         let expected_chain_id = U256::from(self.chain_spec.id);
         if auth.chain_id != expected_chain_id {
