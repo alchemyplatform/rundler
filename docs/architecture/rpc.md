@@ -153,6 +153,8 @@ Rundler specific methods that are not specified by the ERC-4337 spec. This names
 | [`rundler_getMinedUserOperation`](#rundler_getmineduseroperation)                               |    ✅     |
 | [`rundler_getUserOperationStatus`](#rundler_getuseroperationstatus)                             |    ✅     |
 | [`rundler_getPendingUserOperationBySenderNonce`](#rundler_getpendinguseroperationbysendernonce) |    ✅     |
+| [`rundler_sendSponsoredDelegation`](#rundler_sendsponsoreddelegation)                           |    ✅     |
+| [`rundler_delegationStatus`](#rundler_delegationstatus)                                         |    ✅     |
 
 #### `rundler_maxPriorityFeePerGas`
 
@@ -384,6 +386,79 @@ Gets a pending user operation for the given sender & nonce. If a user operation 
   "jsonrpc": "2.0",
   "id": 1,
   "result": null | UserOperation
+}
+```
+
+#### `rundler_sendSponsoredDelegation`
+
+Submits a signed EIP-7702 authorization tuple for sponsored delegation. The bundler pays the gas cost of the type-4 transaction and returns a delegation ID immediately. Use [`rundler_delegationStatus`](#rundler_delegationstatus) to poll for the transaction hash once it mines.
+
+The authorization must:
+
+- Have a `chainId` matching the bundler's chain.
+- Carry a valid ECDSA signature recoverable to the EOA being delegated.
+
+##### Parameters
+
+- Signed EIP-7702 authorization object
+
+```
+# Request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "rundler_sendSponsoredDelegation",
+  "params": [
+    {
+      chainId: "0x...",   // uint256, must match the bundler's chain
+      address: "0x...",   // address, the delegate contract address
+      nonce: "0x...",     // uint64, the EOA's current nonce
+      yParity: "0x0",     // uint8, signature parity (0 or 1)
+      r: "0x...",         // bytes32, signature r value
+      s: "0x..."          // bytes32, signature s value
+    }
+  ]
+}
+
+# Response
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "0x..." // bytes32, delegation ID — use with rundler_delegationStatus
+}
+```
+
+#### `rundler_delegationStatus`
+
+Returns the current status of a previously submitted sponsored delegation.
+
+Possible statuses:
+
+- `"pending"`: the delegation transaction has been submitted and is waiting to be mined.
+- `"mined"`: the delegation transaction has been mined; `txHash` is populated.
+- `"unknown"`: the delegation ID is not recognized — either it was never submitted, or the record was pruned after mining.
+
+##### Parameters
+
+- Delegation ID (the `bytes32` returned by `rundler_sendSponsoredDelegation`)
+
+```
+# Request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "rundler_delegationStatus",
+  "params": ["0x..."] // bytes32 delegation ID
+}
+
+# Response
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    status: "pending" | "mined" | "unknown",
+    txHash: "0x..." | null  // bytes32, populated when status is "mined"
+  }
 }
 ```
 
