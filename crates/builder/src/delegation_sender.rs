@@ -12,7 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
 };
 
@@ -134,7 +134,7 @@ pub(crate) struct DelegationSenderTask<E, F> {
     /// Incoming delegations waiting for a free signer.
     queue: VecDeque<(DelegationId, Eip7702Auth)>,
     /// Delegations that have been submitted and are waiting to mine.
-    pending: HashMap<DelegationId, ()>,
+    pending: HashSet<DelegationId>,
     /// Delegations that have mined, with their (tx_hash, block_number).
     /// Entries are pruned after MINED_RETENTION_BLOCKS.
     mined: HashMap<DelegationId, (B256, u64)>,
@@ -161,14 +161,14 @@ where
         settings: Settings,
         heads_tx: broadcast::Sender<Arc<NewHead>>,
     ) -> (Self, DelegationSenderHandle) {
-        let (action_tx, action_rx) = mpsc::channel(64);
-        let (completion_tx, completion_rx) = mpsc::channel(64);
+        let (action_tx, action_rx) = mpsc::channel(1024);
+        let (completion_tx, completion_rx) = mpsc::channel(1024);
         let task = Self {
             action_rx,
             completion_tx,
             completion_rx,
             queue: VecDeque::new(),
-            pending: HashMap::new(),
+            pending: HashSet::new(),
             mined: HashMap::new(),
             current_block: 0,
             heads_tx,
@@ -266,14 +266,14 @@ where
                     match action {
                         DelegationSenderAction::Send { auth, responder } => {
                             let id = DelegationId::from_auth(&auth);
-                            self.pending.insert(id.clone(), ());
+                            self.pending.insert(id.clone());
                             let _ = responder.send(id.clone());
                             self.queue.push_back((id, auth));
                             self.try_drain_queue();
                         }
 
                         DelegationSenderAction::GetStatus { id, responder } => {
-                            let status = if self.pending.contains_key(&id) {
+                            let status = if self.pending.contains(&id) {
                                 DelegationStatus::Pending
                             } else if let Some(&(tx_hash, _)) = self.mined.get(&id) {
                                 DelegationStatus::Mined { tx_hash }
