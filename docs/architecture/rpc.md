@@ -393,6 +393,10 @@ Gets a pending user operation for the given sender & nonce. If a user operation 
 
 Submits a signed EIP-7702 authorization tuple for sponsored delegation. The bundler pays the gas cost of the type-4 transaction and returns a delegation ID immediately. Use [`rundler_delegationStatus`](#rundler_delegationstatus) to poll for the transaction hash once it mines.
 
+**Disabled by default.** Enable with `--rpc.sponsored_delegation_enabled` / `RPC_SPONSORED_DELEGATION_ENABLED=true`.
+
+> **DOS risk:** each submission queues a delegation that must acquire one of the bundler's signers to send. An attacker with unauthenticated access can flood this endpoint and starve normal bundle sends of signers. It is strongly recommended to place this method behind an authentication layer or a separate access-controlled endpoint before enabling it.
+
 The authorization must:
 
 - Have a `chainId` matching the bundler's chain.

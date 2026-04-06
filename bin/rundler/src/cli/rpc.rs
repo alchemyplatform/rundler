@@ -118,6 +118,19 @@ pub struct RpcArgs {
         default_value = "50"
     )]
     base_fee_suggested_buffer_percent: u64,
+
+    /// Enable the `rundler_sendSponsoredDelegation` RPC method.
+    ///
+    /// Disabled by default. Callers can drain all available signers by submitting many
+    /// delegation requests simultaneously, which blocks normal bundle sends. Only enable
+    /// this on trusted or access-controlled endpoints.
+    #[arg(
+        long = "rpc.sponsored_delegation_enabled",
+        name = "rpc.sponsored_delegation_enabled",
+        env = "RPC_SPONSORED_DELEGATION_ENABLED",
+        default_value = "false"
+    )]
+    sponsored_delegation_enabled: bool,
 }
 
 impl RpcArgs {
@@ -144,6 +157,7 @@ impl RpcArgs {
         let rundler_api_settings = RundlerApiSettings {
             priority_fee_buffer_percent: self.priority_fee_suggested_buffer_percent,
             base_fee_buffer_percent: self.base_fee_suggested_buffer_percent,
+            sponsored_delegation_enabled: self.sponsored_delegation_enabled,
         };
 
         Ok(RpcTaskArgs {

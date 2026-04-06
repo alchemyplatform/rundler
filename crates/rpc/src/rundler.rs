@@ -44,6 +44,12 @@ pub struct RundlerApiSettings {
     pub priority_fee_buffer_percent: u64,
     /// Base fee buffer percent for gas price suggestions (e.g., 50 for 1.5x base fee)
     pub base_fee_buffer_percent: u64,
+    /// Whether the sponsored delegation endpoint is enabled.
+    ///
+    /// Disabled by default: callers can drain all available signers by submitting
+    /// many delegation requests, blocking bundle sends. Enable only on trusted/gated
+    /// endpoints.
+    pub sponsored_delegation_enabled: bool,
 }
 
 impl Default for RundlerApiSettings {
@@ -51,6 +57,7 @@ impl Default for RundlerApiSettings {
         Self {
             priority_fee_buffer_percent: 30,
             base_fee_buffer_percent: 50,
+            sponsored_delegation_enabled: false,
         }
     }
 }
@@ -444,6 +451,12 @@ where
     }
 
     async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> EthResult<B256> {
+        if !self.settings.sponsored_delegation_enabled {
+            return Err(EthRpcError::InvalidParams(
+                "sponsored delegation is not enabled on this node".to_string(),
+            ));
+        }
+
         if !self.chain_spec.eip7702_enabled {
             return Err(EthRpcError::InvalidParams(
                 "EIP-7702 is not enabled on this chain".to_string(),
