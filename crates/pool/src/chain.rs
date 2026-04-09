@@ -512,7 +512,27 @@ impl<P: EvmProvider> Chain<P> {
             .load_blocks_back_to_number(head, min_block_number)
             .await
             .context("should load full history when resetting chain")?;
-        self.blocks = self.load_block_summaries(&blocks).await?;
+        self.blocks = if self.settings.flashblocks {
+            // On flashblocks networks, eth_getLogs by block hash is unreliable during
+            // initialization because tip-level reorgs can invalidate a block's canonical
+            // status between when we traverse its parent hash and when we query logs for
+            // it. Bootstrap with empty summaries so the chain becomes non-empty and
+            // wait_for_update switches to the flashblocks path.
+            blocks
+                .iter()
+                .map(|block| BlockSummary {
+                    number: block.header.number,
+                    hash: block.header.hash,
+                    timestamp: block.header.timestamp.into(),
+                    ops: vec![],
+                    transactions: vec![],
+                    entity_balance_updates: vec![],
+                    address_updates: vec![],
+                })
+                .collect()
+        } else {
+            self.load_block_summaries(&blocks).await?
+        };
         self.sync_error_count = 0;
         let mined_ops: Vec<_> = self
             .blocks
