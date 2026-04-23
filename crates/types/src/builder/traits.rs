@@ -43,7 +43,14 @@ pub trait Builder: Send + Sync {
     ///
     /// Returns a [`DelegationId`] immediately. Use [`Builder::get_delegation_status`]
     /// to poll for the result.
-    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> BuilderResult<DelegationId>;
+    ///
+    /// If `valid_until` is `Some(t)`, the delegation is silently dropped if it
+    /// has not been submitted before Unix timestamp `t` (seconds).
+    async fn send_sponsored_delegation(
+        &self,
+        auth: Eip7702Auth,
+        valid_until: Option<u64>,
+    ) -> BuilderResult<DelegationId>;
 
     /// Return the current status of a sponsored delegation.
     async fn get_delegation_status(&self, id: DelegationId) -> BuilderResult<DelegationStatus>;

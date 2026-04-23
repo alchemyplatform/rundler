@@ -14,6 +14,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use alloy_network::TransactionBuilder7702;
@@ -64,6 +65,9 @@ pub(crate) enum DelegationSenderAction {
     /// use [`DelegationSenderAction::GetStatus`] to poll for the mined tx hash.
     Send {
         auth: Eip7702Auth,
+        /// Unix timestamp (seconds) after which the delegation is dropped unsubmitted.
+        /// `None` means no expiry.
+        valid_until: Option<u64>,
         responder: oneshot::Sender<DelegationId>,
     },
     /// Query the current status of a previously submitted delegation.
@@ -82,11 +86,16 @@ pub struct DelegationSenderHandle {
 }
 
 impl DelegationSenderHandle {
-    pub(crate) async fn send_delegation(&self, auth: Eip7702Auth) -> BuilderResult<DelegationId> {
+    pub(crate) async fn send_delegation(
+        &self,
+        auth: Eip7702Auth,
+        valid_until: Option<u64>,
+    ) -> BuilderResult<DelegationId> {
         let (tx, rx) = oneshot::channel();
         self.action_tx
             .send(DelegationSenderAction::Send {
                 auth,
+                valid_until,
                 responder: tx,
             })
             .await
@@ -131,8 +140,9 @@ pub(crate) struct DelegationSenderTask<E, F> {
     action_rx: mpsc::Receiver<DelegationSenderAction>,
     completion_tx: mpsc::Sender<CompletionEvent>,
     completion_rx: mpsc::Receiver<CompletionEvent>,
-    /// Incoming delegations waiting for a free signer.
-    queue: VecDeque<(DelegationId, Eip7702Auth)>,
+    /// Incoming delegations waiting for a free signer. Third element is the optional
+    /// expiry deadline (Unix timestamp in seconds).
+    queue: VecDeque<(DelegationId, Eip7702Auth, Option<u64>)>,
     /// Delegations that have been submitted and are waiting to mine.
     pending: HashSet<DelegationId>,
     /// Delegations that have mined, with their (tx_hash, block_number).
@@ -187,6 +197,24 @@ where
     /// loop stops and the remaining entries stay in the queue for the next
     /// drain attempt (on the next block or the next `Send` action).
     fn try_drain_queue(&mut self) {
+        // Drop any delegations whose valid_until deadline has passed.
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut i = 0;
+        while i < self.queue.len() {
+            let (id, _, valid_until) = &self.queue[i];
+            if valid_until.is_some_and(|deadline| now > deadline) {
+                let id = id.clone();
+                warn!("dropping expired delegation {id}");
+                self.queue.remove(i);
+                self.pending.remove(&id);
+            } else {
+                i += 1;
+            }
+        }
+
         while !self.queue.is_empty() {
             let Some(signer) = self.signer_manager.lease_signer() else {
                 break;
@@ -199,9 +227,10 @@ where
                 .saturating_sub(DELEGATION_GAS_BUFFER))
                 / DELEGATION_GAS_PER_AUTH) as usize;
             let batch_size = self.queue.len().min(max_auths.max(1));
-            let batch: Vec<(DelegationId, Eip7702Auth)> = self.queue.drain(..batch_size).collect();
-            let ids: Vec<DelegationId> = batch.iter().map(|(id, _)| id.clone()).collect();
-            let auths: Vec<Eip7702Auth> = batch.into_iter().map(|(_, auth)| auth).collect();
+            let batch: Vec<(DelegationId, Eip7702Auth, Option<u64>)> =
+                self.queue.drain(..batch_size).collect();
+            let ids: Vec<DelegationId> = batch.iter().map(|(id, _, _)| id.clone()).collect();
+            let auths: Vec<Eip7702Auth> = batch.into_iter().map(|(_, auth, _)| auth).collect();
 
             tracing::debug!(
                 "delegation sender: draining batch of {} (queue remaining: {})",
@@ -264,11 +293,11 @@ where
 
                 Some(action) = self.action_rx.recv() => {
                     match action {
-                        DelegationSenderAction::Send { auth, responder } => {
+                        DelegationSenderAction::Send { auth, valid_until, responder } => {
                             let id = DelegationId::from_auth(&auth);
                             self.pending.insert(id.clone());
                             let _ = responder.send(id.clone());
-                            self.queue.push_back((id, auth));
+                            self.queue.push_back((id, auth, valid_until));
                             self.try_drain_queue();
                         }
 

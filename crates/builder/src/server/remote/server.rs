@@ -135,7 +135,13 @@ impl GrpcBuilder for GrpcBuilderServerImpl {
         let auth = Eip7702Auth::try_from(auth_tuple)
             .map_err(|e| Status::invalid_argument(format!("invalid authorization tuple: {e}")))?;
 
-        let resp = match self.local_builder.send_sponsored_delegation(auth).await {
+        let valid_until = inner.valid_until.filter(|&v| v != 0);
+
+        let resp = match self
+            .local_builder
+            .send_sponsored_delegation(auth, valid_until)
+            .await
+        {
             Ok(id) => SendSponsoredDelegationResponse {
                 result: Some(send_sponsored_delegation_response::Result::Success(
                     SendSponsoredDelegationSuccess {

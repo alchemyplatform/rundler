@@ -113,8 +113,15 @@ pub trait RundlerApi {
     /// The bundler pays the gas cost and immediately returns a delegation ID.
     /// Poll `rundler_delegationStatus` with the returned ID to get the transaction hash.
     /// To undelegate, set `address` to the zero address.
+    ///
+    /// `valid_until` is an optional Unix timestamp (seconds). If set, the
+    /// delegation is silently dropped if it has not been submitted by that time.
     #[method(name = "sendSponsoredDelegation")]
-    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> RpcResult<B256>;
+    async fn send_sponsored_delegation(
+        &self,
+        auth: Eip7702Auth,
+        valid_until: Option<u64>,
+    ) -> RpcResult<B256>;
 
     /// Returns the status of a previously submitted sponsored delegation.
     #[method(name = "delegationStatus")]
@@ -209,10 +216,14 @@ where
     }
 
     #[instrument(skip_all, fields(rpc_method = "rundler_sendSponsoredDelegation"))]
-    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> RpcResult<B256> {
+    async fn send_sponsored_delegation(
+        &self,
+        auth: Eip7702Auth,
+        valid_until: Option<u64>,
+    ) -> RpcResult<B256> {
         utils::safe_call_rpc_handler(
             "rundler_sendSponsoredDelegation",
-            RundlerApi::send_sponsored_delegation(self, auth),
+            RundlerApi::send_sponsored_delegation(self, auth, valid_until),
         )
         .await
     }
@@ -450,7 +461,11 @@ where
         Ok(uo.map(|uo| uo.uo.into()))
     }
 
-    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> EthResult<B256> {
+    async fn send_sponsored_delegation(
+        &self,
+        auth: Eip7702Auth,
+        valid_until: Option<u64>,
+    ) -> EthResult<B256> {
         if !self.settings.sponsored_delegation_enabled {
             return Err(EthRpcError::InvalidParams(
                 "sponsored delegation is not enabled on this node".to_string(),
@@ -479,7 +494,7 @@ where
 
         let id = self
             .builder
-            .send_sponsored_delegation(auth)
+            .send_sponsored_delegation(auth, valid_until)
             .await
             .map_err(|e| anyhow::anyhow!("builder error: {e:?}"))?;
 

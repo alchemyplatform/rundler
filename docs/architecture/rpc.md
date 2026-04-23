@@ -404,7 +404,8 @@ The authorization must:
 
 ##### Parameters
 
-- Signed EIP-7702 authorization object
+1. Signed EIP-7702 authorization object
+2. *(optional)* `valid_until` — Unix timestamp in seconds. If the delegation has not been submitted to the chain by this time it is silently dropped. Omit or set to `null` for no expiry.
 
 ```
 # Request
@@ -420,7 +421,8 @@ The authorization must:
       yParity: "0x0",     // uint8, signature parity (0 or 1)
       r: "0x...",         // bytes32, signature r value
       s: "0x..."          // bytes32, signature s value
-    }
+    },
+    1234567890            // optional uint64, valid_until Unix timestamp (omit or null = no expiry)
   ]
 }
 
@@ -431,6 +433,8 @@ The authorization must:
   "result": "0x..." // bytes32, delegation ID — use with rundler_delegationStatus
 }
 ```
+
+**Expiry behaviour:** if `valid_until` is set and the delegation is still queued when that timestamp passes, it is dropped before submission and its status will return `"unknown"` from `rundler_delegationStatus`.
 
 #### `rundler_delegationStatus`
 

@@ -95,12 +95,17 @@ impl Builder for RemoteBuilderClient {
         }
     }
 
-    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> BuilderResult<DelegationId> {
+    async fn send_sponsored_delegation(
+        &self,
+        auth: Eip7702Auth,
+        valid_until: Option<u64>,
+    ) -> BuilderResult<DelegationId> {
         let res = self
             .grpc_client
             .clone()
             .send_sponsored_delegation(SendSponsoredDelegationRequest {
                 auth: Some(AuthorizationTuple::from(auth)),
+                valid_until,
             })
             .await
             .map_err(anyhow::Error::from)?

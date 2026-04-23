@@ -174,8 +174,12 @@ impl Builder for LocalBuilderHandle {
         }
     }
 
-    async fn send_sponsored_delegation(&self, auth: Eip7702Auth) -> BuilderResult<DelegationId> {
-        let req = ServerRequestKind::SendSponsoredDelegation { auth };
+    async fn send_sponsored_delegation(
+        &self,
+        auth: Eip7702Auth,
+        valid_until: Option<u64>,
+    ) -> BuilderResult<DelegationId> {
+        let req = ServerRequestKind::SendSponsoredDelegation { auth, valid_until };
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::SendSponsoredDelegation { id } => Ok(id),
@@ -248,8 +252,8 @@ impl LocalBuilderServerRunner {
                 }
                 Some(req) = self.req_receiver.recv() => {
                     let resp: BuilderResult<ServerResponse> = match req.request {
-                        ServerRequestKind::SendSponsoredDelegation { auth } => {
-                            match self.delegation_handle.send_delegation(auth).await {
+                        ServerRequestKind::SendSponsoredDelegation { auth, valid_until } => {
+                            match self.delegation_handle.send_delegation(auth, valid_until).await {
                                 Ok(id) => Ok(ServerResponse::SendSponsoredDelegation { id }),
                                 Err(e) => Err(e),
                             }
@@ -346,9 +350,16 @@ impl LocalBuilderServerRunner {
 enum ServerRequestKind {
     GetSupportedEntryPoints,
     DebugSendBundleNow,
-    DebugSetBundlingMode { mode: BundlingMode },
-    SendSponsoredDelegation { auth: Eip7702Auth },
-    GetDelegationStatus { id: DelegationId },
+    DebugSetBundlingMode {
+        mode: BundlingMode,
+    },
+    SendSponsoredDelegation {
+        auth: Eip7702Auth,
+        valid_until: Option<u64>,
+    },
+    GetDelegationStatus {
+        id: DelegationId,
+    },
 }
 
 #[derive(Debug)]

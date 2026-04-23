@@ -96,6 +96,9 @@ message AuthorizationTuple {
 
 message SendSponsoredDelegationRequest {
     AuthorizationTuple auth = 1;
+    // Unix timestamp (seconds) after which the delegation should be dropped.
+    // Absent or 0 means no expiry.
+    optional uint64 valid_until = 2;
 }
 
 message SendSponsoredDelegationResponse {
