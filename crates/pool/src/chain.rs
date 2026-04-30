@@ -504,37 +504,6 @@ impl<P: EvmProvider> Chain<P> {
     }
 
     async fn reset_and_initialize(&mut self, head: Block) -> anyhow::Result<ChainUpdate> {
-        if self.settings.flashblocks {
-            // On flashblocks networks, skip fetching historical blocks and eth_getLogs
-            // entirely. Tip-level reorgs invalidate block hashes faster than the sequential
-            // 64-block history fetch + log queries can complete, causing a permanent init
-            // loop. Bootstrap with just the head block so the chain is non-empty and
-            // wait_for_update switches to the flashblocks path. Historical ops in the
-            // init window are omitted but are already settled on-chain and not in the pool.
-            self.blocks = VecDeque::from([BlockSummary {
-                number: head.header.number,
-                hash: head.header.hash,
-                timestamp: head.header.timestamp.into(),
-                ops: vec![],
-                transactions: vec![],
-                entity_balance_updates: vec![],
-                address_updates: vec![],
-            }]);
-            self.sync_error_count = 0;
-            return Ok(self.new_update(
-                0,
-                vec![],
-                vec![],
-                vec![],
-                None,
-                vec![],
-                vec![],
-                vec![],
-                false,
-                UpdateType::Confirmed,
-            ));
-        }
-
         let min_block_number = head
             .header
             .number
