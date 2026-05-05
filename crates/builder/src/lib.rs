@@ -34,8 +34,8 @@ pub use emit::{BuilderEvent, BuilderEventKind};
 
 mod sender;
 pub use sender::{
-    BloxrouteSenderArgs, FlashbotsSenderArgs, PolygonPrivateArgs, RawSenderArgs,
-    TransactionSenderArgs, TransactionSenderKind,
+    BloxrouteSenderArgs, FallbackSenderArgs, FlashbotsSenderArgs, PolygonPrivateArgs,
+    RawSenderArgs, TransactionSenderArgs, TransactionSenderKind,
 };
 
 mod server;

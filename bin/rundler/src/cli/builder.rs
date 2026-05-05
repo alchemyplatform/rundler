@@ -18,8 +18,9 @@ use anyhow::Context;
 use clap::Args;
 use rundler_builder::{
     self, BloxrouteSenderArgs, BuilderEvent, BuilderEventKind, BuilderSettings, BuilderTask,
-    BuilderTaskArgs, EntryPointBuilderSettings, FlashbotsSenderArgs, LocalBuilderBuilder,
-    PolygonPrivateArgs, RawSenderArgs, TransactionSenderArgs, TransactionSenderKind,
+    BuilderTaskArgs, EntryPointBuilderSettings, FallbackSenderArgs, FlashbotsSenderArgs,
+    LocalBuilderBuilder, PolygonPrivateArgs, RawSenderArgs, TransactionSenderArgs,
+    TransactionSenderKind,
 };
 use rundler_pbh::PbhSubmissionProxy;
 use rundler_pool::RemotePoolClient;
@@ -147,6 +148,26 @@ pub struct BuilderArgs {
         value_parser = super::parse_secret
     )]
     bloxroute_auth_header: Option<SecretString>,
+
+    /// Enable automatic failover to the raw sender for non-raw sender types.
+    /// Set to the number of seconds to remain on the fallback before re-attempting
+    /// the primary. If unset, no fallback is configured.
+    #[arg(
+        long = "builder.sender_recovery_interval_secs",
+        name = "builder.sender_recovery_interval_secs",
+        env = "BUILDER_SENDER_RECOVERY_INTERVAL_SECS"
+    )]
+    sender_recovery_interval_secs: Option<u64>,
+
+    /// Number of consecutive SenderUnavailable errors from the primary before
+    /// activating the fallback. Only applies when fallback is configured.
+    #[arg(
+        long = "builder.sender_failure_threshold",
+        name = "builder.sender_failure_threshold",
+        env = "BUILDER_SENDER_FAILURE_THRESHOLD",
+        default_value = "3"
+    )]
+    sender_failure_threshold: u32,
 
     /// After submitting a bundle transaction, the maximum number of blocks to
     /// wait for that transaction to mine before we try resending with higher
@@ -309,22 +330,41 @@ impl BuilderArgs {
         chain_spec: &ChainSpec,
         rpc_url: &str,
     ) -> anyhow::Result<TransactionSenderArgs> {
+        let raw_args = || RawSenderArgs {
+            submit_url: self.submit_url.clone().unwrap_or_else(|| rpc_url.into()),
+            use_conditional_rpc: false,
+        };
+
+        // Wrap `primary` in a FallbackSenderArgs if recovery is configured.
+        let maybe_with_fallback = |primary: TransactionSenderArgs| -> TransactionSenderArgs {
+            if let Some(secs) = self.sender_recovery_interval_secs {
+                TransactionSenderArgs::Fallback(FallbackSenderArgs {
+                    primary: Box::new(primary),
+                    fallback: Box::new(TransactionSenderArgs::Raw(raw_args())),
+                    recovery_interval: std::time::Duration::from_secs(secs),
+                    failure_threshold: self.sender_failure_threshold,
+                })
+            } else {
+                primary
+            }
+        };
+
         match self.sender_type {
             TransactionSenderKind::Raw => Ok(TransactionSenderArgs::Raw(RawSenderArgs {
                 submit_url: self.submit_url.clone().unwrap_or_else(|| rpc_url.into()),
                 use_conditional_rpc: self.use_conditional_rpc,
             })),
             TransactionSenderKind::PolygonPrivate => {
-                Ok(TransactionSenderArgs::PolygonPrivate(PolygonPrivateArgs {
+                let primary = TransactionSenderArgs::PolygonPrivate(PolygonPrivateArgs {
                     submit_url: self.submit_url.clone().unwrap_or_else(|| rpc_url.into()),
-                }))
+                });
+                Ok(maybe_with_fallback(primary))
             }
             TransactionSenderKind::Flashbots => {
                 if !chain_spec.flashbots_enabled {
                     return Err(anyhow::anyhow!("Flashbots sender is not enabled for chain"));
                 }
-
-                Ok(TransactionSenderArgs::Flashbots(FlashbotsSenderArgs {
+                let primary = TransactionSenderArgs::Flashbots(FlashbotsSenderArgs {
                     builders: self.flashbots_relay_builders.clone(),
                     relay_url: chain_spec
                         .flashbots_relay_url
@@ -333,19 +373,20 @@ impl BuilderArgs {
                     auth_key: self.flashbots_relay_auth_key.clone().context(
                         "should have a flashbots relay auth key (cli: flashbots_relay_auth_key)",
                     )?,
-                }))
+                });
+                Ok(maybe_with_fallback(primary))
             }
             TransactionSenderKind::Bloxroute => {
                 if !chain_spec.bloxroute_enabled {
                     return Err(anyhow::anyhow!("Bloxroute sender is not enabled for chain"));
                 }
-
-                Ok(TransactionSenderArgs::Bloxroute(BloxrouteSenderArgs {
+                let primary = TransactionSenderArgs::Bloxroute(BloxrouteSenderArgs {
                     header: self
                         .bloxroute_auth_header
                         .clone()
                         .context("should have a bloxroute auth header")?,
-                }))
+                });
+                Ok(maybe_with_fallback(primary))
             }
         }
     }

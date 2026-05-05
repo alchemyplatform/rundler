@@ -12,6 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 mod bloxroute;
+mod fallback;
 mod flashbots;
 mod polygon_private;
 mod raw;
@@ -20,6 +21,7 @@ use alloy_primitives::{Address, B256};
 use anyhow::Context;
 pub(crate) use bloxroute::PolygonBloxrouteTransactionSender;
 use enum_dispatch::enum_dispatch;
+pub(crate) use fallback::FallbackTransactionSender;
 pub(crate) use flashbots::FlashbotsTransactionSender;
 #[cfg(test)]
 use mockall::automock;
@@ -66,6 +68,11 @@ pub(crate) enum TxSenderError {
     /// Insufficient funds for transaction
     #[error("insufficient funds for transaction")]
     InsufficientFunds,
+    /// Sender is unavailable due to an outage or unrecognized error.
+    ///
+    /// When a fallback sender is configured this triggers failover.
+    #[error("sender unavailable: {0}")]
+    SenderUnavailable(anyhow::Error),
     /// All other errors
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -100,6 +107,7 @@ pub(crate) enum TransactionSenderEnum<P: EvmProvider> {
     Flashbots(FlashbotsTransactionSender),
     PolygonBloxroute(PolygonBloxrouteTransactionSender<P>),
     PolygonPrivate(PolygonPrivateSender<P>),
+    Fallback(FallbackTransactionSender),
 }
 
 /// Transaction sender types
@@ -127,6 +135,8 @@ pub enum TransactionSenderArgs {
     Bloxroute(BloxrouteSenderArgs),
     /// Polygon private transaction sender
     PolygonPrivate(PolygonPrivateArgs),
+    /// Sender with automatic failover to a fallback sender
+    Fallback(FallbackSenderArgs),
 }
 
 /// Raw sender arguments
@@ -161,6 +171,19 @@ pub struct FlashbotsSenderArgs {
     pub relay_url: String,
     /// Auth Key
     pub auth_key: SecretString,
+}
+
+/// Fallback sender arguments
+#[derive(Debug, Clone)]
+pub struct FallbackSenderArgs {
+    /// Primary sender
+    pub primary: Box<TransactionSenderArgs>,
+    /// Fallback sender used when the primary is unavailable
+    pub fallback: Box<TransactionSenderArgs>,
+    /// How long to wait on the fallback before re-attempting the primary
+    pub recovery_interval: std::time::Duration,
+    /// Consecutive SenderUnavailable responses required before activating the fallback
+    pub failure_threshold: u32,
 }
 
 impl TransactionSenderArgs {
@@ -204,6 +227,16 @@ impl TransactionSenderArgs {
 
                 TransactionSenderEnum::PolygonPrivate(PolygonPrivateSender::new(submitter))
             }
+            Self::Fallback(args) => {
+                let primary = args.primary.into_sender(config)?;
+                let fallback = args.fallback.into_sender(config)?;
+                TransactionSenderEnum::Fallback(FallbackTransactionSender::new(
+                    Box::new(primary),
+                    Box::new(fallback),
+                    args.recovery_interval,
+                    args.failure_threshold,
+                ))
+            }
         };
         Ok(sender)
     }
@@ -235,13 +268,27 @@ impl From<ProviderError> for TxSenderError {
             ProviderError::RPC(e) => {
                 if let Some(e) = e.as_error_resp() {
                     // Client impls use different error codes, just match on the message
-                    if let Some(e) = parse_known_call_execution_failed(&e.message, e.code) {
-                        e
-                    } else {
-                        TxSenderError::Other(value.into())
+                    if let Some(known) = parse_known_call_execution_failed(&e.message, e.code) {
+                        return known;
                     }
+                    // Unrecognized RPC error: -32000s from us should be rare, so treat
+                    // as a provider outage and log for debugging.
+                    tracing::warn!(
+                        rpc_error_code = e.code,
+                        rpc_error_message = %e.message,
+                        "Unrecognized RPC error from provider, treating as sender unavailable"
+                    );
+                    TxSenderError::SenderUnavailable(anyhow::anyhow!(
+                        "unrecognized RPC error {}: {}",
+                        e.code,
+                        e.message
+                    ))
                 } else {
-                    TxSenderError::Other(value.into())
+                    tracing::warn!(
+                        error = ?value,
+                        "Non-error RPC response from provider, treating as sender unavailable"
+                    );
+                    TxSenderError::SenderUnavailable(anyhow::anyhow!("{value:?}"))
                 }
             }
             _ => TxSenderError::Other(value.into()),

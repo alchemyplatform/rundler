@@ -669,6 +669,9 @@ impl From<TxSenderError> for TransactionTrackerError {
             TxSenderError::SoftCancelFailed => {
                 TransactionTrackerError::Other(anyhow::anyhow!("soft cancel failed"))
             }
+            // SenderUnavailable reaching here means no fallback is configured; treat
+            // it as a transient error so the bundle sender retries next cycle.
+            TxSenderError::SenderUnavailable(e) => TransactionTrackerError::Other(e),
             TxSenderError::Other(e) => TransactionTrackerError::Other(e),
         }
     }

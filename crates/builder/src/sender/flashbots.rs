@@ -33,6 +33,14 @@ use serde_json::{Value, json};
 use super::{ExpectedStorage, Result, TransactionSender, TxSenderError};
 use crate::sender::CancelTxInfo;
 
+fn map_flashbots_error(err: anyhow::Error) -> TxSenderError {
+    tracing::warn!(
+        error = %err,
+        "Flashbots request failed, treating as sender unavailable"
+    );
+    TxSenderError::SenderUnavailable(err)
+}
+
 #[derive(Debug)]
 pub(crate) struct FlashbotsTransactionSender {
     flashbots_client: FlashbotsClient,
@@ -54,7 +62,8 @@ impl TransactionSender for FlashbotsTransactionSender {
         let tx_hash = self
             .flashbots_client
             .send_private_transaction(raw_tx)
-            .await?;
+            .await
+            .map_err(map_flashbots_error)?;
 
         Ok(tx_hash)
     }
@@ -69,7 +78,8 @@ impl TransactionSender for FlashbotsTransactionSender {
         let success = self
             .flashbots_client
             .cancel_private_transaction(tx_hash)
-            .await?;
+            .await
+            .map_err(map_flashbots_error)?;
 
         if !success {
             return Err(TxSenderError::SoftCancelFailed);

@@ -137,12 +137,27 @@ struct BloxrouteResponse {
 
 impl From<jsonrpsee::core::ClientError> for TxSenderError {
     fn from(value: jsonrpsee::core::ClientError) -> Self {
-        if let jsonrpsee::core::ClientError::Call(e) = &value
-            && let Some(e) = super::parse_known_call_execution_failed(e.message(), e.code() as i64)
-        {
-            return e;
+        if let jsonrpsee::core::ClientError::Call(e) = &value {
+            if let Some(known) =
+                super::parse_known_call_execution_failed(e.message(), e.code() as i64)
+            {
+                return known;
+            }
+            tracing::warn!(
+                rpc_error_code = e.code(),
+                rpc_error_message = %e.message(),
+                "Unrecognized Bloxroute RPC error, treating as sender unavailable"
+            );
+            return TxSenderError::SenderUnavailable(anyhow::anyhow!(
+                "unrecognized Bloxroute RPC error {}: {}",
+                e.code(),
+                e.message()
+            ));
         }
-
-        TxSenderError::Other(value.into())
+        tracing::warn!(
+            error = ?value,
+            "Bloxroute transport error, treating as sender unavailable"
+        );
+        TxSenderError::SenderUnavailable(anyhow::Error::from(value))
     }
 }
