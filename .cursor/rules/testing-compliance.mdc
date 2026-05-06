@@ -1,0 +1,18 @@
+---
+description: Rundler test and ERC-4337 compliance guidance
+globs:
+  - "**/*test*.rs"
+  - "test/spec-tests/**"
+  - ".github/workflows/ci.yaml"
+  - ".github/workflows/unit.yaml"
+  - ".github/workflows/compliance.yaml"
+---
+
+- Prefer co-located `#[cfg(test)]` module tests for Rust behavior changes.
+- Reuse existing mockall and manual mock patterns instead of mocking unrelated layers.
+- Run `make test-unit` before handoff for code changes.
+- Run integrated or modular spec tests for RPC, EntryPoint, pool, simulation, or builder-flow changes.
+- CI compliance currently covers v0.6, v0.7, and v0.8 through the bundler test executor.
+
+Full details: `.agents/skills/testing-compliance/`.
+

@@ -1,0 +1,19 @@
+---
+description: Tonic/Buf protobuf and remote service guardrails
+globs:
+  - "crates/builder/proto/**/*.proto"
+  - "crates/pool/proto/**/*.proto"
+  - "crates/builder/build.rs"
+  - "crates/pool/build.rs"
+  - "crates/builder/src/server/remote/**/*.rs"
+  - "crates/pool/src/server/remote/**/*.rs"
+---
+
+- Edit `.proto` schemas and hand-written conversion code, not generated `OUT_DIR` Rust.
+- If adding proto files, update the relevant `build.rs` compile list.
+- Run Buf lint and a Cargo build after schema changes.
+- Keep proto/domain conversions lossless for `UserOperationVariant`, errors, EntryPoint versions, and EIP-7702 auth.
+- Use `connect_with_retries_shutdown` and `HealthCheck` patterns for long-running remotes.
+
+Full details: `.agents/skills/grpc-protobuf/`.
+

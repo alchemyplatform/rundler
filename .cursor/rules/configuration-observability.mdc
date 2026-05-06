@@ -1,0 +1,17 @@
+---
+description: Chain spec, provider, metrics, tracing, and secret handling
+globs:
+  - "bin/rundler/src/cli/**/*.rs"
+  - "bin/rundler/chain_specs/**/*.toml"
+  - "crates/provider/src/**/*.rs"
+  - "crates/utils/src/log.rs"
+---
+
+- Preserve chain spec precedence: `CHAIN_*`, `--chain_spec`, `--network`, base, defaults.
+- Keep JSON config loading compatible with local files and `s3://bucket/key`.
+- Compose provider retry, consistency retry, metrics, and timeout layers deliberately.
+- Add scoped metrics for new hot paths and keep logs structured.
+- Never log private keys, mnemonics, auth headers, or raw signatures.
+
+Full details: `.agents/skills/configuration-observability/`.
+

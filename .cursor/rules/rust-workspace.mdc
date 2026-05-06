@@ -1,0 +1,20 @@
+---
+description: Rundler Rust workspace and tooling guardrails
+globs:
+  - "**/*.rs"
+  - "Cargo.toml"
+  - "Cargo.lock"
+  - "rust-toolchain.toml"
+  - ".cargo/config.toml"
+  - "Makefile"
+  - "deny.toml"
+---
+
+- Use Rust `1.92.0` from `rust-toolchain.toml`; use nightly only for rustfmt.
+- Prefer `make fmt`, `make lint`, and `make test-unit` over ad hoc equivalents.
+- Keep `tokio_unstable` from `.cargo/config.toml` in mind for builds and docs.
+- Do not add `openssl` or new unknown git sources without updating `deny.toml`.
+- Use `TaskSpawnerExt` for long-running library tasks instead of untracked `tokio::spawn`.
+
+Full details: `.agents/skills/tooling/` and `.agents/skills/rust-async/`.
+

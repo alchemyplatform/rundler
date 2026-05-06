@@ -1,0 +1,18 @@
+name: Claude - PR Auto-Review
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review:
+    uses: OMGWINNING/github-actions-workflows/.github/workflows/claude-pr-review.yaml@main
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      instructions_file: .github/review-instructions.md
+    secrets: inherit
+

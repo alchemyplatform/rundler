@@ -1,0 +1,15 @@
+---
+description: JSON-RPC routing and ERC-4337 error contracts
+globs:
+  - "crates/rpc/src/**/*.rs"
+  - "crates/types/src/user_operation/**/*.rs"
+---
+
+- Wrap jsonrpsee handlers with `utils::safe_call_rpc_handler`.
+- Route user operations by EntryPoint address through `EntryPointRouter`.
+- Remember v0.8/v0.9 are distinct EntryPoint versions that share the v0.7 ABI.
+- Add or update `EthRpcError` to `ErrorObjectOwned` mappings for client-visible errors.
+- Gate privileged or state-mutating endpoints; sponsored delegation is disabled by default for a reason.
+
+Full details: `.agents/skills/rpc-errors/`.
+

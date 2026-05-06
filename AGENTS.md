@@ -1,44 +1,107 @@
-# Repository Guidelines
+# Agent Router
 
-## Project Structure & Module Organization
-Rundler is a Rust workspace.
-- `bin/rundler/`: CLI binary entrypoint and chain spec configs (`bin/rundler/chain_specs/*.toml`).
-- `crates/*`: core libraries (for example `rundler-pool`, `rundler-rpc`, `rundler-sim`, `rundler-builder`).
-- `test/spec-tests/`: ERC-4337 compliance test harnesses (`local/` integrated mode, `remote/` modular mode, plus versioned suites under `v0_6/`, `v0_7/`, `v0_8/`).
-- `docs/`: architecture, CLI, Docker, and development documentation.
-- `.github/workflows/`: CI checks (lint, unit tests, commit/PR semantics, docs, dependency ordering).
+Rundler is a Rust ERC-4337 bundler workspace. Load the repo-local skills in
+`.agents/skills/` based on the file area you are changing.
 
-## Build, Test, and Development Commands
-- `make build`: build all crates with all features.
-- `make test-unit`: run unit tests via `cargo nextest`.
-- `make test`: run unit + integrated spec + modular spec tests.
-- `make test-spec-integrated` / `make test-spec-modular`: run ERC-4337 spec suites only.
-- `make fmt`: format Rust code with nightly `rustfmt`.
-- `make lint`: run `clippy` with `-D warnings`.
-- `cargo run node`: run a local integrated node (after `.env` setup).
+## Quick Reference
 
-## Coding Style & Naming Conventions
-- Rust toolchain targets edition `2024` (workspace `rust-version` is `1.92`).
-- Formatting is required: `cargo +nightly fmt --all --check`.
-- Lint must be clean: `cargo clippy --all --all-features --tests -- -D warnings`.
-- Follow Rust naming defaults: modules/files `snake_case`, types/traits `UpperCamelCase`, constants `SCREAMING_SNAKE_CASE`.
-- Keep crate names in the established `rundler-*` pattern.
-- Use the `{variable}` shorthand syntax in format strings, logs, and error messages (e.g. `format!("transaction {tx_hash} missing")` instead of `format!("transaction {} missing", tx_hash)`).
-- Always import types rather than using inline paths (e.g. `use crate::eth::events::EventProviderError;` then `EventProviderError`, not `crate::eth::events::EventProviderError` inline). Use `as` renames to resolve conflicts.
-- Always qualify function calls with their module or type (e.g. `EthRpcError::from(...)`, `Vec::new()`), but do not qualify types/structs/enums unless needed to resolve ambiguity.
+```bash
+make build                 # Build all crates with all features
+make fmt                   # Format with nightly rustfmt
+make lint                  # Run clippy with -D warnings
+make test-unit             # Run cargo nextest unit tests
+make test                  # Run unit, integrated spec, and modular spec tests
+make test-spec-integrated  # Run local ERC-4337 spec tests
+make test-spec-modular     # Run remote/distributed ERC-4337 spec tests
+cargo run node             # Run a local integrated node after .env setup
+```
 
-## Testing Guidelines
-- Add or update tests for every behavior change (`#[test]` / `#[tokio::test]` near the changed module is common here).
-- Run at least `make test-unit` before opening a PR; run spec tests for EntryPoint- or RPC-flow changes.
-- CI collects coverage with `cargo llvm-cov nextest`; no fixed threshold is enforced, but coverage regressions should be justified.
+## Available Skills
 
-## Commit & Pull Request Guidelines
-- Commits must follow Conventional Commits (for example `fix(rpc): return error on invalid entrypoint`).
-- PR titles are semantically validated in CI; use Conventional Commit style there too.
-- Use focused commits, squash checkpoint commits, and include tests with code changes.
-- Fill the PR template: link issue (`[Closes/Fixes] #...`) and list concrete proposed changes.
-- If a change affects API/CLI behavior or architecture, update relevant docs in the same PR (typically `docs/cli.md`, `docs/architecture/*`, and README sections as needed).
+| Skill | Description |
+| --- | --- |
+| `tooling` | Cargo workspace, Rust 1.92, nightly fmt, nextest, cargo-deny, submodules, and CI parity |
+| `rust-async` | `reth_tasks`, `TaskSpawnerExt`, async traits, minimal Tokio features, and crate lint conventions |
+| `rpc-errors` | JSON-RPC method shape, EntryPoint routing, `safe_call_rpc_handler`, and ERC-4337 error code mapping |
+| `grpc-protobuf` | Tonic/Buf protobuf generation, proto/domain conversions, remote health checks, and retry behavior |
+| `builder-signer` | Bundle sender state, transaction senders, signer leases, KMS/Redis locking, and sender failover |
+| `contracts-generated` | Foundry contract generation, bytecode sidecars, sim tracer Yarn build, and FastLZ bindgen boundaries |
+| `testing-compliance` | Module-local tests, mockall/manual mocks, nextest coverage, and versioned ERC-4337 spec tests |
+| `configuration-observability` | Chain spec resolution, JSON/S3 configs, provider retry/timeout layers, metrics, tracing, and secrets |
 
-## Security & Configuration Tips
-- Do not commit secrets; keep local values in `.env`.
-- For security disclosures, follow `SECURITY.md` instead of opening a public issue.
+## Skill Loading
+
+| Task | Load skills |
+| --- | --- |
+| Editing `Cargo.toml`, `Cargo.lock`, `.cargo/`, `Makefile`, or workflows | `tooling` |
+| Adding async tasks, background loops, or crate APIs | `rust-async`, `testing-compliance` |
+| Adding or modifying JSON-RPC methods | `rpc-errors`, `testing-compliance` |
+| Editing `.proto`, remote pool/builder clients, or gRPC servers | `grpc-protobuf`, `testing-compliance` |
+| Changing bundle building, transaction senders, signer logic, or sponsored delegation | `builder-signer`, `configuration-observability`, `testing-compliance` |
+| Editing Solidity, generated contract bindings, sim tracer, or FastLZ bindings | `contracts-generated`, `tooling` |
+| Changing chain specs, CLI config, provider layers, tracing, or metrics | `configuration-observability`, `tooling` |
+| Preparing a PR or judging deployment safety | `tooling`, `testing-compliance`, plus area-specific skills |
+
+## Directory Mapping
+
+| Path | Skills |
+| --- | --- |
+| `bin/rundler/` | `configuration-observability`, `builder-signer`, `rpc-errors`, `tooling` |
+| `bin/rundler/chain_specs/` | `configuration-observability` |
+| `crates/rpc/` | `rpc-errors`, `grpc-protobuf`, `testing-compliance` |
+| `crates/pool/` | `grpc-protobuf`, `testing-compliance`, `configuration-observability` |
+| `crates/builder/` | `builder-signer`, `grpc-protobuf`, `testing-compliance` |
+| `crates/signer/` | `builder-signer`, `configuration-observability` |
+| `crates/provider/` | `configuration-observability`, `rust-async`, `testing-compliance` |
+| `crates/sim/` | `contracts-generated`, `testing-compliance` |
+| `crates/contracts/` | `contracts-generated` |
+| `crates/types/` | `rpc-errors`, `grpc-protobuf`, `testing-compliance` |
+| `crates/task/` | `rust-async`, `grpc-protobuf` |
+| `test/spec-tests/` | `testing-compliance`, `contracts-generated` |
+| `.github/workflows/`, `deny.toml`, `Makefile` | `tooling`, `testing-compliance` |
+| `.cursor/rules/`, `.agents/skills/`, `.agents/commands/` | `tooling` |
+
+## Project Structure
+
+```text
+rundler/
+├── bin/rundler/                 # CLI, local node wiring, chain specs
+├── crates/
+│   ├── builder/                 # Bundle building, transaction senders, remote builder gRPC
+│   ├── pool/                    # Mempool, chain tracking, remote pool gRPC
+│   ├── provider/                # Alloy provider wrappers, DA gas oracles, fee estimation
+│   ├── rpc/                     # jsonrpsee eth/debug/rundler/admin APIs
+│   ├── signer/                  # Private key, mnemonic, AWS KMS, funding, key leasing
+│   ├── sim/                     # Simulation, gas estimation, TypeScript tracer build
+│   ├── contracts/               # Solidity submodules, Foundry-generated ABI artifacts
+│   ├── task/                    # Reth task spawner and gRPC utilities
+│   ├── types/                   # UserOperation, EntryPoint, pool, builder, chain types
+│   └── utils/                   # Retry, logging, metrics helpers
+├── test/spec-tests/             # Local and remote ERC-4337 spec harnesses
+├── docs/                        # Architecture, CLI, Docker, release docs
+├── docs/solutions/              # AI-maintained gotchas and historical learnings
+└── .github/workflows/           # CI, unit, compliance, release, dependency checks
+```
+
+## Slash Commands
+
+| Command | Description |
+| --- | --- |
+| `/run-gates` | Run the right local verification gates for the current diff |
+| `/add-rpc-method` | Add a JSON-RPC method end-to-end with routing, errors, tests, and docs |
+| `/add-proto-field` | Change a proto schema and update all generated/domain conversion boundaries |
+| `/add-chain-spec` | Add or modify a hardcoded chain spec safely |
+| `/run-spec-tests` | Prepare and run local or remote ERC-4337 spec tests by EntryPoint version |
+| `/prepare-release` | Prepare the release checklist and workflow inputs without dispatching release jobs |
+
+## Documentation Discovery
+
+- Read `README.md` for the public project overview.
+- Read `docs/developing.md` for local setup, but trust `Cargo.toml`,
+  `rust-toolchain.toml`, and CI workflows for current toolchain versions.
+- Read `docs/architecture/` for domain behavior and update it when behavior
+  changes.
+- Read `docs/solutions/` for gotchas. These docs are reference material, not
+  authoritative rules. If a solution doc contradicts current code, trust the code.
+- Existing AI instructions can be stale. Derive factual claims from source,
+  build files, tests, scripts, and workflow YAML.

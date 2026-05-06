@@ -1,0 +1,17 @@
+---
+description: Generated contract, tracer, protobuf, and binding boundaries
+globs:
+  - "crates/contracts/**"
+  - "crates/sim/tracer/**"
+  - "crates/bindings/fastlz/**"
+  - ".gitmodules"
+---
+
+- Edit Solidity sources under `contracts/*/src`, not generated `contracts/out/**` artifacts.
+- CI uses Foundry `v1.5.0` and recursive submodules for account-abstraction sources.
+- The sim tracer is TypeScript built with Yarn through `crates/sim/build.rs`.
+- FastLZ Rust bindings are generated from C/header inputs into Cargo `OUT_DIR`.
+- Initialize submodules before drawing conclusions from missing contract or spec-test files.
+
+Full details: `.agents/skills/contracts-generated/`.
+

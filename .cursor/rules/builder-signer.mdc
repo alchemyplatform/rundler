@@ -1,0 +1,17 @@
+---
+description: Bundle builder, transaction sender, and signer safety
+globs:
+  - "crates/builder/src/**/*.rs"
+  - "crates/signer/src/**/*.rs"
+  - "bin/rundler/src/cli/builder.rs"
+  - "bin/rundler/src/cli/signer.rs"
+---
+
+- Keep sender errors distinct; fallback should activate only for `SenderUnavailable`.
+- Return signer leases on every completion, failure, cancellation, and early-exit path.
+- Store private keys, mnemonics, Flashbots auth, and Bloxroute auth in `SecretString`.
+- Preserve Redis-backed KMS locking semantics when multiple KMS keys are configured.
+- Match mempool filters with builder affinity or filtered operations may never be bundled.
+
+Full details: `.agents/skills/builder-signer/`.
+
