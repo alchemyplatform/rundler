@@ -29,4 +29,3 @@ Use unit tests for local Rust behavior. Add spec tests for changes to RPC
 interfaces, EntryPoint routing, simulation, mempool acceptance, or builder
 submission. Choose integrated mode for node behavior and modular mode for
 pool/builder/RPC service boundaries.
-

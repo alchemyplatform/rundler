@@ -12,7 +12,6 @@ Foundry, protobuf, Buf, and recursive submodules in CI.
 
 ## Rules
 
-| Rule | Read when |
-| --- | --- |
+| Rule                  | Read when                                                  |
+| --------------------- | ---------------------------------------------------------- |
 | [core](rules/core.md) | Editing build, lint, dependency, submodule, or CI behavior |
-

@@ -44,4 +44,3 @@ versions, OpenZeppelin versions, FastLZ, and spec tests live under submodules.
 - Bad: assume missing vendored files mean the repo no longer uses them.
 - Exception: do not audit vendored submodule internals unless the change is
   explicitly about those sources.
-

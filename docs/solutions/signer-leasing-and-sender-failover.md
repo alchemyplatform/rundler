@@ -28,4 +28,3 @@ Return signer leases on all terminal paths, keep KMS lock IDs scoped by
 `chain_id:key_id`, and preserve `FallbackTransactionSender` cancellation
 routing. Treat `SenderUnavailable` as the failover signal; do not collapse all
 sender errors into outage errors.
-

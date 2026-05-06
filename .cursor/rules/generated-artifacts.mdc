@@ -14,4 +14,3 @@ globs:
 - Initialize submodules before drawing conclusions from missing contract or spec-test files.
 
 Full details: `.agents/skills/contracts-generated/`.
-

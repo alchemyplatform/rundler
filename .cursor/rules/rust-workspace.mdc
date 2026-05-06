@@ -17,4 +17,3 @@ globs:
 - Use `TaskSpawnerExt` for long-running library tasks instead of untracked `tokio::spawn`.
 
 Full details: `.agents/skills/tooling/` and `.agents/skills/rust-async/`.
-

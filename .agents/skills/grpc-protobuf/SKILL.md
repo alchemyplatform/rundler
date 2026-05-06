@@ -13,7 +13,6 @@ mode. Generated Rust lives in Cargo `OUT_DIR`; source-of-truth schemas live in
 
 ## Rules
 
-| Rule | Read when |
-| --- | --- |
+| Rule                  | Read when                                                                |
+| --------------------- | ------------------------------------------------------------------------ |
 | [core](rules/core.md) | Editing `.proto`, remote server/client code, or proto/domain conversions |
-

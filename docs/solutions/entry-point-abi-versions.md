@@ -27,4 +27,3 @@ and validates that the user operation variant matches the route ABI.
 When adding RPC, simulation, or conversion behavior, distinguish version from
 ABI. Use `EntryPointVersion::abi_version()`, `ChainSpec::entry_point_address`,
 and `EntryPointRouter` rather than ad hoc address or schema checks.
-

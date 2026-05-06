@@ -32,20 +32,19 @@ long spec runs.
 
 Use the Makefile target matching the requested mode and version:
 
-| Mode | Version | Command |
-| --- | --- | --- |
-| integrated | all | `make test-spec-integrated` |
-| integrated | `v0_6` | `make test-spec-integrated-v0_6` |
-| integrated | `v0_7` | `make test-spec-integrated-v0_7` |
-| integrated | `v0_8` | `make test-spec-integrated-v0_8` |
-| modular | all | `make test-spec-modular` |
-| modular | `v0_6` | `make test-spec-modular-v0_6` |
-| modular | `v0_7` | `make test-spec-modular-v0_7` |
-| modular | `v0_8` | `make test-spec-modular-v0_8` |
+| Mode       | Version | Command                          |
+| ---------- | ------- | -------------------------------- |
+| integrated | all     | `make test-spec-integrated`      |
+| integrated | `v0_6`  | `make test-spec-integrated-v0_6` |
+| integrated | `v0_7`  | `make test-spec-integrated-v0_7` |
+| integrated | `v0_8`  | `make test-spec-integrated-v0_8` |
+| modular    | all     | `make test-spec-modular`         |
+| modular    | `v0_6`  | `make test-spec-modular-v0_6`    |
+| modular    | `v0_7`  | `make test-spec-modular-v0_7`    |
+| modular    | `v0_8`  | `make test-spec-modular-v0_8`    |
 
 ### 3. Report
 
 Include the command, version, mode, exit code, and the first actionable failure
 summary. Do not rerun the same failing spec target twice without a new
 hypothesis.
-

@@ -24,15 +24,15 @@ argument-hint: [scope]
 
 Use the first matching rules:
 
-| Changed paths | Required gates |
-| --- | --- |
-| `Cargo.toml`, `Cargo.lock`, `.cargo/`, `Makefile`, `.github/workflows/` | `make fmt`, `make lint`, `make test-unit` |
-| `crates/rpc/`, `crates/types/src/user_operation/` | `make fmt`, `make lint`, `make test-unit`, targeted spec tests if behavior changed |
-| `crates/{pool,builder}/proto/` | `buf lint`, `cargo build --all --all-features`, `make test-unit` |
-| `crates/contracts/`, `.gitmodules` | `git submodule update --init --recursive`, `cargo build --all --all-features`, `make test-unit` |
-| `crates/sim/tracer/` | `yarn build` from `crates/sim/tracer`, then `cargo build --all --all-features` |
-| EntryPoint, simulation, mempool, or builder behavior | `make test-unit`, then `make test-spec-integrated` or `make test-spec-modular` as appropriate |
-| Docs-only | `codespell --toml .github/workflows/codespell.toml *.md docs/*.md` if codespell is installed |
+| Changed paths                                                           | Required gates                                                                                  |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `Cargo.toml`, `Cargo.lock`, `.cargo/`, `Makefile`, `.github/workflows/` | `make fmt`, `make lint`, `make test-unit`                                                       |
+| `crates/rpc/`, `crates/types/src/user_operation/`                       | `make fmt`, `make lint`, `make test-unit`, targeted spec tests if behavior changed              |
+| `crates/{pool,builder}/proto/`                                          | `buf lint`, `cargo build --all --all-features`, `make test-unit`                                |
+| `crates/contracts/`, `.gitmodules`                                      | `git submodule update --init --recursive`, `cargo build --all --all-features`, `make test-unit` |
+| `crates/sim/tracer/`                                                    | `yarn build` from `crates/sim/tracer`, then `cargo build --all --all-features`                  |
+| EntryPoint, simulation, mempool, or builder behavior                    | `make test-unit`, then `make test-spec-integrated` or `make test-spec-modular` as appropriate   |
+| Docs-only                                                               | `codespell --toml .github/workflows/codespell.toml *.md docs/*.md` if codespell is installed    |
 
 ### 2. Run Commands
 
@@ -48,4 +48,3 @@ Use this structure:
 
     **Result:** <summary>
     **Remaining risk:** <anything not covered locally>
-

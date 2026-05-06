@@ -13,7 +13,6 @@ are part of the client contract.
 
 ## Rules
 
-| Rule | Read when |
-| --- | --- |
+| Rule                  | Read when                                                                       |
+| --------------------- | ------------------------------------------------------------------------------- |
 | [core](rules/core.md) | Editing `crates/rpc/`, `crates/types/src/user_operation/`, or RPC-facing errors |
-

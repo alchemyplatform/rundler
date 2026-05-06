@@ -12,7 +12,6 @@ tracer, tonic for protos, and bindgen/cc for FastLZ.
 
 ## Rules
 
-| Rule | Read when |
-| --- | --- |
+| Rule                  | Read when                                                                  |
+| --------------------- | -------------------------------------------------------------------------- |
 | [core](rules/core.md) | Editing contracts, generated output, tracer TypeScript, or FastLZ bindings |
-

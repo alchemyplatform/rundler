@@ -14,4 +14,3 @@ globs:
 - Match mempool filters with builder affinity or filtered operations may never be bundled.
 
 Full details: `.agents/skills/builder-signer/`.
-

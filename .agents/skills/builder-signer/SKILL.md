@@ -13,7 +13,6 @@ senders.
 
 ## Rules
 
-| Rule | Read when |
-| --- | --- |
+| Rule                  | Read when                                                                 |
+| --------------------- | ------------------------------------------------------------------------- |
 | [core](rules/core.md) | Editing `crates/builder/`, `crates/signer/`, or builder/signer CLI config |
-

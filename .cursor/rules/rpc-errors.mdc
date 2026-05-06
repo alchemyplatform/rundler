@@ -12,4 +12,3 @@ globs:
 - Gate privileged or state-mutating endpoints; sponsored delegation is disabled by default for a reason.
 
 Full details: `.agents/skills/rpc-errors/`.
-

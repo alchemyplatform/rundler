@@ -45,4 +45,3 @@ delegation is disabled by default because callers can drain available signers.
   namespace without a gating decision.
 - Exception: read-only status methods may remain in the default `eth` or
   `rundler` namespace when they do not mutate state.
-

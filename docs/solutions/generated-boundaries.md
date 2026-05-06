@@ -30,4 +30,3 @@ Edit source inputs: `.proto` files, Solidity under `contracts/*/src`, tracer
 TypeScript, FastLZ C/header files, or the build scripts. Regenerate through
 `cargo build --all --all-features` or the generator-specific command. Do not
 hand-edit `target/`, `OUT_DIR`, generated protobuf Rust, or Foundry output.
-

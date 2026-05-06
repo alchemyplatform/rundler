@@ -15,4 +15,3 @@ globs:
 - CI compliance currently covers v0.6, v0.7, and v0.8 through the bundler test executor.
 
 Full details: `.agents/skills/testing-compliance/`.
-

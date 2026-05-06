@@ -29,4 +29,3 @@ When adding client-visible errors, update both the domain-to-`EthRpcError`
 conversion and `impl From<EthRpcError> for ErrorObjectOwned`. Use
 `rpc_err_with_data` for structured payloads and avoid `INTERNAL_ERROR_CODE`
 unless the failure is truly internal.
-

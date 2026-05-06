@@ -43,4 +43,3 @@ dependencies are CI-visible.
 - Bad: ignore `Result` values from async work or add unused crate dependencies.
 - Exception: test-only dependency markers such as the existing `cargo_husky as _`
   pattern should remain isolated to tests.
-

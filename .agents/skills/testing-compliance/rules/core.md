@@ -43,4 +43,3 @@ Local unit tests use `make test-unit`, which calls `cargo nextest run --locked
 - Bad: run only `cargo test -p one-crate` and call the workspace tested.
 - Exception: during development, narrow package tests are fine before the final
   gate.
-

@@ -13,7 +13,6 @@ cloud operation.
 
 ## Rules
 
-| Rule | Read when |
-| --- | --- |
+| Rule                  | Read when                                                                          |
+| --------------------- | ---------------------------------------------------------------------------------- |
 | [core](rules/core.md) | Editing config resolution, chain specs, provider layers, logs, metrics, or secrets |
-

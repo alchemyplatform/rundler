@@ -12,7 +12,6 @@ versioned ERC-4337 spec harnesses in integrated and modular modes.
 
 ## Rules
 
-| Rule | Read when |
-| --- | --- |
+| Rule                  | Read when                                                 |
+| --------------------- | --------------------------------------------------------- |
 | [core](rules/core.md) | Writing tests or choosing validation for behavior changes |
-

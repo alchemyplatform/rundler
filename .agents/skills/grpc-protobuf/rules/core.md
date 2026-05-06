@@ -45,4 +45,3 @@ Standalone RPC connects to remote pool and builder services via
   ordering races.
 - Exception: admin or one-shot tools can fail fast when they do not participate
   in long-running service startup.
-

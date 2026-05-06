@@ -14,4 +14,3 @@ globs:
 - Never log private keys, mnemonics, auth headers, or raw signatures.
 
 Full details: `.agents/skills/configuration-observability/`.
-

@@ -16,4 +16,3 @@ globs:
 - Use `connect_with_retries_shutdown` and `HealthCheck` patterns for long-running remotes.
 
 Full details: `.agents/skills/grpc-protobuf/`.
-

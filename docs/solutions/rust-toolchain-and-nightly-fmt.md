@@ -26,4 +26,3 @@ separate nightly rustfmt path via `make fmt` and CI's `cargo +nightly fmt
 Use Rust `1.92.0` for builds, clippy, and tests. Use nightly only for rustfmt.
 When documentation and toolchain files disagree, trust `rust-toolchain.toml`,
 `Cargo.toml`, and `.github/workflows/ci.yaml`.
-

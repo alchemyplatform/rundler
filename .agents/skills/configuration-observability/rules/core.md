@@ -42,4 +42,3 @@ Metrics use `metrics-derive` scopes such as `op_pool_chain`.
 - Bad: print private keys, mnemonics, auth headers, or raw signatures.
 - Exception: addresses, transaction hashes, EntryPoint versions, and non-secret
   KMS key IDs are normal operational identifiers.
-

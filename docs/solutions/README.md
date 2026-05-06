@@ -37,4 +37,3 @@ Use these sections:
 Prefer notes for issues that are easy for agents to miss: stale docs, generated
 boundaries, workflow behavior that differs from local commands, or versioned
 protocol details.
-

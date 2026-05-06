@@ -54,4 +54,3 @@ enter a mempool that no builder mines.
 - Good: update builder config docs/tests when changing `EntryPointBuilderConfigs`.
 - Bad: add a mempool filter without a corresponding builder path.
 - Exception: default builders without filters can handle unfiltered mempools.
-

@@ -55,4 +55,3 @@ Report:
 
 Do not create tags, dispatch workflows, or publish Docker images without
 explicit user confirmation.
-

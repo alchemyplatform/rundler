@@ -40,4 +40,3 @@ bindings from `fastlz/fastlz.h` into `OUT_DIR`.
 - Good: edit C/header sources or the build script.
 - Bad: commit generated bindgen output from `OUT_DIR`.
 - Exception: generated output can be inspected locally when debugging bindgen.
-

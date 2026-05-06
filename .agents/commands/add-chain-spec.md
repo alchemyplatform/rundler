@@ -52,4 +52,3 @@ make test-unit
 
 If chain behavior affects gas estimation, EntryPoint support, DA gas, or senders,
 run targeted spec tests or document why local spec coverage is not practical.
-
