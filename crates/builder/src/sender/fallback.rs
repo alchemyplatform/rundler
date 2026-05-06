@@ -17,11 +17,32 @@ use std::{
 };
 
 use alloy_primitives::B256;
+use metrics::{Counter, Gauge};
+use metrics_derive::Metrics;
 use rundler_provider::TransactionRequest;
 use rundler_signer::SignerLease;
 use rundler_types::{ExpectedStorage, GasFees, Timestamp};
 
 use super::{CancelTxInfo, Result, TransactionSender, TxSenderError};
+
+#[derive(Metrics)]
+#[metrics(scope = "builder_fallback_sender")]
+struct FallbackSenderMetrics {
+    #[metric(describe = "1 when the fallback sender is active, 0 when on primary")]
+    using_fallback: Gauge,
+    #[metric(describe = "total number of times the fallback was activated")]
+    activations: Counter,
+    #[metric(describe = "total number of times the primary was restored after fallback")]
+    recoveries: Counter,
+    #[metric(describe = "total successful sends via the primary")]
+    primary_sends: Counter,
+    #[metric(describe = "total successful sends via the fallback")]
+    fallback_sends: Counter,
+    #[metric(
+        describe = "total SenderUnavailable errors from the primary, including those below the failover threshold"
+    )]
+    primary_unavailable: Counter,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 enum ActiveSender {
@@ -56,6 +77,7 @@ pub(crate) struct FallbackTransactionSender {
     consecutive_failures: AtomicU32,
     /// How many consecutive failures are required before activating the fallback.
     failure_threshold: u32,
+    metrics: FallbackSenderMetrics,
 }
 
 impl FallbackTransactionSender {
@@ -65,6 +87,8 @@ impl FallbackTransactionSender {
         recovery_interval: Duration,
         failure_threshold: u32,
     ) -> Self {
+        let metrics = FallbackSenderMetrics::default();
+        metrics.using_fallback.set(0.0);
         Self {
             primary,
             fallback,
@@ -74,6 +98,7 @@ impl FallbackTransactionSender {
             last_tx_used_fallback: AtomicBool::new(false),
             consecutive_failures: AtomicU32::new(0),
             failure_threshold,
+            metrics,
         }
     }
 
@@ -92,6 +117,8 @@ impl FallbackTransactionSender {
             );
             self.using_fallback.store(false, Ordering::Release);
             self.degraded_since_secs.store(0, Ordering::Release);
+            self.metrics.using_fallback.set(0.0);
+            self.metrics.recoveries.increment(1);
             return ActiveSender::Primary;
         }
         ActiveSender::Fallback
@@ -105,6 +132,8 @@ impl FallbackTransactionSender {
         {
             self.degraded_since_secs
                 .store(Timestamp::now().seconds_since_epoch(), Ordering::Release);
+            self.metrics.using_fallback.set(1.0);
+            self.metrics.activations.increment(1);
             tracing::warn!("Primary sender unavailable, activating fallback sender");
         }
     }
@@ -124,6 +153,7 @@ impl TransactionSender for FallbackTransactionSender {
                 .send_transaction(tx, expected_storage, signer)
                 .await?;
             self.last_tx_used_fallback.store(true, Ordering::Release);
+            self.metrics.fallback_sends.increment(1);
             return Ok(hash);
         }
 
@@ -135,9 +165,11 @@ impl TransactionSender for FallbackTransactionSender {
             Ok(hash) => {
                 self.consecutive_failures.store(0, Ordering::Release);
                 self.last_tx_used_fallback.store(false, Ordering::Release);
+                self.metrics.primary_sends.increment(1);
                 Ok(hash)
             }
             Err(TxSenderError::SenderUnavailable(e)) => {
+                self.metrics.primary_unavailable.increment(1);
                 let failures = self.consecutive_failures.fetch_add(1, Ordering::AcqRel) + 1;
                 if failures >= self.failure_threshold {
                     self.activate_fallback();
@@ -147,6 +179,7 @@ impl TransactionSender for FallbackTransactionSender {
                         .send_transaction(tx, expected_storage, signer)
                         .await?;
                     self.last_tx_used_fallback.store(true, Ordering::Release);
+                    self.metrics.fallback_sends.increment(1);
                     Ok(hash)
                 } else {
                     tracing::warn!(
