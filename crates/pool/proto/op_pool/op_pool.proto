@@ -605,6 +605,8 @@ message NewHead {
   uint64 block_number = 2;
   // Address Updates
   repeated AddressUpdate address_updates = 3;
+  // Depth of any reorg detected with this update; 0 if none.
+  uint64 reorg_depth = 4;
 }
 message AddressUpdate {
   // The address

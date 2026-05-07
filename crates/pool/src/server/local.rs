@@ -735,6 +735,7 @@ impl LocalPoolServerRunner {
                                     block_hash: chain_update.latest_block_hash,
                                     block_number: chain_update.latest_block_number,
                                     address_updates: chain_update.address_updates.clone(),
+                                    reorg_depth: chain_update.reorg_depth,
                                 });
                             }
                         }));

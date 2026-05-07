@@ -364,6 +364,14 @@ async fn init_balances<P: EvmProvider>(
             return Ok(());
         }
     };
-    manager.update_balances(balances);
+    let updates = balances
+        .into_iter()
+        .map(|(address, balance)| AddressStateUpdate {
+            address,
+            balance,
+            nonce: None,
+        })
+        .collect();
+    manager.update_address_states(updates);
     Ok(())
 }

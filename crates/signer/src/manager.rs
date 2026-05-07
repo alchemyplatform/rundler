@@ -83,13 +83,17 @@ pub trait SignerManager: Send + Sync {
     /// Return a leased signer
     fn return_lease(&self, lease: SignerLease);
 
-    /// Update the balances of the signers
-    fn update_balances(&self, balances: Vec<(Address, U256)>);
-
-    /// Apply chain-state snapshots from a new-head event. Updates balance/funding
-    /// status (same as [`update_balances`]) and additionally caches each address's
-    /// latest `(balance, nonce)` so consumers can avoid redundant RPC fetches.
+    /// Apply chain-state snapshots from a new-head event (or bootstrap balance
+    /// fetch). Updates balance/funding status and caches each address's latest
+    /// `(balance, nonce)` so consumers can avoid redundant RPC fetches.
     fn update_address_states(&self, updates: Vec<AddressStateUpdate>);
+
+    /// Drop all cached nonces. Balances are retained. Call this when a chain
+    /// event (e.g. a reorg) may have rolled back nonces; the next call to
+    /// `update_address_states` will refresh cached nonces from the new canonical
+    /// chain, and any consumer reading [`cached_state`] in the meantime will see
+    /// `nonce: None` and fall back to RPC.
+    fn invalidate_nonce_cache(&self);
 
     /// Return the latest cached snapshot for an address, if one is known.
     fn cached_state(&self, address: &Address) -> Option<AddressStateSnapshot>;
@@ -274,20 +278,7 @@ impl SignerManager for FundingSignerManager {
         }
     }
 
-    fn update_balances(&self, balances: Vec<(Address, U256)>) {
-        if Self::update_signer_statuses(
-            &self.signer_statuses,
-            balances,
-            self.funder_settings.as_ref(),
-            self.auto_fund,
-        ) {
-            self.funding_notify.notify_one();
-        }
-    }
-
     fn update_address_states(&self, updates: Vec<AddressStateUpdate>) {
-        // Run the existing balance/funding-status path first so behavior matches
-        // the pre-cache `update_balances` call site.
         let balances: Vec<(Address, U256)> =
             updates.iter().map(|u| (u.address, u.balance)).collect();
         if Self::update_signer_statuses(
@@ -317,6 +308,13 @@ impl SignerManager for FundingSignerManager {
             {
                 entry.nonce = Some(new_nonce);
             }
+        }
+    }
+
+    fn invalidate_nonce_cache(&self) {
+        let mut cache = self.address_states.write();
+        for snapshot in cache.values_mut() {
+            snapshot.nonce = None;
         }
     }
 
@@ -440,6 +438,17 @@ mod tests {
 
     use super::*;
 
+    fn balance_updates(balances: Vec<(Address, U256)>) -> Vec<AddressStateUpdate> {
+        balances
+            .into_iter()
+            .map(|(address, balance)| AddressStateUpdate {
+                address,
+                balance,
+                nonce: None,
+            })
+            .collect()
+    }
+
     fn create_test_manager(signers: Vec<Address>) -> FundingSignerManager {
         let mut wallet = EthereumWallet::default();
         for signer in signers {
@@ -520,7 +529,7 @@ mod tests {
             })
             .collect();
 
-        manager.update_balances(balances.clone());
+        manager.update_address_states(balance_updates(balances.clone()));
 
         // Verify status transitions
         {
@@ -535,7 +544,7 @@ mod tests {
         }
 
         balances[0].1 = high_balance;
-        manager.update_balances(balances.clone());
+        manager.update_address_states(balance_updates(balances.clone()));
         {
             let statuses = manager.signer_statuses.read();
             assert_eq!(statuses.get(&addresses[0]), Some(&SignerStatus::Available));
@@ -543,7 +552,7 @@ mod tests {
 
         let lease = manager.lease_signer_by_address(&addresses[0]).unwrap();
         balances[0].1 = low_balance;
-        manager.update_balances(balances);
+        manager.update_address_states(balance_updates(balances));
         {
             let statuses = manager.signer_statuses.read();
             assert_eq!(
@@ -582,7 +591,7 @@ mod tests {
                 }
             })
             .collect();
-        manager.update_balances(balances);
+        manager.update_address_states(balance_updates(balances));
 
         // Try to lease the signer that needs funding
         assert!(manager.lease_signer_by_address(&addresses[0]).is_none());

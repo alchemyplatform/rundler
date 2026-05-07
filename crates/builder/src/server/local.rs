@@ -231,6 +231,14 @@ impl LocalBuilderServerRunner {
                 head = self.heads_rx.recv() => {
                     match head {
                         Ok(new_head) => {
+                            // On reorg, drop cached nonces before applying the new
+                            // canonical state — otherwise a tx that mined in the
+                            // reorged-out block would leave the cache with a nonce
+                            // higher than the actual on-chain nonce, and begin_cycle
+                            // would happily reuse it.
+                            if new_head.reorg_depth > 0 {
+                                self.signer_manager.invalidate_nonce_cache();
+                            }
                             if !new_head.address_updates.is_empty() {
                                 tracing::info!("received new head with address updates: {:?}", new_head);
                                 let updates = new_head

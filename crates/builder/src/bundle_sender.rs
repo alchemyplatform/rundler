@@ -1530,6 +1530,7 @@ impl BundleSenderTrigger {
                 block_hash: B256::ZERO,
                 block_number: 0,
                 address_updates: vec![],
+                reorg_depth: 0,
             },
         })
     }
@@ -2709,6 +2710,7 @@ mod tests {
             block_number,
             block_hash: B256::ZERO,
             address_updates: vec![],
+            reorg_depth: 0,
         }
     }
 
@@ -2722,6 +2724,7 @@ mod tests {
                 balance: U256::ZERO,
                 mined_tx_hashes: vec![B256::ZERO],
             }],
+            reorg_depth: 0,
         }
     }
 

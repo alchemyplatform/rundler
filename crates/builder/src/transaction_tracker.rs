@@ -783,9 +783,9 @@ mod tests {
             self.available.store(true, Ordering::Release);
         }
 
-        fn update_balances(&self, _: Vec<(Address, U256)>) {}
-
         fn update_address_states(&self, _: Vec<AddressStateUpdate>) {}
+
+        fn invalidate_nonce_cache(&self) {}
 
         fn cached_state(&self, _: &Address) -> Option<AddressStateSnapshot> {
             None

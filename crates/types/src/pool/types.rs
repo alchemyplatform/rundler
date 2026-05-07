@@ -55,6 +55,8 @@ pub struct NewHead {
     pub block_number: u64,
     /// The updates to the state of the addresses
     pub address_updates: Vec<AddressUpdate>,
+    /// Depth of any reorg detected with this update; `0` if none.
+    pub reorg_depth: u64,
 }
 
 /// An the state of an address

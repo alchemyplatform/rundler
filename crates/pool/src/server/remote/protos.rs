@@ -582,6 +582,7 @@ impl TryFrom<NewHead> for PoolNewHead {
                 .into_iter()
                 .map(PoolAddressUpdate::try_from)
                 .collect::<Result<Vec<_>, _>>()?,
+            reorg_depth: new_head.reorg_depth,
         })
     }
 }
@@ -596,6 +597,7 @@ impl From<PoolNewHead> for NewHead {
                 .into_iter()
                 .map(AddressUpdate::from)
                 .collect(),
+            reorg_depth: head.reorg_depth,
         }
     }
 }
