@@ -42,7 +42,7 @@ mod local;
 
 mod manager;
 use manager::FundingSignerManager;
-pub use manager::{SignerLease, SignerManager};
+pub use manager::{AddressStateSnapshot, AddressStateUpdate, SignerLease, SignerManager};
 
 pub mod utils;
 

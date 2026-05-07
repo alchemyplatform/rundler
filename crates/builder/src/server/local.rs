@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use futures::future::BoxFuture;
 use metrics::Histogram;
 use metrics_derive::Metrics;
-use rundler_signer::SignerManager;
+use rundler_signer::{AddressStateUpdate, SignerManager};
 use rundler_task::{
     GracefulShutdown,
     server::{HealthCheck, ServerStatus},
@@ -233,12 +233,16 @@ impl LocalBuilderServerRunner {
                         Ok(new_head) => {
                             if !new_head.address_updates.is_empty() {
                                 tracing::info!("received new head with address updates: {:?}", new_head);
-                                let balances = new_head
+                                let updates = new_head
                                     .address_updates
                                     .iter()
-                                    .map(|u| (u.address, u.balance))
+                                    .map(|u| AddressStateUpdate {
+                                        address: u.address,
+                                        balance: u.balance,
+                                        nonce: u.nonce,
+                                    })
                                     .collect::<Vec<_>>();
-                                self.signer_manager.update_balances(balances);
+                                self.signer_manager.update_address_states(updates);
                             }
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {

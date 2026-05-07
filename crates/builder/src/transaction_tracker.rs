@@ -638,7 +638,22 @@ where
             .signer_manager
             .lease_signer()
             .ok_or_else(|| anyhow::anyhow!("no signer available"))?;
+        let address = signer.address();
         self.signer = Some(signer);
+
+        // Fast path: the new-head stream already publishes balance and nonce for
+        // every tracked signer address. If a snapshot with an observed nonce is
+        // available, use it and skip the per-cycle eth_getBalance / eth_getTransactionCount.
+        if let Some(snapshot) = self.signer_manager.cached_state(&address)
+            && let Some(nonce) = snapshot.nonce
+        {
+            self.set_nonce_and_clear_state(nonce);
+            self.balance = snapshot.balance;
+            return Ok(());
+        }
+
+        // Cache miss (cold start, or no committed nonce observed yet for this
+        // address): fall back to RPC.
         self.reset().await;
         Ok(())
     }
@@ -713,6 +728,7 @@ mod tests {
         AnyReceiptEnvelope, AnyTxEnvelope, MockEvmProvider, ReceiptWithBloom, Transaction,
         WithOtherFields,
     };
+    use rundler_signer::{AddressStateSnapshot, AddressStateUpdate};
 
     use super::*;
     use crate::sender::MockTransactionSender;
@@ -768,6 +784,12 @@ mod tests {
         }
 
         fn update_balances(&self, _: Vec<(Address, U256)>) {}
+
+        fn update_address_states(&self, _: Vec<AddressStateUpdate>) {}
+
+        fn cached_state(&self, _: &Address) -> Option<AddressStateSnapshot> {
+            None
+        }
 
         fn fund_signers(&self) -> rundler_signer::Result<()> {
             Ok(())

@@ -36,6 +36,30 @@ use crate::{
     utils,
 };
 
+/// A snapshot of an address's chain state, sourced from new-head events.
+///
+/// `nonce` is `None` until a transaction from the address is observed in a
+/// new-head update; once observed it is monotonically tracked at the latest
+/// committed value.
+#[derive(Clone, Copy, Debug)]
+pub struct AddressStateSnapshot {
+    /// The latest known balance of the address.
+    pub balance: U256,
+    /// The latest committed nonce of the address, if one has been observed.
+    pub nonce: Option<u64>,
+}
+
+/// An address-state update derived from a new-head event.
+#[derive(Clone, Copy, Debug)]
+pub struct AddressStateUpdate {
+    /// The address.
+    pub address: Address,
+    /// The latest balance.
+    pub balance: U256,
+    /// A new committed nonce, if a transaction from this address mined in this block.
+    pub nonce: Option<u64>,
+}
+
 /// Trait for a signer manager
 ///
 /// Leases available signers and manages their balances
@@ -61,6 +85,14 @@ pub trait SignerManager: Send + Sync {
 
     /// Update the balances of the signers
     fn update_balances(&self, balances: Vec<(Address, U256)>);
+
+    /// Apply chain-state snapshots from a new-head event. Updates balance/funding
+    /// status (same as [`update_balances`]) and additionally caches each address's
+    /// latest `(balance, nonce)` so consumers can avoid redundant RPC fetches.
+    fn update_address_states(&self, updates: Vec<AddressStateUpdate>);
+
+    /// Return the latest cached snapshot for an address, if one is known.
+    fn cached_state(&self, address: &Address) -> Option<AddressStateSnapshot>;
 
     /// Fund the signers
     ///
@@ -143,6 +175,9 @@ pub(crate) struct FundingSignerManager {
     chain_id: u64,
     wallet: EthereumWallet,
     signer_statuses: Arc<RwLock<HashMap<Address, SignerStatus>>>,
+    /// Per-address `(balance, nonce)` cache, fed by `update_address_states` from
+    /// new-head events. Lets the transaction tracker skip per-cycle RPC reads.
+    address_states: Arc<RwLock<HashMap<Address, AddressStateSnapshot>>>,
     auto_fund: bool,
     funder_settings: Option<FunderSettings>,
     funding_notify: Arc<Notify>,
@@ -250,6 +285,46 @@ impl SignerManager for FundingSignerManager {
         }
     }
 
+    fn update_address_states(&self, updates: Vec<AddressStateUpdate>) {
+        // Run the existing balance/funding-status path first so behavior matches
+        // the pre-cache `update_balances` call site.
+        let balances: Vec<(Address, U256)> =
+            updates.iter().map(|u| (u.address, u.balance)).collect();
+        if Self::update_signer_statuses(
+            &self.signer_statuses,
+            balances,
+            self.funder_settings.as_ref(),
+            self.auto_fund,
+        ) {
+            self.funding_notify.notify_one();
+        }
+
+        let known: std::collections::HashSet<Address> =
+            self.signer_statuses.read().keys().copied().collect();
+        let mut cache = self.address_states.write();
+        for update in updates {
+            if !known.contains(&update.address) {
+                continue;
+            }
+            let entry = cache.entry(update.address).or_insert(AddressStateSnapshot {
+                balance: update.balance,
+                nonce: None,
+            });
+            entry.balance = update.balance;
+            // Nonce is monotonic; only advance when the new head reports a
+            // committed value at least as high as what we've already seen.
+            if let Some(new_nonce) = update.nonce
+                && entry.nonce.is_none_or(|cached| new_nonce >= cached)
+            {
+                entry.nonce = Some(new_nonce);
+            }
+        }
+    }
+
+    fn cached_state(&self, address: &Address) -> Option<AddressStateSnapshot> {
+        self.address_states.read().get(address).copied()
+    }
+
     fn fund_signers(&self) -> Result<()> {
         if self.funder_settings.is_none() {
             Err(anyhow::anyhow!("Manager does not support funding"))?
@@ -302,6 +377,7 @@ impl FundingSignerManager {
             chain_id,
             wallet,
             signer_statuses,
+            address_states: Arc::new(RwLock::new(HashMap::new())),
             auto_fund,
             funder_settings,
             funding_notify,
