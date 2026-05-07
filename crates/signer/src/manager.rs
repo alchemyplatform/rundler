@@ -12,7 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::{self, Debug},
     sync::Arc,
 };
@@ -299,8 +299,7 @@ impl SignerManager for FundingSignerManager {
             self.funding_notify.notify_one();
         }
 
-        let known: std::collections::HashSet<Address> =
-            self.signer_statuses.read().keys().copied().collect();
+        let known: HashSet<Address> = self.signer_statuses.read().keys().copied().collect();
         let mut cache = self.address_states.write();
         for update in updates {
             if !known.contains(&update.address) {
