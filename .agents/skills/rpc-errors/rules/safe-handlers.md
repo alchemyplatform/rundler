@@ -18,4 +18,3 @@ keep logging, panic handling, and error conversion consistent.
 ## Exceptions
 
 Internal helper methods may return `EthResult` or `InternalRpcResult`.
-

@@ -20,4 +20,3 @@ Metrics use `metrics-derive` scopes such as `op_pool_chain`.
 
 Addresses, transaction hashes, EntryPoint versions, and non-secret KMS key IDs
 are normal operational identifiers.
-

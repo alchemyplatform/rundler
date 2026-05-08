@@ -21,4 +21,3 @@ toolchain. Formatting is the exception: both `make fmt` and CI use
 ## Exceptions
 
 Use `+nightly` for rustfmt only, matching the Makefile and CI.
-

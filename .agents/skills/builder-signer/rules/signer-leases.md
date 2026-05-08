@@ -20,4 +20,3 @@ and `LeasedNeedsFunding`.
 
 A bundle sender may keep its paired lease during the transaction tracking state
 machine by design.
-

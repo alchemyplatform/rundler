@@ -21,4 +21,3 @@ Buf lint, cargo-sort, cargo-deny, and coverage via `cargo llvm-cov nextest
 ## Exceptions
 
 During development, narrow package-level commands are fine before the final gate.
-

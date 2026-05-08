@@ -18,4 +18,3 @@ not found style errors.
 ## Exceptions
 
 Sender-specific retry behavior belongs in transaction sender code.
-

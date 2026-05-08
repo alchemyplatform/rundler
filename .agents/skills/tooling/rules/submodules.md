@@ -20,4 +20,3 @@ versions, OpenZeppelin versions, FastLZ, and spec tests live under submodules.
 
 Do not audit vendored submodule internals unless the change explicitly targets
 those sources.
-

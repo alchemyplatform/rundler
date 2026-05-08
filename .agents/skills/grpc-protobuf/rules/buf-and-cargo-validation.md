@@ -18,4 +18,3 @@ Buf lint plus a Cargo build that compiles protos.
 ## Exceptions
 
 Comment-only proto edits still need Buf lint.
-

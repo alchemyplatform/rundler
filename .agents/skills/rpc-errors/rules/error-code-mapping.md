@@ -23,4 +23,3 @@ error code and structured data.
 
 Use `INTERNAL_ERROR_CODE` only for failures that are truly internal and not
 actionable by RPC clients.
-

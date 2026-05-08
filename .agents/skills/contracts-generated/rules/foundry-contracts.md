@@ -18,4 +18,3 @@ Change Solidity sources or build scripts, not generated Foundry output.
 
 Generated outputs may be inspected as evidence, but source changes belong in
 Solidity or build scripts.
-

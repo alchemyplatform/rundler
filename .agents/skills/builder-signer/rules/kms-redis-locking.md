@@ -18,4 +18,3 @@ KMS keys. The lock manager loop extends locks and logs relock failures.
 ## Exceptions
 
 A single KMS key does not need the multi-key selection loop.
-

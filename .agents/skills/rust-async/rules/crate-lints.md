@@ -18,4 +18,3 @@ and `#![deny(unused_must_use, rust_2018_idioms)]`.
 
 Test-only dependency markers such as the existing `cargo_husky as _` pattern
 should remain isolated to tests.
-

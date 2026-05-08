@@ -20,4 +20,3 @@ binary can observe failure and shut down cleanly.
 ## Exceptions
 
 Short test-only tasks may use Tokio directly inside test modules.
-

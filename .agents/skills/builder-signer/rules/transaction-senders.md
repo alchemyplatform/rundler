@@ -19,4 +19,3 @@ route cancellations to the sender that submitted the original transaction.
 ## Exceptions
 
 Unknown outages may use `SenderUnavailable` when fallback should handle them.
-

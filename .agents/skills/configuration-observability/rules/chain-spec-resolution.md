@@ -20,4 +20,3 @@ must be defined and non-zero.
 
 Runtime-only CLI flags that are not chain-specific can live in the command args
 structs.
-

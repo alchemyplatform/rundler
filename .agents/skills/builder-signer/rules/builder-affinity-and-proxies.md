@@ -19,4 +19,3 @@ enter a mempool that no builder mines.
 ## Exceptions
 
 Default builders without filters can handle unfiltered mempools.
-

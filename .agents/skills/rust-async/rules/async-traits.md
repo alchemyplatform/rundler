@@ -18,4 +18,3 @@ boundaries that need trait objects or mock support.
 ## Exceptions
 
 Concrete helper methods do not need trait abstraction.
-

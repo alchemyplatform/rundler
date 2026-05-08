@@ -21,4 +21,3 @@ including `UserOperationVariant`, `EntryPointVersion`, `Eip7702Auth`,
 ## Exceptions
 
 Truly unexpected remote responses may remain `PoolError::UnexpectedResponse`.
-

@@ -18,4 +18,3 @@ watches `validationTracerV0_6.ts` and `validationTracerV0_7.ts`.
 ## Exceptions
 
 Lockfile-only changes should still be validated with the tracer build command.
-

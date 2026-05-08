@@ -17,4 +17,3 @@ bindings from `fastlz/fastlz.h` into `OUT_DIR`.
 ## Exceptions
 
 Generated output can be inspected locally when debugging bindgen.
-

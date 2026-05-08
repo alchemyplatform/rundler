@@ -20,4 +20,3 @@ and complex chain tests use hand-rolled mocks such as `MockBlock` and
 ## Exceptions
 
 Small pure functions should use direct inputs without mocks.
-

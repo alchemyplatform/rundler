@@ -21,4 +21,3 @@ source. Shared crates use workspace dependencies from the root `Cargo.toml`.
 ## Exceptions
 
 Crate-local dependencies are fine when they are truly local to one crate.
-

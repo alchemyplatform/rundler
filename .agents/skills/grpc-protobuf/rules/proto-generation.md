@@ -21,4 +21,3 @@ and `include_file_descriptor_set!`.
 
 Conversion code in `protos.rs` is hand-written and should be updated alongside
 schema changes.
-

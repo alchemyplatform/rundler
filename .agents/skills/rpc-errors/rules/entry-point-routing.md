@@ -20,4 +20,3 @@ route's ABI before simulation or pool insertion.
 
 Endpoints without an EntryPoint argument may query all enabled routes, as
 receipt/status methods do.
-

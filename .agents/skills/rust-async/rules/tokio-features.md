@@ -19,4 +19,3 @@ The workspace `tokio` dependency enables only `rt`, `sync`, and `time`.
 
 `bin/rundler` owns CLI runtime setup and may use the binary's broader Tokio
 feature set.
-

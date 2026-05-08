@@ -18,4 +18,3 @@ Most unit tests live in `#[cfg(test)] mod tests` near the changed module, using
 ## Exceptions
 
 Distributed or end-to-end behavior belongs in spec or harness tests.
-
