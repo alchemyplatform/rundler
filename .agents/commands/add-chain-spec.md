@@ -1,7 +1,7 @@
 ---
 name: Add Chain Spec
 description: Add or update a Rundler hardcoded chain spec and verify config resolution behavior.
-argument-hint: [network_name]
+argument-hint: "[network_name]"
 ---
 
 ## How It Works

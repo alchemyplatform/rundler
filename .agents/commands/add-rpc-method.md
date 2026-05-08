@@ -1,7 +1,7 @@
 ---
 name: Add RPC Method
 description: Add a Rundler JSON-RPC method with routing, error mapping, tests, and docs.
-argument-hint: [namespace] [method_name]
+argument-hint: "[namespace] [method_name]"
 ---
 
 ## How It Works

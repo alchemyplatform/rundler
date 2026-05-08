@@ -12,6 +12,9 @@ tracer, tonic for protos, and bindgen/cc for FastLZ.
 
 ## Rules
 
-| Rule                  | Read when                                                                  |
-| --------------------- | -------------------------------------------------------------------------- |
-| [core](rules/core.md) | Editing contracts, generated output, tracer TypeScript, or FastLZ bindings |
+| Rule | Read when |
+| --- | --- |
+| [foundry-contracts](rules/foundry-contracts.md) | Editing Solidity or contract artifacts |
+| [foundry-submodules](rules/foundry-submodules.md) | Changing account-abstraction, OpenZeppelin, or Foundry assumptions |
+| [sim-tracer](rules/sim-tracer.md) | Editing simulation tracer TypeScript |
+| [fastlz-bindings](rules/fastlz-bindings.md) | Editing FastLZ C, headers, or generated bindings |

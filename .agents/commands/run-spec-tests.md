@@ -1,7 +1,7 @@
 ---
 name: Run Spec Tests
 description: Prepare and run Rundler ERC-4337 spec tests in integrated or modular mode.
-argument-hint: [mode] [version]
+argument-hint: "[mode] [version]"
 ---
 
 ## How It Works

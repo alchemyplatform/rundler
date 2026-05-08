@@ -12,6 +12,9 @@ versioned ERC-4337 spec harnesses in integrated and modular modes.
 
 ## Rules
 
-| Rule                  | Read when                                                 |
-| --------------------- | --------------------------------------------------------- |
-| [core](rules/core.md) | Writing tests or choosing validation for behavior changes |
+| Rule | Read when |
+| --- | --- |
+| [co-located-tests](rules/co-located-tests.md) | Adding Rust unit tests |
+| [mocking-patterns](rules/mocking-patterns.md) | Mocking providers, builders, or chain state |
+| [spec-tests](rules/spec-tests.md) | Changing EntryPoint, simulation, mempool, RPC, or builder behavior |
+| [nextest-gates](rules/nextest-gates.md) | Choosing local unit test commands |

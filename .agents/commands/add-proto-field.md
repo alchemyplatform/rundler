@@ -1,7 +1,7 @@
 ---
 name: Add Proto Field
 description: Change a pool or builder protobuf schema and update all conversion and validation boundaries.
-argument-hint: [service] [field_name]
+argument-hint: "[service] [field_name]"
 ---
 
 ## How It Works

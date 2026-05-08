@@ -13,6 +13,9 @@ mode. Generated Rust lives in Cargo `OUT_DIR`; source-of-truth schemas live in
 
 ## Rules
 
-| Rule                  | Read when                                                                |
-| --------------------- | ------------------------------------------------------------------------ |
-| [core](rules/core.md) | Editing `.proto`, remote server/client code, or proto/domain conversions |
+| Rule | Read when |
+| --- | --- |
+| [proto-generation](rules/proto-generation.md) | Editing schemas or tonic build files |
+| [buf-and-cargo-validation](rules/buf-and-cargo-validation.md) | Validating protobuf changes |
+| [domain-conversions](rules/domain-conversions.md) | Updating `protos.rs` conversion code |
+| [remote-health-and-retries](rules/remote-health-and-retries.md) | Changing remote service startup or clients |

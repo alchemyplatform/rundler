@@ -13,6 +13,9 @@ cloud operation.
 
 ## Rules
 
-| Rule                  | Read when                                                                          |
-| --------------------- | ---------------------------------------------------------------------------------- |
-| [core](rules/core.md) | Editing config resolution, chain specs, provider layers, logs, metrics, or secrets |
+| Rule | Read when |
+| --- | --- |
+| [chain-spec-resolution](rules/chain-spec-resolution.md) | Adding chain spec fields or hardcoded networks |
+| [json-config-loading](rules/json-config-loading.md) | Changing JSON config file loading |
+| [provider-layers](rules/provider-layers.md) | Changing Alloy retry, timeout, or metrics layers |
+| [observability-and-secrets](rules/observability-and-secrets.md) | Adding logs, metrics, tracing, or secret handling |

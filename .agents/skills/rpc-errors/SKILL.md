@@ -13,6 +13,9 @@ are part of the client contract.
 
 ## Rules
 
-| Rule                  | Read when                                                                       |
-| --------------------- | ------------------------------------------------------------------------------- |
-| [core](rules/core.md) | Editing `crates/rpc/`, `crates/types/src/user_operation/`, or RPC-facing errors |
+| Rule | Read when |
+| --- | --- |
+| [safe-handlers](rules/safe-handlers.md) | Adding or changing jsonrpsee method implementations |
+| [entry-point-routing](rules/entry-point-routing.md) | Routing user operations by EntryPoint version/address |
+| [error-code-mapping](rules/error-code-mapping.md) | Adding client-visible failures or error variants |
+| [privileged-endpoints](rules/privileged-endpoints.md) | Adding admin, debug, sponsored, or state-mutating endpoints |

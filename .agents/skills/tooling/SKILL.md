@@ -12,6 +12,9 @@ Foundry, protobuf, Buf, and recursive submodules in CI.
 
 ## Rules
 
-| Rule                  | Read when                                                  |
-| --------------------- | ---------------------------------------------------------- |
-| [core](rules/core.md) | Editing build, lint, dependency, submodule, or CI behavior |
+| Rule | Read when |
+| --- | --- |
+| [rust-toolchain](rules/rust-toolchain.md) | Choosing Rust toolchain or formatter behavior |
+| [repository-gates](rules/repository-gates.md) | Choosing local or CI-equivalent validation commands |
+| [dependency-policy](rules/dependency-policy.md) | Adding or changing Cargo dependencies |
+| [submodules](rules/submodules.md) | Working with contracts, spec tests, or vendored sources |

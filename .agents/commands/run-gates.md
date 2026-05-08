@@ -1,7 +1,7 @@
 ---
 name: Run Gates
 description: Run the appropriate local verification gates for the current Rundler diff.
-argument-hint: [scope]
+argument-hint: "[scope]"
 ---
 
 ## How It Works

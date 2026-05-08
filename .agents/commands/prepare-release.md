@@ -1,7 +1,7 @@
 ---
 name: Prepare Release
 description: Prepare Rundler release inputs and checks without dispatching production-affecting workflows.
-argument-hint: [version]
+argument-hint: "[version]"
 ---
 
 ## How It Works

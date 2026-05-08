@@ -12,6 +12,9 @@ object-safe async traits, and keeps Tokio features minimal in workspace crates.
 
 ## Rules
 
-| Rule                  | Read when                                                              |
-| --------------------- | ---------------------------------------------------------------------- |
-| [core](rules/core.md) | Changing async tasks, traits, Tokio features, or crate lint boundaries |
+| Rule | Read when |
+| --- | --- |
+| [task-spawning](rules/task-spawning.md) | Adding background tasks or long-running loops |
+| [tokio-features](rules/tokio-features.md) | Using Tokio APIs in library crates |
+| [async-traits](rules/async-traits.md) | Adding async trait boundaries |
+| [crate-lints](rules/crate-lints.md) | Adding public APIs or dependencies |
