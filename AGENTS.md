@@ -42,6 +42,21 @@ cargo run node             # Run a local integrated node after .env setup
 | Changing chain specs, CLI config, provider layers, tracing, or metrics               | `configuration-observability`, `tooling`                              |
 | Preparing a PR or judging deployment safety                                          | `tooling`, `testing-compliance`, plus area-specific skills            |
 
+## Baseline Coding and PR Conventions
+
+- Follow Rust naming defaults: modules/files `snake_case`, types/traits
+  `UpperCamelCase`, constants `SCREAMING_SNAKE_CASE`.
+- Use `{variable}` shorthand in format strings, logs, and error messages, for
+  example `format!("transaction {tx_hash} missing")`.
+- Import types instead of using inline paths. Use `as` renames to resolve
+  conflicts.
+- Qualify function calls with their module or type, for example
+  `EthRpcError::from(...)` or `Vec::new()`, but do not qualify types/structs/enums
+  unless needed to resolve ambiguity.
+- Commits and PR titles must follow Conventional Commit style; CI validates both.
+- Fill the PR template, keep commits focused, include tests with code changes,
+  and update docs when API, CLI, or architecture behavior changes.
+
 ## Directory Mapping
 
 | Path                                                     | Skills                                                                   |
@@ -55,6 +70,7 @@ cargo run node             # Run a local integrated node after .env setup
 | `crates/provider/`                                       | `configuration-observability`, `rust-async`, `testing-compliance`        |
 | `crates/sim/`                                            | `contracts-generated`, `testing-compliance`                              |
 | `crates/contracts/`                                      | `contracts-generated`                                                    |
+| `crates/aggregators/`                                    | `testing-compliance`, `rust-async`, `builder-signer`                     |
 | `crates/types/`                                          | `rpc-errors`, `grpc-protobuf`, `testing-compliance`                      |
 | `crates/task/`                                           | `rust-async`, `grpc-protobuf`                                            |
 | `test/spec-tests/`                                       | `testing-compliance`, `contracts-generated`                              |
@@ -74,6 +90,7 @@ rundler/
 │   ├── signer/                  # Private key, mnemonic, AWS KMS, funding, key leasing
 │   ├── sim/                     # Simulation, gas estimation, TypeScript tracer build
 │   ├── contracts/               # Solidity submodules, Foundry-generated ABI artifacts
+│   ├── aggregators/             # BLS/PBH signature aggregation and proxy helpers
 │   ├── task/                    # Reth task spawner and gRPC utilities
 │   ├── types/                   # UserOperation, EntryPoint, pool, builder, chain types
 │   └── utils/                   # Retry, logging, metrics helpers

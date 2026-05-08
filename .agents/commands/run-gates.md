@@ -32,7 +32,15 @@ Use the first matching rules:
 | `crates/contracts/`, `.gitmodules`                                      | `git submodule update --init --recursive`, `cargo build --all --all-features`, `make test-unit` |
 | `crates/sim/tracer/`                                                    | `yarn build` from `crates/sim/tracer`, then `cargo build --all --all-features`                  |
 | EntryPoint, simulation, mempool, or builder behavior                    | `make test-unit`, then `make test-spec-integrated` or `make test-spec-modular` as appropriate   |
-| Docs-only                                                               | `codespell --toml .github/workflows/codespell.toml *.md docs/*.md` if codespell is installed    |
+| Docs-only                                                               | Run codespell against changed `.md` and `.mdc` files if codespell is installed                   |
+
+For docs-only changes, collect changed docs first so nested guidance files
+under `.agents/`, `.cursor/rules/`, and `docs/solutions/` are covered:
+
+```bash
+changed_docs=$(git diff --name-only -- '*.md' '*.mdc')
+[ -z "$changed_docs" ] || codespell --toml .github/workflows/codespell.toml $changed_docs
+```
 
 ### 2. Run Commands
 
