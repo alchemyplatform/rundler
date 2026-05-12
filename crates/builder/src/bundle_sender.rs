@@ -473,6 +473,12 @@ where
                         );
                     }
 
+                    if let Err(e) = self.emit_userop_metrics(tx_hash, &pinned).await {
+                        warn!(
+                            "Failed to emit per-userop metrics for bundle transaction {tx_hash:?}: {e:#?}"
+                        );
+                    }
+
                     self.emit(
                         BuilderEvent::transaction_mined(
                             self.builder_tag.clone(),
@@ -1012,6 +1018,41 @@ where
 
         self.remove_ops_from_pool_by_hash(ep_address, to_remove)
             .await
+    }
+
+    async fn emit_userop_metrics(
+        &self,
+        tx_hash: B256,
+        pinned_proposer: &Option<ProposerKey>,
+    ) -> anyhow::Result<()> {
+        let proposer_key = pinned_proposer
+            .clone()
+            .context("No entry point for userop metrics")?;
+        let ep_address = proposer_key.0;
+
+        let filter_id = &proposer_key.1;
+        let proposer = self.proposers.get(&proposer_key).context(format!(
+            "Unknown entry point config: {ep_address:?}, filter_id: {filter_id:?}"
+        ))?;
+
+        let records = proposer.process_mined(tx_hash).await?;
+        let ep_label = ep_address.to_string();
+        for record in records {
+            if !record.success {
+                warn!(
+                    "Userop reverted post-inclusion (is_7702={}): uo_hash={:?} bundle_tx={:?}",
+                    record.is_7702, record.user_op_hash, tx_hash,
+                );
+            }
+            metrics::counter!(
+                "builder_userop_executed",
+                "entry_point" => ep_label.clone(),
+                "success" => record.success.to_string(),
+                "is_7702" => record.is_7702.to_string(),
+            )
+            .increment(1);
+        }
+        Ok(())
     }
 
     fn emit(&self, event: BuilderEvent, pinned_proposer: &Option<ProposerKey>) {
@@ -2461,6 +2502,13 @@ mod tests {
         // Mock the proposer's process_revert to return empty (no ops to remove)
         mock_proposer_t
             .expect_process_revert()
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
+
+        // Mock process_mined — emit_userop_metrics calls this for any mined
+        // bundle (success or revert) when a pin is established. Returning
+        // empty means no per-userop counters are incremented.
+        mock_proposer_t
+            .expect_process_mined()
             .returning(|_| Box::pin(async { Ok(vec![]) }));
 
         mock_pool.expect_remove_ops().returning(|_, _| Ok(()));

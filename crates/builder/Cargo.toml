@@ -13,6 +13,7 @@ alloy-consensus.workspace = true
 alloy-primitives.workspace = true
 alloy-signer.workspace = true
 alloy-signer-local.workspace = true
+alloy-sol-types.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
@@ -26,6 +27,7 @@ metrics-derive.workspace = true
 prost.workspace = true
 rand.workspace = true
 reqwest = { workspace = true, default-features = false, features = ["json"] }
+rundler-contracts.workspace = true
 rundler-provider.workspace = true
 rundler-signer.workspace = true
 rundler-sim.workspace = true

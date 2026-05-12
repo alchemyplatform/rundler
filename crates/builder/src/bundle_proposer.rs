@@ -20,13 +20,19 @@ use std::{
     time::Instant,
 };
 
+use alloy_consensus::Transaction as _;
 use alloy_primitives::{Address, B256, Bytes, U256};
+use alloy_sol_types::SolEvent;
 use anyhow::Context;
 use async_trait::async_trait;
 use futures::future;
 use linked_hash_map::LinkedHashMap;
 use metrics::{Counter, Histogram};
 use metrics_derive::Metrics;
+use rundler_contracts::{
+    v0_6::IEntryPoint::UserOperationEvent as UserOperationEventV06,
+    v0_7::IEntryPoint::UserOperationEvent as UserOperationEventV07,
+};
 use rundler_provider::{
     BundleHandler, DAGasOracleSync, DAGasProvider, EntryPoint, EvmProvider,
     GethDebugBuiltInTracerType, GethDebugTracerCallConfig, GethDebugTracerType,
@@ -150,6 +156,19 @@ pub(crate) struct BundleProposalRequest {
     pub(crate) condition_not_met: bool,
 }
 
+/// Per-userop outcome from a mined bundle transaction. Returned by
+/// `BundleProposerT::process_mined` so the bundle sender can emit per-userop
+/// counters with a 7702-vs-non-7702 dimension.
+#[derive(Debug, Clone)]
+pub(crate) struct UserOpExecutionRecord {
+    pub user_op_hash: B256,
+    /// Decoded from the on-chain `UserOperationEvent.success` field. False
+    /// means the userop reverted post-inclusion (paymaster still pays gas).
+    pub success: bool,
+    /// True when the included userop carried an EIP-7702 authorization tuple.
+    pub is_7702: bool,
+}
+
 /// Type-erased bundle proposer trait.
 /// Allows workers to build bundles without knowing the specific entrypoint version.
 #[async_trait]
@@ -165,6 +184,13 @@ pub(crate) trait BundleProposerT: Send + Sync {
     /// Process a reverted bundle transaction and return op hashes to remove from pool.
     /// Fetches the trace and transaction internally, then decodes and processes the revert.
     async fn process_revert(&self, tx_hash: B256) -> anyhow::Result<Vec<B256>>;
+
+    /// Process a mined bundle transaction (success or revert) and return one
+    /// record per userop included in the bundle, including whether that
+    /// individual userop succeeded on-chain and whether it carried a 7702
+    /// authorization. Used to emit per-userop metrics for observability of
+    /// in-execution reverts that don't fail the whole bundle.
+    async fn process_mined(&self, tx_hash: B256) -> anyhow::Result<Vec<UserOpExecutionRecord>>;
 }
 
 pub(crate) struct BundleProposerImpl<EP, BP> {
@@ -495,6 +521,96 @@ where
                     .collect())
             }
         }
+    }
+
+    async fn process_mined(&self, tx_hash: B256) -> anyhow::Result<Vec<UserOpExecutionRecord>> {
+        let address = *self.ep_providers.entry_point().address();
+        let chain_spec = &self.settings.chain_spec;
+        let evm = self.ep_providers.evm();
+
+        let (tx_opt, receipt_opt) = tokio::try_join!(
+            evm.get_transaction_by_hash(tx_hash),
+            evm.get_transaction_receipt(tx_hash),
+        )
+        .context("should have fetched tx and receipt from provider")?;
+
+        let Some(tx) = tx_opt else {
+            warn!("Transaction {tx_hash:?} not found during mined processing");
+            return Ok(vec![]);
+        };
+        let Some(receipt) = receipt_opt else {
+            warn!("Receipt {tx_hash:?} not found during mined processing");
+            return Ok(vec![]);
+        };
+
+        let auth_list = get_auth_list_from_transaction(&tx);
+        let calldata = tx.input().clone();
+
+        let ops: Vec<UserOpsPerAggregator<UserOperationVariant>> =
+            match self.ep_providers.entry_point().version().abi_version() {
+                EntryPointAbiVersion::V0_6 => {
+                    decode_v0_6_ops_from_calldata(chain_spec, address, &calldata)
+                        .into_iter()
+                        .map(|ops| ops.into_uo_variants())
+                        .collect()
+                }
+                EntryPointAbiVersion::V0_7 => {
+                    decode_v0_7_ops_from_calldata(chain_spec, address, &calldata, &auth_list)
+                        .into_iter()
+                        .map(|ops| ops.into_uo_variants())
+                        .collect()
+                }
+            };
+
+        let logs = receipt.inner.inner.logs();
+        let mut hash_to_success: HashMap<B256, bool> = HashMap::new();
+        for log in logs {
+            if log.address() != address {
+                continue;
+            }
+            let Some(topic0) = log.topic0() else { continue };
+            let event = match self.ep_providers.entry_point().version().abi_version() {
+                EntryPointAbiVersion::V0_6 => {
+                    if *topic0 != UserOperationEventV06::SIGNATURE_HASH {
+                        continue;
+                    }
+                    log.log_decode::<UserOperationEventV06>().ok().map(|l| {
+                        let d = l.data();
+                        (d.userOpHash, d.success)
+                    })
+                }
+                EntryPointAbiVersion::V0_7 => {
+                    if *topic0 != UserOperationEventV07::SIGNATURE_HASH {
+                        continue;
+                    }
+                    log.log_decode::<UserOperationEventV07>().ok().map(|l| {
+                        let d = l.data();
+                        (d.userOpHash, d.success)
+                    })
+                }
+            };
+            if let Some((uo_hash, success)) = event {
+                hash_to_success.insert(uo_hash, success);
+            }
+        }
+
+        let mut records = Vec::new();
+        for uo_agg in &ops {
+            for uo in &uo_agg.user_ops {
+                let hash = uo.hash();
+                let is_7702 = uo.authorization_tuple().is_some();
+                // If no event was emitted for this op, treat it as failed:
+                // that's what happens when handleOps reverts before the op runs.
+                let success = hash_to_success.get(&hash).copied().unwrap_or(false);
+                records.push(UserOpExecutionRecord {
+                    user_op_hash: hash,
+                    success,
+                    is_7702,
+                });
+            }
+        }
+
+        Ok(records)
     }
 }
 
