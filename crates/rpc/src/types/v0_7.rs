@@ -23,10 +23,7 @@ use rundler_types::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    eth::EthRpcError,
-    utils::{FromRpcType, TryFromRpcType},
-};
+use crate::{eth::EthRpcError, utils::TryFromRpcType};
 
 /// User operation definition for RPC inputs
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -146,19 +143,10 @@ impl TryFromRpcType<RpcUserOperation> for UserOperation {
             );
         }
         if let Some(factory) = def.factory {
-            // special handling for "0x7702" shortened factory marker
-            let factory = if factory == bytes!("7702") {
-                EIP7702_FACTORY_MARKER
-            } else if factory.len() == 20 {
-                Address::from_slice(&factory)
-            } else {
-                return Err(EthRpcError::InvalidParams(format!(
-                    "Invalid factory length. Expected 20 bytes. Got: {:?}",
-                    factory.len()
-                )));
-            };
-
-            builder = builder.factory(factory, def.factory_data.unwrap_or_default());
+            builder = builder.factory(
+                decode_factory(factory)?,
+                def.factory_data.unwrap_or_default(),
+            );
         }
         if let Some(auth) = def.eip7702_auth {
             builder = builder.authorization_tuple(auth);
@@ -192,7 +180,7 @@ pub(crate) struct RpcUserOperationOptionalGas {
     pre_verification_gas: Option<U256>,
     max_priority_fee_per_gas: Option<U128>,
     max_fee_per_gas: Option<U128>,
-    factory: Option<Address>,
+    factory: Option<Bytes>,
     factory_data: Option<Bytes>,
     paymaster: Option<Address>,
     paymaster_verification_gas_limit: Option<U128>,
@@ -204,13 +192,15 @@ pub(crate) struct RpcUserOperationOptionalGas {
     paymaster_signature: Option<Bytes>,
 }
 
-impl FromRpcType<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
-    fn from_rpc_type(
+impl TryFromRpcType<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
+    fn try_from_rpc_type(
         def: RpcUserOperationOptionalGas,
         _chain_spec: &ChainSpec,
         ep_version: EntryPointVersion,
-    ) -> Self {
-        UserOperationOptionalGas {
+    ) -> Result<Self, EthRpcError> {
+        let factory = def.factory.map(decode_factory).transpose()?;
+
+        Ok(UserOperationOptionalGas {
             sender: def.sender,
             nonce: def.nonce,
             call_data: def.call_data,
@@ -219,7 +209,7 @@ impl FromRpcType<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
             pre_verification_gas: def.pre_verification_gas.map(|x| x.to()),
             max_priority_fee_per_gas: def.max_priority_fee_per_gas.map(|x| x.to()),
             max_fee_per_gas: def.max_fee_per_gas.map(|x| x.to()),
-            factory: def.factory,
+            factory,
             factory_data: def.factory_data.unwrap_or_default(),
             paymaster: def.paymaster,
             paymaster_verification_gas_limit: def.paymaster_verification_gas_limit.map(|x| x.to()),
@@ -230,7 +220,20 @@ impl FromRpcType<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
             aggregator: def.aggregator,
             paymaster_signature: def.paymaster_signature,
             entry_point_version: ep_version,
-        }
+        })
+    }
+}
+
+fn decode_factory(factory: Bytes) -> Result<Address, EthRpcError> {
+    if factory == bytes!("7702") {
+        Ok(EIP7702_FACTORY_MARKER)
+    } else if factory.len() == 20 {
+        Ok(Address::from_slice(&factory))
+    } else {
+        Err(EthRpcError::InvalidParams(format!(
+            "Invalid factory length. Expected 2-byte EIP-7702 marker or 20-byte address. Got: {:?}",
+            factory.len()
+        )))
     }
 }
 

@@ -22,7 +22,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
     eth::EthRpcError,
-    utils::{FromRpcType, IntoRundlerType, TryFromRpcType, TryIntoRundlerType},
+    utils::{IntoRundlerType, TryFromRpcType, TryIntoRundlerType},
 };
 
 mod permissions;
@@ -156,20 +156,20 @@ pub(crate) enum RpcUserOperationOptionalGas {
     V0_7(RpcUserOperationOptionalGasV0_7),
 }
 
-impl FromRpcType<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
-    fn from_rpc_type(
+impl TryFromRpcType<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
+    fn try_from_rpc_type(
         op: RpcUserOperationOptionalGas,
         chain_spec: &ChainSpec,
         ep_version: EntryPointVersion,
-    ) -> Self {
-        match op {
+    ) -> Result<Self, EthRpcError> {
+        Ok(match op {
             RpcUserOperationOptionalGas::V0_6(op) => {
                 UserOperationOptionalGas::V0_6(op.into_rundler_type(chain_spec, ep_version))
             }
             RpcUserOperationOptionalGas::V0_7(op) => {
-                UserOperationOptionalGas::V0_7(op.into_rundler_type(chain_spec, ep_version))
+                UserOperationOptionalGas::V0_7(op.try_into_rundler_type(chain_spec, ep_version)?)
             }
-        }
+        })
     }
 }
 

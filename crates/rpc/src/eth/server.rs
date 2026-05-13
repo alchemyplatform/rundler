@@ -89,7 +89,7 @@ where
             "eth_estimateUserOperationGas",
             EthApi::estimate_user_operation_gas(
                 self,
-                op.into_rundler_type(&self.chain_spec, ep_version),
+                op.try_into_rundler_type(&self.chain_spec, ep_version)?,
                 entry_point,
                 state_override,
             ),
