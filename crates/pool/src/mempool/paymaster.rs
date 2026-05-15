@@ -121,18 +121,20 @@ where
             .await
             .context("Paymaster balance should not be empty if address exists in pool")?;
 
-        let paymaster_meta = PaymasterMetadata {
+        // Re-seed the cache under a single write lock, recomputing outstanding pending
+        // liability from user_op_fees so an LRU eviction doesn't forget in-flight ops.
+        let mut state = self.state.write();
+        if let Some(meta) = state.paymaster_metadata(paymaster) {
+            return Ok(meta);
+        }
+        let pending = state.outstanding_liability_for(paymaster);
+        state.add_new_paymaster(paymaster, balance, pending);
+
+        Ok(PaymasterMetadata {
             address: paymaster,
-            pending_balance: balance,
+            pending_balance: balance.saturating_sub(pending),
             confirmed_balance: balance,
-        };
-
-        // Save paymaster balance after first lookup
-        self.state
-            .write()
-            .add_new_paymaster(paymaster, balance, U256::ZERO);
-
-        Ok(paymaster_meta)
+        })
     }
 
     #[instrument(skip_all)]
@@ -251,6 +253,13 @@ impl PaymasterTrackerInner {
 
     fn paymaster_exists(&self, paymaster: Address) -> bool {
         self.paymaster_balances.peek(&paymaster).is_some()
+    }
+
+    fn outstanding_liability_for(&self, paymaster: Address) -> U256 {
+        self.user_op_fees
+            .values()
+            .filter(|fee| fee.paymaster == paymaster)
+            .fold(U256::ZERO, |acc, fee| acc.saturating_add(fee.max_op_cost))
     }
 
     fn set_tracking(&mut self, tracking_enabled: bool) {
@@ -951,6 +960,68 @@ mod tests {
         let status = tracker.get_stake_status(Address::random()).await.unwrap();
 
         assert!(status.is_staked);
+    }
+
+    #[tokio::test]
+    async fn lru_eviction_preserves_outstanding_paymaster_liability() {
+        let real_paymaster = Address::random();
+        let evictor_1 = Address::random();
+        let evictor_2 = Address::random();
+
+        let sender_1 = Address::random();
+        let sender_2 = Address::random();
+
+        let mut entrypoint = MockEntryPointV0_6::new();
+        entrypoint
+            .expect_balance_of()
+            .returning(|_, _| Ok(U256::from(2000)));
+
+        let tracker =
+            PaymasterTracker::new(entrypoint, PaymasterConfig::new(U256::ZERO, 0, true, 2));
+
+        let mk_op = |sender: Address| {
+            UserOperationBuilder::new(
+                &ChainSpec::default(),
+                UserOperationRequiredFields {
+                    sender,
+                    nonce: U256::ZERO,
+                    call_gas_limit: 400,
+                    verification_gas_limit: 400,
+                    pre_verification_gas: 100,
+                    max_fee_per_gas: 1,
+                    paymaster_and_data: real_paymaster.to_vec().into(),
+                    ..Default::default()
+                },
+            )
+            .build()
+        };
+
+        let po_1 = demo_pool_op(mk_op(sender_1));
+        let po_2 = demo_pool_op(mk_op(sender_2));
+
+        // Each op costs 1700 (verification_gas * 3 + call_gas + pre_verification) under v0.6
+        // with a paymaster set. Deposit of 2000 can only safely cover one such op.
+        assert_eq!(po_1.uo.max_gas_cost(), U256::from(1700));
+
+        tracker.add_or_update_balance(&po_1).await.unwrap();
+
+        // Force eviction of real_paymaster from the size-2 LRU cache.
+        tracker.paymaster_balance(evictor_1).await.unwrap();
+        tracker.paymaster_balance(evictor_2).await.unwrap();
+        assert!(!tracker.state.read().paymaster_exists(real_paymaster));
+
+        // Reloading must reconstruct pending liability from user_op_fees,
+        // not reset it to the full deposit.
+        let reloaded = tracker.paymaster_balance(real_paymaster).await.unwrap();
+        assert_eq!(reloaded.confirmed_balance, U256::from(2000));
+        assert_eq!(reloaded.pending_balance, U256::from(300));
+
+        // Second op must now be rejected since aggregate liability would exceed the deposit.
+        let res = tracker.add_or_update_balance(&po_2).await;
+        assert!(matches!(
+            res,
+            Err(MempoolError::PaymasterBalanceTooLow(_, _))
+        ));
     }
 
     #[test]
