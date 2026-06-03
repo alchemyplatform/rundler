@@ -115,7 +115,10 @@ where
                     match e {
                         alloy_json_rpc::RpcError::ErrorResp(rpc_error) => {
                             method_logger.record_http(HttpCode::TwoHundreds);
-                            method_logger.record_rpc(get_rpc_status_from_code(rpc_error.code));
+                            method_logger.record_rpc(get_rpc_status_from_error(
+                                rpc_error.code,
+                                &rpc_error.message,
+                            ));
                         }
                         alloy_json_rpc::RpcError::Transport(TransportErrorKind::HttpError(
                             HttpError { status, body: _ },
@@ -165,6 +168,34 @@ fn get_rpc_status_from_code(code: i64) -> RpcCode {
     }
 }
 
+/// Some JSON-RPC "errors" returned when broadcasting a transaction actually
+/// mean the node already accepted it — i.e. rundler re-broadcast an in-flight
+/// or already-mined tx. These are not RPC-provider failures, so they're
+/// recorded under a dedicated `AlreadyExist` status code rather than
+/// `ServerError`, keeping them observable without counting against the RPC
+/// success-rate alert.
+///
+/// Covers the geth-family wordings ("nonce too low", "already known") and the
+/// Cosmos/Ethermint wording ("invalid sequence") seen on e.g. Cronos, where
+/// the node rejects a re-broadcast of an already-consumed account sequence
+/// with `-32000 invalid sequence`.
+fn is_already_known_tx_error(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("nonce too low")
+        || message.contains("already known")
+        || message.contains("invalid sequence")
+}
+
+/// Classify a JSON-RPC error response into an `RpcCode`, treating
+/// already-accepted-transaction errors (see [`is_already_known_tx_error`]) as
+/// `AlreadyExist` rather than a server-side failure.
+fn get_rpc_status_from_error(code: i64, message: &str) -> RpcCode {
+    if is_already_known_tx_error(message) {
+        return RpcCode::AlreadyExist;
+    }
+    get_rpc_status_from_code(code)
+}
+
 fn get_http_status_from_code(code: u16) -> HttpCode {
     match code {
         x if (200..=299).contains(&x) => HttpCode::TwoHundreds,
@@ -184,9 +215,10 @@ fn get_rpc_status_code(response_packet: &ResponsePacket) -> RpcCode {
         }
         ResponsePacket::Single(resp) => resp,
     };
-    let response_code: i64 = match &response.payload {
-        alloy_json_rpc::ResponsePayload::Success(_) => 0,
-        alloy_json_rpc::ResponsePayload::Failure(error_payload) => error_payload.code,
-    };
-    get_rpc_status_from_code(response_code)
+    match &response.payload {
+        alloy_json_rpc::ResponsePayload::Success(_) => RpcCode::Success,
+        alloy_json_rpc::ResponsePayload::Failure(error_payload) => {
+            get_rpc_status_from_error(error_payload.code, &error_payload.message)
+        }
+    }
 }
