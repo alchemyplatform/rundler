@@ -323,6 +323,10 @@ fn parse_known_call_execution_failed(message: &str, code: i64) -> Option<TxSende
     if lowercase_message.contains("nonce too low") {
         return Some(TxSenderError::NonceTooLow);
     }
+    // Cronos/Cosmos SDK: "invalid nonce; got 1232, expected 1233: invalid sequence"
+    if lowercase_message.contains("invalid nonce; got") {
+        return Some(TxSenderError::NonceTooLow);
+    }
     // geth
     if lowercase_message.contains("transaction underpriced") {
         return Some(TxSenderError::Underpriced);
@@ -350,4 +354,37 @@ fn parse_known_call_execution_failed(message: &str, code: i64) -> Option<TxSende
     }
     // No known error matched
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TxSenderError;
+
+    #[test]
+    fn parses_cronos_invalid_sequence_as_nonce_too_low() {
+        let error = super::parse_known_call_execution_failed(
+            "invalid nonce; got 1232, expected 1233: invalid sequence: invalid sequence",
+            -32000,
+        );
+
+        assert!(matches!(error, Some(TxSenderError::NonceTooLow)));
+    }
+
+    #[test]
+    fn parses_cronos_invalid_sequence_case_insensitively() {
+        let error = super::parse_known_call_execution_failed(
+            "Invalid nonce; got 26, expected 27: invalid sequence: invalid sequence",
+            -32000,
+        );
+
+        assert!(matches!(error, Some(TxSenderError::NonceTooLow)));
+    }
+
+    #[test]
+    fn ignores_invalid_sequence_without_invalid_nonce() {
+        let error =
+            super::parse_known_call_execution_failed("invalid sequence: invalid sequence", -32000);
+
+        assert!(matches!(error, None));
+    }
 }
