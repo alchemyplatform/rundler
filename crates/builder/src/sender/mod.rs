@@ -385,6 +385,6 @@ mod tests {
         let error =
             super::parse_known_call_execution_failed("invalid sequence: invalid sequence", -32000);
 
-        assert!(matches!(error, None));
+        assert!(error.is_none());
     }
 }
