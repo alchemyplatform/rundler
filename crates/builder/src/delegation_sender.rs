@@ -348,6 +348,12 @@ where
         heads_rx: broadcast::Receiver<Arc<NewHead>>,
     ) -> anyhow::Result<B256> {
         let result = self.run(&signer, auths, heads_rx).await;
+        // This path sends transactions from the signer's address, advancing its
+        // nonce outside the bundle sender's tracking. Invalidate the cached
+        // account state so the next consumer to lease this address re-reads the
+        // nonce from chain rather than reusing a now-stale cached value.
+        self.signer_manager
+            .invalidate_account_state(signer.address());
         self.signer_manager.return_lease(signer);
         result
     }

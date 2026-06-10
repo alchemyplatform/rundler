@@ -59,6 +59,25 @@ pub trait SignerManager: Send + Sync {
     /// Return a leased signer
     fn return_lease(&self, lease: SignerLease);
 
+    /// Return the cached on-chain account state (nonce + balance) for a signer
+    /// address, if a fresh nonce is currently known.
+    ///
+    /// This lets a consumer re-acquire a signer without a chain round-trip to
+    /// re-read nonce/balance. The cache is only populated with a known nonce
+    /// while the state is trustworthy (see [`SignerManager::set_account_state`]
+    /// and [`SignerManager::invalidate_account_state`]).
+    fn cached_account_state(&self, address: Address) -> Option<CachedAccountState>;
+
+    /// Record fresh on-chain account state (nonce + balance) for a signer
+    /// address, as read from chain or derived from a confirmed chain update.
+    fn set_account_state(&self, address: Address, nonce: u64, balance: U256);
+
+    /// Invalidate the cached nonce for a signer address, forcing the next
+    /// consumer to re-read it from chain. Must be called by any consumer that
+    /// sends transactions from the address outside the normal bundle-sender
+    /// tracking path (e.g. sponsored delegation), since that advances the nonce.
+    fn invalidate_account_state(&self, address: Address);
+
     /// Update the balances of the signers
     fn update_balances(&self, balances: Vec<(Address, U256)>);
 
@@ -66,6 +85,16 @@ pub trait SignerManager: Send + Sync {
     ///
     /// Returns an error if the signer manager does not support funding
     fn fund_signers(&self) -> Result<()>;
+}
+
+/// Last-known on-chain state for a signer account, cached to avoid redundant
+/// per-block nonce/balance reads when a signer is repeatedly leased and returned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CachedAccountState {
+    /// The account nonce.
+    pub nonce: u64,
+    /// The account balance.
+    pub balance: U256,
 }
 
 /// A leased signer
@@ -143,6 +172,9 @@ pub(crate) struct FundingSignerManager {
     chain_id: u64,
     wallet: EthereumWallet,
     signer_statuses: Arc<RwLock<HashMap<Address, SignerStatus>>>,
+    /// Cached on-chain account state (nonce + balance) per signer address. A
+    /// missing entry means the nonce is unknown and must be read from chain.
+    account_states: Arc<RwLock<HashMap<Address, CachedAccountState>>>,
     auto_fund: bool,
     funder_settings: Option<FunderSettings>,
     funding_notify: Arc<Notify>,
@@ -239,7 +271,34 @@ impl SignerManager for FundingSignerManager {
         }
     }
 
+    fn cached_account_state(&self, address: Address) -> Option<CachedAccountState> {
+        self.account_states.read().get(&address).copied()
+    }
+
+    fn set_account_state(&self, address: Address, nonce: u64, balance: U256) {
+        self.account_states
+            .write()
+            .insert(address, CachedAccountState { nonce, balance });
+    }
+
+    fn invalidate_account_state(&self, address: Address) {
+        self.account_states.write().remove(&address);
+    }
+
     fn update_balances(&self, balances: Vec<(Address, U256)>) {
+        // Keep the cached balance fresh for addresses we already track. We only
+        // refresh existing entries: arriving here does not establish a known
+        // nonce, so we must not create a cache entry that would let a consumer
+        // skip its initial chain read.
+        {
+            let mut states = self.account_states.write();
+            for (address, balance) in &balances {
+                if let Some(state) = states.get_mut(address) {
+                    state.balance = *balance;
+                }
+            }
+        }
+
         if Self::update_signer_statuses(
             &self.signer_statuses,
             balances,
@@ -302,6 +361,7 @@ impl FundingSignerManager {
             chain_id,
             wallet,
             signer_statuses,
+            account_states: Arc::new(RwLock::new(HashMap::new())),
             auto_fund,
             funder_settings,
             funding_notify,
