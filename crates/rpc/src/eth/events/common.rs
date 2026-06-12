@@ -14,12 +14,13 @@
 use std::{collections::VecDeque, marker::PhantomData};
 
 use alloy_consensus::Transaction;
+use alloy_eips::BlockNumberOrTag;
 use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_sol_types::SolEvent;
 use itertools::Itertools;
 use rundler_provider::{
-    EvmProvider, Filter, GethDebugBuiltInTracerType, GethDebugTracerType, GethDebugTracingOptions,
-    GethTrace, Log, TransactionReceipt,
+    EvmProvider, Filter, FilterBlockOption, GethDebugBuiltInTracerType, GethDebugTracerType,
+    GethDebugTracingOptions, GethTrace, Log, TransactionReceipt,
 };
 use rundler_types::{
     UserOperation, UserOperationVariant, authorization::Eip7702Auth, chain::ChainSpec,
@@ -72,10 +73,11 @@ where
     async fn get_mined_by_hash(
         &self,
         hash: B256,
+        block_option: Option<FilterBlockOption>,
     ) -> EventProviderResult<Option<RpcUserOperationByHash>> {
         // Get event associated with hash (need to check all entry point addresses associated with this API)
         let event = self
-            .get_event_by_hash(hash)
+            .get_event_by_hash(hash, block_option)
             .await
             .log_on_error("should have successfully queried for user op events by hash")?;
 
@@ -112,9 +114,10 @@ where
     async fn get_receipt(
         &self,
         hash: B256,
+        block_option: Option<FilterBlockOption>,
     ) -> EventProviderResult<Option<RpcUserOperationReceipt>> {
         let event = self
-            .get_event_by_hash(hash)
+            .get_event_by_hash(hash, block_option)
             .await
             .log_on_error("should have successfully queried for user op events by hash")?;
         let Some(event) = event else { return Ok(None) };
@@ -181,13 +184,14 @@ where
         &self,
         hash: B256,
         preconfirmed_bundle_transaction: Option<B256>,
+        block_option: Option<FilterBlockOption>,
     ) -> EventProviderResult<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>> {
         // Step 1: Get tx_hash (preconfirmed: passed in, pending: find event first)
         let (tx_hash, event_from_logs) = if let Some(bundle_tx) = preconfirmed_bundle_transaction {
             (bundle_tx, None)
         } else {
             let event = self
-                .get_event_by_hash(hash)
+                .get_event_by_hash(hash, block_option)
                 .await
                 .log_on_error("should have successfully queried for user op events by hash")?;
 
@@ -314,30 +318,52 @@ where
     }
 
     #[instrument(skip_all)]
-    async fn get_event_by_hash(&self, hash: B256) -> EventProviderResult<Option<Log>> {
-        let to_block = self.provider.get_block_number().await?;
-
-        let from_block = match self.event_block_distance {
-            Some(distance) => to_block.saturating_sub(distance),
-            None => 0,
+    async fn get_event_by_hash(
+        &self,
+        hash: B256,
+        block_option: Option<FilterBlockOption>,
+    ) -> EventProviderResult<Option<Log>> {
+        let has_block_option = block_option.is_some();
+        let block_option = if let Some(bo) = block_option {
+            bo
+        } else {
+            let to_block = self.provider.get_block_number().await?;
+            let from_block = match self.event_block_distance {
+                Some(distance) => to_block.saturating_sub(distance),
+                None => 0,
+            };
+            FilterBlockOption::Range {
+                from_block: Some(from_block.into()),
+                to_block: Some(to_block.into()),
+            }
         };
 
-        match self.get_event_by_hash_at(hash, from_block, to_block).await {
+        match self.get_event_by_hash_at(hash, block_option).await {
             Ok(logs) => Ok(logs),
             Err(e) => {
-                if let Some(fallback_distance) = self.event_block_distance_fallback {
+                if let FilterBlockOption::Range {
+                    from_block: Some(BlockNumberOrTag::Number(from_block)),
+                    to_block: Some(BlockNumberOrTag::Number(to_block)),
+                } = block_option
+                    && !has_block_option
+                    && let Some(fallback_distance) = self.event_block_distance_fallback
+                {
                     tracing::warn!(
                         "Error querying for event at from block {from_block:?} to block {to_block:?} falling back to a distance of {fallback_distance:?}. Error {e:?}"
                     );
-                    self.get_event_by_hash_at(
-                        hash,
-                        to_block.saturating_sub(fallback_distance),
-                        to_block,
-                    )
-                    .await
-                } else {
-                    Err(e)
+                    return self
+                        .get_event_by_hash_at(
+                            hash,
+                            FilterBlockOption::Range {
+                                from_block: Some(
+                                    (to_block.saturating_sub(fallback_distance)).into(),
+                                ),
+                                to_block: Some(to_block.into()),
+                            },
+                        )
+                        .await;
                 }
+                Err(e)
             }
         }
     }
@@ -346,14 +372,12 @@ where
     async fn get_event_by_hash_at(
         &self,
         hash: B256,
-        from_block: u64,
-        to_block: u64,
+        block_option: FilterBlockOption,
     ) -> EventProviderResult<Option<Log>> {
         let filter = Filter::new()
             .address(vec![self.entry_point_address])
             .event_signature(E::UserOperationEvent::SIGNATURE_HASH)
-            .from_block(from_block)
-            .to_block(to_block)
+            .select(block_option)
             .topic1(hash);
 
         Ok(self.provider.get_logs(&filter).await?.into_iter().next())

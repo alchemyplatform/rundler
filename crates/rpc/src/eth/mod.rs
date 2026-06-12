@@ -26,11 +26,10 @@ mod server;
 use alloy_primitives::{Address, B256, U64};
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_provider::StateOverride;
-use rundler_types::BlockTag;
 
 use crate::types::{
-    RpcGasEstimate, RpcUserOperation, RpcUserOperationByHash, RpcUserOperationOptionalGas,
-    RpcUserOperationPermissions, RpcUserOperationReceipt,
+    RpcBlockOption, RpcBlockOptionOrTag, RpcGasEstimate, RpcUserOperation, RpcUserOperationByHash,
+    RpcUserOperationOptionalGas, RpcUserOperationPermissions, RpcUserOperationReceipt,
 };
 
 /// Eth API
@@ -60,6 +59,7 @@ pub trait EthApi {
     async fn get_user_operation_by_hash(
         &self,
         hash: B256,
+        block_option: Option<RpcBlockOption>,
     ) -> RpcResult<Option<RpcUserOperationByHash>>;
 
     /// Returns the user operation receipt with the given hash.
@@ -67,7 +67,7 @@ pub trait EthApi {
     async fn get_user_operation_receipt(
         &self,
         hash: B256,
-        tag: Option<BlockTag>,
+        block_option_or_tag: Option<RpcBlockOptionOrTag>,
     ) -> RpcResult<Option<RpcUserOperationReceipt>>;
 
     /// Returns the supported entry points addresses

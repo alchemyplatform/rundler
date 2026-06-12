@@ -26,6 +26,32 @@ Methods defined by the [ERC-7769 spec](https://eips.ethereum.org/EIPS/eip-7769#r
 | `eth_getUserOperationByHash`   |    ✅     |
 | `eth_getUserOperationReceipt`  |    ✅     |
 
+#### Block Option Parameter
+
+`eth_getUserOperationByHash` and `eth_getUserOperationReceipt` locate user operations by searching for the `UserOperationEvent` log via `eth_getLogs`. By default the search covers the last `--user_operation_event_block_distance` blocks (all blocks if unset). Both methods accept a non-standard optional 2nd positional parameter to scope this search. This is useful when the caller already knows where the operation was mined, or needs to search outside the default window.
+
+The parameter is one of:
+
+- A block range object: `{ fromBlock, toBlock }`, where each field is an optional block number or tag.
+- A block hash: only the given block is searched.
+
+```
+# Request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "eth_getUserOperationByHash",
+  "params": [
+    "0x...", // user operation hash
+    { "fromBlock": "0x64", "toBlock": "0xc8" } // optional, block range or block hash
+  ]
+}
+```
+
+`eth_getUserOperationReceipt` additionally accepts a block tag for this parameter: `"LATEST"` (default) or `"PENDING"`. On networks that support preconfirmations, `"PENDING"` allows the receipt of a preconfirmed user operation to be returned before it lands onchain.
+
+NOTE: when a block option is supplied, the `--user_operation_event_block_distance_fallback` retry behavior is disabled and the supplied option is used as-is.
+
 ### `debug_` Namespace
 
 Method defined by the [ERC-7769 spec](https://eips.ethereum.org/EIPS/eip-7769#rpc-methods-debug-namespace). Used only for debugging/testing and should be disabled on production APIs.
@@ -306,6 +332,8 @@ NOTE: The returned user operation receipt is slightly different than the receipt
 
 Gets the status of a user operation by hash. Intended for use cases where the user wants a single RPC call to retrieve the status of a user operation, as well as its receipt if that user operation is mined.
 
+Accepts an optional 2nd positional parameter to scope the search for the mined user operation event: a block range object or block hash, as described in [Block Option Parameter](#block-option-parameter) (block tags are not supported here).
+
 Possible statuses:
 
 - "unknown": the user operation is not mined or pending in the mempool.
@@ -338,6 +366,7 @@ The `pendingBundle` object contains:
   "method": "rundler_getUserOperationStatus",
   "params": [
     "0x...", // user operation hash
+    { "fromBlock": "0x64", "toBlock": "0xc8" } // optional, block range or block hash
   ]
 }
 

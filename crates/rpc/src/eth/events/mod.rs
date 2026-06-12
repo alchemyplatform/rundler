@@ -12,7 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_primitives::{Address, B256};
-use rundler_provider::{Log, ProviderError, TransactionReceipt};
+use rundler_provider::{FilterBlockOption, Log, ProviderError, TransactionReceipt};
 use thiserror::Error;
 use tracing::instrument;
 
@@ -30,6 +30,7 @@ pub(crate) trait UserOperationEventProvider: Send + Sync {
     async fn get_mined_by_hash(
         &self,
         hash: B256,
+        block_option: Option<FilterBlockOption>,
     ) -> EventProviderResult<Option<RpcUserOperationByHash>>;
 
     async fn get_mined_from_tx_receipt(
@@ -38,8 +39,11 @@ pub(crate) trait UserOperationEventProvider: Send + Sync {
         tx_receipt: TransactionReceipt,
     ) -> EventProviderResult<Option<RpcUserOperationByHash>>;
 
-    async fn get_receipt(&self, hash: B256)
-    -> EventProviderResult<Option<RpcUserOperationReceipt>>;
+    async fn get_receipt(
+        &self,
+        hash: B256,
+        block_option: Option<FilterBlockOption>,
+    ) -> EventProviderResult<Option<RpcUserOperationReceipt>>;
 
     async fn get_receipt_from_tx_hash(
         &self,
@@ -59,6 +63,7 @@ pub(crate) trait UserOperationEventProvider: Send + Sync {
         &self,
         hash: B256,
         bundle_transaction: Option<B256>,
+        block_option: Option<FilterBlockOption>,
     ) -> EventProviderResult<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>>;
 }
 

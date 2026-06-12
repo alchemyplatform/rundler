@@ -11,6 +11,7 @@ publish = false
 alloy-consensus.workspace = true
 
 alloy-contract.workspace = true
+alloy-eips.workspace = true
 alloy-json-rpc.workspace = true
 alloy-primitives.workspace = true
 alloy-sol-types.workspace = true

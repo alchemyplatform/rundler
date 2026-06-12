@@ -11,10 +11,11 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, B256, U64, U128, U256};
-use rundler_provider::{Log, TransactionReceipt};
+use alloy_eips::BlockNumberOrTag;
+use alloy_primitives::{Address, B256, BlockHash, U64, U128, U256};
+use rundler_provider::{FilterBlockOption, Log, TransactionReceipt};
 use rundler_types::{
-    EntryPointVersion, UserOperationOptionalGas, UserOperationVariant,
+    BlockTag, EntryPointVersion, UserOperationOptionalGas, UserOperationVariant,
     chain::ChainSpec,
     pool::{PendingBundleInfo, PoolOperationStatus, Reputation},
 };
@@ -429,4 +430,47 @@ pub enum RpcDelegationStatus {
     },
     /// Delegation status is unknown.
     Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(untagged, rename_all_fields = "camelCase")]
+pub(crate) enum RpcBlockOption {
+    Range {
+        /// The block number or tag this filter should start at.
+        from_block: Option<BlockNumberOrTag>,
+        /// The block number that this filter should end at.
+        to_block: Option<BlockNumberOrTag>,
+    },
+    /// The hash of the block if the filter only targets a single block
+    AtBlockHash(BlockHash),
+}
+
+impl From<RpcBlockOption> for FilterBlockOption {
+    fn from(rpc: RpcBlockOption) -> FilterBlockOption {
+        match rpc {
+            RpcBlockOption::Range {
+                from_block,
+                to_block,
+            } => FilterBlockOption::Range {
+                from_block,
+                to_block,
+            },
+            RpcBlockOption::AtBlockHash(block_hash) => FilterBlockOption::AtBlockHash(block_hash),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(untagged, rename_all_fields = "camelCase")]
+pub(crate) enum RpcBlockOptionOrTag {
+    Range {
+        /// The block number or tag this filter should start at.
+        from_block: Option<BlockNumberOrTag>,
+        /// The block number that this filter should end at.
+        to_block: Option<BlockNumberOrTag>,
+    },
+    /// The hash of the block if the filter only targets a single block
+    BlockHash(BlockHash),
+    /// The block tag to use for this request
+    BlockTag(BlockTag),
 }

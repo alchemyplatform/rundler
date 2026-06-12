@@ -15,7 +15,7 @@ use std::{future::Future, pin::Pin};
 
 use alloy_primitives::{Address, B256, U64};
 use futures_util::future;
-use rundler_provider::StateOverride;
+use rundler_provider::{FilterBlockOption, StateOverride};
 use rundler_types::{
     BlockTag, UserOperation, UserOperationOptionalGas, UserOperationPermissions,
     UserOperationVariant, chain::ChainSpec, pool::Pool,
@@ -132,6 +132,7 @@ where
     pub(crate) async fn get_user_operation_by_hash(
         &self,
         hash: B256,
+        block_option: Option<FilterBlockOption>,
     ) -> EthResult<Option<RpcUserOperationByHash>> {
         if hash == B256::ZERO {
             return Err(EthRpcError::InvalidParams(
@@ -148,7 +149,7 @@ where
         for ep in self.router.entry_points() {
             futs.push(Box::pin(async move {
                 self.router
-                    .get_mined_by_hash(ep, hash)
+                    .get_mined_by_hash(ep, hash, block_option)
                     .await
                     .map_err(EthRpcError::from)
             }));
@@ -164,6 +165,7 @@ where
         &self,
         hash: B256,
         tag: Option<BlockTag>,
+        block_option: Option<FilterBlockOption>,
     ) -> EthResult<Option<RpcUserOperationReceipt>> {
         if hash == B256::ZERO {
             return Err(EthRpcError::InvalidParams(
@@ -191,7 +193,12 @@ where
             {
                 let ret = self
                     .router
-                    .get_receipt(&op_status.entry_point, hash, Some(preconf_info.tx_hash))
+                    .get_receipt(
+                        &op_status.entry_point,
+                        hash,
+                        Some(preconf_info.tx_hash),
+                        None,
+                    )
                     .await;
                 match ret {
                     Ok(Some(receipt)) => return Ok(Some(receipt)),
@@ -217,7 +224,7 @@ where
         let futs = self
             .router
             .entry_points()
-            .map(|ep| self.router.get_receipt(ep, hash, None));
+            .map(|ep| self.router.get_receipt(ep, hash, None, block_option));
         let results = future::try_join_all(futs).await?;
         Ok(results.into_iter().find_map(|x| x))
     }
@@ -328,7 +335,7 @@ mod tests {
             MockGasEstimator::default(),
             false,
         );
-        let res = api.get_user_operation_by_hash(hash).await.unwrap();
+        let res = api.get_user_operation_by_hash(hash, None).await.unwrap();
         let ro = RpcUserOperationByHash {
             user_operation: UserOperationVariant::from(uo).into(),
             entry_point: ep.into(),
@@ -412,7 +419,7 @@ mod tests {
             MockGasEstimator::default(),
             false,
         );
-        let res = api.get_user_operation_by_hash(hash).await.unwrap();
+        let res = api.get_user_operation_by_hash(hash, None).await.unwrap();
         let ro = RpcUserOperationByHash {
             user_operation: UserOperationVariant::from(uo).into(),
             entry_point: ep.into(),
@@ -453,8 +460,56 @@ mod tests {
             MockGasEstimator::default(),
             false,
         );
-        let res = api.get_user_operation_by_hash(hash).await.unwrap();
+        let res = api.get_user_operation_by_hash(hash, None).await.unwrap();
         assert_eq!(res, None);
+    }
+
+    #[tokio::test]
+    async fn test_get_user_op_by_hash_with_block_option() {
+        let cs = ChainSpec {
+            id: 1,
+            ..Default::default()
+        };
+        let ep = cs.entry_point_address_v0_6;
+        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
+        let hash = uo.hash();
+
+        for block_option in [
+            FilterBlockOption::Range {
+                from_block: Some(100u64.into()),
+                to_block: Some(200u64.into()),
+            },
+            FilterBlockOption::AtBlockHash(B256::random()),
+        ] {
+            let mut pool = MockPool::default();
+            pool.expect_get_op_by_hash()
+                .with(eq(hash))
+                .returning(move |_| Ok(None));
+
+            // no `expect_get_block_number`: a caller-supplied block option must skip
+            // the latest-block lookup used to compute the default search window
+            let mut provider = MockEvmProvider::default();
+            provider
+                .expect_get_logs()
+                .withf(move |filter| filter.block_option == block_option)
+                .returning(move |_| Ok(vec![]));
+
+            let mut entry_point = MockEntryPointV0_6::default();
+            entry_point.expect_address().return_const(ep);
+
+            let api = create_api(
+                provider,
+                entry_point,
+                pool,
+                MockGasEstimator::default(),
+                false,
+            );
+            let res = api
+                .get_user_operation_by_hash(hash, Some(block_option))
+                .await
+                .unwrap();
+            assert_eq!(res, None);
+        }
     }
 
     fn create_api(

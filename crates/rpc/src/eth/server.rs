@@ -13,16 +13,17 @@
 
 use alloy_primitives::{Address, B256, U64};
 use jsonrpsee::core::RpcResult;
-use rundler_provider::StateOverride;
-use rundler_types::{BlockTag, UserOperationPermissions, pool::Pool};
+use rundler_provider::{FilterBlockOption, StateOverride};
+use rundler_types::{UserOperationPermissions, pool::Pool};
 use tracing::instrument;
 
 use super::{EthApiServer, api::EthApi};
 use crate::{
     eth::EthRpcError,
     types::{
-        RpcGasEstimate, RpcUserOperation, RpcUserOperationByHash, RpcUserOperationOptionalGas,
-        RpcUserOperationPermissions, RpcUserOperationReceipt,
+        RpcBlockOption, RpcBlockOptionOrTag, RpcGasEstimate, RpcUserOperation,
+        RpcUserOperationByHash, RpcUserOperationOptionalGas, RpcUserOperationPermissions,
+        RpcUserOperationReceipt,
     },
     utils::{self, IntoRundlerType, TryIntoRundlerType},
 };
@@ -101,10 +102,11 @@ where
     async fn get_user_operation_by_hash(
         &self,
         hash: B256,
+        block_option: Option<RpcBlockOption>,
     ) -> RpcResult<Option<RpcUserOperationByHash>> {
         utils::safe_call_rpc_handler(
             "eth_getUserOperationByHash",
-            EthApi::get_user_operation_by_hash(self, hash),
+            EthApi::get_user_operation_by_hash(self, hash, block_option.map(|o| o.into())),
         )
         .await
     }
@@ -113,11 +115,27 @@ where
     async fn get_user_operation_receipt(
         &self,
         hash: B256,
-        tag: Option<BlockTag>,
+        block_option_or_tag: Option<RpcBlockOptionOrTag>,
     ) -> RpcResult<Option<RpcUserOperationReceipt>> {
+        let (tag, block_option) = match block_option_or_tag {
+            None => (None, None),
+            Some(RpcBlockOptionOrTag::BlockTag(t)) => (Some(t), None),
+            Some(RpcBlockOptionOrTag::BlockHash(h)) => (None, Some(h.into())),
+            Some(RpcBlockOptionOrTag::Range {
+                from_block,
+                to_block,
+            }) => (
+                None,
+                Some(FilterBlockOption::Range {
+                    from_block,
+                    to_block,
+                }),
+            ),
+        };
+
         utils::safe_call_rpc_handler(
             "eth_getUserOperationReceipt",
-            EthApi::get_user_operation_receipt(self, hash, tag),
+            EthApi::get_user_operation_receipt(self, hash, tag, block_option),
         )
         .await
     }
