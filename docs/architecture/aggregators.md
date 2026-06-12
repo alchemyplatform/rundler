@@ -104,4 +104,4 @@ NOTE: This is implemented mostly as a POC of aggregation in Rundler. Due to the 
 
 ### [PBH](../../crates/aggregators/pbh/)
 
-The PBH aggregator has support for the World Chain Priority Blockspace for Humans signature aggregator. More info can be found [here](https://github.com/worldcoin/world-chain/tree/main/contracts).
+The PBH aggregator has support for the World Chain Priority Blockspace for Humans signature aggregator. More info can be found [here](https://github.com/worldcoin/world-chain/tree/main/pkg/contracts).
