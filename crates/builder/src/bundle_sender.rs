@@ -281,8 +281,16 @@ where
 
         match state.inner {
             InnerState::Building(building_state) => {
-                if has_tracker_update {
-                    // Building state has no tracker-dependent cleanup, so release immediately.
+                // Only release locks when no transaction is in-flight. A Building state can be
+                // (re-)entered while a previously sent bundle is still pending (e.g. the
+                // underpriced / replacement / condition-not-met retry paths in
+                // `handle_building_state`). Releasing a sender whose userOp is still in-flight —
+                // submitted but not yet mined, and therefore still served by the shared pool —
+                // lets another builder re-assign and re-submit the same op, producing a duplicate
+                // on-chain submission where one tx reverts with AA25 invalid account nonce. This
+                // mirrors the `num_pending_transactions() == 0` guard used by every per-result
+                // handler in `handle_building_state`.
+                if has_tracker_update && state.transaction_tracker.num_pending_transactions() == 0 {
                     self.assigner.release_all(self.sender_eoa);
                 }
                 self.handle_building_state(state, building_state).await?;
@@ -2355,6 +2363,94 @@ mod tests {
         assert!(
             matches!(reassignment, AssignmentResult::NoOperations),
             "confirmed lock should be preserved during pending tx"
+        );
+    }
+
+    // Regression test: a Building-state step that receives a tracker update must NOT release
+    // sender locks while a transaction is still in-flight. Releasing a confirmed lock for an
+    // op whose tx is submitted-but-not-yet-mined (and therefore still in the pool) lets another
+    // builder re-bundle and re-submit it, causing a duplicate on-chain submission (AA25).
+    #[tokio::test]
+    async fn test_building_step_with_pending_tx_keeps_confirmed_locks() {
+        let mut mock_pool = MockPool::new();
+        let mut mock_trigger = MockTrigger::new();
+        let mut mock_tracker = MockTransactionTracker::new();
+
+        let sender = Address::ZERO;
+
+        // last_block is read for block_number()/block_hash() during the building step.
+        mock_trigger.expect_last_block().return_const(new_head(0));
+
+        // A transaction is still in-flight (e.g. a replacement awaiting mine), so the
+        // Building-arm release in `step_after_trigger` must NOT drop the confirmed lock.
+        mock_tracker
+            .expect_num_pending_transactions()
+            .return_const(1_usize);
+        // send_bundle reads tracker state; required_fees forces the pool op to be fee-filtered
+        // so send_bundle returns NoOperationsAfterFeeFilter (a guarded path that also keeps the
+        // confirmed lock) — isolating the Building-arm release decision under test.
+        mock_tracker.expect_get_state().returning(|| {
+            Ok(TrackerState {
+                nonce: 1,
+                balance: U256::ZERO,
+                required_fees: Some(GasFees {
+                    max_fee_per_gas: 100,
+                    max_priority_fee_per_gas: 50,
+                }),
+            })
+        });
+
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(move |_, _, _| Ok(vec![pool_op_summary(ENTRY_POINT_ADDRESS_V0_6, sender)]));
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .returning(|_, _| Ok(vec![demo_pool_op()]));
+
+        let mut sender_impl = new_sender(MockBundleProposerT::new(), mock_pool);
+
+        // Pre-lock and confirm the sender to simulate an existing in-flight bundle.
+        match sender_impl
+            .assigner
+            .assign_work(sender, u64::MAX, GasFees::default())
+            .await
+            .unwrap()
+        {
+            AssignmentResult::Assigned(assignment) => assert_eq!(assignment.operations.len(), 1),
+            other => panic!("initial assignment should exist, got {other:?}"),
+        };
+        sender_impl
+            .assigner
+            .confirm_senders_drop_unused(sender, &[sender])
+            .unwrap();
+
+        // Drive a Building step that receives a tracker update while a tx is in-flight.
+        // `SenderMachineState::new` starts in Building { wait_for_trigger: true }.
+        let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
+        let update = Some(TrackerUpdate::Mined {
+            block_number: 1,
+            nonce: 0,
+            gas_limit: None,
+            gas_used: None,
+            gas_price: None,
+            tx_hash: B256::ZERO,
+            attempt_number: 0,
+            is_success: true,
+        });
+        sender_impl
+            .step_after_trigger(&mut state, update)
+            .await
+            .unwrap();
+
+        // The confirmed lock must survive: another builder cannot claim the in-flight sender.
+        let reassignment = sender_impl
+            .assigner
+            .assign_work(Address::from([0xAA; 20]), u64::MAX, GasFees::default())
+            .await
+            .unwrap();
+        assert!(
+            matches!(reassignment, AssignmentResult::NoOperations),
+            "confirmed lock must be preserved while a transaction is in-flight, got {reassignment:?}"
         );
     }
 

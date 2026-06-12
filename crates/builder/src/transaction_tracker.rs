@@ -590,6 +590,12 @@ where
             }
         }
         self.set_nonce_and_clear_state(new_nonce);
+        // Keep the shared cache in sync with the confirmed nonce so a later
+        // begin_cycle() re-acquiring this address can skip the chain read.
+        if let Some(addr) = self.signer.as_ref().map(|s| s.address()) {
+            self.signer_manager
+                .set_account_state(addr, new_nonce, self.balance);
+        }
         return Ok(Some(out));
     }
 
@@ -615,6 +621,9 @@ where
 
         self.set_nonce_and_clear_state(nonce);
         self.balance = balance;
+        // Cache the freshly-read state so a later begin_cycle() that re-acquires
+        // this address can skip the chain round-trip.
+        self.signer_manager.set_account_state(addr, nonce, balance);
     }
 
     fn abandon(&mut self) {
@@ -638,8 +647,23 @@ where
             .signer_manager
             .lease_signer()
             .ok_or_else(|| anyhow::anyhow!("no signer available"))?;
+        let addr = signer.address();
         self.signer = Some(signer);
-        self.reset().await;
+
+        // Avoid a per-block RPC round-trip: when we have a valid cached nonce and
+        // balance for this address, seed local state from it instead of calling
+        // reset() (which reads nonce + balance from chain). This is safe because
+        // only a lease holder can advance an account's nonce, and the bundle
+        // sender only releases the signer when no transactions are pending, so a
+        // cached nonce stays valid until another consumer leases the address and
+        // sends from it (which invalidates the cache via invalidate_account_state).
+        // Error-recovery resets still go through reset() and re-read from chain.
+        if let Some(state) = self.signer_manager.cached_account_state(addr) {
+            self.set_nonce_and_clear_state(state.nonce);
+            self.balance = state.balance;
+        } else {
+            self.reset().await;
+        }
         Ok(())
     }
 
@@ -713,6 +737,7 @@ mod tests {
         AnyReceiptEnvelope, AnyTxEnvelope, MockEvmProvider, ReceiptWithBloom, Transaction,
         WithOtherFields,
     };
+    use rundler_signer::CachedAccountState;
 
     use super::*;
     use crate::sender::MockTransactionSender;
@@ -722,6 +747,7 @@ mod tests {
         signer: Arc<dyn TxSigner<Signature> + Send + Sync + 'static>,
         chain_id: u64,
         available: AtomicBool,
+        account_state: std::sync::Mutex<Option<CachedAccountState>>,
     }
 
     impl TestSignerManager {
@@ -730,6 +756,7 @@ mod tests {
                 signer,
                 chain_id: 1,
                 available: AtomicBool::new(true),
+                account_state: std::sync::Mutex::new(None),
             })
         }
     }
@@ -765,6 +792,18 @@ mod tests {
 
         fn return_lease(&self, _: SignerLease) {
             self.available.store(true, Ordering::Release);
+        }
+
+        fn cached_account_state(&self, _: Address) -> Option<CachedAccountState> {
+            *self.account_state.lock().unwrap()
+        }
+
+        fn set_account_state(&self, _: Address, nonce: u64, balance: U256) {
+            *self.account_state.lock().unwrap() = Some(CachedAccountState { nonce, balance });
+        }
+
+        fn invalidate_account_state(&self, _: Address) {
+            *self.account_state.lock().unwrap() = None;
         }
 
         fn update_balances(&self, _: Vec<(Address, U256)>) {}
@@ -864,6 +903,48 @@ mod tests {
             },
             state
         );
+    }
+
+    #[tokio::test]
+    async fn test_begin_cycle_uses_cache_after_release() {
+        // After the first begin_cycle() reads nonce/balance from chain, releasing
+        // the signer (end_cycle) and re-acquiring it (begin_cycle) must NOT read
+        // from chain again: the cached account state should be reused. We assert
+        // this by allowing the chain reads at most once.
+        let sender = MockTransactionSender::new();
+
+        let mut provider = MockEvmProvider::new();
+        provider
+            .expect_get_transaction_count()
+            .times(1)
+            .returning(move |_a| Ok(7));
+        provider
+            .expect_get_balance()
+            .times(1)
+            .returning(move |_a, _b| Ok(U256::from(42)));
+
+        let signer = MockTxSigner {};
+
+        // create_tracker performs the first begin_cycle() (the single chain read).
+        let mut tracker = create_tracker(sender, provider, signer).await;
+
+        let state = tracker.get_state().unwrap();
+        assert_eq!(state.nonce, 7);
+        assert_eq!(state.balance, U256::from(42));
+
+        // Release the signer back to the pool (idle, no pending transactions).
+        assert!(tracker.end_cycle());
+
+        // Re-acquire: must hit the cache, not the chain. The MockEvmProvider
+        // expectations above (times(1)) would panic if a second read occurred.
+        tracker
+            .begin_cycle()
+            .await
+            .expect("failed to begin cycle from cache");
+
+        let state = tracker.get_state().unwrap();
+        assert_eq!(state.nonce, 7);
+        assert_eq!(state.balance, U256::from(42));
     }
 
     #[tokio::test]
