@@ -437,9 +437,9 @@ pub enum RpcDelegationStatus {
 pub(crate) enum RpcBlockOption {
     Range {
         /// The block number or tag this filter should start at.
-        from_block: Option<BlockNumberOrTag>,
+        from_block: BlockNumberOrTag,
         /// The block number that this filter should end at.
-        to_block: Option<BlockNumberOrTag>,
+        to_block: BlockNumberOrTag,
     },
     /// The hash of the block if the filter only targets a single block
     AtBlockHash(BlockHash),
@@ -452,8 +452,8 @@ impl From<RpcBlockOption> for FilterBlockOption {
                 from_block,
                 to_block,
             } => FilterBlockOption::Range {
-                from_block,
-                to_block,
+                from_block: Some(from_block),
+                to_block: Some(to_block),
             },
             RpcBlockOption::AtBlockHash(block_hash) => FilterBlockOption::AtBlockHash(block_hash),
         }

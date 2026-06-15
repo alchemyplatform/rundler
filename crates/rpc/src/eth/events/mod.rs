@@ -97,6 +97,10 @@ pub enum EventProviderError {
     /// Error processing logs (includes invalid sequence, no matching logs, decode failures)
     #[error("log processing error: {0}")]
     LogProcessingError(String),
+
+    /// Invalid request
+    #[error("invalid event request: {0}")]
+    InvalidRequest(String),
 }
 
 /// Type alias for results from event provider operations

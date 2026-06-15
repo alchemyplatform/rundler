@@ -14,13 +14,13 @@
 use std::{collections::VecDeque, marker::PhantomData};
 
 use alloy_consensus::Transaction;
-use alloy_eips::BlockNumberOrTag;
+use alloy_eips::{BlockId, BlockNumberOrTag};
 use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_sol_types::SolEvent;
 use itertools::Itertools;
 use rundler_provider::{
     EvmProvider, Filter, FilterBlockOption, GethDebugBuiltInTracerType, GethDebugTracerType,
-    GethDebugTracingOptions, GethTrace, Log, TransactionReceipt,
+    GethDebugTracingOptions, GethTrace, Log, ProviderError, TransactionReceipt,
 };
 use rundler_types::{
     UserOperation, UserOperationVariant, authorization::Eip7702Auth, chain::ChainSpec,
@@ -325,7 +325,53 @@ where
     ) -> EventProviderResult<Option<Log>> {
         let has_block_option = block_option.is_some();
         let block_option = if let Some(bo) = block_option {
-            bo
+            if let FilterBlockOption::Range {
+                from_block,
+                to_block,
+            } = bo
+                && let Some(max_distance) = self.event_block_distance
+            {
+                let (Some(from), Some(to)) = (from_block, to_block) else {
+                    return Err(EventProviderError::InvalidRequest(
+                        "fromBlock and toBlock must both be populated in event request".to_string(),
+                    ));
+                };
+
+                let from = match from {
+                    BlockNumberOrTag::Number(from) => from,
+                    _ => {
+                        return Err(EventProviderError::InvalidRequest(format!(
+                            "max event block distance set to {max_distance}, fromBlock cannot be block tag"
+                        )));
+                    }
+                };
+
+                let to = match to {
+                    BlockNumberOrTag::Number(to) => to,
+                    _ => {
+                        let Some(block) = self.provider.get_block(BlockId::Number(to)).await?
+                        else {
+                            return Err(EventProviderError::Provider(ProviderError::Other(
+                                anyhow::anyhow!("provider returned null block"),
+                            )));
+                        };
+                        block.number()
+                    }
+                };
+
+                if to.saturating_sub(from) > max_distance {
+                    return Err(EventProviderError::InvalidRequest(format!(
+                        "fromBlock: {from}, toBlock: {to} larger than max block distance {max_distance}, reduce block range"
+                    )));
+                }
+
+                FilterBlockOption::Range {
+                    from_block: Some(from.into()),
+                    to_block: Some(to.into()),
+                }
+            } else {
+                bo
+            }
         } else {
             let to_block = self.provider.get_block_number().await?;
             let from_block = match self.event_block_distance {
