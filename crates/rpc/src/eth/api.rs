@@ -133,6 +133,7 @@ where
         &self,
         hash: B256,
         block_option: Option<FilterBlockOption>,
+        max_block_range: Option<u64>,
     ) -> EthResult<Option<RpcUserOperationByHash>> {
         if hash == B256::ZERO {
             return Err(EthRpcError::InvalidParams(
@@ -149,7 +150,7 @@ where
         for ep in self.router.entry_points() {
             futs.push(Box::pin(async move {
                 self.router
-                    .get_mined_by_hash(ep, hash, block_option)
+                    .get_mined_by_hash(ep, hash, block_option, max_block_range)
                     .await
                     .map_err(EthRpcError::from)
             }));
@@ -166,6 +167,7 @@ where
         hash: B256,
         tag: Option<BlockTag>,
         block_option: Option<FilterBlockOption>,
+        max_block_range: Option<u64>,
     ) -> EthResult<Option<RpcUserOperationReceipt>> {
         if hash == B256::ZERO {
             return Err(EthRpcError::InvalidParams(
@@ -198,6 +200,7 @@ where
                         hash,
                         Some(preconf_info.tx_hash),
                         None,
+                        max_block_range,
                     )
                     .await;
                 match ret {
@@ -221,10 +224,10 @@ where
             }
         };
 
-        let futs = self
-            .router
-            .entry_points()
-            .map(|ep| self.router.get_receipt(ep, hash, None, block_option));
+        let futs = self.router.entry_points().map(|ep| {
+            self.router
+                .get_receipt(ep, hash, None, block_option, max_block_range)
+        });
         let results = future::try_join_all(futs).await?;
         Ok(results.into_iter().find_map(|x| x))
     }
@@ -335,7 +338,10 @@ mod tests {
             MockGasEstimator::default(),
             false,
         );
-        let res = api.get_user_operation_by_hash(hash, None).await.unwrap();
+        let res = api
+            .get_user_operation_by_hash(hash, None, None)
+            .await
+            .unwrap();
         let ro = RpcUserOperationByHash {
             user_operation: UserOperationVariant::from(uo).into(),
             entry_point: ep.into(),
@@ -419,7 +425,10 @@ mod tests {
             MockGasEstimator::default(),
             false,
         );
-        let res = api.get_user_operation_by_hash(hash, None).await.unwrap();
+        let res = api
+            .get_user_operation_by_hash(hash, None, None)
+            .await
+            .unwrap();
         let ro = RpcUserOperationByHash {
             user_operation: UserOperationVariant::from(uo).into(),
             entry_point: ep.into(),
@@ -460,7 +469,10 @@ mod tests {
             MockGasEstimator::default(),
             false,
         );
-        let res = api.get_user_operation_by_hash(hash, None).await.unwrap();
+        let res = api
+            .get_user_operation_by_hash(hash, None, None)
+            .await
+            .unwrap();
         assert_eq!(res, None);
     }
 
@@ -505,11 +517,129 @@ mod tests {
                 false,
             );
             let res = api
-                .get_user_operation_by_hash(hash, Some(block_option))
+                .get_user_operation_by_hash(hash, Some(block_option), None)
                 .await
                 .unwrap();
             assert_eq!(res, None);
         }
+    }
+
+    #[tokio::test]
+    async fn test_get_user_op_by_hash_max_block_range_override() {
+        let cs = ChainSpec {
+            id: 1,
+            ..Default::default()
+        };
+        let ep = cs.entry_point_address_v0_6;
+        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
+        let hash = uo.hash();
+
+        let mut pool = MockPool::default();
+        pool.expect_get_op_by_hash()
+            .with(eq(hash))
+            .returning(move |_| Ok(None));
+
+        // The event provider is constructed with no static block distance, so a non-default
+        // search window proves the per-request override is applied.
+        let mut provider = MockEvmProvider::default();
+        provider.expect_get_block_number().returning(|| Ok(1000));
+        provider
+            .expect_get_logs()
+            .withf(|filter| {
+                filter.block_option
+                    == FilterBlockOption::Range {
+                        from_block: Some(900u64.into()),
+                        to_block: Some(1000u64.into()),
+                    }
+            })
+            .returning(move |_| Ok(vec![]));
+
+        let mut entry_point = MockEntryPointV0_6::default();
+        entry_point.expect_address().return_const(ep);
+
+        let api = create_api(
+            provider,
+            entry_point,
+            pool,
+            MockGasEstimator::default(),
+            false,
+        );
+        let res = api
+            .get_user_operation_by_hash(hash, None, Some(100))
+            .await
+            .unwrap();
+        assert_eq!(res, None);
+    }
+
+    #[tokio::test]
+    async fn test_send_user_op_header_permissions_take_precedence() {
+        use std::sync::Mutex;
+
+        use http::Extensions;
+        use rundler_types::EntryPointVersion;
+
+        use crate::{
+            eth::{EntryPointRouteImpl, EntryPointRouterBuilder, EthApiServer},
+            types::{RpcPermissions, RpcUserOperation},
+        };
+
+        let chain_spec = ChainSpec {
+            id: 1,
+            max_transaction_size_bytes: 1_000_000,
+            ..Default::default()
+        };
+        let ep = chain_spec.entry_point_address_v0_6;
+        let uo =
+            UserOperationBuilder::new(&chain_spec, UserOperationRequiredFields::default()).build();
+
+        let captured = Arc::new(Mutex::new(None));
+        let captured_clone = captured.clone();
+        let mut pool = MockPool::default();
+        pool.expect_add_op().returning(move |_, perms| {
+            *captured_clone.lock().unwrap() = Some(perms);
+            Ok(B256::ZERO)
+        });
+
+        let provider = Arc::new(MockEvmProvider::default());
+        let mut entry_point = MockEntryPointV0_6::default();
+        entry_point.expect_address().return_const(ep);
+        entry_point
+            .expect_version()
+            .return_const(EntryPointVersion::V0_6);
+
+        let router = EntryPointRouterBuilder::default()
+            .add_route(EntryPointRouteImpl::new(
+                Arc::new(entry_point),
+                MockGasEstimator::default(),
+                UserOperationEventProviderV0_6::new(chain_spec.clone(), ep, provider, None, None),
+            ))
+            .build();
+
+        let api = EthApi {
+            router,
+            chain_spec,
+            pool,
+            permissions_enabled: true,
+        };
+
+        // Positional parameter says untrusted; the header says trusted. The header must win.
+        let mut ext = Extensions::new();
+        ext.insert(RpcPermissions {
+            trusted: true,
+            ..Default::default()
+        });
+        let positional = RpcPermissions {
+            trusted: false,
+            ..Default::default()
+        };
+
+        let rpc_uo: RpcUserOperation = UserOperationVariant::from(uo).into();
+        EthApiServer::send_user_operation(&api, &ext, rpc_uo, ep, Some(positional))
+            .await
+            .unwrap();
+
+        let perms = captured.lock().unwrap().clone().unwrap();
+        assert!(perms.trusted, "header permissions should take precedence");
     }
 
     fn create_api(

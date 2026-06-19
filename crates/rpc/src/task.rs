@@ -40,6 +40,7 @@ use crate::{
         EthApiSettings, UserOperationEventProviderV0_6, UserOperationEventProviderV0_7,
     },
     health::{HealthChecker, SystemApiServer},
+    permissions_middleware::PermissionsHeaderLayer,
     rpc_metrics::{HttpMetricMiddlewareLayer, RpcMetricsMiddlewareLayer},
     rundler::{RundlerApi, RundlerApiServer, RundlerApiSettings},
     types::ApiNamespace,
@@ -222,6 +223,11 @@ where
             .timeout(self.args.rpc_timeout)
             .layer(HttpMetricMiddlewareLayer::new(
                 "rundler-rpc-service-http".to_string(),
+            ))
+            // Parse per-request permission headers into request extensions. Only honored when
+            // permissions are enabled (Rundler behind a trusted gateway).
+            .layer(PermissionsHeaderLayer::new(
+                self.args.eth_api_settings.permissions_enabled,
             ));
 
         let rpc_metric_middleware = RpcServiceBuilder::new().layer(RpcMetricsMiddlewareLayer::new(

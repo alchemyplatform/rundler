@@ -12,6 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_primitives::{Address, B256, U64};
+use http::Extensions;
 use jsonrpsee::core::RpcResult;
 use rundler_provider::{FilterBlockOption, StateOverride};
 use rundler_types::{UserOperationPermissions, pool::Pool};
@@ -21,9 +22,8 @@ use super::{EthApiServer, api::EthApi};
 use crate::{
     eth::EthRpcError,
     types::{
-        RpcBlockOption, RpcBlockOptionOrTag, RpcGasEstimate, RpcUserOperation,
-        RpcUserOperationByHash, RpcUserOperationOptionalGas, RpcUserOperationPermissions,
-        RpcUserOperationReceipt,
+        RpcBlockOption, RpcBlockOptionOrTag, RpcGasEstimate, RpcPermissions, RpcUserOperation,
+        RpcUserOperationByHash, RpcUserOperationOptionalGas, RpcUserOperationReceipt,
     },
     utils::{self, IntoRundlerType, TryIntoRundlerType},
 };
@@ -36,9 +36,10 @@ where
     #[instrument(skip_all, fields(rpc_method = "eth_sendUserOperation"))]
     async fn send_user_operation(
         &self,
+        ext: &Extensions,
         op: RpcUserOperation,
         entry_point: Address,
-        permissions: Option<RpcUserOperationPermissions>,
+        permissions: Option<RpcPermissions>,
     ) -> RpcResult<B256> {
         let Some(ep_version) = self.chain_spec.entry_point_version(entry_point) else {
             Err(EthRpcError::InvalidParams(format!(
@@ -47,9 +48,13 @@ where
             )))?
         };
 
+        // Header-supplied permissions (parsed into the request extensions by the transport
+        // middleware) take precedence over the legacy positional parameter.
+        let rpc_permissions = ext.get::<RpcPermissions>().cloned().or(permissions);
+
         // if permissions are not enabled, default them
         let mut permissions = if self.permissions_enabled {
-            permissions
+            rpc_permissions
                 .map(|p| p.into_rundler_type(&self.chain_spec, ep_version))
                 .unwrap_or_default()
         } else {
@@ -101,12 +106,21 @@ where
     #[instrument(skip_all, fields(rpc_method = "eth_getUserOperationByHash"))]
     async fn get_user_operation_by_hash(
         &self,
+        ext: &Extensions,
         hash: B256,
         block_option: Option<RpcBlockOption>,
     ) -> RpcResult<Option<RpcUserOperationByHash>> {
+        let max_block_range = ext
+            .get::<RpcPermissions>()
+            .and_then(|p| p.max_block_range());
         utils::safe_call_rpc_handler(
             "eth_getUserOperationByHash",
-            EthApi::get_user_operation_by_hash(self, hash, block_option.map(|o| o.into())),
+            EthApi::get_user_operation_by_hash(
+                self,
+                hash,
+                block_option.map(|o| o.into()),
+                max_block_range,
+            ),
         )
         .await
     }
@@ -114,9 +128,13 @@ where
     #[instrument(skip_all, fields(rpc_method = "eth_getUserOperationReceipt"))]
     async fn get_user_operation_receipt(
         &self,
+        ext: &Extensions,
         hash: B256,
         block_option_or_tag: Option<RpcBlockOptionOrTag>,
     ) -> RpcResult<Option<RpcUserOperationReceipt>> {
+        let max_block_range = ext
+            .get::<RpcPermissions>()
+            .and_then(|p| p.max_block_range());
         let (tag, block_option) = match block_option_or_tag {
             None => (None, None),
             Some(RpcBlockOptionOrTag::BlockTag(t)) => (Some(t), None),
@@ -135,7 +153,7 @@ where
 
         utils::safe_call_rpc_handler(
             "eth_getUserOperationReceipt",
-            EthApi::get_user_operation_receipt(self, hash, tag, block_option),
+            EthApi::get_user_operation_receipt(self, hash, tag, block_option, max_block_range),
         )
         .await
     }

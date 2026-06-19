@@ -27,7 +27,7 @@ use crate::{
 };
 
 mod permissions;
-pub(crate) use permissions::RpcUserOperationPermissions;
+pub(crate) use permissions::RpcPermissions;
 
 mod v0_6;
 pub(crate) use v0_6::{

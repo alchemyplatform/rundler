@@ -28,8 +28,8 @@ use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_provider::StateOverride;
 
 use crate::types::{
-    RpcBlockOption, RpcBlockOptionOrTag, RpcGasEstimate, RpcUserOperation, RpcUserOperationByHash,
-    RpcUserOperationOptionalGas, RpcUserOperationPermissions, RpcUserOperationReceipt,
+    RpcBlockOption, RpcBlockOptionOrTag, RpcGasEstimate, RpcPermissions, RpcUserOperation,
+    RpcUserOperationByHash, RpcUserOperationOptionalGas, RpcUserOperationReceipt,
 };
 
 /// Eth API
@@ -37,12 +37,12 @@ use crate::types::{
 #[cfg_attr(test, automock)]
 pub trait EthApi {
     /// Sends a user operation to the pool.
-    #[method(name = "sendUserOperation")]
+    #[method(name = "sendUserOperation", with_extensions)]
     async fn send_user_operation(
         &self,
         op: RpcUserOperation,
         entry_point: Address,
-        permissions: Option<RpcUserOperationPermissions>,
+        permissions: Option<RpcPermissions>,
     ) -> RpcResult<B256>;
 
     /// Estimates the gas fields for a user operation.
@@ -55,7 +55,7 @@ pub trait EthApi {
     ) -> RpcResult<RpcGasEstimate>;
 
     /// Returns the user operation with the given hash.
-    #[method(name = "getUserOperationByHash")]
+    #[method(name = "getUserOperationByHash", with_extensions)]
     async fn get_user_operation_by_hash(
         &self,
         hash: B256,
@@ -63,7 +63,7 @@ pub trait EthApi {
     ) -> RpcResult<Option<RpcUserOperationByHash>>;
 
     /// Returns the user operation receipt with the given hash.
-    #[method(name = "getUserOperationReceipt")]
+    #[method(name = "getUserOperationReceipt", with_extensions)]
     async fn get_user_operation_receipt(
         &self,
         hash: B256,

@@ -52,6 +52,33 @@ The parameter is one of:
 
 NOTE: when a block option is supplied, the `--user_operation_event_block_distance_fallback` retry behavior is disabled and the supplied option is used as-is.
 
+#### Per-request permissions (HTTP headers)
+
+When Rundler runs behind a trusted gateway, per-request policy can be supplied via discrete HTTP headers instead of (or in addition to) the legacy positional `permissions` parameter on `eth_sendUserOperation`. The headers are parsed by a transport-level middleware and delivered to the RPC handlers, so they apply across the relevant methods without changing any method's JSON-RPC parameters.
+
+Headers are **only honored when permissions are enabled** (`--rpc.permissions_enabled`) — the same trust assumption as the positional parameter. When permissions are disabled the headers are ignored entirely.
+
+| Header                                 | Type               | Field                            |
+| -------------------------------------- | ------------------ | -------------------------------- |
+| `X-Rundler-Max-Block-Range`            | int                | `maxBlockRange`                  |
+| `X-Rundler-Trusted`                    | `true`/`false`     | `trusted`                        |
+| `X-Rundler-Max-Ops-In-Pool-For-Sender` | int                | `maxAllowedInPoolForSender`      |
+| `X-Rundler-Underpriced-Accept-Pct`     | int (0–100)        | `underpricedAcceptPct`           |
+| `X-Rundler-Underpriced-Bundle-Pct`     | int (0–100)        | `underpricedBundlePct`           |
+| `X-Rundler-Eip7702-Disabled`           | `true`/`false`     | `eip7702Disabled`                |
+| `X-Rundler-Sponsorship-Max-Cost`       | U256, `0x`-hex     | `bundlerSponsorship.maxCost`     |
+| `X-Rundler-Sponsorship-Valid-Until`    | int (unix seconds) | `bundlerSponsorship.validUntil`  |
+
+Parsing rules:
+
+- Every header is optional; an absent header leaves its field at the default.
+- A malformed value fails the request closed with `400 Bad Request` — a bad policy header must never silently fall through to defaults.
+- The sponsorship pair (`X-Rundler-Sponsorship-Max-Cost` and `X-Rundler-Sponsorship-Valid-Until`) is coupled: supply both or neither. Supplying exactly one is rejected with `400`.
+
+`X-Rundler-Max-Block-Range` overrides `--user_operation_event_block_distance` for the event lookup on `eth_getUserOperationByHash`, `eth_getUserOperationReceipt`, and `rundler_getUserOperationStatus`.
+
+On `eth_sendUserOperation`, when both the headers and the positional `permissions` parameter are present, **the headers take precedence**. The positional parameter remains supported for backwards compatibility and is deprecated in favor of the headers.
+
 ### `debug_` Namespace
 
 Method defined by the [ERC-7769 spec](https://eips.ethereum.org/EIPS/eip-7769#rpc-methods-debug-namespace). Used only for debugging/testing and should be disabled on production APIs.

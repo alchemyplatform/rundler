@@ -114,9 +114,10 @@ impl EntryPointRouter {
         entry_point: &Address,
         hash: B256,
         block_option: Option<FilterBlockOption>,
+        max_block_range: Option<u64>,
     ) -> Result<Option<RpcUserOperationByHash>, EventProviderError> {
         self.get_event_route(entry_point)?
-            .get_mined_by_hash(hash, block_option)
+            .get_mined_by_hash(hash, block_option, max_block_range)
             .await
     }
 
@@ -137,9 +138,10 @@ impl EntryPointRouter {
         hash: B256,
         bundle_transaction: Option<B256>,
         block_option: Option<FilterBlockOption>,
+        max_block_range: Option<u64>,
     ) -> Result<Option<RpcUserOperationReceipt>, EventProviderError> {
         self.get_event_route(entry_point)?
-            .get_receipt(hash, bundle_transaction, block_option)
+            .get_receipt(hash, bundle_transaction, block_option, max_block_range)
             .await
     }
 
@@ -162,9 +164,10 @@ impl EntryPointRouter {
         hash: B256,
         bundle_transaction: Option<B256>,
         block_option: Option<FilterBlockOption>,
+        max_block_range: Option<u64>,
     ) -> Result<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>, EventProviderError> {
         self.get_event_route(entry_point)?
-            .get_mined_and_receipt(hash, bundle_transaction, block_option)
+            .get_mined_and_receipt(hash, bundle_transaction, block_option, max_block_range)
             .await
     }
 
@@ -240,6 +243,7 @@ pub(crate) trait EntryPointRoute: Send + Sync {
         &self,
         hash: B256,
         block_option: Option<FilterBlockOption>,
+        max_block_range: Option<u64>,
     ) -> EventProviderResult<Option<RpcUserOperationByHash>>;
 
     async fn get_mined_from_tx_receipt(
@@ -253,6 +257,7 @@ pub(crate) trait EntryPointRoute: Send + Sync {
         hash: B256,
         bundle_transaction: Option<B256>,
         block_option: Option<FilterBlockOption>,
+        max_block_range: Option<u64>,
     ) -> EventProviderResult<Option<RpcUserOperationReceipt>>;
 
     async fn get_receipt_from_tx_receipt(
@@ -268,6 +273,7 @@ pub(crate) trait EntryPointRoute: Send + Sync {
         hash: B256,
         bundle_transaction: Option<B256>,
         block_option: Option<FilterBlockOption>,
+        max_block_range: Option<u64>,
     ) -> EventProviderResult<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>>;
 
     async fn estimate_gas(
@@ -308,9 +314,10 @@ where
         &self,
         hash: B256,
         block_option: Option<FilterBlockOption>,
+        max_block_range: Option<u64>,
     ) -> EventProviderResult<Option<RpcUserOperationByHash>> {
         self.event_provider
-            .get_mined_by_hash(hash, block_option)
+            .get_mined_by_hash(hash, block_option, max_block_range)
             .await
     }
 
@@ -329,13 +336,16 @@ where
         hash: B256,
         bundle_transaction: Option<B256>,
         block_option: Option<FilterBlockOption>,
+        max_block_range: Option<u64>,
     ) -> EventProviderResult<Option<RpcUserOperationReceipt>> {
         if let Some(bundle_transaction) = bundle_transaction {
             self.event_provider
                 .get_receipt_from_tx_hash(hash, bundle_transaction)
                 .await
         } else {
-            self.event_provider.get_receipt(hash, block_option).await
+            self.event_provider
+                .get_receipt(hash, block_option, max_block_range)
+                .await
         }
     }
 
@@ -354,9 +364,10 @@ where
         hash: B256,
         bundle_transaction: Option<B256>,
         block_option: Option<FilterBlockOption>,
+        max_block_range: Option<u64>,
     ) -> EventProviderResult<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>> {
         self.event_provider
-            .get_mined_and_receipt(hash, bundle_transaction, block_option)
+            .get_mined_and_receipt(hash, bundle_transaction, block_option, max_block_range)
             .await
     }
 

@@ -31,6 +31,7 @@ pub(crate) trait UserOperationEventProvider: Send + Sync {
         &self,
         hash: B256,
         block_option: Option<FilterBlockOption>,
+        max_block_range: Option<u64>,
     ) -> EventProviderResult<Option<RpcUserOperationByHash>>;
 
     async fn get_mined_from_tx_receipt(
@@ -43,6 +44,7 @@ pub(crate) trait UserOperationEventProvider: Send + Sync {
         &self,
         hash: B256,
         block_option: Option<FilterBlockOption>,
+        max_block_range: Option<u64>,
     ) -> EventProviderResult<Option<RpcUserOperationReceipt>>;
 
     async fn get_receipt_from_tx_hash(
@@ -64,6 +66,7 @@ pub(crate) trait UserOperationEventProvider: Send + Sync {
         hash: B256,
         bundle_transaction: Option<B256>,
         block_option: Option<FilterBlockOption>,
+        max_block_range: Option<u64>,
     ) -> EventProviderResult<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>>;
 }
 

@@ -17,6 +17,7 @@ use alloy_primitives::{Address, B256, U64, U128, U256};
 use anyhow::Context;
 use async_trait::async_trait;
 use futures_util::future;
+use http::Extensions;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_provider::{EvmProvider, FeeEstimator, FilterBlockOption};
 use rundler_types::{
@@ -31,9 +32,9 @@ use tracing::instrument;
 use crate::{
     eth::{EntryPointRouter, EthResult, EthRpcError},
     types::{
-        RpcBlockOption, RpcDelegationStatus, RpcMinedUserOperation, RpcSuggestedGasFees,
-        RpcUserOperation, RpcUserOperationGasPrice, RpcUserOperationStatus, UOStatusEnum,
-        UserOperationStatusEnum,
+        RpcBlockOption, RpcDelegationStatus, RpcMinedUserOperation, RpcPermissions,
+        RpcSuggestedGasFees, RpcUserOperation, RpcUserOperationGasPrice, RpcUserOperationStatus,
+        UOStatusEnum, UserOperationStatusEnum,
     },
     utils::{self, TryIntoRundlerType},
 };
@@ -94,7 +95,7 @@ pub trait RundlerApi {
     ) -> RpcResult<Option<RpcMinedUserOperation>>;
 
     /// Gets the status of a user operation by user operation hash
-    #[method(name = "getUserOperationStatus")]
+    #[method(name = "getUserOperationStatus", with_extensions)]
     async fn get_user_operation_status(
         &self,
         uo_hash: B256,
@@ -189,12 +190,21 @@ where
     #[instrument(skip_all, fields(rpc_method = "rundler_getUserOperationStatus"))]
     async fn get_user_operation_status(
         &self,
+        ext: &Extensions,
         uo_hash: B256,
         block_option: Option<RpcBlockOption>,
     ) -> RpcResult<RpcUserOperationStatus> {
+        let max_block_range = ext
+            .get::<RpcPermissions>()
+            .and_then(|p| p.max_block_range());
         utils::safe_call_rpc_handler(
             "rundler_getUserOperationStatus",
-            RundlerApi::get_user_operation_status(self, uo_hash, block_option.map(|o| o.into())),
+            RundlerApi::get_user_operation_status(
+                self,
+                uo_hash,
+                block_option.map(|o| o.into()),
+                max_block_range,
+            ),
         )
         .await
     }
@@ -383,6 +393,7 @@ where
         &self,
         uo_hash: B256,
         block_option: Option<FilterBlockOption>,
+        max_block_range: Option<u64>,
     ) -> EthResult<RpcUserOperationStatus> {
         // Fetch pool status first to get preconf info for the mined query
         let op_status = self
@@ -405,6 +416,7 @@ where
                     uo_hash,
                     Some(preconf_info.tx_hash),
                     None,
+                    max_block_range,
                 )
                 .await;
             match ret {
@@ -418,8 +430,13 @@ where
             }
         } else {
             let mined_futs = self.entry_point_router.entry_points().map(|ep| {
-                self.entry_point_router
-                    .get_mined_and_receipt(ep, uo_hash, None, block_option)
+                self.entry_point_router.get_mined_and_receipt(
+                    ep,
+                    uo_hash,
+                    None,
+                    block_option,
+                    max_block_range,
+                )
             });
             future::try_join_all(mined_futs)
                 .await

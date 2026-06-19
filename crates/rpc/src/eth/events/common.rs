@@ -74,10 +74,11 @@ where
         &self,
         hash: B256,
         block_option: Option<FilterBlockOption>,
+        max_block_range: Option<u64>,
     ) -> EventProviderResult<Option<RpcUserOperationByHash>> {
         // Get event associated with hash (need to check all entry point addresses associated with this API)
         let event = self
-            .get_event_by_hash(hash, block_option)
+            .get_event_by_hash(hash, block_option, max_block_range)
             .await
             .log_on_error("should have successfully queried for user op events by hash")?;
 
@@ -115,9 +116,10 @@ where
         &self,
         hash: B256,
         block_option: Option<FilterBlockOption>,
+        max_block_range: Option<u64>,
     ) -> EventProviderResult<Option<RpcUserOperationReceipt>> {
         let event = self
-            .get_event_by_hash(hash, block_option)
+            .get_event_by_hash(hash, block_option, max_block_range)
             .await
             .log_on_error("should have successfully queried for user op events by hash")?;
         let Some(event) = event else { return Ok(None) };
@@ -185,13 +187,14 @@ where
         hash: B256,
         preconfirmed_bundle_transaction: Option<B256>,
         block_option: Option<FilterBlockOption>,
+        max_block_range: Option<u64>,
     ) -> EventProviderResult<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>> {
         // Step 1: Get tx_hash (preconfirmed: passed in, pending: find event first)
         let (tx_hash, event_from_logs) = if let Some(bundle_tx) = preconfirmed_bundle_transaction {
             (bundle_tx, None)
         } else {
             let event = self
-                .get_event_by_hash(hash, block_option)
+                .get_event_by_hash(hash, block_option, max_block_range)
                 .await
                 .log_on_error("should have successfully queried for user op events by hash")?;
 
@@ -322,14 +325,18 @@ where
         &self,
         hash: B256,
         block_option: Option<FilterBlockOption>,
+        max_block_range: Option<u64>,
     ) -> EventProviderResult<Option<Log>> {
+        // A per-request override (e.g. from a trusted gateway) takes precedence over the
+        // statically configured event block distance.
+        let event_block_distance = max_block_range.or(self.event_block_distance);
         let has_block_option = block_option.is_some();
         let block_option = if let Some(bo) = block_option {
             if let FilterBlockOption::Range {
                 from_block,
                 to_block,
             } = bo
-                && let Some(max_distance) = self.event_block_distance
+                && let Some(max_distance) = event_block_distance
             {
                 let (Some(from), Some(to)) = (from_block, to_block) else {
                     return Err(EventProviderError::InvalidRequest(
@@ -374,7 +381,7 @@ where
             }
         } else {
             let to_block = self.provider.get_block_number().await?;
-            let from_block = match self.event_block_distance {
+            let from_block = match event_block_distance {
                 Some(distance) => to_block.saturating_sub(distance),
                 None => 0,
             };
