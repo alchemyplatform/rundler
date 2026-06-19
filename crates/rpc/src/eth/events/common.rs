@@ -344,27 +344,8 @@ where
                     ));
                 };
 
-                let from = match from {
-                    BlockNumberOrTag::Number(from) => from,
-                    _ => {
-                        return Err(EventProviderError::InvalidRequest(format!(
-                            "max event block distance set to {max_distance}, fromBlock cannot be block tag"
-                        )));
-                    }
-                };
-
-                let to = match to {
-                    BlockNumberOrTag::Number(to) => to,
-                    _ => {
-                        let Some(block) = self.provider.get_block(BlockId::Number(to)).await?
-                        else {
-                            return Err(EventProviderError::Provider(ProviderError::Other(
-                                anyhow::anyhow!("provider returned null block"),
-                            )));
-                        };
-                        block.number()
-                    }
-                };
+                let from = self.resolve_block_number(from).await?;
+                let to = self.resolve_block_number(to).await?;
 
                 if to.saturating_sub(from) > max_distance {
                     return Err(EventProviderError::InvalidRequest(format!(
@@ -591,5 +572,19 @@ where
         }
 
         Ok(None)
+    }
+
+    async fn resolve_block_number(&self, block: BlockNumberOrTag) -> EventProviderResult<u64> {
+        match block {
+            BlockNumberOrTag::Number(block) => Ok(block),
+            _ => {
+                let Some(block) = self.provider.get_block(BlockId::Number(block)).await? else {
+                    return Err(EventProviderError::Provider(ProviderError::Other(
+                        anyhow::anyhow!("provider returned null block"),
+                    )));
+                };
+                Ok(block.number())
+            }
+        }
     }
 }
