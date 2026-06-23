@@ -152,6 +152,7 @@ interface BundlerCollectorTracer extends LogTracer<BundlerTracerResult>, Bundler
  *  slots: accessed slots (on any address)
  */
 ((): BundlerCollectorTracer => {
+  const CALL_OPCODES = new Set(['CALL', 'CALLCODE', 'DELEGATECALL', 'STATICCALL'])
   return {
     callsFromEntryPoint: [],
     currentLevel: null as any,
@@ -362,7 +363,7 @@ interface BundlerCollectorTracer extends LogTracer<BundlerTracerResult>, Bundler
       }
 
       // [OP-012]
-      if (this.lastOp === 'GAS' && !opcode.includes('CALL')) {
+      if (this.lastOp === 'GAS' && !CALL_OPCODES.has(opcode)) {
         // count "GAS" opcode only if not followed by "CALL"
         this.countSlot(this.currentLevel.opcodes, 'GAS')
       }
