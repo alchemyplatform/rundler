@@ -33,7 +33,6 @@ metrics.workspace = true
 metrics-derive.workspace = true
 mockall = { workspace = true, optional = true }
 moka = { version = "0.12.11", features = ["future"] }
-pin-project.workspace = true
 rand.workspace = true
 regex.workspace = true
 reth-tasks = { workspace = true, features = ["rayon"] }
@@ -51,7 +50,7 @@ url.workspace = true
 [dev-dependencies]
 alloy-provider = { workspace = true, features = ["debug-api", "anvil-node"] }
 tiny_http.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["macros", "test-util"] }
 
 [features]
 test-utils = ["mockall"]
