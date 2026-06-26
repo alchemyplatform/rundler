@@ -18,3 +18,8 @@ remappings = [
 ]
 
 allow_paths = ["../v0_7/lib"]
+
+# forge 1.4+ runs the solar linter during `forge build`; skip it so generating
+# ABIs doesn't fail on third-party lib (e.g. OpenZeppelin) sources.
+[lint]
+lint_on_build = false
