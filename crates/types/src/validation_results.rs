@@ -284,7 +284,10 @@ impl TryFrom<ReturnInfoV0_6> for ValidationReturnInfo {
             account_sig_failed: sigFailed,
             paymaster_sig_failed: sigFailed,
             valid_after: validAfter.to::<u64>().into(),
-            valid_until: validUntil.to::<u64>().into(),
+            // Per ERC-4337 a `validUntil` of 0 means "no expiry". The v0.7 path
+            // already coerces this in `parse_validation_data`; mirror it here so
+            // v0.6 ops with no expiry aren't treated as expired at epoch 0.
+            valid_until: coerce_valid_until(validUntil.to::<u64>()).into(),
             paymaster_context: paymasterContext,
         })
     }
@@ -360,10 +363,7 @@ pub fn parse_validation_data(data: U256) -> ValidationData {
 
     let mut buf = [0; 8];
     buf[2..8].copy_from_slice(&slice[6..12]);
-    let mut valid_until = u64::from_be_bytes(buf);
-    if valid_until == 0 {
-        valid_until = u64::MAX;
-    }
+    let valid_until = coerce_valid_until(u64::from_be_bytes(buf));
 
     let mut buf = [0; 8];
     buf[2..8].copy_from_slice(&slice[..6]);
@@ -373,6 +373,18 @@ pub fn parse_validation_data(data: U256) -> ValidationData {
         aggregator,
         valid_after,
         valid_until,
+    }
+}
+
+/// Coerce a `validUntil` of 0 to `u64::MAX`.
+///
+/// Per ERC-4337, a `validUntil` of 0 means the operation never expires. Without
+/// this coercion a 0 would be interpreted as epoch 0, i.e. already expired.
+fn coerce_valid_until(valid_until: u64) -> u64 {
+    if valid_until == 0 {
+        u64::MAX
+    } else {
+        valid_until
     }
 }
 
@@ -460,9 +472,10 @@ impl TryFrom<AggregatorStakeInfoV0_7> for AggregatorInfo {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{address, uint};
+    use alloy_primitives::{Bytes, U256, address, aliases::U48, uint};
+    use rundler_contracts::v0_6::ReturnInfo as ReturnInfoV0_6;
 
-    use super::parse_validation_data;
+    use super::{ValidationReturnInfo, parse_validation_data};
 
     #[test]
     fn test_parse_validation_data() {
@@ -488,5 +501,32 @@ mod tests {
 
         assert_eq!(parsed.valid_until, u64::MAX);
         assert_eq!(parsed.valid_after, 0x001122334455);
+    }
+
+    fn return_info_v0_6(valid_after: u64, valid_until: u64) -> ReturnInfoV0_6 {
+        ReturnInfoV0_6 {
+            preOpGas: U256::ZERO,
+            prefund: U256::ZERO,
+            sigFailed: false,
+            validAfter: U48::try_from(valid_after).unwrap(),
+            validUntil: U48::try_from(valid_until).unwrap(),
+            paymasterContext: Bytes::new(),
+        }
+    }
+
+    #[test]
+    fn test_v0_6_valid_until_zero_is_no_expiry() {
+        let info = ValidationReturnInfo::try_from(return_info_v0_6(0, 0)).unwrap();
+        // 0 valid_until means "no expiry" per ERC-4337, must map to u64::MAX
+        assert_eq!(info.valid_until.seconds_since_epoch(), u64::MAX);
+        // 0 valid_after is genesis (no lower bound) and must be preserved
+        assert_eq!(info.valid_after.seconds_since_epoch(), 0);
+    }
+
+    #[test]
+    fn test_v0_6_valid_until_nonzero_is_preserved() {
+        let info = ValidationReturnInfo::try_from(return_info_v0_6(100, 1_700_000_000)).unwrap();
+        assert_eq!(info.valid_until.seconds_since_epoch(), 1_700_000_000);
+        assert_eq!(info.valid_after.seconds_since_epoch(), 100);
     }
 }
