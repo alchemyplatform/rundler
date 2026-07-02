@@ -381,10 +381,10 @@ where
     }
 
     fn decode_handle_ops_revert(
-        _message: &str,
+        message: &str,
         revert_data: &Option<Bytes>,
     ) -> Option<HandleOpsOut> {
-        decode_handle_ops_revert(revert_data)
+        decode_handle_ops_revert(message, revert_data)
     }
 
     fn decode_ops_from_calldata(
@@ -766,9 +766,14 @@ pub fn decode_ops_from_calldata(
 }
 
 /// Decode the revert data from a call to `handleOps` for v0.7+
-pub fn decode_handle_ops_revert(revert_data: &Option<Bytes>) -> Option<HandleOpsOut> {
+pub fn decode_handle_ops_revert(
+    message: &str,
+    revert_data: &Option<Bytes>,
+) -> Option<HandleOpsOut> {
     let Some(revert_data) = revert_data else {
-        return None;
+        return message
+            .contains("revert")
+            .then(|| HandleOpsOut::Revert(Bytes::new()));
     };
 
     if let Ok(err) = IEntryPointErrors::abi_decode(revert_data) {
@@ -899,5 +904,62 @@ fn add_authorization_tuple(
 ) {
     if let Some(authorization) = authorization {
         authorization_utils::apply_7702_overrides(state_override, sender, authorization.address);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_decode_handle_ops_revert_failed_op() {
+        let err = IEntryPointErrors::FailedOp(FailedOp {
+            opIndex: U256::from(2),
+            reason: "AA25 invalid account nonce".to_string(),
+        });
+        let revert_data = Some(Bytes::from(err.abi_encode()));
+
+        assert_eq!(
+            decode_handle_ops_revert("execution reverted", &revert_data),
+            Some(HandleOpsOut::FailedOp(
+                2,
+                "AA25 invalid account nonce".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_decode_handle_ops_revert_unknown_data() {
+        let revert_data = Bytes::from_static(&[0xde, 0xad, 0xbe, 0xef]);
+
+        assert_eq!(
+            decode_handle_ops_revert("execution reverted", &Some(revert_data.clone())),
+            Some(HandleOpsOut::Revert(revert_data))
+        );
+    }
+
+    #[test]
+    fn test_decode_handle_ops_revert_empty_revert_missing_data() {
+        assert_eq!(
+            decode_handle_ops_revert("execution reverted", &None),
+            Some(HandleOpsOut::Revert(Bytes::new()))
+        );
+    }
+
+    #[test]
+    fn test_decode_handle_ops_revert_empty_revert_empty_data() {
+        assert_eq!(
+            decode_handle_ops_revert("execution reverted", &Some(Bytes::new())),
+            Some(HandleOpsOut::Revert(Bytes::new()))
+        );
+    }
+
+    #[test]
+    fn test_decode_handle_ops_revert_non_revert_error() {
+        assert_eq!(decode_handle_ops_revert("out of gas", &None), None);
+        assert_eq!(
+            decode_handle_ops_revert("insufficient funds for gas * price + value", &None),
+            None
+        );
     }
 }
