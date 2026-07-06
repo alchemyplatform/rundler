@@ -680,6 +680,8 @@ pub fn decode_handle_ops_revert(
         // See https://github.com/eth-infinitism/account-abstraction/pull/325 for more details.
         // NOTE: this error message is copied directly from Geth and assumes it will not change.
         Some(HandleOpsOut::PostOpRevert)
+    } else if message.contains("revert") {
+        Some(HandleOpsOut::Revert(Bytes::new()))
     } else {
         None
     }
@@ -774,5 +776,23 @@ mod tests {
             &None,
         );
         assert_eq!(result, Some(HandleOpsOut::PostOpRevert));
+    }
+
+    #[test]
+    fn test_decode_handle_ops_revert_empty_revert_missing_data() {
+        let result = EntryPointProvider::<RootProvider<AnyNetwork>, ZeroDAGasOracle>::decode_handle_ops_revert(
+            "execution reverted",
+            &None,
+        );
+        assert_eq!(result, Some(HandleOpsOut::Revert(Bytes::new())));
+    }
+
+    #[test]
+    fn test_decode_handle_ops_revert_non_revert_error() {
+        let result = EntryPointProvider::<RootProvider<AnyNetwork>, ZeroDAGasOracle>::decode_handle_ops_revert(
+            "out of gas",
+            &None,
+        );
+        assert_eq!(result, None);
     }
 }
