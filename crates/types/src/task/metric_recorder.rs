@@ -25,6 +25,12 @@ pub struct MethodSessionLogger {
     protocol: String,
     method_metric: MethodMetrics,
     json_rpsee_metric: JsonRpseeMetrics,
+    // Whether this logger incremented `open_requests` and therefore owns a
+    // matching decrement. Set only by `start()`. Guarantees the gauge is
+    // decremented exactly once via `Drop`, even when the request future is
+    // dropped (client disconnect or server-side timeout) before `done()` is
+    // reached — which would otherwise leak the gauge upward permanently.
+    open_request_active: bool,
 }
 
 #[derive(Metrics)]
@@ -62,6 +68,26 @@ pub(crate) struct JsonRpseeMetrics {
 impl MethodSessionLogger {
     /// create a session logger.
     pub fn new(service_name: String, method_name: String, protocol: String) -> Self {
+        Self::build(service_name, method_name, protocol, false)
+    }
+
+    /// start the session. time will be initialized.
+    pub fn start(service_name: String, method_name: String, protocol: String) -> Self {
+        let logger = Self::build(service_name, method_name, protocol, true);
+        logger.method_metric.num_requests.increment(1);
+        logger.method_metric.open_requests.increment(1);
+        logger
+    }
+
+    /// Construct a logger. `open_request_active` records whether the caller will
+    /// increment `open_requests` (i.e. `start()`), so `Drop` knows whether it
+    /// owns a matching decrement.
+    fn build(
+        service_name: String,
+        method_name: String,
+        protocol: String,
+        open_request_active: bool,
+    ) -> Self {
         Self {
             start_time: Instant::now(),
             method_name: method_name.clone(),
@@ -76,15 +102,8 @@ impl MethodSessionLogger {
                 ("service_name", service_name),
                 ("protocol", protocol),
             ]),
+            open_request_active,
         }
-    }
-
-    /// start the session. time will be initialized.
-    pub fn start(service_name: String, method_name: String, protocol: String) -> Self {
-        let logger = Self::new(service_name, method_name, protocol);
-        logger.method_metric.num_requests.increment(1);
-        logger.method_metric.open_requests.increment(1);
-        logger
     }
 
     /// record a rpc status code.
@@ -112,8 +131,11 @@ impl MethodSessionLogger {
     }
 
     /// end of the session. Record the session duration.
+    ///
+    /// The `open_requests` gauge is decremented in `Drop`, not here, so the
+    /// count stays correct even when the request future is dropped before
+    /// completing (client disconnect or server-side timeout).
     pub fn done(&self) {
-        self.method_metric.open_requests.decrement(1);
         self.method_metric
             .request_latency
             .record(self.start_time.elapsed().as_millis() as f64);
@@ -125,5 +147,16 @@ impl MethodSessionLogger {
         self.json_rpsee_metric
             .active_connections
             .set(available_connections);
+    }
+}
+
+impl Drop for MethodSessionLogger {
+    fn drop(&mut self) {
+        // Decrement here rather than in `done()` so the `open_requests` gauge is
+        // released exactly once whether the request completed normally or its
+        // future was dropped mid-flight (client disconnect or server timeout).
+        if self.open_request_active {
+            self.method_metric.open_requests.decrement(1);
+        }
     }
 }
