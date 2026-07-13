@@ -68,14 +68,41 @@ pub(crate) enum TxSenderError {
     /// Insufficient funds for transaction
     #[error("insufficient funds for transaction")]
     InsufficientFunds,
-    /// Sender is unavailable due to an outage or unrecognized error.
+    /// Sender is unavailable due to an outage or transport error.
     ///
     /// When a fallback sender is configured this triggers failover.
     #[error("sender unavailable: {0}")]
     SenderUnavailable(anyhow::Error),
+    /// The sender returned an unrecognized RPC error after transaction signing.
+    ///
+    /// This is treated as sender unavailability by fallback senders. The transaction
+    /// hash is populated by senders that have access to the signed transaction bytes.
+    #[error("unrecognized RPC error {code}: {message}")]
+    UnrecognizedRpc {
+        /// RPC error code.
+        code: i64,
+        /// RPC error message.
+        message: String,
+        /// Hash of the signed transaction submitted to the sender.
+        tx_hash: Option<B256>,
+    },
     /// All other errors
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+impl TxSenderError {
+    /// Attach the signed transaction hash to errors for which it is useful.
+    pub(crate) fn with_tx_hash(self, tx_hash: B256) -> Self {
+        match self {
+            Self::UnrecognizedRpc { code, message, .. } => Self::UnrecognizedRpc {
+                code,
+                message,
+                tx_hash: Some(tx_hash),
+            },
+            error => error,
+        }
+    }
 }
 
 pub(crate) type Result<T> = std::result::Result<T, TxSenderError>;
@@ -278,11 +305,11 @@ impl From<ProviderError> for TxSenderError {
                         rpc_error_message = %e.message,
                         "Unrecognized RPC error from provider, treating as sender unavailable"
                     );
-                    TxSenderError::SenderUnavailable(anyhow::anyhow!(
-                        "unrecognized RPC error {}: {}",
-                        e.code,
-                        e.message
-                    ))
+                    TxSenderError::UnrecognizedRpc {
+                        code: e.code,
+                        message: e.message.to_string(),
+                        tx_hash: None,
+                    }
                 } else {
                     tracing::warn!(
                         error = ?value,
@@ -358,7 +385,29 @@ fn parse_known_call_execution_failed(message: &str, code: i64) -> Option<TxSende
 
 #[cfg(test)]
 mod tests {
+    use alloy_primitives::B256;
+
     use super::TxSenderError;
+
+    #[test]
+    fn attaches_transaction_hash_to_unrecognized_rpc_error() {
+        let tx_hash = B256::repeat_byte(0x11);
+        let error = TxSenderError::UnrecognizedRpc {
+            code: -32000,
+            message: String::from("internal error"),
+            tx_hash: None,
+        }
+        .with_tx_hash(tx_hash);
+
+        assert!(matches!(
+            error,
+            TxSenderError::UnrecognizedRpc {
+                code: -32000,
+                message,
+                tx_hash: Some(actual_tx_hash),
+            } if message == "internal error" && actual_tx_hash == tx_hash
+        ));
+    }
 
     #[test]
     fn parses_cronos_invalid_sequence_as_nonce_too_low() {

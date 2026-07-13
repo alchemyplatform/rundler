@@ -117,6 +117,16 @@ pub(crate) enum TransactionTrackerError {
     Rejected,
     #[error("insufficient funds")]
     InsufficientFunds,
+    /// An unrecognized RPC error returned for a signed transaction.
+    #[error("unrecognized RPC error {code}: {message}; transaction hash {tx_hash}")]
+    UnrecognizedRpc {
+        /// RPC error code.
+        code: i64,
+        /// RPC error message.
+        message: String,
+        /// Hash of the signed transaction submitted to the sender.
+        tx_hash: B256,
+    },
     /// All other errors
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -696,6 +706,22 @@ impl From<TxSenderError> for TransactionTrackerError {
             // SenderUnavailable reaching here means no fallback is configured; treat
             // it as a transient error so the bundle sender retries next cycle.
             TxSenderError::SenderUnavailable(e) => TransactionTrackerError::Other(e),
+            TxSenderError::UnrecognizedRpc {
+                code,
+                message,
+                tx_hash: Some(tx_hash),
+            } => TransactionTrackerError::UnrecognizedRpc {
+                code,
+                message,
+                tx_hash,
+            },
+            TxSenderError::UnrecognizedRpc {
+                code,
+                message,
+                tx_hash: None,
+            } => TransactionTrackerError::Other(anyhow::anyhow!(
+                "unrecognized RPC error {code}: {message}"
+            )),
             TxSenderError::Other(e) => TransactionTrackerError::Other(e),
         }
     }
@@ -741,6 +767,25 @@ mod tests {
 
     use super::*;
     use crate::sender::MockTransactionSender;
+
+    #[test]
+    fn preserves_unrecognized_rpc_transaction_hash() {
+        let tx_hash = B256::repeat_byte(0x11);
+        let error = TransactionTrackerError::from(TxSenderError::UnrecognizedRpc {
+            code: -32000,
+            message: String::from("internal error"),
+            tx_hash: Some(tx_hash),
+        });
+
+        assert!(matches!(
+            error,
+            TransactionTrackerError::UnrecognizedRpc {
+                code: -32000,
+                message,
+                tx_hash: actual_tx_hash,
+            } if message == "internal error" && actual_tx_hash == tx_hash
+        ));
+    }
 
     /// Single-signer manager for unit tests.
     struct TestSignerManager {

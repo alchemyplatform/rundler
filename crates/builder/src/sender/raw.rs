@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::B256;
+use alloy_primitives::{B256, keccak256};
 use anyhow::Context;
 use async_trait::async_trait;
 use rundler_provider::{EvmProvider, TransactionRequest};
@@ -19,7 +19,7 @@ use rundler_signer::SignerLease;
 use rundler_types::{ExpectedStorage, GasFees};
 use serde_json::json;
 
-use super::{CancelTxInfo, Result};
+use super::{CancelTxInfo, Result, TxSenderError};
 use crate::sender::{TransactionSender, create_hard_cancel_tx};
 
 #[derive(Debug)]
@@ -43,19 +43,24 @@ where
             .sign_tx_raw(tx)
             .await
             .context("failed to sign transaction")?;
+        let signed_tx_hash = keccak256(&raw_tx);
 
-        let tx_hash = if self.use_conditional_rpc {
+        let send_result: Result<B256> = if self.use_conditional_rpc {
             self.submit_provider
                 .request(
                     "eth_sendRawTransactionConditional",
                     (raw_tx, json!({ "knownAccounts": expected_storage })),
                 )
-                .await?
+                .await
+                .map_err(TxSenderError::from)
         } else {
-            self.submit_provider.send_raw_transaction(raw_tx).await?
+            self.submit_provider
+                .send_raw_transaction(raw_tx)
+                .await
+                .map_err(TxSenderError::from)
         };
 
-        Ok(tx_hash)
+        send_result.map_err(|error| error.with_tx_hash(signed_tx_hash))
     }
 
     async fn cancel_transaction(

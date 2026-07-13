@@ -11,14 +11,14 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::B256;
+use alloy_primitives::{B256, keccak256};
 use anyhow::Context;
 use async_trait::async_trait;
 use rundler_provider::{EvmProvider, TransactionRequest};
 use rundler_signer::SignerLease;
 use rundler_types::{ExpectedStorage, GasFees};
 
-use super::{CancelTxInfo, Result};
+use super::{CancelTxInfo, Result, TxSenderError};
 use crate::sender::{TransactionSender, create_hard_cancel_tx};
 
 #[derive(Debug)]
@@ -41,13 +41,13 @@ where
             .sign_tx_raw(tx)
             .await
             .context("failed to sign transaction")?;
+        let signed_tx_hash = keccak256(&raw_tx);
 
-        let tx_hash = self
-            .submit_provider
+        self.submit_provider
             .request("eth_sendRawTransactionPrivate", (raw_tx,))
-            .await?;
-
-        Ok(tx_hash)
+            .await
+            .map_err(TxSenderError::from)
+            .map_err(|error| error.with_tx_hash(signed_tx_hash))
     }
 
     async fn cancel_transaction(
