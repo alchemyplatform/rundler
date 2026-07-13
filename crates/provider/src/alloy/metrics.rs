@@ -22,6 +22,8 @@ use rundler_types::task::{
 };
 use tower::{Layer, Service};
 
+use crate::transaction;
+
 /// Alloy provider metric layer.
 #[derive(Default)]
 pub(crate) struct AlloyMetricLayer {}
@@ -95,7 +97,11 @@ where
             match &response {
                 Ok(resp) => {
                     method_logger.record_http(HttpCode::TwoHundreds);
-                    method_logger.record_rpc(get_rpc_status_code(resp));
+                    if resp.as_error().is_none_or(|error| {
+                        should_record_rpc_status(&method_name, &error.message, error.code)
+                    }) {
+                        method_logger.record_rpc(get_rpc_status_code(resp));
+                    }
                     if resp.is_error() {
                         let error = resp.as_error().unwrap();
                         if error.code < 0 {
@@ -115,7 +121,13 @@ where
                     match e {
                         alloy_json_rpc::RpcError::ErrorResp(rpc_error) => {
                             method_logger.record_http(HttpCode::TwoHundreds);
-                            method_logger.record_rpc(get_rpc_status_from_code(rpc_error.code));
+                            if should_record_rpc_status(
+                                &method_name,
+                                &rpc_error.message,
+                                rpc_error.code,
+                            ) {
+                                method_logger.record_rpc(get_rpc_status_from_code(rpc_error.code));
+                            }
                         }
                         alloy_json_rpc::RpcError::Transport(TransportErrorKind::HttpError(
                             HttpError { status, body: _ },
@@ -150,6 +162,19 @@ fn get_method_name(req: &RequestPacket) -> String {
             "batch".to_string()
         }
     }
+}
+
+fn should_record_rpc_status(method_name: &str, message: &str, code: i64) -> bool {
+    if !matches!(
+        method_name,
+        "eth_sendRawTransaction"
+            | "eth_sendRawTransactionConditional"
+            | "eth_sendRawTransactionPrivate"
+    ) {
+        return true;
+    }
+
+    transaction::classify_submission_error(message, code).is_none()
 }
 
 fn get_rpc_status_from_code(code: i64) -> RpcCode {
@@ -189,4 +214,51 @@ fn get_rpc_status_code(response_packet: &ResponsePacket) -> RpcCode {
         alloy_json_rpc::ResponsePayload::Failure(error_payload) => error_payload.code,
     };
     get_rpc_status_from_code(response_code)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn filters_handled_transaction_submission_errors() {
+        let cases = [
+            ("nonce too low", -32000),
+            ("replacement transaction underpriced", -32000),
+            ("transaction underpriced", -32000),
+            ("insufficient funds for gas * price + value", -32000),
+            ("storage slot value condition not met", -32000),
+            ("future transaction tries to replace pending", -32000),
+        ];
+        let methods = [
+            "eth_sendRawTransaction",
+            "eth_sendRawTransactionConditional",
+            "eth_sendRawTransactionPrivate",
+        ];
+
+        for method in methods {
+            for (message, code) in cases {
+                assert!(
+                    !super::should_record_rpc_status(method, message, code),
+                    "method: {method}, message: {message}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn records_unknown_transaction_submission_errors() {
+        assert!(super::should_record_rpc_status(
+            "eth_sendRawTransaction",
+            "internal error",
+            -32000,
+        ));
+    }
+
+    #[test]
+    fn records_known_error_for_other_rpc_methods() {
+        assert!(super::should_record_rpc_status(
+            "eth_call",
+            "nonce too low",
+            -32000,
+        ));
+    }
 }
