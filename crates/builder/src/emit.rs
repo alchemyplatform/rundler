@@ -196,6 +196,13 @@ pub enum OpRejectionReason {
     FailedRevalidation { error: SimulationError },
     /// Operation reverted during bundle formation simulation with message
     FailedInBundle { message: Arc<String> },
+    /// The bundle transaction failed to land after submission.
+    BundleTransactionFailedToLand {
+        /// Hash of the bundle transaction.
+        tx_hash: B256,
+        /// Submission error returned by the transaction sender.
+        error: Arc<String>,
+    },
     /// Operation's storage slot condition was not met
     ConditionNotMet(ConditionNotMetReason),
     /// Current time is outside of the operation's valid time range

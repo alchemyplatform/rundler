@@ -63,13 +63,17 @@ where
             .sign_tx_raw(tx)
             .await
             .context("failed to sign transaction")?;
+        let signed_tx_hash = keccak256(&raw_tx);
 
-        let tx_hash = self.submit_provider.send_raw_transaction(raw_tx).await?;
-
-        Ok(CancelTxInfo {
-            tx_hash,
-            soft_cancelled: false,
-        })
+        self.submit_provider
+            .send_raw_transaction(raw_tx)
+            .await
+            .map_err(TxSenderError::from)
+            .map_err(|error| error.with_tx_hash(signed_tx_hash))
+            .map(|tx_hash| CancelTxInfo {
+                tx_hash,
+                soft_cancelled: false,
+            })
     }
 }
 

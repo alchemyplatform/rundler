@@ -41,7 +41,7 @@ use crate::{
     ProposerKey,
     assigner::{Assigner, AssignmentResult},
     bundle_proposer::{BundleData, BundleProposalRequest, BundleProposerError, BundleProposerT},
-    emit::{BuilderEvent, BundleTxDetails},
+    emit::{BuilderEvent, BundleTxDetails, OpRejectionReason},
     transaction_tracker::{
         TrackerState, TrackerUpdate, TransactionTracker, TransactionTrackerError,
     },
@@ -1027,8 +1027,25 @@ where
                         rpc_error_code = code,
                         rpc_error_message = %message,
                         uo_count,
-                        "Bundle transaction failed to land; removing all user operations from the pool"
+                        "Bundle transaction failed to land due to internal RPC error; removing all user operations from the pool"
                     );
+
+                    let rejection_error =
+                        Arc::new(format!("unrecognized RPC error {code}: {message}"));
+                    for uo_hash in &uo_hashes {
+                        self.emit_for_entrypoint(
+                            entry_point,
+                            BuilderEvent::rejected_op(
+                                self.builder_tag.clone(),
+                                *uo_hash,
+                                OpRejectionReason::BundleTransactionFailedToLand {
+                                    tx_hash,
+                                    error: Arc::clone(&rejection_error),
+                                },
+                            ),
+                        );
+                    }
+
                     if let Err(remove_error) = self.pool.remove_ops(entry_point, uo_hashes).await {
                         error!(
                             %tx_hash,
@@ -1664,6 +1681,7 @@ mod tests {
         assigner::{AssignmentResult, EntrypointInfo},
         bundle_proposer::{BundleData, MockBundleProposerT},
         bundle_sender::{BundleSenderImpl, MockTrigger},
+        emit::BuilderEventKind,
         transaction_tracker::MockTransactionTracker,
     };
 
@@ -1845,6 +1863,7 @@ mod tests {
             .returning(|_, _| Ok(()));
 
         let mut sender = new_sender(mock_proposer_t, mock_pool);
+        let mut event_rx = sender.event_sender.subscribe();
         let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
         let result = sender
             .send_bundle_from_data(
@@ -1861,6 +1880,25 @@ mod tests {
 
         let error = result.expect_err("internal RPC error should fail the bundle send");
         assert!(error.to_string().contains(&tx_hash.to_string()));
+
+        for expected_uo_hash in uo_hashes {
+            let event = event_rx
+                .try_recv()
+                .expect("removed UO should emit a rejection event");
+            assert_eq!(event.entry_point, ENTRY_POINT_ADDRESS_V0_6);
+            assert!(matches!(
+                event.event.kind,
+                BuilderEventKind::RejectedOp {
+                    op_hash,
+                    reason: OpRejectionReason::BundleTransactionFailedToLand {
+                        tx_hash: event_tx_hash,
+                        error,
+                    },
+                } if op_hash == expected_uo_hash
+                    && event_tx_hash == tx_hash
+                    && error.as_str() == "unrecognized RPC error -32000: internal error"
+            ));
+        }
     }
 
     #[tokio::test]
