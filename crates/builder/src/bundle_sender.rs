@@ -1019,6 +1019,8 @@ where
                 tx_hash,
             }) => {
                 if Self::is_internal_rpc_error(code, &message) {
+                    // Treat this error shape as terminal. Unlike an onchain bundle revert, do not
+                    // retry the bundle's operations.
                     let uo_hashes: Vec<B256> = ops.iter().map(|(_, hash)| *hash).collect();
                     let uo_count = uo_hashes.len();
                     error!(
@@ -1027,7 +1029,7 @@ where
                         rpc_error_code = code,
                         rpc_error_message = %message,
                         uo_count,
-                        "Bundle transaction failed to land due to internal RPC error; removing all user operations from the pool"
+                        "Bundle submission hit a terminal internal RPC error; removing all user operations from the pool"
                     );
 
                     let rejection_error =
@@ -1038,7 +1040,7 @@ where
                             BuilderEvent::rejected_op(
                                 self.builder_tag.clone(),
                                 *uo_hash,
-                                OpRejectionReason::BundleTransactionFailedToLand {
+                                OpRejectionReason::TerminalBundleSubmissionError {
                                     tx_hash,
                                     error: Arc::clone(&rejection_error),
                                 },
@@ -1890,7 +1892,7 @@ mod tests {
                 event.event.kind,
                 BuilderEventKind::RejectedOp {
                     op_hash,
-                    reason: OpRejectionReason::BundleTransactionFailedToLand {
+                    reason: OpRejectionReason::TerminalBundleSubmissionError {
                         tx_hash: event_tx_hash,
                         error,
                     },

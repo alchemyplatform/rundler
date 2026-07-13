@@ -196,8 +196,9 @@ pub enum OpRejectionReason {
     FailedRevalidation { error: SimulationError },
     /// Operation reverted during bundle formation simulation with message
     FailedInBundle { message: Arc<String> },
-    /// The bundle transaction failed to land after submission.
-    BundleTransactionFailedToLand {
+    /// Bundle submission hit a terminal error. Unlike an onchain bundle revert, it is not
+    /// retried and all associated operations are removed.
+    TerminalBundleSubmissionError {
         /// Hash of the bundle transaction.
         tx_hash: B256,
         /// Submission error returned by the transaction sender.
