@@ -345,7 +345,7 @@ interface BundlerCollectorTracer extends LogTracer<BundlerTracerResult>, Bundler
         // this.debug.push(`isPrecompiled address=${addrHex} addressInt=${addressInt}`)
 
         // MODIFICATION: allow precompile RIP-7212 through - which is at 256
-        return (addressInt > 0 && addressInt < 10) || addressInt == 256
+        return (addressInt > 0 && addressInt < 18) || addressInt == 256
       }
       // [OP-041]
       if (opcode.match(/^(EXT.*|CALL|CALLCODE|DELEGATECALL|STATICCALL)$/) != null) {
