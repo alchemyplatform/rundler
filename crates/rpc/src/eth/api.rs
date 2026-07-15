@@ -28,7 +28,7 @@ use super::{
     router::EntryPointRouter,
 };
 use crate::{
-    eth::events::{self, EventBlockOptions, EventProviderError},
+    eth::events::{EventBlockOptions, EventProviderError},
     types::{RpcGasEstimate, RpcUserOperationByHash, RpcUserOperationReceipt},
 };
 
@@ -144,7 +144,10 @@ where
             ));
         }
 
-        let block_options = self.resolve_block_options(block_options).await?;
+        let block_options = block_options
+            .resolve(&self.provider)
+            .await
+            .map_err(EthRpcError::from)?;
 
         // check both entry points and pending for the user operation event
         #[allow(clippy::type_complexity)]
@@ -179,7 +182,10 @@ where
             ));
         }
 
-        let block_options = self.resolve_block_options(block_options).await?;
+        let block_options = block_options
+            .resolve(&self.provider)
+            .await
+            .map_err(EthRpcError::from)?;
         let tag = tag.unwrap_or(BlockTag::Latest);
 
         if tag == BlockTag::Pending {
@@ -272,26 +278,6 @@ where
             block_hash: None,
             transaction_hash: None,
         }))
-    }
-
-    // Resolve block tags to concrete numbers once, before fanning out to the entry point
-    // routes, so each route doesn't re-resolve them via RPC.
-    async fn resolve_block_options(
-        &self,
-        block_options: EventBlockOptions,
-    ) -> EthResult<EventBlockOptions> {
-        let block_option = match block_options.block_option {
-            Some(bo) => Some(
-                events::resolve_block_option(&self.provider, bo)
-                    .await
-                    .map_err(EthRpcError::from)?,
-            ),
-            None => None,
-        };
-        Ok(EventBlockOptions {
-            block_option,
-            ..block_options
-        })
     }
 }
 
@@ -677,6 +663,57 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res, None);
+    }
+
+    #[tokio::test]
+    async fn test_get_user_op_by_hash_unresolvable_tag_is_invalid_params() {
+        use alloy_eips::BlockNumberOrTag;
+
+        let cs = ChainSpec {
+            id: 1,
+            ..Default::default()
+        };
+        let ep = cs.entry_point_address_v0_6;
+        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
+        let hash = uo.hash();
+
+        let mut pool = MockPool::default();
+        pool.expect_get_op_by_hash()
+            .with(eq(hash))
+            .returning(move |_| Ok(None));
+
+        // The tag is caller-supplied, so a provider returning no block for it must
+        // surface as invalid params, not an internal error.
+        let mut provider = MockEvmProvider::default();
+        provider.expect_get_block().returning(|_| Ok(None));
+
+        let mut entry_point = MockEntryPointV0_6::default();
+        entry_point.expect_address().return_const(ep);
+
+        let api = create_api(
+            provider,
+            entry_point,
+            pool,
+            MockGasEstimator::default(),
+            false,
+        );
+        let err = api
+            .get_user_operation_by_hash(
+                hash,
+                EventBlockOptions {
+                    block_option: Some(FilterBlockOption::Range {
+                        from_block: Some(BlockNumberOrTag::Pending),
+                        to_block: Some(BlockNumberOrTag::Pending),
+                    }),
+                    max_block_range: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, EthRpcError::InvalidParams(_)),
+            "expected invalid params, got {err:?}"
+        );
     }
 
     #[tokio::test]

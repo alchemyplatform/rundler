@@ -32,7 +32,7 @@ Methods defined by the [ERC-7769 spec](https://eips.ethereum.org/EIPS/eip-7769#r
 
 The parameter is one of:
 
-- A block range object: `{ fromBlock, toBlock }`, where each field is an optional block number or tag. Unknown fields in the object are rejected. When the node enforces a maximum event block range (`--user_operation_event_block_distance`, or a per-request `X-Rundler-Max-Block-Range` override), both fields are required so the range can be validated. A range wider than the maximum, or with `fromBlock` greater than `toBlock`, is rejected with an invalid params error (`-32602`).
+- A block range object: `{ fromBlock, toBlock }`, where each field is an optional string containing either a hex-encoded block number (`0x`-quantity, e.g. `"0x64"` — decimal JSON numbers are rejected) or a block tag (`"latest"`, `"earliest"`, `"pending"`, `"safe"`, `"finalized"`; case-insensitive). Unknown fields in the object are rejected. When the node enforces a maximum event block range (`--user_operation_event_block_distance`, or a per-request `X-Rundler-Max-Block-Range` override), both fields are required so the range can be validated. A range wider than the maximum, or with `fromBlock` greater than `toBlock`, is rejected with an invalid params error (`-32602`).
 - A block hash (as a string): only the given block is searched.
 
 ```
@@ -48,7 +48,7 @@ The parameter is one of:
 }
 ```
 
-`eth_getUserOperationReceipt` additionally accepts a block tag for this parameter: `"LATEST"` (default) or `"PENDING"`. On networks that support preconfirmations, `"PENDING"` allows the receipt of a preconfirmed user operation to be returned before it lands onchain.
+`eth_getUserOperationReceipt` additionally accepts a block tag for this parameter: `"LATEST"` (default) or `"PENDING"`, also accepted in lowercase (but not mixed case). On networks that support preconfirmations, `"PENDING"` allows the receipt of a preconfirmed user operation to be returned before it lands onchain.
 
 NOTE: when a block option is supplied, the `--user_operation_event_block_distance_fallback` retry behavior is disabled and the supplied option is used as-is.
 
@@ -619,6 +619,8 @@ Currently, it simply queries each the `Pool` and the `Builder` servers to check 
 ## User Operation Permissions
 
 Rundler supports a non-standard 3rd positional parameter on `eth_sendUserOperation` to enabled special permissions on a per-user operation basis. If `rpc.permissions_enabled` is set, these permissions will be sent to the mempool. If disabled, the permissions will be ignored.
+
+NOTE: this positional parameter is deprecated in favor of the [per-request permission headers](#per-request-permissions-http-headers), which carry the same fields. When both are supplied, the headers take precedence.
 
 These permissions are meant to be used only by trusted connections. For example, an internal proxy that has a trusted relationship with a sender can tag that user operation as `trusted` and skip complex untrusted simulation.
 

@@ -22,7 +22,6 @@ pub(crate) use error::{EthResult, EthRpcError};
 mod events;
 pub(crate) use events::{
     EventBlockOptions, UserOperationEventProviderV0_6, UserOperationEventProviderV0_7,
-    resolve_block_option,
 };
 mod server;
 

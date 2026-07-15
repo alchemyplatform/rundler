@@ -195,6 +195,7 @@ fn header_str<'a>(
 }
 
 fn parse_bool(name: &'static str, s: &str) -> Result<bool, PermissionsHeaderError> {
+    let s = s.trim();
     if s.eq_ignore_ascii_case("true") {
         Ok(true)
     } else if s.eq_ignore_ascii_case("false") {
@@ -215,6 +216,7 @@ fn parse_u64(name: &'static str, s: &str) -> Result<u64, PermissionsHeaderError>
 }
 
 fn parse_u256_hex(name: &'static str, s: &str) -> Result<U256, PermissionsHeaderError> {
+    let s = s.trim();
     let stripped = s
         .strip_prefix("0x")
         .or_else(|| s.strip_prefix("0X"))

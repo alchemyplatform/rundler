@@ -36,6 +36,22 @@ pub(crate) struct EventBlockOptions {
     pub(crate) max_block_range: Option<u64>,
 }
 
+impl EventBlockOptions {
+    /// Resolve any block tags in the block option to concrete block numbers.
+    ///
+    /// RPC handlers call this once per request so the resolved options can be fanned out
+    /// to multiple entry point routes without each route re-resolving the tags via RPC.
+    pub(crate) async fn resolve<P: EvmProvider>(self, provider: &P) -> EventProviderResult<Self> {
+        Ok(Self {
+            block_option: match self.block_option {
+                Some(bo) => Some(resolve_block_option(provider, bo).await?),
+                None => None,
+            },
+            ..self
+        })
+    }
+}
+
 #[async_trait::async_trait]
 pub(crate) trait UserOperationEventProvider: Send + Sync {
     async fn get_mined_by_hash(
@@ -164,10 +180,13 @@ pub(crate) async fn resolve_block_number<P: EvmProvider>(
 ) -> EventProviderResult<u64> {
     match block {
         BlockNumberOrTag::Number(block) => Ok(block),
-        _ => {
-            let Some(block) = provider.get_block(BlockId::Number(block)).await? else {
-                return Err(EventProviderError::Provider(ProviderError::Other(
-                    anyhow::anyhow!("provider returned null block"),
+        tag => {
+            // The tag is caller-supplied, so an unresolvable tag (e.g. "pending" on a
+            // chain whose node returns no pending block) is an invalid request, not an
+            // internal error.
+            let Some(block) = provider.get_block(BlockId::Number(tag)).await? else {
+                return Err(EventProviderError::InvalidRequest(format!(
+                    "block \"{tag}\" not found"
                 )));
             };
             Ok(block.number())
