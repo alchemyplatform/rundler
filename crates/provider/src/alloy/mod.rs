@@ -15,9 +15,10 @@ use std::time::Duration;
 
 use alloy_provider::{Provider as AlloyProvider, ProviderBuilder, network::AnyNetwork};
 use alloy_rpc_client::ClientBuilder;
+use alloy_transport::{TransportError, TransportErrorKind};
 use evm::AlloyEvmProvider;
 use metrics::AlloyMetricLayer;
-use provider_timeout::ProviderTimeoutLayer;
+use tower::{BoxError, ServiceBuilder, timeout::error::Elapsed};
 use url::Url;
 
 use crate::EvmProvider;
@@ -28,7 +29,6 @@ mod consistency_retry;
 pub(crate) mod entry_point;
 pub(crate) mod evm;
 pub(crate) mod metrics;
-mod provider_timeout;
 
 /// Configuration for an Alloy network provider
 #[derive(Debug, Clone)]
@@ -100,8 +100,9 @@ pub fn new_alloy_provider(
     };
 
     let metric_layer = AlloyMetricLayer::default();
-    let timeout_layer =
-        ProviderTimeoutLayer::new(Duration::from_secs(config.client_timeout_seconds));
+    let timeout_layer = ServiceBuilder::new()
+        .map_err(map_timeout_error)
+        .timeout(Duration::from_secs(config.client_timeout_seconds));
 
     // Build the client with layers based on configuration
     let client = match (
@@ -135,6 +136,20 @@ pub fn new_alloy_provider(
         .connect_client(client))
 }
 
+/// Maps errors from a [`tower::timeout::Timeout`]-wrapped transport back to
+/// [`TransportError`], as required by alloy's `Transport` contract.
+fn map_timeout_error(error: BoxError) -> TransportError {
+    match error.downcast::<Elapsed>() {
+        Ok(_) => TransportError::local_usage_str("provider request timeout from client side"),
+        Err(error) => match error.downcast::<TransportError>() {
+            Ok(error) => *error,
+            // Unreachable in practice: the inner transport's error type is
+            // `TransportError`, so the box holds either that or `Elapsed`.
+            Err(error) => TransportErrorKind::custom_str(&error.to_string()),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -142,10 +157,17 @@ mod tests {
         time::Duration,
     };
 
+    use alloy_json_rpc::RpcError;
     use alloy_provider::Provider;
+    use alloy_transport::{TransportError, TransportErrorKind};
+    use futures_util::future;
     use tiny_http::{Response, Server};
+    use tower::{Service, ServiceBuilder, ServiceExt, util::service_fn};
 
-    use crate::{alloy::AlloyNetworkConfig, new_alloy_provider};
+    use crate::{
+        alloy::{AlloyNetworkConfig, map_timeout_error},
+        new_alloy_provider,
+    };
 
     fn setup() {
         let server = Server::http("0.0.0.0:9009").unwrap();
@@ -174,6 +196,44 @@ mod tests {
             let provider = new_alloy_provider(&config).expect("can not initialize provider");
             let x = provider.get_block_number().await;
             assert!(x.is_err());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn timeout_layer_maps_elapsed_to_transport_error() {
+        let mut service = ServiceBuilder::new()
+            .map_err(map_timeout_error)
+            .timeout(Duration::from_secs(1))
+            .service(service_fn(|()| {
+                future::pending::<Result<(), TransportError>>()
+            }));
+
+        let response = service.ready().await.unwrap().call(());
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+
+        let error = response.await.unwrap_err();
+        assert!(matches!(error, RpcError::LocalUsageError(_)));
+        assert_eq!(
+            error.to_string(),
+            "local usage error: provider request timeout from client side"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn timeout_layer_passes_through_transport_errors() {
+        let mut service = ServiceBuilder::new()
+            .map_err(map_timeout_error)
+            .timeout(Duration::from_secs(1))
+            .service(service_fn(|()| async {
+                Err::<(), TransportError>(TransportErrorKind::backend_gone())
+            }));
+
+        let error = service.ready().await.unwrap().call(()).await.unwrap_err();
+
+        match error {
+            RpcError::Transport(kind) => assert!(kind.is_backend_gone()),
+            other => panic!("expected backend gone transport error, got {other:?}"),
         }
     }
 }

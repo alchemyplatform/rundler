@@ -5543,7 +5543,6 @@ dependencies = [
  "metrics-derive",
  "mockall",
  "moka",
- "pin-project",
  "rand 0.8.5",
  "regex",
  "reth-tasks",
