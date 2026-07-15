@@ -278,6 +278,7 @@ where
                     self.args.chain_spec.clone(),
                     entry_point_router.clone(),
                     self.pool.clone(),
+                    self.providers.evm().clone(),
                     permissions_enabled,
                 )
                 .into_rpc(),

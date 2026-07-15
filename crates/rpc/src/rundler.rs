@@ -30,7 +30,7 @@ use rundler_types::{
 use tracing::instrument;
 
 use crate::{
-    eth::{EntryPointRouter, EthResult, EthRpcError},
+    eth::{EntryPointRouter, EthResult, EthRpcError, resolve_block_option},
     types::{
         RpcBlockOption, RpcDelegationStatus, RpcMinedUserOperation, RpcPermissions,
         RpcSuggestedGasFees, RpcUserOperation, RpcUserOperationGasPrice, RpcUserOperationStatus,
@@ -395,6 +395,17 @@ where
         block_option: Option<FilterBlockOption>,
         max_block_range: Option<u64>,
     ) -> EthResult<RpcUserOperationStatus> {
+        // Resolve block tags to concrete numbers once, before fanning out to the entry
+        // point routes, so each route doesn't re-resolve them via RPC.
+        let block_option = match block_option {
+            Some(bo) => Some(
+                resolve_block_option(&self.evm_provider, bo)
+                    .await
+                    .map_err(EthRpcError::from)?,
+            ),
+            None => None,
+        };
+
         // Fetch pool status first to get preconf info for the mined query
         let op_status = self
             .pool_server

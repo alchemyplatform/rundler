@@ -14,13 +14,13 @@
 use std::{collections::VecDeque, marker::PhantomData};
 
 use alloy_consensus::Transaction;
-use alloy_eips::{BlockId, BlockNumberOrTag};
+use alloy_eips::BlockNumberOrTag;
 use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_sol_types::SolEvent;
 use itertools::Itertools;
 use rundler_provider::{
     EvmProvider, Filter, FilterBlockOption, GethDebugBuiltInTracerType, GethDebugTracerType,
-    GethDebugTracingOptions, GethTrace, Log, ProviderError, TransactionReceipt,
+    GethDebugTracingOptions, GethTrace, Log, TransactionReceipt,
 };
 use rundler_types::{
     UserOperation, UserOperationVariant, authorization::Eip7702Auth, chain::ChainSpec,
@@ -344,8 +344,8 @@ where
                     ));
                 };
 
-                let from = self.resolve_block_number(from).await?;
-                let to = self.resolve_block_number(to).await?;
+                let from = super::resolve_block_number(&self.provider, from).await?;
+                let to = super::resolve_block_number(&self.provider, to).await?;
 
                 if from > to {
                     return Err(EventProviderError::InvalidRequest(format!(
@@ -578,19 +578,5 @@ where
         }
 
         Ok(None)
-    }
-
-    async fn resolve_block_number(&self, block: BlockNumberOrTag) -> EventProviderResult<u64> {
-        match block {
-            BlockNumberOrTag::Number(block) => Ok(block),
-            _ => {
-                let Some(block) = self.provider.get_block(BlockId::Number(block)).await? else {
-                    return Err(EventProviderError::Provider(ProviderError::Other(
-                        anyhow::anyhow!("provider returned null block"),
-                    )));
-                };
-                Ok(block.number())
-            }
-        }
     }
 }

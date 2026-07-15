@@ -14,7 +14,7 @@
 use alloy_primitives::{Address, B256, U64};
 use http::Extensions;
 use jsonrpsee::core::RpcResult;
-use rundler_provider::{FilterBlockOption, StateOverride};
+use rundler_provider::{EvmProvider, FilterBlockOption, StateOverride};
 use rundler_types::{UserOperationPermissions, pool::Pool};
 use tracing::instrument;
 
@@ -29,9 +29,10 @@ use crate::{
 };
 
 #[async_trait::async_trait]
-impl<P> EthApiServer for EthApi<P>
+impl<P, E> EthApiServer for EthApi<P, E>
 where
     P: Pool + 'static,
+    E: EvmProvider + 'static,
 {
     #[instrument(skip_all, fields(rpc_method = "eth_sendUserOperation"))]
     async fn send_user_operation(

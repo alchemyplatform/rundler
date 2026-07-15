@@ -15,7 +15,7 @@ use std::{future::Future, pin::Pin};
 
 use alloy_primitives::{Address, B256, U64};
 use futures_util::future;
-use rundler_provider::{FilterBlockOption, StateOverride};
+use rundler_provider::{EvmProvider, FilterBlockOption, StateOverride};
 use rundler_types::{
     BlockTag, UserOperation, UserOperationOptionalGas, UserOperationPermissions,
     UserOperationVariant, chain::ChainSpec, pool::Pool,
@@ -28,31 +28,35 @@ use super::{
     router::EntryPointRouter,
 };
 use crate::{
-    eth::events::EventProviderError,
+    eth::events::{self, EventProviderError},
     types::{RpcGasEstimate, RpcUserOperationByHash, RpcUserOperationReceipt},
 };
 
-pub(crate) struct EthApi<P> {
+pub(crate) struct EthApi<P, E> {
     pub(crate) chain_spec: ChainSpec,
     pool: P,
     router: EntryPointRouter,
+    provider: E,
     pub(crate) permissions_enabled: bool,
 }
 
-impl<P> EthApi<P>
+impl<P, E> EthApi<P, E>
 where
     P: Pool,
+    E: EvmProvider,
 {
     pub(crate) fn new(
         chain_spec: ChainSpec,
         router: EntryPointRouter,
         pool: P,
+        provider: E,
         permissions_enabled: bool,
     ) -> Self {
         Self {
             router,
             pool,
             chain_spec,
+            provider,
             permissions_enabled,
         }
     }
@@ -141,6 +145,8 @@ where
             ));
         }
 
+        let block_option = self.resolve_block_option(block_option).await?;
+
         // check both entry points and pending for the user operation event
         #[allow(clippy::type_complexity)]
         let mut futs: Vec<
@@ -174,6 +180,8 @@ where
                 "Missing/invalid userOpHash".to_string(),
             ));
         }
+
+        let block_option = self.resolve_block_option(block_option).await?;
         let tag = tag.unwrap_or(BlockTag::Latest);
 
         if tag == BlockTag::Pending {
@@ -264,6 +272,22 @@ where
             block_hash: None,
             transaction_hash: None,
         }))
+    }
+
+    // Resolve block tags to concrete numbers once, before fanning out to the entry point
+    // routes, so each route doesn't re-resolve them via RPC.
+    async fn resolve_block_option(
+        &self,
+        block_option: Option<FilterBlockOption>,
+    ) -> EthResult<Option<FilterBlockOption>> {
+        match block_option {
+            Some(bo) => Ok(Some(
+                events::resolve_block_option(&self.provider, bo)
+                    .await
+                    .map_err(EthRpcError::from)?,
+            )),
+            None => Ok(None),
+        }
     }
 }
 
@@ -572,6 +596,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_user_op_by_hash_resolves_tags_once() {
+        use alloy_eips::BlockNumberOrTag;
+
+        let cs = ChainSpec {
+            id: 1,
+            ..Default::default()
+        };
+        let ep = cs.entry_point_address_v0_6;
+        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
+        let hash = uo.hash();
+
+        let mut pool = MockPool::default();
+        pool.expect_get_op_by_hash()
+            .with(eq(hash))
+            .returning(move |_| Ok(None));
+
+        // A latest..latest range must be resolved to concrete numbers with a single
+        // get_block call before the fan-out; the filter must see the numbers.
+        let mut inner = alloy_rpc_types_eth::Block::<
+            rundler_provider::AnyRpcTransaction,
+            rundler_provider::AnyRpcHeader,
+        >::default();
+        inner.header.inner.number = 1000;
+        let block = rundler_provider::Block::new(WithOtherFields::new(inner));
+        let mut provider = MockEvmProvider::default();
+        provider
+            .expect_get_block()
+            .times(1)
+            .returning(move |_| Ok(Some(block.clone())));
+        provider
+            .expect_get_logs()
+            .withf(|filter| {
+                filter.block_option
+                    == FilterBlockOption::Range {
+                        from_block: Some(1000u64.into()),
+                        to_block: Some(1000u64.into()),
+                    }
+            })
+            .returning(move |_| Ok(vec![]));
+
+        let mut entry_point = MockEntryPointV0_6::default();
+        entry_point.expect_address().return_const(ep);
+
+        let api = create_api(
+            provider,
+            entry_point,
+            pool,
+            MockGasEstimator::default(),
+            false,
+        );
+        let res = api
+            .get_user_operation_by_hash(
+                hash,
+                Some(FilterBlockOption::Range {
+                    from_block: Some(BlockNumberOrTag::Latest),
+                    to_block: Some(BlockNumberOrTag::Latest),
+                }),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(res, None);
+    }
+
+    #[tokio::test]
     async fn test_get_user_op_by_hash_block_option_invalid_ranges() {
         let cs = ChainSpec {
             id: 1,
@@ -663,7 +752,13 @@ mod tests {
             .add_route(EntryPointRouteImpl::new(
                 Arc::new(entry_point),
                 MockGasEstimator::default(),
-                UserOperationEventProviderV0_6::new(chain_spec.clone(), ep, provider, None, None),
+                UserOperationEventProviderV0_6::new(
+                    chain_spec.clone(),
+                    ep,
+                    provider.clone(),
+                    None,
+                    None,
+                ),
             ))
             .build();
 
@@ -671,6 +766,7 @@ mod tests {
             router,
             chain_spec,
             pool,
+            provider,
             permissions_enabled: true,
         };
 
@@ -700,7 +796,7 @@ mod tests {
         pool: MockPool,
         gas_estimator: MockGasEstimator,
         permissions_enabled: bool,
-    ) -> EthApi<MockPool> {
+    ) -> EthApi<MockPool, Arc<MockEvmProvider>> {
         let ep = Arc::new(ep);
         let provider = Arc::new(provider);
         let chain_spec = ChainSpec {
@@ -726,6 +822,7 @@ mod tests {
             router,
             chain_spec,
             pool,
+            provider,
             permissions_enabled,
         }
     }
