@@ -2,7 +2,20 @@
 
 echo 'Running pre-push hook...'
 
-if cog check -l; then
+# Resolve the latest tag with git instead of `cog check -l`: cog's libgit2
+# tag lookup mis-detects the working directory in symlinked .git layouts
+# (e.g. `repo` tool workspaces), fails to load cog.toml, and errors with
+# "unable to get any tag". Passing an explicit range avoids the lookup;
+# --ignore-merge-commits is passed explicitly for the same reason.
+latest_tag=$(git describe --tags --abbrev=0 2>/dev/null)
+
+if [ -n "$latest_tag" ]; then
+    set -- --ignore-merge-commits "$latest_tag..HEAD"
+else
+    set -- --from-latest-tag
+fi
+
+if cog check "$@"; then
     exit 0
 fi
 
