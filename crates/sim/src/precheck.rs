@@ -28,7 +28,7 @@ use rundler_types::{
     pool::{MempoolError, PrecheckViolation},
     v0_7::EIP7702_FACTORY_MARKER,
 };
-use rundler_utils::math;
+use rundler_utils::{authorization_utils, math};
 use tracing::instrument;
 
 use crate::{gas, types::ViolationError};
@@ -190,7 +190,8 @@ where
             da_gas_data: async_data.da_gas_data,
             required_pre_verification_gas: async_data.min_pre_verification_gas,
             sender_is_7702: op.authorization_tuple().is_some()
-                || is_7702_bytecode(&async_data.sender_bytecode),
+                || authorization_utils::eip7702_delegate_from_code(&async_data.sender_bytecode)
+                    .is_some(),
         })
     }
 }
@@ -250,7 +251,9 @@ where
                 op.sender(),
             ));
         // EIP-7702 disabled case
-        } else if perms.eip7702_disabled && is_7702_bytecode(sender_bytecode) {
+        } else if perms.eip7702_disabled
+            && authorization_utils::eip7702_delegate_from_code(sender_bytecode).is_some()
+        {
             violations.push(PrecheckViolation::Eip7702Disabled);
         }
 
@@ -624,14 +627,6 @@ where
             pending_transaction_count,
         }))
     }
-}
-
-fn is_7702_bytecode(bytecode: &Bytes) -> bool {
-    if bytecode.len() < 23 {
-        return false;
-    }
-    let prefix = &bytecode[..3];
-    prefix == [0xef, 0x01, 0x00]
 }
 
 #[cfg(test)]

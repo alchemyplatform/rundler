@@ -157,7 +157,7 @@ pub(crate) struct Settings {
 }
 
 #[derive(Debug)]
-struct BlockSummary {
+pub(crate) struct BlockSummary {
     number: u64,
     hash: B256,
     timestamp: Timestamp,

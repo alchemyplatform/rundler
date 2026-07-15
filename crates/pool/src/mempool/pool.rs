@@ -912,10 +912,15 @@ impl Eq for OrderedPoolOperation {}
 
 impl Ord for OrderedPoolOperation {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Sort by gas price descending then by id ascending
+        // Sort bundler sponsored operations first, then by gas price descending,
+        // then by id ascending
         other
-            .gas_price()
-            .cmp(&self.gas_price())
+            .po
+            .perms
+            .bundler_sponsorship
+            .is_some()
+            .cmp(&self.po.perms.bundler_sponsorship.is_some())
+            .then_with(|| other.gas_price().cmp(&self.gas_price()))
             .then_with(|| self.submission_id.cmp(&other.submission_id))
     }
 }
@@ -1751,6 +1756,27 @@ mod tests {
         pool.do_maintenance(0, Timestamp::from(2), None, GasFees::default(), 0);
         assert!(pool.get_operation_by_hash(hash).is_some());
         assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 1);
+    }
+
+    #[test]
+    fn test_bundler_sponsorship_ordered_first() {
+        let mut pool = pool();
+
+        let po1 = create_op(Address::random(), 0, 10);
+        let _ = pool.add_operation(po1.clone(), 0, 0).unwrap();
+
+        let mut po2 = create_op_zero_fees(Address::random(), 0);
+        po2.perms.bundler_sponsorship = Some(BundlerSponsorship {
+            max_cost: U256::from(100),
+            valid_until: u64::MAX,
+        });
+        let _ = pool.add_operation(po2.clone(), 0, 0).unwrap();
+
+        // sponsored op sorts first despite zero gas price and later submission
+        assert_eq!(
+            pool.best_operations().collect::<Vec<_>>(),
+            vec![Arc::new(po2), Arc::new(po1)]
+        );
     }
 
     #[test]
