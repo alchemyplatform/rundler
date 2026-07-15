@@ -20,7 +20,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use pin_project::pin_project;
+use pin_project::{pin_project, pinned_drop};
 use tonic::codegen::http;
 use tower::{Layer, Service};
 
@@ -91,7 +91,7 @@ where
 /// Future returned by the middleware.
 // checkout: https://github.com/tower-rs/tower/blob/master/guides/building-a-middleware-from-scratch.md
 // for details on the use of Pin here
-#[pin_project]
+#[pin_project(PinnedDrop)]
 pub struct ResponseFuture<F> {
     #[pin]
     response_future: F,
@@ -111,7 +111,9 @@ where
         let this = self.project();
         let res = this.response_future.poll(cx);
         if res.is_ready() {
-            GrpcMetricsRecorder::decrement_open_requests(this.method_name, this.scope);
+            // `open_requests` is decremented in `Drop` so the gauge is released
+            // even if this future is dropped before completing (client
+            // disconnect or timeout). Only record latency on real completion.
             GrpcMetricsRecorder::record_request_latency(
                 this.method_name,
                 this.scope,
@@ -124,6 +126,14 @@ where
         }
 
         res
+    }
+}
+
+#[pinned_drop]
+impl<F> PinnedDrop for ResponseFuture<F> {
+    fn drop(self: Pin<&mut Self>) {
+        let this = self.project();
+        GrpcMetricsRecorder::decrement_open_requests(this.method_name, this.scope);
     }
 }
 
