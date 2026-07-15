@@ -14,9 +14,8 @@
 use std::{io, time::Duration};
 
 use opentelemetry::{KeyValue, global, trace::TracerProvider};
-use opentelemetry_otlp::{WithExportConfig, WithTonicConfig};
+use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::Resource;
-use tonic::metadata::MetadataMap;
 pub use tracing::*;
 use tracing::{Metadata, Subscriber, subscriber, subscriber::Interest};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -49,7 +48,6 @@ pub fn configure_logging(
                 .with_tonic()
                 .with_endpoint(endpoint)
                 .with_timeout(Duration::from_secs(3))
-                .with_metadata(MetadataMap::new())
                 .build()?;
 
             let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()

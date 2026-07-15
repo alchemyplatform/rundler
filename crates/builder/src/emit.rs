@@ -200,6 +200,9 @@ pub enum OpRejectionReason {
     ConditionNotMet(ConditionNotMetReason),
     /// Current time is outside of the operation's valid time range
     InvalidTimeRange { valid_range: ValidTimeRange },
+    /// Operation's EIP-7702 authorization tuple has a stale nonce and its
+    /// sender is not delegated to the tuple's address
+    StaleEip7702Auth { chain_nonce: u64, auth_nonce: u64 },
 }
 
 /// Reason for a condition not being met

@@ -47,7 +47,9 @@ use rundler_types::{
     pool::{PoolOperation, SimulationViolation},
     proxy::SubmissionProxy,
 };
-use rundler_utils::{emit::WithEntryPoint, eth, guard_timer::CustomTimerGuard, math};
+use rundler_utils::{
+    authorization_utils, emit::WithEntryPoint, eth, guard_timer::CustomTimerGuard, math,
+};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
@@ -267,6 +269,12 @@ where
         );
 
         // (3) simulate ops
+        let eip7702_senders = ops
+            .iter()
+            .filter(|op| op.op.uo.authorization_tuple().is_some())
+            .map(|op| op.op.uo.sender())
+            .collect::<HashSet<Address>>();
+
         let simulation_futures = ops
             .into_iter()
             .map(|op| self.simulate_op(op, block_hash))
@@ -275,11 +283,16 @@ where
         let ops_with_simulations_future = future::join_all(simulation_futures);
         let balances_by_paymaster_future =
             self.get_balances_by_paymaster(all_paymaster_addresses, block_hash);
+        let eip7702_sender_states_future = self.get_eip7702_sender_states(eip7702_senders);
 
-        let (ops_with_simulations, balances_by_paymaster) =
-            tokio::join!(ops_with_simulations_future, balances_by_paymaster_future);
+        let (ops_with_simulations, balances_by_paymaster, eip7702_sender_states) = tokio::join!(
+            ops_with_simulations_future,
+            balances_by_paymaster_future,
+            eip7702_sender_states_future
+        );
 
         let balances_by_paymaster = balances_by_paymaster?;
+        let eip7702_sender_states = eip7702_sender_states?;
         let ops_with_simulations = ops_with_simulations
             .into_iter()
             .flatten()
@@ -291,6 +304,7 @@ where
                 bundle_fees.max_fee_per_gas,
                 ops_with_simulations,
                 balances_by_paymaster,
+                eip7702_sender_states,
             )
             .await;
         while !context.is_empty() {
@@ -459,7 +473,9 @@ where
             EntryPointAbiVersion::V0_6 => {
                 decode_v0_6_handle_ops_revert(revert_message, &Some(revert_data.clone()))
             }
-            EntryPointAbiVersion::V0_7 => decode_v0_7_handle_ops_revert(&Some(revert_data.clone())),
+            EntryPointAbiVersion::V0_7 => {
+                decode_v0_7_handle_ops_revert(revert_message, &Some(revert_data.clone()))
+            }
         };
         warn!("Onchain revert data for {tx_hash:?}: {revert_data:?}");
         warn!("decoded handle ops out: {handle_ops_out:?}");
@@ -507,6 +523,8 @@ struct BuilderProposerMetrics {
     op_simulation_ms: Histogram,
     #[metric(describe = "the number of bundle simulation failures.")]
     bundle_simulation_failures: Counter,
+    #[metric(describe = "the number of ops rejected due to a stale EIP-7702 authorization.")]
+    stale_eip7702_auth_rejections: Counter,
     #[metric(describe = "the distribution of bundle simulation time.")]
     bundle_simulation_ms: Histogram,
 }
@@ -761,6 +779,7 @@ where
             Result<SimulationResult, SimulationError>,
         )>,
         mut balances_by_paymaster: HashMap<Address, U256>,
+        eip7702_sender_states: HashMap<Address, Eip7702SenderState>,
     ) -> ProposalContext<EP::UO> {
         if max_bundle_fee == U256::ZERO {
             warn!("Max bundle fee is zero, skipping bundle");
@@ -832,6 +851,28 @@ where
                     context.rejected_ops.push((op.into(), po.op.entity_infos));
                     continue;
                 }
+            }
+
+            // Re-validate the op's EIP-7702 authorization against current chain
+            // state. A tuple whose nonce went stale in the pool is silently
+            // skipped by the node, so unless the sender is already delegated to
+            // the tuple's address the op can never validate on chain — reject it.
+            if let Some(auth) = op.authorization_tuple()
+                && let Some(state) = eip7702_sender_states.get(&op.sender())
+                && auth.nonce != state.transaction_count
+                && state.delegate != Some(auth.address)
+            {
+                self.emit(BuilderEvent::rejected_op(
+                    self.builder_tag.clone(),
+                    op.hash(),
+                    OpRejectionReason::StaleEip7702Auth {
+                        chain_nonce: state.transaction_count,
+                        auth_nonce: auth.nonce,
+                    },
+                ));
+                self.metrics.stale_eip7702_auth_rejections.increment(1);
+                context.rejected_ops.push((op.into(), po.op.entity_infos));
+                continue;
             }
 
             // if the bundle is at or past target, skip op and continue to finish processing any rejections
@@ -1229,6 +1270,34 @@ where
         }
     }
 
+    // Fetch the current transaction count and delegation status of each EIP-7702
+    // sender. Authorization tuple nonces are only checked against chain state at
+    // pool entry, and simulation overrides the sender's code unconditionally, so
+    // this is the builder's only chance to catch a tuple that went stale while
+    // the op sat in the pool.
+    async fn get_eip7702_sender_states(
+        &self,
+        senders: impl IntoIterator<Item = Address>,
+    ) -> BundleProposerResult<HashMap<Address, Eip7702SenderState>> {
+        let futures = senders.into_iter().map(|sender| async move {
+            let (transaction_count, code) = tokio::try_join!(
+                self.ep_providers.evm().get_transaction_count(sender),
+                self.ep_providers.evm().get_code(sender, None)
+            )?;
+            Ok::<_, anyhow::Error>((
+                sender,
+                Eip7702SenderState {
+                    transaction_count,
+                    delegate: authorization_utils::eip7702_delegate_from_code(&code),
+                },
+            ))
+        });
+        let sender_states = future::try_join_all(futures)
+            .await
+            .context("should fetch transaction counts and code for EIP-7702 senders")?;
+        Ok(HashMap::from_iter(sender_states))
+    }
+
     async fn get_balances_by_paymaster(
         &self,
         addresses: impl IntoIterator<Item = Address>,
@@ -1586,6 +1655,14 @@ where
 struct PoolOperationWithSponsoredDAGas {
     op: PoolOperation,
     sponsored_da_gas: u128,
+}
+
+/// Chain state of an EIP-7702 sender at bundle proposal time, used to
+/// re-validate authorization tuples that were only checked at pool entry.
+#[derive(Debug)]
+struct Eip7702SenderState {
+    transaction_count: u64,
+    delegate: Option<Address>,
 }
 
 #[derive(Debug, Clone)]
@@ -4129,6 +4206,7 @@ mod tests {
             None,
             U256::MAX,
             None,
+            vec![],
         )
         .await
         .expect_err("should fail to bundle");
@@ -4168,6 +4246,7 @@ mod tests {
             None,
             U256::MAX,
             None,
+            vec![],
         )
         .await
         .expect_err("should fail to bundle");
@@ -4243,6 +4322,119 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_7702_stale_auth_codeless_sender_rejected() {
+        // Auth tuple nonce (0) is stale (chain nonce 1) and the sender has no
+        // code: the op can never validate on chain, reject it. The innocent op
+        // in the same bundle proceeds.
+        let auth = Eip7702Auth::new_dummy(ChainSpec::default().id, address(7));
+        let poison_op = op_with_sender_and_auth(address(1), auth);
+        let innocent_op = op_with_sender(address(2));
+
+        let bundle = make_bundle_with_7702_states(
+            vec![
+                MockOp {
+                    op: poison_op.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    perms: UserOperationPermissions::default(),
+                },
+                MockOp {
+                    op: innocent_op.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    perms: UserOperationPermissions::default(),
+                },
+            ],
+            vec![(address(1), 1, Bytes::new())],
+        )
+        .await;
+
+        assert_eq!(bundle.rejected_ops, vec![poison_op]);
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![innocent_op],
+                ..Default::default()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_7702_stale_auth_wrong_delegate_rejected() {
+        // Stale tuple and the sender is delegated to a different address than
+        // the tuple's: simulation (which overrode code with the tuple's
+        // delegate) no longer reflects chain state, reject.
+        let auth = Eip7702Auth::new_dummy(ChainSpec::default().id, address(7));
+        let op = op_with_sender_and_auth(address(1), auth);
+
+        let bundle = make_bundle_with_7702_states(
+            vec![MockOp {
+                op: op.clone(),
+                simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                perms: UserOperationPermissions::default(),
+            }],
+            vec![(address(1), 1, eip7702_delegated_code(address(8)))],
+        )
+        .await;
+
+        assert_eq!(bundle.rejected_ops, vec![op]);
+        assert!(bundle.ops_per_aggregator.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_7702_stale_auth_already_delegated_kept() {
+        // Stale tuple but the delegation already landed on chain: the op
+        // validates against the sender's real code, keep it.
+        let delegate = address(7);
+        let auth = Eip7702Auth::new_dummy(ChainSpec::default().id, delegate);
+        let op = op_with_sender_and_auth(address(1), auth);
+
+        let bundle = make_bundle_with_7702_states(
+            vec![MockOp {
+                op: op.clone(),
+                simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                perms: UserOperationPermissions::default(),
+            }],
+            vec![(address(1), 1, eip7702_delegated_code(delegate))],
+        )
+        .await;
+
+        assert_eq!(bundle.rejected_ops, vec![]);
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op],
+                ..Default::default()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_7702_valid_auth_kept() {
+        // Tuple nonce matches the sender's current transaction count: the
+        // tuple is still valid, keep the op.
+        let auth = Eip7702Auth::new_dummy(ChainSpec::default().id, address(7));
+        let op = op_with_sender_and_auth(address(1), auth);
+
+        let bundle = make_bundle_with_7702_states(
+            vec![MockOp {
+                op: op.clone(),
+                simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                perms: UserOperationPermissions::default(),
+            }],
+            vec![(address(1), 0, Bytes::new())],
+        )
+        .await;
+
+        assert_eq!(bundle.rejected_ops, vec![]);
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op],
+                ..Default::default()
+            }]
+        );
+    }
+
     struct MockOp {
         op: UserOperation,
         simulation_result: Box<dyn Fn() -> Result<SimulationResult, SimulationError> + Send + Sync>,
@@ -4305,6 +4497,33 @@ mod tests {
             proxy,
             max_bundle_fee,
             max_transaction_size_bytes,
+            vec![],
+        )
+        .await
+        .expect("should make a bundle")
+    }
+
+    // Make a bundle with default settings and the given EIP-7702 sender states
+    // (sender, transaction count, code).
+    async fn make_bundle_with_7702_states(
+        mock_ops: Vec<MockOp>,
+        mock_7702_sender_states: Vec<(Address, u64, Bytes)>,
+    ) -> Bundle<UserOperation> {
+        mock_make_bundle_allow_error(
+            mock_ops,
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![],
+            None,
+            U256::MAX,
+            None,
+            mock_7702_sender_states,
         )
         .await
         .expect("should make a bundle")
@@ -4325,6 +4544,7 @@ mod tests {
         proxy: Option<MockSubmissionProxy>,
         max_bundle_fee: U256,
         max_transaction_size_bytes: Option<usize>,
+        mock_7702_sender_states: Vec<(Address, u64, Bytes)>,
     ) -> BundleProposerResult<Bundle<UserOperation>> {
         let mut chain_spec = ChainSpec {
             da_pre_verification_gas: da_gas_tracking_enabled,
@@ -4403,6 +4623,17 @@ mod tests {
         provider
             .expect_get_latest_block_hash_and_number()
             .returning(move || Ok((current_block_hash, 0)));
+
+        for (sender, transaction_count, code) in mock_7702_sender_states {
+            provider
+                .expect_get_transaction_count()
+                .withf(move |&a| a == sender)
+                .returning(move |_| Ok(transaction_count));
+            provider
+                .expect_get_code()
+                .withf(move |&a, _| a == sender)
+                .returning(move |_, _| Ok(code.clone()));
+        }
 
         let bundle_fees = GasFees {
             max_fee_per_gas: base_fee + max_priority_fee_per_gas,
@@ -4645,6 +4876,25 @@ mod tests {
 
     fn op_from_required(required: UserOperationRequiredFields) -> UserOperation {
         UserOperationBuilder::new(&ChainSpec::default(), required).build()
+    }
+
+    fn op_with_sender_and_auth(sender: Address, auth: Eip7702Auth) -> UserOperation {
+        UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                sender,
+                pre_verification_gas: DEFAULT_PVG,
+                ..Default::default()
+            },
+        )
+        .authorization_tuple(auth)
+        .build()
+    }
+
+    fn eip7702_delegated_code(delegate: Address) -> Bytes {
+        [&[0xef, 0x01, 0x00][..], delegate.as_slice()]
+            .concat()
+            .into()
     }
 
     fn mock_signature_aggregator(address: Address, signature: Bytes) -> MockSignatureAggregator {
