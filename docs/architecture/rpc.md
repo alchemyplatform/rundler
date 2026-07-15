@@ -50,6 +50,8 @@ The parameter is one of:
 
 `eth_getUserOperationReceipt` additionally accepts a block tag for this parameter: `"LATEST"` (default) or `"PENDING"`, also accepted in lowercase (but not mixed case). On networks that support preconfirmations, `"PENDING"` allows the receipt of a preconfirmed user operation to be returned before it lands onchain.
 
+An empty range object `{}` is treated exactly as if the parameter was omitted. If only one bound is supplied and no maximum block range is enforced, the missing bound is left to the node's `eth_getLogs` default (typically `latest`).
+
 NOTE: when a block option is supplied, the `--user_operation_event_block_distance_fallback` retry behavior is disabled and the supplied option is used as-is.
 
 #### Per-request permissions (HTTP headers)
@@ -76,7 +78,7 @@ Parsing rules:
 - Supplying the same header more than once is ambiguous and is rejected with `400`.
 - The sponsorship pair (`X-Rundler-Sponsorship-Max-Cost` and `X-Rundler-Sponsorship-Valid-Until`) is coupled: supply both or neither. Supplying exactly one is rejected with `400`.
 
-`X-Rundler-Max-Block-Range` overrides `--user_operation_event_block_distance` for the event lookup on `eth_getUserOperationByHash`, `eth_getUserOperationReceipt`, and `rundler_getUserOperationStatus`. It is lookup configuration, not a user operation permission: it has no counterpart in the positional `permissions` parameter and never affects `eth_sendUserOperation`.
+`X-Rundler-Max-Block-Range` overrides `--user_operation_event_block_distance` for the event lookup on `eth_getUserOperationByHash`, `eth_getUserOperationReceipt`, and `rundler_getUserOperationStatus`, and also caps the `--user_operation_event_block_distance_fallback` retry window. It is lookup configuration, not a user operation permission: it has no counterpart in the positional `permissions` parameter and never affects `eth_sendUserOperation`.
 
 On `eth_sendUserOperation`, when both the permission headers and the positional `permissions` parameter are present, **the headers take precedence** (`X-Rundler-Max-Block-Range` does not count as a permission header for this purpose). The positional parameter remains supported for backwards compatibility and is deprecated in favor of the headers.
 

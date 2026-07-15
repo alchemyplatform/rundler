@@ -65,11 +65,15 @@ pub trait EthApi {
     ) -> RpcResult<Option<RpcUserOperationByHash>>;
 
     /// Returns the user operation receipt with the given hash.
+    ///
+    /// NOTE: the parameter identifier `tag` is part of the named-params wire API
+    /// (jsonrpsee matches object-form params by argument name) and predates the block
+    /// option — do not rename it.
     #[method(name = "getUserOperationReceipt", with_extensions)]
     async fn get_user_operation_receipt(
         &self,
         hash: B256,
-        block_option_or_tag: Option<RpcBlockOptionOrTag>,
+        tag: Option<RpcBlockOptionOrTag>,
     ) -> RpcResult<Option<RpcUserOperationReceipt>>;
 
     /// Returns the supported entry points addresses

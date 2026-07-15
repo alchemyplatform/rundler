@@ -128,9 +128,9 @@ where
         &self,
         ext: &Extensions,
         hash: B256,
-        block_option_or_tag: Option<RpcBlockOptionOrTag>,
+        tag: Option<RpcBlockOptionOrTag>,
     ) -> RpcResult<Option<RpcUserOperationReceipt>> {
-        let (tag, block_option) = match block_option_or_tag {
+        let (tag, block_option) = match tag {
             None => (None, None),
             Some(RpcBlockOptionOrTag::BlockTag(t)) => (Some(t), None),
             Some(RpcBlockOptionOrTag::BlockOption(bo)) => (None, Some(bo.into())),

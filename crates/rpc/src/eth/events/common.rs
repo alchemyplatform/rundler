@@ -328,8 +328,20 @@ where
         // A per-request override (e.g. from a trusted gateway) takes precedence over the
         // statically configured event block distance.
         let event_block_distance = block_options.max_block_range.or(self.event_block_distance);
-        let has_block_option = block_options.block_option.is_some();
-        let block_option = if let Some(bo) = block_options.block_option {
+        // An empty range `{}` carries no information: treat it exactly like an omitted
+        // parameter (default window + fallback retry) instead of delegating both bounds
+        // to the node's getLogs defaults (typically latest..latest).
+        let supplied_block_option = block_options.block_option.filter(|bo| {
+            !matches!(
+                bo,
+                FilterBlockOption::Range {
+                    from_block: None,
+                    to_block: None,
+                }
+            )
+        });
+        let has_block_option = supplied_block_option.is_some();
+        let block_option = if let Some(bo) = supplied_block_option {
             // No-op when the RPC handler already resolved the tags before fanning out.
             let bo = super::resolve_block_option(&self.provider, bo).await?;
 
@@ -390,6 +402,13 @@ where
                     && !has_block_option
                     && let Some(fallback_distance) = self.event_block_distance_fallback
                 {
+                    // The per-request override is a hard cap on the search window; the
+                    // retry must not exceed it. The statically configured fallback is
+                    // deliberately not capped by the static distance (operator's choice).
+                    let fallback_distance = match block_options.max_block_range {
+                        Some(max) => fallback_distance.min(max),
+                        None => fallback_distance,
+                    };
                     tracing::warn!(
                         "Error querying for event at from block {from_block:?} to block {to_block:?} falling back to a distance of {fallback_distance:?}. Error {e:?}"
                     );

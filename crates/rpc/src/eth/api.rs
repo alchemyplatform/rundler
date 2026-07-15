@@ -292,8 +292,8 @@ mod tests {
     use mockall::predicate::eq;
     use rundler_contracts::v0_6::IEntryPoint::{IEntryPointCalls, handleOpsCall};
     use rundler_provider::{
-        AnyTxEnvelope, FilterBlockOption, Log, MockEntryPointV0_6, MockEvmProvider, Transaction,
-        WithOtherFields,
+        AnyTxEnvelope, FilterBlockOption, Log, MockEntryPointV0_6, MockEvmProvider, ProviderError,
+        Transaction, WithOtherFields,
     };
     use rundler_sim::MockGasEstimator;
     use rundler_types::{
@@ -775,6 +775,249 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_user_op_by_hash_fallback_retries_default_path() {
+        let cs = ChainSpec {
+            id: 1,
+            ..Default::default()
+        };
+        let ep = cs.entry_point_address_v0_6;
+        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
+        let hash = uo.hash();
+
+        let mut pool = MockPool::default();
+        pool.expect_get_op_by_hash()
+            .with(eq(hash))
+            .returning(move |_| Ok(None));
+
+        // With no caller-supplied block option, a failed primary query must retry with
+        // the configured fallback distance.
+        let mut provider = MockEvmProvider::default();
+        provider.expect_get_block_number().returning(|| Ok(1000));
+        provider
+            .expect_get_logs()
+            .withf(|filter| {
+                filter.block_option
+                    == FilterBlockOption::Range {
+                        from_block: Some(500u64.into()),
+                        to_block: Some(1000u64.into()),
+                    }
+            })
+            .times(1)
+            .returning(|_| Err(ProviderError::Other(anyhow::anyhow!("range too large"))));
+        provider
+            .expect_get_logs()
+            .withf(|filter| {
+                filter.block_option
+                    == FilterBlockOption::Range {
+                        from_block: Some(900u64.into()),
+                        to_block: Some(1000u64.into()),
+                    }
+            })
+            .times(1)
+            .returning(|_| Ok(vec![]));
+
+        let mut entry_point = MockEntryPointV0_6::default();
+        entry_point.expect_address().return_const(ep);
+
+        let api = create_api_with_event_distances(
+            provider,
+            entry_point,
+            pool,
+            MockGasEstimator::default(),
+            false,
+            Some(500),
+            Some(100),
+        );
+        let res = api
+            .get_user_operation_by_hash(hash, EventBlockOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(res, None);
+    }
+
+    #[tokio::test]
+    async fn test_get_user_op_by_hash_fallback_suppressed_with_block_option() {
+        let cs = ChainSpec {
+            id: 1,
+            ..Default::default()
+        };
+        let ep = cs.entry_point_address_v0_6;
+        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
+        let hash = uo.hash();
+
+        let mut pool = MockPool::default();
+        pool.expect_get_op_by_hash()
+            .with(eq(hash))
+            .returning(move |_| Ok(None));
+
+        // A caller-supplied block option must be used as-is: on error there is no
+        // fallback retry (a second get_logs call would fail the mock's times(1)).
+        let mut provider = MockEvmProvider::default();
+        provider
+            .expect_get_logs()
+            .withf(|filter| {
+                filter.block_option
+                    == FilterBlockOption::Range {
+                        from_block: Some(100u64.into()),
+                        to_block: Some(200u64.into()),
+                    }
+            })
+            .times(1)
+            .returning(|_| Err(ProviderError::Other(anyhow::anyhow!("boom"))));
+
+        let mut entry_point = MockEntryPointV0_6::default();
+        entry_point.expect_address().return_const(ep);
+
+        let api = create_api_with_event_distances(
+            provider,
+            entry_point,
+            pool,
+            MockGasEstimator::default(),
+            false,
+            None,
+            Some(100),
+        );
+        let res = api
+            .get_user_operation_by_hash(
+                hash,
+                EventBlockOptions {
+                    block_option: Some(FilterBlockOption::Range {
+                        from_block: Some(100u64.into()),
+                        to_block: Some(200u64.into()),
+                    }),
+                    max_block_range: None,
+                },
+            )
+            .await;
+        assert!(res.is_err(), "expected the provider error to propagate");
+    }
+
+    #[tokio::test]
+    async fn test_get_user_op_by_hash_fallback_capped_by_max_block_range() {
+        let cs = ChainSpec {
+            id: 1,
+            ..Default::default()
+        };
+        let ep = cs.entry_point_address_v0_6;
+        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
+        let hash = uo.hash();
+
+        let mut pool = MockPool::default();
+        pool.expect_get_op_by_hash()
+            .with(eq(hash))
+            .returning(move |_| Ok(None));
+
+        // The per-request max (50) bounds the primary window; the fallback retry (a
+        // larger configured 80) must be capped to it as well.
+        let mut provider = MockEvmProvider::default();
+        provider.expect_get_block_number().returning(|| Ok(1000));
+        provider
+            .expect_get_logs()
+            .withf(|filter| {
+                filter.block_option
+                    == FilterBlockOption::Range {
+                        from_block: Some(950u64.into()),
+                        to_block: Some(1000u64.into()),
+                    }
+            })
+            .times(2)
+            .returning({
+                let mut first = true;
+                move |_| {
+                    if first {
+                        first = false;
+                        Err(ProviderError::Other(anyhow::anyhow!("transient")))
+                    } else {
+                        Ok(vec![])
+                    }
+                }
+            });
+
+        let mut entry_point = MockEntryPointV0_6::default();
+        entry_point.expect_address().return_const(ep);
+
+        let api = create_api_with_event_distances(
+            provider,
+            entry_point,
+            pool,
+            MockGasEstimator::default(),
+            false,
+            None,
+            Some(80),
+        );
+        let res = api
+            .get_user_operation_by_hash(
+                hash,
+                EventBlockOptions {
+                    block_option: None,
+                    max_block_range: Some(50),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(res, None);
+    }
+
+    #[tokio::test]
+    async fn test_get_user_op_by_hash_empty_range_treated_as_omitted() {
+        let cs = ChainSpec {
+            id: 1,
+            ..Default::default()
+        };
+        let ep = cs.entry_point_address_v0_6;
+        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
+        let hash = uo.hash();
+
+        let mut pool = MockPool::default();
+        pool.expect_get_op_by_hash()
+            .with(eq(hash))
+            .returning(move |_| Ok(None));
+
+        // An empty range `{}` carries no information: the default search window must be
+        // used, not the node's getLogs defaults.
+        let mut provider = MockEvmProvider::default();
+        provider.expect_get_block_number().returning(|| Ok(1000));
+        provider
+            .expect_get_logs()
+            .withf(|filter| {
+                filter.block_option
+                    == FilterBlockOption::Range {
+                        from_block: Some(900u64.into()),
+                        to_block: Some(1000u64.into()),
+                    }
+            })
+            .times(1)
+            .returning(|_| Ok(vec![]));
+
+        let mut entry_point = MockEntryPointV0_6::default();
+        entry_point.expect_address().return_const(ep);
+
+        let api = create_api_with_event_distances(
+            provider,
+            entry_point,
+            pool,
+            MockGasEstimator::default(),
+            false,
+            Some(100),
+            None,
+        );
+        let res = api
+            .get_user_operation_by_hash(
+                hash,
+                EventBlockOptions {
+                    block_option: Some(FilterBlockOption::Range {
+                        from_block: None,
+                        to_block: None,
+                    }),
+                    max_block_range: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(res, None);
+    }
+
+    #[tokio::test]
     async fn test_send_user_op_header_permissions_take_precedence() {
         use std::sync::Mutex;
 
@@ -859,6 +1102,26 @@ mod tests {
         gas_estimator: MockGasEstimator,
         permissions_enabled: bool,
     ) -> EthApi<MockPool, Arc<MockEvmProvider>> {
+        create_api_with_event_distances(
+            provider,
+            ep,
+            pool,
+            gas_estimator,
+            permissions_enabled,
+            None,
+            None,
+        )
+    }
+
+    fn create_api_with_event_distances(
+        provider: MockEvmProvider,
+        ep: MockEntryPointV0_6,
+        pool: MockPool,
+        gas_estimator: MockGasEstimator,
+        permissions_enabled: bool,
+        event_block_distance: Option<u64>,
+        event_block_distance_fallback: Option<u64>,
+    ) -> EthApi<MockPool, Arc<MockEvmProvider>> {
         let ep = Arc::new(ep);
         let provider = Arc::new(provider);
         let chain_spec = ChainSpec {
@@ -874,8 +1137,8 @@ mod tests {
                     chain_spec.clone(),
                     chain_spec.entry_point_address_v0_6,
                     provider.clone(),
-                    None,
-                    None,
+                    event_block_distance,
+                    event_block_distance_fallback,
                 ),
             ))
             .build();
