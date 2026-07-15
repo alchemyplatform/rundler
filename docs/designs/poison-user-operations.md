@@ -8,8 +8,9 @@ Status: Draft
    fail, preventing them from blocking bundle submission indefinitely.
 2. **Fairness:** schedule healthy and suspect UOs so neither work class can starve the
    other.
-3. **Provider resilience:** detect provider-health events and prevent their failures from
-   causing non-poison UOs to be removed in most cases.
+3. **Provider resilience:** prevent provider-health events from converting healthy UOs
+   into suspects (best effort, via detection) or removing them (unconditional, via
+   evidence spacing).
 
 ## How the goals are achieved
 
@@ -38,15 +39,19 @@ both remain continuously eligible.
 
 ### Provider resilience
 
-Only final outcomes after provider retries and fallbacks affect the provider-event
-signal. During a detected event, non-terminal failures do not create suspects, advance
-removal counters, or remove UOs. Entering the event clears accumulated non-terminal
-failure evidence, while suspect backoff continues to limit repeated isolation attempts.
+Protection is two-tier. Suspect creation is gated by detection: only final outcomes
+after provider retries and fallbacks affect the provider-event signal, and while an
+event is active, non-terminal failures do not advance pre-suspect counts, so an outage
+cannot mass-convert the pool into suspects. Removal is protected independently of
+detection: the suspect backoff schedule spaces removal-counter increments so that a
+single provider incident contributes at most one increment (see "Non-terminal RPC
+evidence").
 
 Detection requires a rolling sample, so failures observed before the signal activates
-may still affect UO state. Terminal RPC errors also bypass provider-health gating because
-they definitively reject the transaction. These are the principal cases in which a
-provider event could still affect a non-poison UO.
+may still create suspects. Because suspicion is recoverable — a healthy suspect
+succeeds in isolation and clears — detection lag costs wasted singleton attempts, not
+false removals. Terminal RPC errors bypass provider-health gating because they
+definitively reject the transaction.
 
 ## Failure flow
 
@@ -58,9 +63,8 @@ provider event could still affect a non-poison UO.
 | Terminal RPC error | 1 | Remove the sole UO immediately. |
 | Terminal RPC error | More than 1 | Mark every UO as suspect immediately. |
 | Non-terminal provider failure while provider is healthy | Any | Increment each non-suspect UO's RPC-failure count; mark it suspect at the configured threshold. |
-| Non-terminal provider failure from an isolated suspect while provider is healthy | 1 | Increment its suspect RPC-failure count and either back off or remove it at the configured threshold. |
-| Non-terminal provider failure from an isolated suspect during a provider event | 1 | Apply suspect backoff without incrementing its removal count. |
-| Non-terminal provider failure from a normal bundle during a provider event | Any | Do not change UO state. |
+| Non-terminal provider failure from an isolated suspect | 1 | Increment its suspect removal count, back off, and remove it at the configured threshold. |
+| Non-terminal provider failure from a normal bundle during a provider event | Any | Do not advance pre-suspect counts; no other UO state change. |
 | Known operational error | Any | Preserve existing behavior. |
 
 Provider retries and configured fallbacks are exhausted before an RPC outcome enters
@@ -93,34 +97,39 @@ Initial parameters:
 Different enter and exit thresholds prevent flapping. The signal does not change bundle
 construction or submission rate; existing provider rate limiting handles request pacing.
 
-The builder updates the signal before processing non-terminal UO feedback. While a
-provider event is active, non-terminal failures cannot mark suspects, increment removal
-counters, or remove UOs. They may still defer an isolated suspect's next attempt.
-Entering an event clears all accumulated non-terminal RPC-failure counters. Existing
-suspect status remains, including suspicion created by mined reverts or terminal RPC
-errors, but its non-terminal removal counter resets.
+The signal has exactly one effect: while a provider event is active, non-terminal
+failures do not advance pre-suspect counts, so no new suspects are created. Suspect
+backoff and removal counting are unaffected by the signal; false removal is bounded by
+the backoff schedule's evidence spacing rather than by detection. Because the gate's
+only failure mode is recoverable suspicion, no counter state is cleared when an event
+is entered or exited.
 
 ## Non-terminal RPC evidence
 
-Outside a provider event:
-
-1. A final non-terminal provider failure increments the pre-suspect count of every UO in
-   the failed bundle.
+1. Outside a provider event, a final non-terminal provider failure increments the
+   pre-suspect count of every UO in the failed bundle. During an event, pre-suspect
+   counts do not advance.
 2. A successful submission clears the pre-suspect counts of every UO in that bundle.
 3. At `--pool.rpc_failures_before_suspect` (default `3`), a UO becomes a suspect and its
    count resets.
 4. A final provider failure from its single-UO attempt schedules an exponentially
    increasing retry delay with jitter.
-5. If the provider-event signal is healthy, the failure also increments the suspect's
-   removal count.
+5. The failure also increments the suspect's removal count, regardless of
+   provider-event state.
 6. At `--pool.max_suspect_rpc_failures` (default `3`), the pool removes the UO and logs
    `RepeatedNonTerminalRpcFailure`.
 
-`--pool.max_suspect_rpc_failures=0` disables RPC-based removal. Provider-event periods do
-not contribute to either threshold, but suspect backoff still applies.
+`--pool.max_suspect_rpc_failures=0` disables RPC-based removal. Provider events pause
+pre-suspect counting only; suspect removal counting and backoff continue.
 
 Suspect backoff is configured with `--pool.suspect_rpc_backoff_initial_secs` and
-`--pool.suspect_rpc_backoff_max_secs`.
+`--pool.suspect_rpc_backoff_max_secs`. The schedule is load-bearing for the
+false-removal bound: the cumulative delay across `max_suspect_rpc_failures` consecutive
+attempts must exceed the longest provider incident that removal should tolerate, so
+that a single incident contributes at most one removal increment. With doubling from a
+60-second initial, three increments span only about three minutes; tolerating a
+30-minute incident requires a larger initial (for example 600 seconds: 10 m + 20 m
+between increments), a steeper curve, or a higher removal threshold.
 
 ## Suspect scheduling
 
@@ -142,22 +151,37 @@ state.
 
 ## State ownership
 
-The submission route owns the provider-event signal. The pool owns pre-suspect counts,
-suspect status, suspect removal counts, and suspect retry times so they are shared across
-builders and cleared with the UO lifecycle. Backoff progression is separate from removal
-evidence: provider-event failures increase the former but not the latter. This state is
-in-memory and does not track transaction hashes for deduplication.
+The submission route owns the provider-event signal; the pool consumes it as a single
+boolean gate on pre-suspect counting. The pool owns pre-suspect counts, suspect status,
+suspect removal counts, and suspect retry times so they are shared across builders and
+cleared with the UO lifecycle. This state is in-memory and does not track transaction
+hashes for deduplication.
 
 ## Tradeoffs
 
-- **Liveness versus false removal:** eventual removal protects bundling, but repeated
-  non-terminal failures can still remove a healthy UO when the provider-event signal
-  does not activate. Higher thresholds reduce false removals but extend poison lifetime.
+- **Liveness versus false removal:** eventual removal protects bundling, but failures
+  persisting across the entire backoff span can still remove a healthy UO — for
+  example, a provider incident longer than the cumulative suspect backoff. Higher
+  thresholds and longer backoff reduce false removals but extend poison lifetime.
 - **Isolation versus throughput:** singleton attempts identify poison UOs without adding
   innocent fillers, but consume more transactions than normal bundles. The dynamic
   isolation limit preserves normal capacity at the cost of slower suspect draining.
-- **Provider protection versus poison detection:** suppressing evidence during provider
-  events prevents broad false attribution, but a poison UO encountered during an event
-  takes longer to identify. Detection lag can also allow early event failures to count.
+- **Provider protection versus poison detection:** pausing pre-suspect counting during
+  provider events prevents mass false suspicion, but a poison UO encountered during an
+  event takes longer to identify. Detection lag can still create false suspects before
+  the signal activates; each costs one wasted singleton attempt after recovery and then
+  self-clears. An outage that outlasts detection lag may still suspect part of the
+  pool, which drains at singleton throughput after recovery.
 - **Backoff versus recovery latency:** per-suspect backoff prevents hot loops and resource
   churn, but delays successful retry after a transient failure.
+
+## Related work
+
+- **EIP-7702 auth-nonce recheck at bundle assembly** (fix 2 in
+  `INVESTIGATION-empty-revert-bundle-livelock.md`): re-validating authorization tuple
+  nonces at proposal time deterministically prevents the primary observed poison class
+  before it ever reaches this system. Companion change, tracked separately.
+- **PR #1304 (`fix(builder): remove ops after internal RPC error`):** removing every UO
+  in a bundle on a terminal `-32000: internal error` is superseded by this design. That
+  error class should instead follow the ambiguous multi-UO path (mark every UO suspect)
+  so innocent UOs survive; the two mechanisms must not both fire on the same error.
