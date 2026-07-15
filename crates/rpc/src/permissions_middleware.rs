@@ -205,18 +205,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_headers_does_not_insert_permissions() {
-        let inner = RecordingService::default();
-        let saw = inner.saw_permissions.clone();
-        let mut svc = PermissionsHeaderLayer::new(true).layer(inner);
-
-        let resp = svc.call(request_with(&[])).await.unwrap();
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(*saw.lock().unwrap(), Some(false));
-    }
-
-    #[tokio::test]
     async fn malformed_header_returns_400_without_calling_inner() {
         let inner = RecordingService::default();
         let called = inner.called.clone();

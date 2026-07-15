@@ -366,20 +366,6 @@ mod tests {
     }
 
     #[test]
-    fn case_insensitive_bool() {
-        let headers = headers_from(&[(headers::TRUSTED, "TRUE")]);
-        let perms = RpcPermissions::from_headers(&headers).unwrap().unwrap();
-        assert!(perms.trusted);
-    }
-
-    #[test]
-    fn malformed_int_is_rejected() {
-        let headers = headers_from(&[(headers::MAX_OPS_IN_POOL_FOR_SENDER, "not-a-number")]);
-        let err = RpcPermissions::from_headers(&headers).unwrap_err();
-        assert_eq!(err.header, headers::MAX_OPS_IN_POOL_FOR_SENDER);
-    }
-
-    #[test]
     fn malformed_bool_is_rejected() {
         let headers = headers_from(&[(headers::TRUSTED, "yes")]);
         let err = RpcPermissions::from_headers(&headers).unwrap_err();

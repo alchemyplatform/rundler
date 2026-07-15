@@ -560,14 +560,12 @@ mod tests {
 
     #[test]
     fn block_option_or_tag_deserializes_block_options() {
-        let range: RpcBlockOptionOrTag =
+        // Outer-union routing only: field parsing is covered on RpcBlockOption directly.
+        let parsed: RpcBlockOptionOrTag =
             serde_json::from_str(r#"{"fromBlock": "0x64", "toBlock": "0xc8"}"#).unwrap();
         assert!(matches!(
-            range,
-            RpcBlockOptionOrTag::BlockOption(RpcBlockOption::Range(RpcBlockRange {
-                from_block: Some(BlockNumberOrTag::Number(100)),
-                to_block: Some(BlockNumberOrTag::Number(200)),
-            }))
+            parsed,
+            RpcBlockOptionOrTag::BlockOption(RpcBlockOption::Range(_))
         ));
 
         let hash = B256::repeat_byte(0xab);

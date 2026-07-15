@@ -286,6 +286,7 @@ mod tests {
     use std::sync::Arc;
 
     use alloy_consensus::{Signed, TxEip1559, transaction::Recovered};
+    use alloy_eips::BlockNumberOrTag;
     use alloy_primitives::{Log as PrimitiveLog, LogData, Signature, TxKind, U256};
     use alloy_rpc_types_eth::Transaction as AlloyTransaction;
     use alloy_sol_types::SolInterface;
@@ -491,54 +492,150 @@ mod tests {
         assert_eq!(res, None);
     }
 
-    #[tokio::test]
-    async fn test_get_user_op_by_hash_with_block_option() {
-        let cs = ChainSpec {
-            id: 1,
-            ..Default::default()
-        };
-        let ep = cs.entry_point_address_v0_6;
-        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
-        let hash = uo.hash();
+    /// Fixture for `get_user_operation_by_hash` lookup tests: a pool with no pending
+    /// op, a single v0.6 entry point, and per-test provider expectations.
+    struct LookupTest {
+        provider: MockEvmProvider,
+        event_block_distance: Option<u64>,
+        event_block_distance_fallback: Option<u64>,
+    }
 
-        for block_option in [
-            FilterBlockOption::Range {
-                from_block: Some(100u64.into()),
-                to_block: Some(200u64.into()),
-            },
-            FilterBlockOption::AtBlockHash(B256::random()),
-        ] {
+    fn range(from: u64, to: u64) -> FilterBlockOption {
+        FilterBlockOption::Range {
+            from_block: Some(from.into()),
+            to_block: Some(to.into()),
+        }
+    }
+
+    impl LookupTest {
+        fn new() -> Self {
+            Self {
+                provider: MockEvmProvider::default(),
+                event_block_distance: None,
+                event_block_distance_fallback: None,
+            }
+        }
+
+        fn distances(mut self, distance: Option<u64>, fallback: Option<u64>) -> Self {
+            self.event_block_distance = distance;
+            self.event_block_distance_fallback = fallback;
+            self
+        }
+
+        /// The provider's latest block number, used to compute default search windows.
+        fn latest_block(mut self, number: u64) -> Self {
+            self.provider
+                .expect_get_block_number()
+                .returning(move || Ok(number));
+            self
+        }
+
+        /// Expect exactly one tag-resolving `get_block` call, resolving to `number`.
+        fn resolves_tag_to(mut self, number: u64) -> Self {
+            let mut inner = alloy_rpc_types_eth::Block::<
+                rundler_provider::AnyRpcTransaction,
+                rundler_provider::AnyRpcHeader,
+            >::default();
+            inner.header.inner.number = number;
+            let block = rundler_provider::Block::new(WithOtherFields::new(inner));
+            self.provider
+                .expect_get_block()
+                .times(1)
+                .returning(move |_| Ok(Some(block.clone())));
+            self
+        }
+
+        /// Tag resolution finds no block.
+        fn tag_unresolvable(mut self) -> Self {
+            self.provider.expect_get_block().returning(|_| Ok(None));
+            self
+        }
+
+        /// Expect exactly one `get_logs` call for `block_option`, returning no logs.
+        fn logs_empty(mut self, block_option: FilterBlockOption) -> Self {
+            self.provider
+                .expect_get_logs()
+                .withf(move |filter| filter.block_option == block_option)
+                .times(1)
+                .returning(|_| Ok(vec![]));
+            self
+        }
+
+        /// Expect exactly one `get_logs` call for `block_option`, returning an error.
+        fn logs_error(mut self, block_option: FilterBlockOption) -> Self {
+            self.provider
+                .expect_get_logs()
+                .withf(move |filter| filter.block_option == block_option)
+                .times(1)
+                .returning(|_| Err(ProviderError::Other(anyhow::anyhow!("getLogs failed"))));
+            self
+        }
+
+        /// Expect exactly two `get_logs` calls for `block_option`: an error, then no logs.
+        fn logs_error_then_empty(mut self, block_option: FilterBlockOption) -> Self {
+            let mut first = true;
+            self.provider
+                .expect_get_logs()
+                .withf(move |filter| filter.block_option == block_option)
+                .times(2)
+                .returning(move |_| {
+                    if first {
+                        first = false;
+                        Err(ProviderError::Other(anyhow::anyhow!("getLogs failed")))
+                    } else {
+                        Ok(vec![])
+                    }
+                });
+            self
+        }
+
+        async fn run(
+            self,
+            block_options: EventBlockOptions,
+        ) -> EthResult<Option<RpcUserOperationByHash>> {
+            let cs = ChainSpec {
+                id: 1,
+                ..Default::default()
+            };
+            let ep = cs.entry_point_address_v0_6;
+            let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
+            let hash = uo.hash();
+
             let mut pool = MockPool::default();
             pool.expect_get_op_by_hash()
                 .with(eq(hash))
                 .returning(move |_| Ok(None));
 
-            // no `expect_get_block_number`: a caller-supplied block option must skip
-            // the latest-block lookup used to compute the default search window
-            let mut provider = MockEvmProvider::default();
-            provider
-                .expect_get_logs()
-                .withf(move |filter| filter.block_option == block_option)
-                .returning(move |_| Ok(vec![]));
-
             let mut entry_point = MockEntryPointV0_6::default();
             entry_point.expect_address().return_const(ep);
 
-            let api = create_api(
-                provider,
+            let api = create_api_with_event_distances(
+                self.provider,
                 entry_point,
                 pool,
                 MockGasEstimator::default(),
                 false,
+                self.event_block_distance,
+                self.event_block_distance_fallback,
             );
-            let res = api
-                .get_user_operation_by_hash(
-                    hash,
-                    EventBlockOptions {
-                        block_option: Some(block_option),
-                        max_block_range: None,
-                    },
-                )
+            api.get_user_operation_by_hash(hash, block_options).await
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_user_op_by_hash_with_block_option() {
+        // A caller-supplied block option must reach the getLogs filter as-is and skip
+        // the latest-block lookup used to compute the default search window.
+        for block_option in [
+            range(100, 200),
+            FilterBlockOption::AtBlockHash(B256::random()),
+        ] {
+            let res = LookupTest::new()
+                .logs_empty(block_option)
+                .run(EventBlockOptions {
+                    block_option: Some(block_option),
+                    max_block_range: None,
+                })
                 .await
                 .unwrap();
             assert_eq!(res, None);
@@ -547,52 +644,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_user_op_by_hash_max_block_range_override() {
-        let cs = ChainSpec {
-            id: 1,
-            ..Default::default()
-        };
-        let ep = cs.entry_point_address_v0_6;
-        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
-        let hash = uo.hash();
-
-        let mut pool = MockPool::default();
-        pool.expect_get_op_by_hash()
-            .with(eq(hash))
-            .returning(move |_| Ok(None));
-
-        // The event provider is constructed with no static block distance, so a non-default
-        // search window proves the per-request override is applied.
-        let mut provider = MockEvmProvider::default();
-        provider.expect_get_block_number().returning(|| Ok(1000));
-        provider
-            .expect_get_logs()
-            .withf(|filter| {
-                filter.block_option
-                    == FilterBlockOption::Range {
-                        from_block: Some(900u64.into()),
-                        to_block: Some(1000u64.into()),
-                    }
+        // No static block distance is configured, so a non-default search window proves
+        // the per-request override is applied.
+        let res = LookupTest::new()
+            .latest_block(1000)
+            .logs_empty(range(900, 1000))
+            .run(EventBlockOptions {
+                block_option: None,
+                max_block_range: Some(100),
             })
-            .returning(move |_| Ok(vec![]));
-
-        let mut entry_point = MockEntryPointV0_6::default();
-        entry_point.expect_address().return_const(ep);
-
-        let api = create_api(
-            provider,
-            entry_point,
-            pool,
-            MockGasEstimator::default(),
-            false,
-        );
-        let res = api
-            .get_user_operation_by_hash(
-                hash,
-                EventBlockOptions {
-                    block_option: None,
-                    max_block_range: Some(100),
-                },
-            )
             .await
             .unwrap();
         assert_eq!(res, None);
@@ -600,66 +660,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_user_op_by_hash_resolves_tags_once() {
-        use alloy_eips::BlockNumberOrTag;
-
-        let cs = ChainSpec {
-            id: 1,
-            ..Default::default()
-        };
-        let ep = cs.entry_point_address_v0_6;
-        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
-        let hash = uo.hash();
-
-        let mut pool = MockPool::default();
-        pool.expect_get_op_by_hash()
-            .with(eq(hash))
-            .returning(move |_| Ok(None));
-
         // A latest..latest range must be resolved to concrete numbers with a single
         // get_block call before the fan-out; the filter must see the numbers.
-        let mut inner = alloy_rpc_types_eth::Block::<
-            rundler_provider::AnyRpcTransaction,
-            rundler_provider::AnyRpcHeader,
-        >::default();
-        inner.header.inner.number = 1000;
-        let block = rundler_provider::Block::new(WithOtherFields::new(inner));
-        let mut provider = MockEvmProvider::default();
-        provider
-            .expect_get_block()
-            .times(1)
-            .returning(move |_| Ok(Some(block.clone())));
-        provider
-            .expect_get_logs()
-            .withf(|filter| {
-                filter.block_option
-                    == FilterBlockOption::Range {
-                        from_block: Some(1000u64.into()),
-                        to_block: Some(1000u64.into()),
-                    }
+        let res = LookupTest::new()
+            .resolves_tag_to(1000)
+            .logs_empty(range(1000, 1000))
+            .run(EventBlockOptions {
+                block_option: Some(FilterBlockOption::Range {
+                    from_block: Some(BlockNumberOrTag::Latest),
+                    to_block: Some(BlockNumberOrTag::Latest),
+                }),
+                max_block_range: None,
             })
-            .returning(move |_| Ok(vec![]));
-
-        let mut entry_point = MockEntryPointV0_6::default();
-        entry_point.expect_address().return_const(ep);
-
-        let api = create_api(
-            provider,
-            entry_point,
-            pool,
-            MockGasEstimator::default(),
-            false,
-        );
-        let res = api
-            .get_user_operation_by_hash(
-                hash,
-                EventBlockOptions {
-                    block_option: Some(FilterBlockOption::Range {
-                        from_block: Some(BlockNumberOrTag::Latest),
-                        to_block: Some(BlockNumberOrTag::Latest),
-                    }),
-                    max_block_range: None,
-                },
-            )
             .await
             .unwrap();
         assert_eq!(res, None);
@@ -667,47 +679,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_user_op_by_hash_unresolvable_tag_is_invalid_params() {
-        use alloy_eips::BlockNumberOrTag;
-
-        let cs = ChainSpec {
-            id: 1,
-            ..Default::default()
-        };
-        let ep = cs.entry_point_address_v0_6;
-        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
-        let hash = uo.hash();
-
-        let mut pool = MockPool::default();
-        pool.expect_get_op_by_hash()
-            .with(eq(hash))
-            .returning(move |_| Ok(None));
-
         // The tag is caller-supplied, so a provider returning no block for it must
         // surface as invalid params, not an internal error.
-        let mut provider = MockEvmProvider::default();
-        provider.expect_get_block().returning(|_| Ok(None));
-
-        let mut entry_point = MockEntryPointV0_6::default();
-        entry_point.expect_address().return_const(ep);
-
-        let api = create_api(
-            provider,
-            entry_point,
-            pool,
-            MockGasEstimator::default(),
-            false,
-        );
-        let err = api
-            .get_user_operation_by_hash(
-                hash,
-                EventBlockOptions {
-                    block_option: Some(FilterBlockOption::Range {
-                        from_block: Some(BlockNumberOrTag::Pending),
-                        to_block: Some(BlockNumberOrTag::Pending),
-                    }),
-                    max_block_range: None,
-                },
-            )
+        let err = LookupTest::new()
+            .tag_unresolvable()
+            .run(EventBlockOptions {
+                block_option: Some(FilterBlockOption::Range {
+                    from_block: Some(BlockNumberOrTag::Pending),
+                    to_block: Some(BlockNumberOrTag::Pending),
+                }),
+                max_block_range: None,
+            })
             .await
             .unwrap_err();
         assert!(
@@ -718,53 +700,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_user_op_by_hash_block_option_invalid_ranges() {
-        let cs = ChainSpec {
-            id: 1,
-            ..Default::default()
-        };
-        let ep = cs.entry_point_address_v0_6;
-        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
-        let hash = uo.hash();
-
         // Wider than the max block range, missing a bound while a max is enforced, and
         // reversed: all must surface as invalid params, not an internal error.
         for block_option in [
-            FilterBlockOption::Range {
-                from_block: Some(100u64.into()),
-                to_block: Some(300u64.into()),
-            },
+            range(100, 300),
             FilterBlockOption::Range {
                 from_block: Some(100u64.into()),
                 to_block: None,
             },
-            FilterBlockOption::Range {
-                from_block: Some(300u64.into()),
-                to_block: Some(100u64.into()),
-            },
+            range(300, 100),
         ] {
-            let mut pool = MockPool::default();
-            pool.expect_get_op_by_hash()
-                .with(eq(hash))
-                .returning(move |_| Ok(None));
-
-            let mut entry_point = MockEntryPointV0_6::default();
-            entry_point.expect_address().return_const(ep);
-
-            let api = create_api(
-                MockEvmProvider::default(),
-                entry_point,
-                pool,
-                MockGasEstimator::default(),
-                false,
-            );
-            let err = api
-                .get_user_operation_by_hash(
-                    hash,
-                    EventBlockOptions {
-                        block_option: Some(block_option),
-                        max_block_range: Some(100),
-                    },
-                )
+            let err = LookupTest::new()
+                .run(EventBlockOptions {
+                    block_option: Some(block_option),
+                    max_block_range: Some(100),
+                })
                 .await
                 .unwrap_err();
             assert!(
@@ -776,60 +726,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_user_op_by_hash_fallback_retries_default_path() {
-        let cs = ChainSpec {
-            id: 1,
-            ..Default::default()
-        };
-        let ep = cs.entry_point_address_v0_6;
-        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
-        let hash = uo.hash();
-
-        let mut pool = MockPool::default();
-        pool.expect_get_op_by_hash()
-            .with(eq(hash))
-            .returning(move |_| Ok(None));
-
         // With no caller-supplied block option, a failed primary query must retry with
         // the configured fallback distance.
-        let mut provider = MockEvmProvider::default();
-        provider.expect_get_block_number().returning(|| Ok(1000));
-        provider
-            .expect_get_logs()
-            .withf(|filter| {
-                filter.block_option
-                    == FilterBlockOption::Range {
-                        from_block: Some(500u64.into()),
-                        to_block: Some(1000u64.into()),
-                    }
-            })
-            .times(1)
-            .returning(|_| Err(ProviderError::Other(anyhow::anyhow!("range too large"))));
-        provider
-            .expect_get_logs()
-            .withf(|filter| {
-                filter.block_option
-                    == FilterBlockOption::Range {
-                        from_block: Some(900u64.into()),
-                        to_block: Some(1000u64.into()),
-                    }
-            })
-            .times(1)
-            .returning(|_| Ok(vec![]));
-
-        let mut entry_point = MockEntryPointV0_6::default();
-        entry_point.expect_address().return_const(ep);
-
-        let api = create_api_with_event_distances(
-            provider,
-            entry_point,
-            pool,
-            MockGasEstimator::default(),
-            false,
-            Some(500),
-            Some(100),
-        );
-        let res = api
-            .get_user_operation_by_hash(hash, EventBlockOptions::default())
+        let res = LookupTest::new()
+            .distances(Some(500), Some(100))
+            .latest_block(1000)
+            .logs_error(range(500, 1000))
+            .logs_empty(range(900, 1000))
+            .run(EventBlockOptions::default())
             .await
             .unwrap();
         assert_eq!(res, None);
@@ -837,122 +741,31 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_user_op_by_hash_fallback_suppressed_with_block_option() {
-        let cs = ChainSpec {
-            id: 1,
-            ..Default::default()
-        };
-        let ep = cs.entry_point_address_v0_6;
-        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
-        let hash = uo.hash();
-
-        let mut pool = MockPool::default();
-        pool.expect_get_op_by_hash()
-            .with(eq(hash))
-            .returning(move |_| Ok(None));
-
         // A caller-supplied block option must be used as-is: on error there is no
         // fallback retry (a second get_logs call would fail the mock's times(1)).
-        let mut provider = MockEvmProvider::default();
-        provider
-            .expect_get_logs()
-            .withf(|filter| {
-                filter.block_option
-                    == FilterBlockOption::Range {
-                        from_block: Some(100u64.into()),
-                        to_block: Some(200u64.into()),
-                    }
+        let res = LookupTest::new()
+            .distances(None, Some(100))
+            .logs_error(range(100, 200))
+            .run(EventBlockOptions {
+                block_option: Some(range(100, 200)),
+                max_block_range: None,
             })
-            .times(1)
-            .returning(|_| Err(ProviderError::Other(anyhow::anyhow!("boom"))));
-
-        let mut entry_point = MockEntryPointV0_6::default();
-        entry_point.expect_address().return_const(ep);
-
-        let api = create_api_with_event_distances(
-            provider,
-            entry_point,
-            pool,
-            MockGasEstimator::default(),
-            false,
-            None,
-            Some(100),
-        );
-        let res = api
-            .get_user_operation_by_hash(
-                hash,
-                EventBlockOptions {
-                    block_option: Some(FilterBlockOption::Range {
-                        from_block: Some(100u64.into()),
-                        to_block: Some(200u64.into()),
-                    }),
-                    max_block_range: None,
-                },
-            )
             .await;
         assert!(res.is_err(), "expected the provider error to propagate");
     }
 
     #[tokio::test]
     async fn test_get_user_op_by_hash_fallback_capped_by_max_block_range() {
-        let cs = ChainSpec {
-            id: 1,
-            ..Default::default()
-        };
-        let ep = cs.entry_point_address_v0_6;
-        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
-        let hash = uo.hash();
-
-        let mut pool = MockPool::default();
-        pool.expect_get_op_by_hash()
-            .with(eq(hash))
-            .returning(move |_| Ok(None));
-
         // The per-request max (50) bounds the primary window; the fallback retry (a
         // larger configured 80) must be capped to it as well.
-        let mut provider = MockEvmProvider::default();
-        provider.expect_get_block_number().returning(|| Ok(1000));
-        provider
-            .expect_get_logs()
-            .withf(|filter| {
-                filter.block_option
-                    == FilterBlockOption::Range {
-                        from_block: Some(950u64.into()),
-                        to_block: Some(1000u64.into()),
-                    }
+        let res = LookupTest::new()
+            .distances(None, Some(80))
+            .latest_block(1000)
+            .logs_error_then_empty(range(950, 1000))
+            .run(EventBlockOptions {
+                block_option: None,
+                max_block_range: Some(50),
             })
-            .times(2)
-            .returning({
-                let mut first = true;
-                move |_| {
-                    if first {
-                        first = false;
-                        Err(ProviderError::Other(anyhow::anyhow!("transient")))
-                    } else {
-                        Ok(vec![])
-                    }
-                }
-            });
-
-        let mut entry_point = MockEntryPointV0_6::default();
-        entry_point.expect_address().return_const(ep);
-
-        let api = create_api_with_event_distances(
-            provider,
-            entry_point,
-            pool,
-            MockGasEstimator::default(),
-            false,
-            None,
-            Some(80),
-        );
-        let res = api
-            .get_user_operation_by_hash(
-                hash,
-                EventBlockOptions {
-                    block_option: None,
-                    max_block_range: Some(50),
-                },
-            )
             .await
             .unwrap();
         assert_eq!(res, None);
@@ -960,58 +773,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_user_op_by_hash_empty_range_treated_as_omitted() {
-        let cs = ChainSpec {
-            id: 1,
-            ..Default::default()
-        };
-        let ep = cs.entry_point_address_v0_6;
-        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
-        let hash = uo.hash();
-
-        let mut pool = MockPool::default();
-        pool.expect_get_op_by_hash()
-            .with(eq(hash))
-            .returning(move |_| Ok(None));
-
         // An empty range `{}` carries no information: the default search window must be
         // used, not the node's getLogs defaults.
-        let mut provider = MockEvmProvider::default();
-        provider.expect_get_block_number().returning(|| Ok(1000));
-        provider
-            .expect_get_logs()
-            .withf(|filter| {
-                filter.block_option
-                    == FilterBlockOption::Range {
-                        from_block: Some(900u64.into()),
-                        to_block: Some(1000u64.into()),
-                    }
+        let res = LookupTest::new()
+            .distances(Some(100), None)
+            .latest_block(1000)
+            .logs_empty(range(900, 1000))
+            .run(EventBlockOptions {
+                block_option: Some(FilterBlockOption::Range {
+                    from_block: None,
+                    to_block: None,
+                }),
+                max_block_range: None,
             })
-            .times(1)
-            .returning(|_| Ok(vec![]));
-
-        let mut entry_point = MockEntryPointV0_6::default();
-        entry_point.expect_address().return_const(ep);
-
-        let api = create_api_with_event_distances(
-            provider,
-            entry_point,
-            pool,
-            MockGasEstimator::default(),
-            false,
-            Some(100),
-            None,
-        );
-        let res = api
-            .get_user_operation_by_hash(
-                hash,
-                EventBlockOptions {
-                    block_option: Some(FilterBlockOption::Range {
-                        from_block: None,
-                        to_block: None,
-                    }),
-                    max_block_range: None,
-                },
-            )
             .await
             .unwrap();
         assert_eq!(res, None);
