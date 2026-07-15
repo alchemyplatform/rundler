@@ -26,13 +26,22 @@ pub(crate) use v0_6::UserOperationEventProviderV0_6;
 mod v0_7;
 pub(crate) use v0_7::UserOperationEventProviderV0_7;
 
+/// Options scoping the block window searched for user operation events.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct EventBlockOptions {
+    /// Caller-supplied block range or hash to search. When set, the fallback retry is
+    /// disabled and the option is used as-is (after tag resolution and validation).
+    pub(crate) block_option: Option<FilterBlockOption>,
+    /// Per-request override of the maximum event block distance.
+    pub(crate) max_block_range: Option<u64>,
+}
+
 #[async_trait::async_trait]
 pub(crate) trait UserOperationEventProvider: Send + Sync {
     async fn get_mined_by_hash(
         &self,
         hash: B256,
-        block_option: Option<FilterBlockOption>,
-        max_block_range: Option<u64>,
+        block_options: EventBlockOptions,
     ) -> EventProviderResult<Option<RpcUserOperationByHash>>;
 
     async fn get_mined_from_tx_receipt(
@@ -44,8 +53,7 @@ pub(crate) trait UserOperationEventProvider: Send + Sync {
     async fn get_receipt(
         &self,
         hash: B256,
-        block_option: Option<FilterBlockOption>,
-        max_block_range: Option<u64>,
+        block_options: EventBlockOptions,
     ) -> EventProviderResult<Option<RpcUserOperationReceipt>>;
 
     async fn get_receipt_from_tx_hash(
@@ -66,8 +74,7 @@ pub(crate) trait UserOperationEventProvider: Send + Sync {
         &self,
         hash: B256,
         bundle_transaction: Option<B256>,
-        block_option: Option<FilterBlockOption>,
-        max_block_range: Option<u64>,
+        block_options: EventBlockOptions,
     ) -> EventProviderResult<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>>;
 }
 

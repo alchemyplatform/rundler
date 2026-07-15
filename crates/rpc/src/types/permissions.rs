@@ -41,9 +41,27 @@ pub(crate) struct RpcPermissions {
     /// Disable EIP-7702
     #[serde(default)]
     pub(crate) eip7702_disabled: Option<bool>,
-    /// Override for the maximum block range used when looking up user operation events
-    #[serde(default)]
-    pub(crate) max_block_range: Option<U64>,
+}
+
+/// Per-request override for the maximum block range used when looking up user operation
+/// events, parsed from the [`headers::MAX_BLOCK_RANGE`] header.
+///
+/// Deliberately separate from [`RpcPermissions`]: this is lookup configuration, not a user
+/// operation permission, and its presence must not affect the header-vs-positional
+/// permissions precedence on `eth_sendUserOperation`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MaxBlockRange(pub(crate) u64);
+
+impl MaxBlockRange {
+    /// Parse the max block range override from HTTP headers, if present.
+    pub(crate) fn from_headers(
+        headers: &http::HeaderMap,
+    ) -> Result<Option<Self>, PermissionsHeaderError> {
+        Ok(header_str(headers, headers::MAX_BLOCK_RANGE)?
+            .map(|s| parse_u64(headers::MAX_BLOCK_RANGE, s))
+            .transpose()?
+            .map(MaxBlockRange))
+    }
 }
 
 /// HTTP header names carrying per-request user operation permissions.
@@ -77,11 +95,6 @@ pub(crate) struct PermissionsHeaderError {
 }
 
 impl RpcPermissions {
-    /// The override for the maximum event-lookup block range, if any.
-    pub(crate) fn max_block_range(&self) -> Option<u64> {
-        self.max_block_range.map(|v| v.to())
-    }
-
     /// Parse per-request permissions from HTTP headers.
     ///
     /// Every header is optional; absent headers leave their field at the default. Returns
@@ -94,10 +107,6 @@ impl RpcPermissions {
         let mut present = false;
         let mut perms = RpcPermissions::default();
 
-        if let Some(s) = header_str(headers, headers::MAX_BLOCK_RANGE)? {
-            present = true;
-            perms.max_block_range = Some(U64::from(parse_u64(headers::MAX_BLOCK_RANGE, s)?));
-        }
         if let Some(s) = header_str(headers, headers::TRUSTED)? {
             present = true;
             perms.trusted = parse_bool(headers::TRUSTED, s)?;
@@ -164,16 +173,25 @@ fn header_str<'a>(
     headers: &'a http::HeaderMap,
     name: &'static str,
 ) -> Result<Option<&'a str>, PermissionsHeaderError> {
-    match headers.get(name) {
-        None => Ok(None),
-        Some(value) => value
-            .to_str()
-            .map(Some)
-            .map_err(|_| PermissionsHeaderError {
-                header: name,
-                reason: "value is not valid ASCII".to_string(),
-            }),
+    let mut values = headers.get_all(name).iter();
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    // Fail closed on ambiguity: these headers carry policy, so a smuggled or
+    // proxy-appended duplicate must not be silently first-wins.
+    if values.next().is_some() {
+        return Err(PermissionsHeaderError {
+            header: name,
+            reason: "header supplied more than once".to_string(),
+        });
     }
+    value
+        .to_str()
+        .map(Some)
+        .map_err(|_| PermissionsHeaderError {
+            header: name,
+            reason: "value is not valid ASCII".to_string(),
+        })
 }
 
 fn parse_bool(name: &'static str, s: &str) -> Result<bool, PermissionsHeaderError> {
@@ -277,7 +295,6 @@ mod tests {
     #[test]
     fn parses_all_scalar_headers() {
         let headers = headers_from(&[
-            (headers::MAX_BLOCK_RANGE, "1000"),
             (headers::TRUSTED, "true"),
             (headers::MAX_OPS_IN_POOL_FOR_SENDER, "4"),
             (headers::UNDERPRICED_ACCEPT_PCT, "10"),
@@ -289,13 +306,43 @@ mod tests {
             .unwrap()
             .expect("at least one header present");
 
-        assert_eq!(perms.max_block_range, Some(U64::from(1000)));
         assert!(perms.trusted);
         assert_eq!(perms.max_allowed_in_pool_for_sender, Some(U64::from(4)));
         assert_eq!(perms.underpriced_accept_pct, Some(U64::from(10)));
         assert_eq!(perms.underpriced_bundle_pct, Some(U64::from(20)));
         assert_eq!(perms.eip7702_disabled, Some(false));
         assert!(perms.bundler_sponsorship.is_none());
+    }
+
+    #[test]
+    fn max_block_range_is_independent_of_permissions() {
+        let headers = headers_from(&[(headers::MAX_BLOCK_RANGE, "1000")]);
+
+        let range = MaxBlockRange::from_headers(&headers)
+            .unwrap()
+            .expect("range header present");
+        assert_eq!(range.0, 1000);
+
+        // The lookup-scoped header must not count as "permissions present", otherwise a
+        // gateway attaching it would wipe out positional permissions on sends.
+        assert!(RpcPermissions::from_headers(&headers).unwrap().is_none());
+    }
+
+    #[test]
+    fn malformed_max_block_range_is_rejected() {
+        let headers = headers_from(&[(headers::MAX_BLOCK_RANGE, "not-a-number")]);
+        let err = MaxBlockRange::from_headers(&headers).unwrap_err();
+        assert_eq!(err.header, headers::MAX_BLOCK_RANGE);
+    }
+
+    #[test]
+    fn duplicate_header_is_rejected() {
+        let mut headers = HeaderMap::new();
+        headers.append(headers::TRUSTED, HeaderValue::from_static("true"));
+        headers.append(headers::TRUSTED, HeaderValue::from_static("false"));
+
+        let err = RpcPermissions::from_headers(&headers).unwrap_err();
+        assert_eq!(err.header, headers::TRUSTED);
     }
 
     #[test]
@@ -325,9 +372,9 @@ mod tests {
 
     #[test]
     fn malformed_int_is_rejected() {
-        let headers = headers_from(&[(headers::MAX_BLOCK_RANGE, "not-a-number")]);
+        let headers = headers_from(&[(headers::MAX_OPS_IN_POOL_FOR_SENDER, "not-a-number")]);
         let err = RpcPermissions::from_headers(&headers).unwrap_err();
-        assert_eq!(err.header, headers::MAX_BLOCK_RANGE);
+        assert_eq!(err.header, headers::MAX_OPS_IN_POOL_FOR_SENDER);
     }
 
     #[test]

@@ -23,7 +23,7 @@ use http::{Request as HttpRequest, Response as HttpResponse, StatusCode, header:
 use jsonrpsee::server::HttpBody;
 use tower::{Layer, Service};
 
-use crate::types::RpcPermissions;
+use crate::types::{MaxBlockRange, RpcPermissions};
 
 /// Tower layer that installs the [`PermissionsHeaderMiddleware`].
 #[derive(Clone)]
@@ -85,11 +85,17 @@ where
         let mut svc = std::mem::replace(&mut self.service, clone);
 
         if self.enabled {
-            match RpcPermissions::from_headers(req.headers()) {
-                Ok(Some(perms)) => {
-                    req.extensions_mut().insert(perms);
+            let parsed = RpcPermissions::from_headers(req.headers())
+                .and_then(|perms| Ok((perms, MaxBlockRange::from_headers(req.headers())?)));
+            match parsed {
+                Ok((perms, max_block_range)) => {
+                    if let Some(perms) = perms {
+                        req.extensions_mut().insert(perms);
+                    }
+                    if let Some(max_block_range) = max_block_range {
+                        req.extensions_mut().insert(max_block_range);
+                    }
                 }
-                Ok(None) => {}
                 Err(err) => {
                     // Fail closed: a malformed policy header must not silently fall through
                     // to defaults.
@@ -120,6 +126,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct RecordingService {
         saw_permissions: Arc<Mutex<Option<bool>>>,
+        saw_max_block_range: Arc<Mutex<Option<u64>>>,
         called: Arc<Mutex<bool>>,
     }
 
@@ -136,6 +143,8 @@ mod tests {
             *self.called.lock().unwrap() = true;
             *self.saw_permissions.lock().unwrap() =
                 Some(req.extensions().get::<RpcPermissions>().is_some());
+            *self.saw_max_block_range.lock().unwrap() =
+                req.extensions().get::<MaxBlockRange>().map(|r| r.0);
             futures_util::future::ready(Ok(HttpResponse::new(HttpBody::from("ok".to_string()))))
         }
     }
@@ -176,6 +185,23 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(*saw.lock().unwrap(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn max_block_range_does_not_count_as_permissions() {
+        let inner = RecordingService::default();
+        let saw_perms = inner.saw_permissions.clone();
+        let saw_range = inner.saw_max_block_range.clone();
+        let mut svc = PermissionsHeaderLayer::new(true).layer(inner);
+
+        let resp = svc
+            .call(request_with(&[("x-rundler-max-block-range", "1000")]))
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(*saw_perms.lock().unwrap(), Some(false));
+        assert_eq!(*saw_range.lock().unwrap(), Some(1000));
     }
 
     #[tokio::test]

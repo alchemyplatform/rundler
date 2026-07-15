@@ -32,8 +32,8 @@ Methods defined by the [ERC-7769 spec](https://eips.ethereum.org/EIPS/eip-7769#r
 
 The parameter is one of:
 
-- A block range object: `{ fromBlock, toBlock }`, where each field is an optional block number or tag. When the node enforces a maximum event block range (`--user_operation_event_block_distance`, or a per-request `X-Rundler-Max-Block-Range` override), both fields are required so the range can be validated, and a range wider than the maximum is rejected with an invalid params error (`-32602`).
-- A block hash: only the given block is searched.
+- A block range object: `{ fromBlock, toBlock }`, where each field is an optional block number or tag. Unknown fields in the object are rejected. When the node enforces a maximum event block range (`--user_operation_event_block_distance`, or a per-request `X-Rundler-Max-Block-Range` override), both fields are required so the range can be validated. A range wider than the maximum, or with `fromBlock` greater than `toBlock`, is rejected with an invalid params error (`-32602`).
+- A block hash (as a string): only the given block is searched.
 
 ```
 # Request
@@ -60,7 +60,7 @@ Headers are **only honored when permissions are enabled** (`--rpc.permissions_en
 
 | Header                                 | Type               | Field                            |
 | -------------------------------------- | ------------------ | -------------------------------- |
-| `X-Rundler-Max-Block-Range`            | int                | `maxBlockRange`                  |
+| `X-Rundler-Max-Block-Range`            | int                | — (header only, see below)       |
 | `X-Rundler-Trusted`                    | `true`/`false`     | `trusted`                        |
 | `X-Rundler-Max-Ops-In-Pool-For-Sender` | int                | `maxAllowedInPoolForSender`      |
 | `X-Rundler-Underpriced-Accept-Pct`     | int (0–100)        | `underpricedAcceptPct`           |
@@ -73,11 +73,12 @@ Parsing rules:
 
 - Every header is optional; an absent header leaves its field at the default.
 - A malformed value fails the request closed with `400 Bad Request` — a bad policy header must never silently fall through to defaults.
+- Supplying the same header more than once is ambiguous and is rejected with `400`.
 - The sponsorship pair (`X-Rundler-Sponsorship-Max-Cost` and `X-Rundler-Sponsorship-Valid-Until`) is coupled: supply both or neither. Supplying exactly one is rejected with `400`.
 
-`X-Rundler-Max-Block-Range` overrides `--user_operation_event_block_distance` for the event lookup on `eth_getUserOperationByHash`, `eth_getUserOperationReceipt`, and `rundler_getUserOperationStatus`.
+`X-Rundler-Max-Block-Range` overrides `--user_operation_event_block_distance` for the event lookup on `eth_getUserOperationByHash`, `eth_getUserOperationReceipt`, and `rundler_getUserOperationStatus`. It is lookup configuration, not a user operation permission: it has no counterpart in the positional `permissions` parameter and never affects `eth_sendUserOperation`.
 
-On `eth_sendUserOperation`, when both the headers and the positional `permissions` parameter are present, **the headers take precedence**. The positional parameter remains supported for backwards compatibility and is deprecated in favor of the headers.
+On `eth_sendUserOperation`, when both the permission headers and the positional `permissions` parameter are present, **the headers take precedence** (`X-Rundler-Max-Block-Range` does not count as a permission header for this purpose). The positional parameter remains supported for backwards compatibility and is deprecated in favor of the headers.
 
 ### `debug_` Namespace
 

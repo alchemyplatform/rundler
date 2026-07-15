@@ -27,7 +27,7 @@ use crate::{
 };
 
 mod permissions;
-pub(crate) use permissions::RpcPermissions;
+pub(crate) use permissions::{MaxBlockRange, RpcPermissions};
 
 mod v0_6;
 pub(crate) use v0_6::{
@@ -432,15 +432,25 @@ pub enum RpcDelegationStatus {
     Unknown,
 }
 
+/// A block range for scoping user operation event lookups.
+///
+/// `deny_unknown_fields` keeps this from swallowing arbitrary JSON objects (e.g. a
+/// `{"blockHash": ...}` getLogs-style filter) as an empty range when used in the
+/// untagged unions below.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-#[serde(untagged, rename_all_fields = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct RpcBlockRange {
+    /// The block number or tag this filter should start at.
+    pub(crate) from_block: Option<BlockNumberOrTag>,
+    /// The block number that this filter should end at.
+    pub(crate) to_block: Option<BlockNumberOrTag>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(untagged)]
 pub(crate) enum RpcBlockOption {
-    Range {
-        /// The block number or tag this filter should start at.
-        from_block: Option<BlockNumberOrTag>,
-        /// The block number that this filter should end at.
-        to_block: Option<BlockNumberOrTag>,
-    },
+    /// The block range this filter should search
+    Range(RpcBlockRange),
     /// The hash of the block if the filter only targets a single block
     AtBlockHash(BlockHash),
 }
@@ -448,10 +458,10 @@ pub(crate) enum RpcBlockOption {
 impl From<RpcBlockOption> for FilterBlockOption {
     fn from(rpc: RpcBlockOption) -> FilterBlockOption {
         match rpc {
-            RpcBlockOption::Range {
+            RpcBlockOption::Range(RpcBlockRange {
                 from_block,
                 to_block,
-            } => FilterBlockOption::Range {
+            }) => FilterBlockOption::Range {
                 from_block,
                 to_block,
             },
@@ -461,16 +471,10 @@ impl From<RpcBlockOption> for FilterBlockOption {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-#[serde(untagged, rename_all_fields = "camelCase")]
+#[serde(untagged)]
 pub(crate) enum RpcBlockOptionOrTag {
-    Range {
-        /// The block number or tag this filter should start at.
-        from_block: Option<BlockNumberOrTag>,
-        /// The block number that this filter should end at.
-        to_block: Option<BlockNumberOrTag>,
-    },
-    /// The hash of the block if the filter only targets a single block
-    BlockHash(BlockHash),
+    /// A block range or block hash
+    BlockOption(RpcBlockOption),
     /// The block tag to use for this request
     BlockTag(BlockTag),
 }
@@ -485,29 +489,29 @@ mod tests {
             serde_json::from_str(r#"{"fromBlock": "0x64", "toBlock": "0xc8"}"#).unwrap();
         assert!(matches!(
             full,
-            RpcBlockOption::Range {
+            RpcBlockOption::Range(RpcBlockRange {
                 from_block: Some(BlockNumberOrTag::Number(100)),
                 to_block: Some(BlockNumberOrTag::Number(200)),
-            }
+            })
         ));
 
         // The documented range fields are optional; a one-sided range must deserialize.
         let from_only: RpcBlockOption = serde_json::from_str(r#"{"fromBlock": "0x64"}"#).unwrap();
         assert!(matches!(
             from_only,
-            RpcBlockOption::Range {
+            RpcBlockOption::Range(RpcBlockRange {
                 from_block: Some(BlockNumberOrTag::Number(100)),
                 to_block: None,
-            }
+            })
         ));
 
         let to_only: RpcBlockOption = serde_json::from_str(r#"{"toBlock": "latest"}"#).unwrap();
         assert!(matches!(
             to_only,
-            RpcBlockOption::Range {
+            RpcBlockOption::Range(RpcBlockRange {
                 from_block: None,
                 to_block: Some(BlockNumberOrTag::Latest),
-            }
+            })
         ));
     }
 
@@ -516,5 +520,61 @@ mod tests {
         let hash = B256::repeat_byte(0xab);
         let parsed: RpcBlockOption = serde_json::from_str(&format!("\"{hash}\"")).unwrap();
         assert!(matches!(parsed, RpcBlockOption::AtBlockHash(h) if h == hash));
+    }
+
+    #[test]
+    fn block_option_rejects_unknown_object_keys() {
+        // A getLogs-style {"blockHash": ...} object must not silently match as an
+        // empty range.
+        let res: Result<RpcBlockOption, _> = serde_json::from_str(
+            r#"{"blockHash": "0xabababababababababababababababababababababababababababababababab"}"#,
+        );
+        assert!(res.is_err());
+
+        let res: Result<RpcBlockOptionOrTag, _> =
+            serde_json::from_str(r#"{"fromBlock": "0x64", "unknown": 1}"#);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn block_option_or_tag_deserializes_legacy_tags() {
+        // Backwards compatibility: every previously-valid eth_getUserOperationReceipt
+        // 2nd positional parameter must keep parsing as a tag.
+        for (raw, expected) in [
+            (r#""LATEST""#, BlockTag::Latest),
+            (r#""latest""#, BlockTag::Latest),
+            (r#""PENDING""#, BlockTag::Pending),
+            (r#""pending""#, BlockTag::Pending),
+        ] {
+            let parsed: RpcBlockOptionOrTag = serde_json::from_str(raw).unwrap();
+            assert!(
+                matches!(parsed, RpcBlockOptionOrTag::BlockTag(t) if t == expected),
+                "{raw} did not parse as {expected:?}: {parsed:?}"
+            );
+        }
+
+        // Previously-invalid inputs must still be rejected.
+        assert!(serde_json::from_str::<RpcBlockOptionOrTag>(r#""Latest""#).is_err());
+        assert!(serde_json::from_str::<RpcBlockOptionOrTag>("100").is_err());
+    }
+
+    #[test]
+    fn block_option_or_tag_deserializes_block_options() {
+        let range: RpcBlockOptionOrTag =
+            serde_json::from_str(r#"{"fromBlock": "0x64", "toBlock": "0xc8"}"#).unwrap();
+        assert!(matches!(
+            range,
+            RpcBlockOptionOrTag::BlockOption(RpcBlockOption::Range(RpcBlockRange {
+                from_block: Some(BlockNumberOrTag::Number(100)),
+                to_block: Some(BlockNumberOrTag::Number(200)),
+            }))
+        ));
+
+        let hash = B256::repeat_byte(0xab);
+        let parsed: RpcBlockOptionOrTag = serde_json::from_str(&format!("\"{hash}\"")).unwrap();
+        assert!(matches!(
+            parsed,
+            RpcBlockOptionOrTag::BlockOption(RpcBlockOption::AtBlockHash(h)) if h == hash
+        ));
     }
 }

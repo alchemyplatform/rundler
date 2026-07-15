@@ -28,7 +28,9 @@ use rundler_types::{
 use rundler_utils::log::LogOnError;
 use tracing::instrument;
 
-use super::{EventProviderError, EventProviderResult, UserOperationEventProvider};
+use super::{
+    EventBlockOptions, EventProviderError, EventProviderResult, UserOperationEventProvider,
+};
 use crate::types::{RpcUserOperationByHash, RpcUserOperationReceipt, UOStatusEnum};
 
 #[derive(Debug)]
@@ -73,12 +75,11 @@ where
     async fn get_mined_by_hash(
         &self,
         hash: B256,
-        block_option: Option<FilterBlockOption>,
-        max_block_range: Option<u64>,
+        block_options: EventBlockOptions,
     ) -> EventProviderResult<Option<RpcUserOperationByHash>> {
         // Get event associated with hash (need to check all entry point addresses associated with this API)
         let event = self
-            .get_event_by_hash(hash, block_option, max_block_range)
+            .get_event_by_hash(hash, block_options)
             .await
             .log_on_error("should have successfully queried for user op events by hash")?;
 
@@ -115,11 +116,10 @@ where
     async fn get_receipt(
         &self,
         hash: B256,
-        block_option: Option<FilterBlockOption>,
-        max_block_range: Option<u64>,
+        block_options: EventBlockOptions,
     ) -> EventProviderResult<Option<RpcUserOperationReceipt>> {
         let event = self
-            .get_event_by_hash(hash, block_option, max_block_range)
+            .get_event_by_hash(hash, block_options)
             .await
             .log_on_error("should have successfully queried for user op events by hash")?;
         let Some(event) = event else { return Ok(None) };
@@ -186,15 +186,14 @@ where
         &self,
         hash: B256,
         preconfirmed_bundle_transaction: Option<B256>,
-        block_option: Option<FilterBlockOption>,
-        max_block_range: Option<u64>,
+        block_options: EventBlockOptions,
     ) -> EventProviderResult<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>> {
         // Step 1: Get tx_hash (preconfirmed: passed in, pending: find event first)
         let (tx_hash, event_from_logs) = if let Some(bundle_tx) = preconfirmed_bundle_transaction {
             (bundle_tx, None)
         } else {
             let event = self
-                .get_event_by_hash(hash, block_option, max_block_range)
+                .get_event_by_hash(hash, block_options)
                 .await
                 .log_on_error("should have successfully queried for user op events by hash")?;
 
@@ -324,48 +323,51 @@ where
     async fn get_event_by_hash(
         &self,
         hash: B256,
-        block_option: Option<FilterBlockOption>,
-        max_block_range: Option<u64>,
+        block_options: EventBlockOptions,
     ) -> EventProviderResult<Option<Log>> {
         // A per-request override (e.g. from a trusted gateway) takes precedence over the
         // statically configured event block distance.
-        let event_block_distance = max_block_range.or(self.event_block_distance);
-        let has_block_option = block_option.is_some();
-        let block_option = if let Some(bo) = block_option {
+        let event_block_distance = block_options.max_block_range.or(self.event_block_distance);
+        let has_block_option = block_options.block_option.is_some();
+        let block_option = if let Some(bo) = block_options.block_option {
+            // No-op when the RPC handler already resolved the tags before fanning out.
+            let bo = super::resolve_block_option(&self.provider, bo).await?;
+
             if let FilterBlockOption::Range {
                 from_block,
                 to_block,
             } = bo
-                && let Some(max_distance) = event_block_distance
             {
-                let (Some(from), Some(to)) = (from_block, to_block) else {
-                    return Err(EventProviderError::InvalidRequest(
-                        "fromBlock and toBlock must both be populated in event request".to_string(),
-                    ));
-                };
-
-                let from = super::resolve_block_number(&self.provider, from).await?;
-                let to = super::resolve_block_number(&self.provider, to).await?;
-
-                if from > to {
+                if let (Some(BlockNumberOrTag::Number(from)), Some(BlockNumberOrTag::Number(to))) =
+                    (from_block, to_block)
+                    && from > to
+                {
                     return Err(EventProviderError::InvalidRequest(format!(
                         "fromBlock: {from} is greater than toBlock: {to}"
                     )));
                 }
 
-                if to - from > max_distance {
-                    return Err(EventProviderError::InvalidRequest(format!(
-                        "fromBlock: {from}, toBlock: {to} larger than max block distance {max_distance}, reduce block range"
-                    )));
-                }
+                if let Some(max_distance) = event_block_distance {
+                    // Resolution guarantees populated bounds are numbers, so this only
+                    // rejects missing bounds.
+                    let (Some(BlockNumberOrTag::Number(from)), Some(BlockNumberOrTag::Number(to))) =
+                        (from_block, to_block)
+                    else {
+                        return Err(EventProviderError::InvalidRequest(
+                            "fromBlock and toBlock must both be populated in event request"
+                                .to_string(),
+                        ));
+                    };
 
-                FilterBlockOption::Range {
-                    from_block: Some(from.into()),
-                    to_block: Some(to.into()),
+                    if to - from > max_distance {
+                        return Err(EventProviderError::InvalidRequest(format!(
+                            "fromBlock: {from}, toBlock: {to} larger than max block distance {max_distance}, reduce block range"
+                        )));
+                    }
                 }
-            } else {
-                bo
             }
+
+            bo
         } else {
             let to_block = self.provider.get_block_number().await?;
             let from_block = match event_block_distance {

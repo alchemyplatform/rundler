@@ -15,7 +15,7 @@ use std::{future::Future, pin::Pin};
 
 use alloy_primitives::{Address, B256, U64};
 use futures_util::future;
-use rundler_provider::{EvmProvider, FilterBlockOption, StateOverride};
+use rundler_provider::{EvmProvider, StateOverride};
 use rundler_types::{
     BlockTag, UserOperation, UserOperationOptionalGas, UserOperationPermissions,
     UserOperationVariant, chain::ChainSpec, pool::Pool,
@@ -28,7 +28,7 @@ use super::{
     router::EntryPointRouter,
 };
 use crate::{
-    eth::events::{self, EventProviderError},
+    eth::events::{self, EventBlockOptions, EventProviderError},
     types::{RpcGasEstimate, RpcUserOperationByHash, RpcUserOperationReceipt},
 };
 
@@ -136,8 +136,7 @@ where
     pub(crate) async fn get_user_operation_by_hash(
         &self,
         hash: B256,
-        block_option: Option<FilterBlockOption>,
-        max_block_range: Option<u64>,
+        block_options: EventBlockOptions,
     ) -> EthResult<Option<RpcUserOperationByHash>> {
         if hash == B256::ZERO {
             return Err(EthRpcError::InvalidParams(
@@ -145,7 +144,7 @@ where
             ));
         }
 
-        let block_option = self.resolve_block_option(block_option).await?;
+        let block_options = self.resolve_block_options(block_options).await?;
 
         // check both entry points and pending for the user operation event
         #[allow(clippy::type_complexity)]
@@ -156,7 +155,7 @@ where
         for ep in self.router.entry_points() {
             futs.push(Box::pin(async move {
                 self.router
-                    .get_mined_by_hash(ep, hash, block_option, max_block_range)
+                    .get_mined_by_hash(ep, hash, block_options)
                     .await
                     .map_err(EthRpcError::from)
             }));
@@ -172,8 +171,7 @@ where
         &self,
         hash: B256,
         tag: Option<BlockTag>,
-        block_option: Option<FilterBlockOption>,
-        max_block_range: Option<u64>,
+        block_options: EventBlockOptions,
     ) -> EthResult<Option<RpcUserOperationReceipt>> {
         if hash == B256::ZERO {
             return Err(EthRpcError::InvalidParams(
@@ -181,7 +179,7 @@ where
             ));
         }
 
-        let block_option = self.resolve_block_option(block_option).await?;
+        let block_options = self.resolve_block_options(block_options).await?;
         let tag = tag.unwrap_or(BlockTag::Latest);
 
         if tag == BlockTag::Pending {
@@ -207,8 +205,10 @@ where
                         &op_status.entry_point,
                         hash,
                         Some(preconf_info.tx_hash),
-                        None,
-                        max_block_range,
+                        EventBlockOptions {
+                            block_option: None,
+                            ..block_options
+                        },
                     )
                     .await;
                 match ret {
@@ -232,10 +232,10 @@ where
             }
         };
 
-        let futs = self.router.entry_points().map(|ep| {
-            self.router
-                .get_receipt(ep, hash, None, block_option, max_block_range)
-        });
+        let futs = self
+            .router
+            .entry_points()
+            .map(|ep| self.router.get_receipt(ep, hash, None, block_options));
         let results = future::try_join_all(futs).await?;
         Ok(results.into_iter().find_map(|x| x))
     }
@@ -276,18 +276,22 @@ where
 
     // Resolve block tags to concrete numbers once, before fanning out to the entry point
     // routes, so each route doesn't re-resolve them via RPC.
-    async fn resolve_block_option(
+    async fn resolve_block_options(
         &self,
-        block_option: Option<FilterBlockOption>,
-    ) -> EthResult<Option<FilterBlockOption>> {
-        match block_option {
-            Some(bo) => Ok(Some(
+        block_options: EventBlockOptions,
+    ) -> EthResult<EventBlockOptions> {
+        let block_option = match block_options.block_option {
+            Some(bo) => Some(
                 events::resolve_block_option(&self.provider, bo)
                     .await
                     .map_err(EthRpcError::from)?,
-            )),
-            None => Ok(None),
-        }
+            ),
+            None => None,
+        };
+        Ok(EventBlockOptions {
+            block_option,
+            ..block_options
+        })
     }
 }
 
@@ -302,7 +306,8 @@ mod tests {
     use mockall::predicate::eq;
     use rundler_contracts::v0_6::IEntryPoint::{IEntryPointCalls, handleOpsCall};
     use rundler_provider::{
-        AnyTxEnvelope, Log, MockEntryPointV0_6, MockEvmProvider, Transaction, WithOtherFields,
+        AnyTxEnvelope, FilterBlockOption, Log, MockEntryPointV0_6, MockEvmProvider, Transaction,
+        WithOtherFields,
     };
     use rundler_sim::MockGasEstimator;
     use rundler_types::{
@@ -363,7 +368,7 @@ mod tests {
             false,
         );
         let res = api
-            .get_user_operation_by_hash(hash, None, None)
+            .get_user_operation_by_hash(hash, EventBlockOptions::default())
             .await
             .unwrap();
         let ro = RpcUserOperationByHash {
@@ -450,7 +455,7 @@ mod tests {
             false,
         );
         let res = api
-            .get_user_operation_by_hash(hash, None, None)
+            .get_user_operation_by_hash(hash, EventBlockOptions::default())
             .await
             .unwrap();
         let ro = RpcUserOperationByHash {
@@ -494,7 +499,7 @@ mod tests {
             false,
         );
         let res = api
-            .get_user_operation_by_hash(hash, None, None)
+            .get_user_operation_by_hash(hash, EventBlockOptions::default())
             .await
             .unwrap();
         assert_eq!(res, None);
@@ -541,7 +546,13 @@ mod tests {
                 false,
             );
             let res = api
-                .get_user_operation_by_hash(hash, Some(block_option), None)
+                .get_user_operation_by_hash(
+                    hash,
+                    EventBlockOptions {
+                        block_option: Some(block_option),
+                        max_block_range: None,
+                    },
+                )
                 .await
                 .unwrap();
             assert_eq!(res, None);
@@ -589,7 +600,13 @@ mod tests {
             false,
         );
         let res = api
-            .get_user_operation_by_hash(hash, None, Some(100))
+            .get_user_operation_by_hash(
+                hash,
+                EventBlockOptions {
+                    block_option: None,
+                    max_block_range: Some(100),
+                },
+            )
             .await
             .unwrap();
         assert_eq!(res, None);
@@ -649,11 +666,13 @@ mod tests {
         let res = api
             .get_user_operation_by_hash(
                 hash,
-                Some(FilterBlockOption::Range {
-                    from_block: Some(BlockNumberOrTag::Latest),
-                    to_block: Some(BlockNumberOrTag::Latest),
-                }),
-                None,
+                EventBlockOptions {
+                    block_option: Some(FilterBlockOption::Range {
+                        from_block: Some(BlockNumberOrTag::Latest),
+                        to_block: Some(BlockNumberOrTag::Latest),
+                    }),
+                    max_block_range: None,
+                },
             )
             .await
             .unwrap();
@@ -702,7 +721,13 @@ mod tests {
                 false,
             );
             let err = api
-                .get_user_operation_by_hash(hash, Some(block_option), Some(100))
+                .get_user_operation_by_hash(
+                    hash,
+                    EventBlockOptions {
+                        block_option: Some(block_option),
+                        max_block_range: Some(100),
+                    },
+                )
                 .await
                 .unwrap_err();
             assert!(

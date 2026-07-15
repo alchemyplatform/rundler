@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use futures_util::future;
 use http::Extensions;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
-use rundler_provider::{EvmProvider, FeeEstimator, FilterBlockOption};
+use rundler_provider::{EvmProvider, FeeEstimator};
 use rundler_types::{
     GasFees, UserOperation, UserOperationId, UserOperationVariant,
     authorization::Eip7702Auth,
@@ -30,9 +30,9 @@ use rundler_types::{
 use tracing::instrument;
 
 use crate::{
-    eth::{EntryPointRouter, EthResult, EthRpcError, resolve_block_option},
+    eth::{EntryPointRouter, EthResult, EthRpcError, EventBlockOptions, resolve_block_option},
     types::{
-        RpcBlockOption, RpcDelegationStatus, RpcMinedUserOperation, RpcPermissions,
+        MaxBlockRange, RpcBlockOption, RpcDelegationStatus, RpcMinedUserOperation,
         RpcSuggestedGasFees, RpcUserOperation, RpcUserOperationGasPrice, RpcUserOperationStatus,
         UOStatusEnum, UserOperationStatusEnum,
     },
@@ -194,17 +194,13 @@ where
         uo_hash: B256,
         block_option: Option<RpcBlockOption>,
     ) -> RpcResult<RpcUserOperationStatus> {
-        let max_block_range = ext
-            .get::<RpcPermissions>()
-            .and_then(|p| p.max_block_range());
+        let block_options = EventBlockOptions {
+            block_option: block_option.map(|o| o.into()),
+            max_block_range: ext.get::<MaxBlockRange>().map(|r| r.0),
+        };
         utils::safe_call_rpc_handler(
             "rundler_getUserOperationStatus",
-            RundlerApi::get_user_operation_status(
-                self,
-                uo_hash,
-                block_option.map(|o| o.into()),
-                max_block_range,
-            ),
+            RundlerApi::get_user_operation_status(self, uo_hash, block_options),
         )
         .await
     }
@@ -392,18 +388,20 @@ where
     async fn get_user_operation_status(
         &self,
         uo_hash: B256,
-        block_option: Option<FilterBlockOption>,
-        max_block_range: Option<u64>,
+        block_options: EventBlockOptions,
     ) -> EthResult<RpcUserOperationStatus> {
         // Resolve block tags to concrete numbers once, before fanning out to the entry
         // point routes, so each route doesn't re-resolve them via RPC.
-        let block_option = match block_option {
-            Some(bo) => Some(
-                resolve_block_option(&self.evm_provider, bo)
-                    .await
-                    .map_err(EthRpcError::from)?,
-            ),
-            None => None,
+        let block_options = EventBlockOptions {
+            block_option: match block_options.block_option {
+                Some(bo) => Some(
+                    resolve_block_option(&self.evm_provider, bo)
+                        .await
+                        .map_err(EthRpcError::from)?,
+                ),
+                None => None,
+            },
+            ..block_options
         };
 
         // Fetch pool status first to get preconf info for the mined query
@@ -426,8 +424,10 @@ where
                     &pool_status.entry_point,
                     uo_hash,
                     Some(preconf_info.tx_hash),
-                    None,
-                    max_block_range,
+                    EventBlockOptions {
+                        block_option: None,
+                        ..block_options
+                    },
                 )
                 .await;
             match ret {
@@ -441,13 +441,8 @@ where
             }
         } else {
             let mined_futs = self.entry_point_router.entry_points().map(|ep| {
-                self.entry_point_router.get_mined_and_receipt(
-                    ep,
-                    uo_hash,
-                    None,
-                    block_option,
-                    max_block_range,
-                )
+                self.entry_point_router
+                    .get_mined_and_receipt(ep, uo_hash, None, block_options)
             });
             future::try_join_all(mined_futs)
                 .await

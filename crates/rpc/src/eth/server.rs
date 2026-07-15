@@ -14,16 +14,17 @@
 use alloy_primitives::{Address, B256, U64};
 use http::Extensions;
 use jsonrpsee::core::RpcResult;
-use rundler_provider::{EvmProvider, FilterBlockOption, StateOverride};
+use rundler_provider::{EvmProvider, StateOverride};
 use rundler_types::{UserOperationPermissions, pool::Pool};
 use tracing::instrument;
 
 use super::{EthApiServer, api::EthApi};
 use crate::{
-    eth::EthRpcError,
+    eth::{EthRpcError, events::EventBlockOptions},
     types::{
-        RpcBlockOption, RpcBlockOptionOrTag, RpcGasEstimate, RpcPermissions, RpcUserOperation,
-        RpcUserOperationByHash, RpcUserOperationOptionalGas, RpcUserOperationReceipt,
+        MaxBlockRange, RpcBlockOption, RpcBlockOptionOrTag, RpcGasEstimate, RpcPermissions,
+        RpcUserOperation, RpcUserOperationByHash, RpcUserOperationOptionalGas,
+        RpcUserOperationReceipt,
     },
     utils::{self, IntoRundlerType, TryIntoRundlerType},
 };
@@ -111,17 +112,13 @@ where
         hash: B256,
         block_option: Option<RpcBlockOption>,
     ) -> RpcResult<Option<RpcUserOperationByHash>> {
-        let max_block_range = ext
-            .get::<RpcPermissions>()
-            .and_then(|p| p.max_block_range());
+        let block_options = EventBlockOptions {
+            block_option: block_option.map(|o| o.into()),
+            max_block_range: ext.get::<MaxBlockRange>().map(|r| r.0),
+        };
         utils::safe_call_rpc_handler(
             "eth_getUserOperationByHash",
-            EthApi::get_user_operation_by_hash(
-                self,
-                hash,
-                block_option.map(|o| o.into()),
-                max_block_range,
-            ),
+            EthApi::get_user_operation_by_hash(self, hash, block_options),
         )
         .await
     }
@@ -133,28 +130,19 @@ where
         hash: B256,
         block_option_or_tag: Option<RpcBlockOptionOrTag>,
     ) -> RpcResult<Option<RpcUserOperationReceipt>> {
-        let max_block_range = ext
-            .get::<RpcPermissions>()
-            .and_then(|p| p.max_block_range());
         let (tag, block_option) = match block_option_or_tag {
             None => (None, None),
             Some(RpcBlockOptionOrTag::BlockTag(t)) => (Some(t), None),
-            Some(RpcBlockOptionOrTag::BlockHash(h)) => (None, Some(h.into())),
-            Some(RpcBlockOptionOrTag::Range {
-                from_block,
-                to_block,
-            }) => (
-                None,
-                Some(FilterBlockOption::Range {
-                    from_block,
-                    to_block,
-                }),
-            ),
+            Some(RpcBlockOptionOrTag::BlockOption(bo)) => (None, Some(bo.into())),
+        };
+        let block_options = EventBlockOptions {
+            block_option,
+            max_block_range: ext.get::<MaxBlockRange>().map(|r| r.0),
         };
 
         utils::safe_call_rpc_handler(
             "eth_getUserOperationReceipt",
-            EthApi::get_user_operation_receipt(self, hash, tag, block_option, max_block_range),
+            EthApi::get_user_operation_receipt(self, hash, tag, block_options),
         )
         .await
     }
