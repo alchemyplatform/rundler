@@ -32,7 +32,7 @@ Methods defined by the [ERC-7769 spec](https://eips.ethereum.org/EIPS/eip-7769#r
 
 The parameter is one of:
 
-- A block range object: `{ fromBlock, toBlock }`, where each field is an optional block number or tag.
+- A block range object: `{ fromBlock, toBlock }`, where each field is an optional block number or tag. When the node enforces a maximum event block range (`--user_operation_event_block_distance`, or a per-request `X-Rundler-Max-Block-Range` override), both fields are required so the range can be validated, and a range wider than the maximum is rejected with an invalid params error (`-32602`).
 - A block hash: only the given block is searched.
 
 ```

@@ -347,7 +347,13 @@ where
                 let from = self.resolve_block_number(from).await?;
                 let to = self.resolve_block_number(to).await?;
 
-                if to.saturating_sub(from) > max_distance {
+                if from > to {
+                    return Err(EventProviderError::InvalidRequest(format!(
+                        "fromBlock: {from} is greater than toBlock: {to}"
+                    )));
+                }
+
+                if to - from > max_distance {
                     return Err(EventProviderError::InvalidRequest(format!(
                         "fromBlock: {from}, toBlock: {to} larger than max block distance {max_distance}, reduce block range"
                     )));

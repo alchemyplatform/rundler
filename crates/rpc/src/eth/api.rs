@@ -572,6 +572,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_user_op_by_hash_block_option_invalid_ranges() {
+        let cs = ChainSpec {
+            id: 1,
+            ..Default::default()
+        };
+        let ep = cs.entry_point_address_v0_6;
+        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
+        let hash = uo.hash();
+
+        // Wider than the max block range, missing a bound while a max is enforced, and
+        // reversed: all must surface as invalid params, not an internal error.
+        for block_option in [
+            FilterBlockOption::Range {
+                from_block: Some(100u64.into()),
+                to_block: Some(300u64.into()),
+            },
+            FilterBlockOption::Range {
+                from_block: Some(100u64.into()),
+                to_block: None,
+            },
+            FilterBlockOption::Range {
+                from_block: Some(300u64.into()),
+                to_block: Some(100u64.into()),
+            },
+        ] {
+            let mut pool = MockPool::default();
+            pool.expect_get_op_by_hash()
+                .with(eq(hash))
+                .returning(move |_| Ok(None));
+
+            let mut entry_point = MockEntryPointV0_6::default();
+            entry_point.expect_address().return_const(ep);
+
+            let api = create_api(
+                MockEvmProvider::default(),
+                entry_point,
+                pool,
+                MockGasEstimator::default(),
+                false,
+            );
+            let err = api
+                .get_user_operation_by_hash(hash, Some(block_option), Some(100))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, EthRpcError::InvalidParams(_)),
+                "expected invalid params, got {err:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn test_send_user_op_header_permissions_take_precedence() {
         use std::sync::Mutex;
 

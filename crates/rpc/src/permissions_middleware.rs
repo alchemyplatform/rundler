@@ -79,6 +79,11 @@ where
     }
 
     fn call(&mut self, mut req: HttpRequest<RequestBody>) -> Self::Future {
+        // `poll_ready` was driven on `self.service`, so take it and leave the fresh
+        // (not-yet-ready) clone behind for the next call.
+        let clone = self.service.clone();
+        let mut svc = std::mem::replace(&mut self.service, clone);
+
         if self.enabled {
             match RpcPermissions::from_headers(req.headers()) {
                 Ok(Some(perms)) => {
@@ -98,7 +103,6 @@ where
             }
         }
 
-        let mut svc = self.service.clone();
         async move { svc.call(req).await }.boxed()
     }
 }
