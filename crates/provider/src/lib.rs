@@ -48,6 +48,7 @@ pub use alloy_network::{
 pub use alloy_serde::WithOtherFields;
 pub use fees::new_fee_estimator;
 mod traits;
+pub mod transaction;
 // re-export alloy RPC types
 use std::marker::PhantomData;
 
