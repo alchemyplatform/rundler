@@ -29,7 +29,7 @@ pub mod v0_7;
 use crate::{Entity, aggregator::AggregatorCosts, authorization::Eip7702Auth, chain::ChainSpec};
 
 /// A user op must be valid for at least this long into the future to be included.
-pub const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
+pub const TIME_RANGE_BUFFER: Duration = Duration::from_secs(20);
 
 /// Overhead for bytes required for each bundle
 /// 4 bytes for function signature
