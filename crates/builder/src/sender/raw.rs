@@ -14,18 +14,19 @@
 use alloy_primitives::B256;
 use anyhow::Context;
 use async_trait::async_trait;
-use rundler_provider::{EvmProvider, TransactionRequest};
+use rundler_provider::{EvmProvider, ProviderError, TransactionRequest};
 use rundler_signer::SignerLease;
 use rundler_types::{ExpectedStorage, GasFees};
 use serde_json::json;
 
 use super::{CancelTxInfo, Result};
-use crate::sender::{TransactionSender, create_hard_cancel_tx};
+use crate::sender::{TransactionSender, TxSenderError, create_hard_cancel_tx};
 
 #[derive(Debug)]
 pub(crate) struct RawTransactionSender<P> {
     submit_provider: P,
     use_conditional_rpc: bool,
+    internal_rpc_error_is_terminal: bool,
 }
 
 #[async_trait]
@@ -44,18 +45,18 @@ where
             .await
             .context("failed to sign transaction")?;
 
-        let tx_hash = if self.use_conditional_rpc {
+        let result = if self.use_conditional_rpc {
             self.submit_provider
                 .request(
                     "eth_sendRawTransactionConditional",
                     (raw_tx, json!({ "knownAccounts": expected_storage })),
                 )
-                .await?
+                .await
         } else {
-            self.submit_provider.send_raw_transaction(raw_tx).await?
+            self.submit_provider.send_raw_transaction(raw_tx).await
         };
 
-        Ok(tx_hash)
+        result.map_err(|e| self.map_provider_error(e))
     }
 
     async fn cancel_transaction(
@@ -72,7 +73,11 @@ where
             .await
             .context("failed to sign transaction")?;
 
-        let tx_hash = self.submit_provider.send_raw_transaction(raw_tx).await?;
+        let tx_hash = self
+            .submit_provider
+            .send_raw_transaction(raw_tx)
+            .await
+            .map_err(|e| self.map_provider_error(e))?;
 
         Ok(CancelTxInfo {
             tx_hash,
@@ -82,10 +87,24 @@ where
 }
 
 impl<P> RawTransactionSender<P> {
-    pub(crate) fn new(submit_provider: P, use_conditional_rpc: bool) -> Self {
+    pub(crate) fn new(
+        submit_provider: P,
+        use_conditional_rpc: bool,
+        internal_rpc_error_is_terminal: bool,
+    ) -> Self {
         Self {
             submit_provider,
             use_conditional_rpc,
+            internal_rpc_error_is_terminal,
+        }
+    }
+
+    fn map_provider_error(&self, error: ProviderError) -> TxSenderError {
+        let error = TxSenderError::from(error);
+        if self.internal_rpc_error_is_terminal {
+            error.promote_terminal_internal_error()
+        } else {
+            error
         }
     }
 }

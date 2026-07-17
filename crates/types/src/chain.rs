@@ -142,6 +142,9 @@ pub struct ChainSpec {
     pub flashbots_relay_url: Option<String>,
     /// True if the bloxroute sender is enabled on this chain
     pub bloxroute_enabled: bool,
+    /// True if this chain's node rejects transactions with `-32000: internal error`
+    /// as a terminal, per-transaction rejection rather than a provider outage
+    pub internal_rpc_error_is_terminal: bool,
 
     /*
      * Pool
@@ -215,6 +218,7 @@ impl Default for ChainSpec {
             flashbots_enabled: false,
             flashbots_relay_url: None,
             bloxroute_enabled: false,
+            internal_rpc_error_is_terminal: false,
             chain_history_size: 64,
             signature_aggregators: Arc::new(ContractRegistry::default()),
             submission_proxies: Arc::new(ContractRegistry::default()),

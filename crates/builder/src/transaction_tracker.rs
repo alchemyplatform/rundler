@@ -120,6 +120,15 @@ pub(crate) enum TransactionTrackerError {
     /// The transaction's gas limit is below its intrinsic gas cost.
     #[error("intrinsic gas too low")]
     IntrinsicGasTooLow,
+    /// The provider rejected the transaction with an error response known to be
+    /// terminal for this chain: retrying the identical transaction cannot succeed.
+    #[error("terminal RPC error {code}: {message}")]
+    TerminalRpcError {
+        /// RPC error code.
+        code: i64,
+        /// RPC error message.
+        message: String,
+    },
     /// The sender is unavailable due to an outage or transport error; acceptance
     /// of the transaction is unknown.
     #[error("sender unavailable: {0}")]
@@ -707,6 +716,9 @@ impl From<TxSenderError> for TransactionTrackerError {
             TxSenderError::Rejected => TransactionTrackerError::Rejected,
             TxSenderError::InsufficientFunds => TransactionTrackerError::InsufficientFunds,
             TxSenderError::IntrinsicGasTooLow => TransactionTrackerError::IntrinsicGasTooLow,
+            TxSenderError::TerminalRpcError { code, message } => {
+                TransactionTrackerError::TerminalRpcError { code, message }
+            }
             TxSenderError::SoftCancelFailed => {
                 TransactionTrackerError::Other(anyhow::anyhow!("soft cancel failed"))
             }

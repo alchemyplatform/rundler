@@ -664,6 +664,7 @@ where
             }
             Err(
                 e @ (TransactionTrackerError::IntrinsicGasTooLow
+                | TransactionTrackerError::TerminalRpcError { .. }
                 | TransactionTrackerError::SenderUnavailable(_)
                 | TransactionTrackerError::UnrecognizedRpc { .. }
                 | TransactionTrackerError::Other(_)),
@@ -1014,6 +1015,10 @@ where
                 );
                 error!("Bundle transaction intrinsic gas too low: tx_bytes={tx_bytes}");
                 Err(anyhow::anyhow!("intrinsic gas too low"))
+            }
+            Err(TransactionTrackerError::TerminalRpcError { code, message }) => {
+                error!("Failed to send bundle with terminal RPC error {code}: {message}");
+                Err(anyhow::anyhow!("terminal RPC error {code}: {message}"))
             }
             Err(TransactionTrackerError::UnrecognizedRpc { code, message }) => {
                 error!("Failed to send bundle with unrecognized RPC error {code}: {message}");

@@ -74,6 +74,18 @@ pub(crate) enum TxSenderError {
     /// Transaction gas limit is below its intrinsic gas cost
     #[error("intrinsic gas too low")]
     IntrinsicGasTooLow,
+    /// The provider rejected the transaction with an error response known to be
+    /// terminal for this chain: retrying the identical transaction cannot succeed.
+    ///
+    /// Currently produced for `-32000: internal error` on chains with
+    /// `ChainSpec::internal_rpc_error_is_terminal`.
+    #[error("terminal RPC error {code}: {message}")]
+    TerminalRpcError {
+        /// RPC error code.
+        code: i64,
+        /// RPC error message.
+        message: String,
+    },
     /// Sender is unavailable due to an outage or transport error.
     ///
     /// When a fallback sender is configured this triggers failover.
@@ -115,7 +127,9 @@ impl TxSenderError {
     #[allow(dead_code)] // consumed once the bundle sender reports outcomes to the pool
     pub(crate) fn classify(&self) -> RpcOutcomeClass {
         match self {
-            TxSenderError::IntrinsicGasTooLow => RpcOutcomeClass::Terminal,
+            TxSenderError::IntrinsicGasTooLow | TxSenderError::TerminalRpcError { .. } => {
+                RpcOutcomeClass::Terminal
+            }
             TxSenderError::SenderUnavailable(_) | TxSenderError::UnrecognizedRpc { .. } => {
                 RpcOutcomeClass::NonTerminal
             }
@@ -127,6 +141,20 @@ impl TxSenderError {
             | TxSenderError::SoftCancelFailed
             | TxSenderError::InsufficientFunds
             | TxSenderError::Other(_) => RpcOutcomeClass::Neutral,
+        }
+    }
+
+    /// On chains where the node emits `-32000: internal error` as a terminal
+    /// per-transaction rejection (`ChainSpec::internal_rpc_error_is_terminal`),
+    /// promotes that response from ambiguous to terminal.
+    pub(crate) fn promote_terminal_internal_error(self) -> Self {
+        match self {
+            TxSenderError::UnrecognizedRpc { code, message }
+                if code == -32000 && message.trim().eq_ignore_ascii_case("internal error") =>
+            {
+                TxSenderError::TerminalRpcError { code, message }
+            }
+            other => other,
         }
     }
 }
@@ -199,6 +227,8 @@ pub struct RawSenderArgs {
     pub submit_url: String,
     /// If the sender should use the conditional endpoint
     pub use_conditional_rpc: bool,
+    /// If the chain emits `-32000: internal error` as a terminal rejection
+    pub internal_rpc_error_is_terminal: bool,
 }
 
 /// Bloxroute sender arguments
@@ -260,6 +290,7 @@ impl TransactionSenderArgs {
                 TransactionSenderEnum::Raw(RawTransactionSender::new(
                     submitter,
                     args.use_conditional_rpc,
+                    args.internal_rpc_error_is_terminal,
                 ))
             }
             Self::Flashbots(args) => TransactionSenderEnum::Flashbots(

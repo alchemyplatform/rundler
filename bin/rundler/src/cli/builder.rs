@@ -333,6 +333,7 @@ impl BuilderArgs {
         let raw_args = || RawSenderArgs {
             submit_url: self.submit_url.clone().unwrap_or_else(|| rpc_url.into()),
             use_conditional_rpc: false,
+            internal_rpc_error_is_terminal: chain_spec.internal_rpc_error_is_terminal,
         };
 
         // Wrap `primary` in a FallbackSenderArgs if recovery is configured.
@@ -353,6 +354,7 @@ impl BuilderArgs {
             TransactionSenderKind::Raw => Ok(TransactionSenderArgs::Raw(RawSenderArgs {
                 submit_url: self.submit_url.clone().unwrap_or_else(|| rpc_url.into()),
                 use_conditional_rpc: self.use_conditional_rpc,
+                internal_rpc_error_is_terminal: chain_spec.internal_rpc_error_is_terminal,
             })),
             TransactionSenderKind::PolygonPrivate => {
                 let primary = TransactionSenderArgs::PolygonPrivate(PolygonPrivateArgs {
