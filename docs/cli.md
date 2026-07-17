@@ -209,6 +209,9 @@ List of command line options for configuring the Pool.
   - env: _POOL_DROP_MIN_NUM_BLOCKS_
 - `--pool.max_time_in_pool_secs`: The maximum amount of time a UO is allowed to be in the mempool, in seconds. (default: `None`)
   - env: _POOL_MAX_TIME_IN_POOL_SECS_
+- `--pool.suspect_tracking_enabled`: Master switch for poison user operation handling — suspect tracking, isolation, and removal (default: `false`)
+  - env: _POOL_SUSPECT_TRACKING_ENABLED_
+  - When disabled, bundle outcomes change no UO state and the `pool.*suspect*` options below have no effect.
 - `--pool.rpc_failures_before_suspect`: Number of non-terminal RPC submission failures before a UO becomes a suspect and is only submitted alone (default: `3`)
   - env: _POOL_RPC_FAILURES_BEFORE_SUSPECT_
   - See [poison user operations](./designs/poison-user-operations.md) for details. With a single builder signer, the scheduler cannot guarantee progress for both suspect and normal work when both remain continuously eligible.

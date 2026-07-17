@@ -218,6 +218,10 @@ pub struct PoolConfig {
     pub max_time_in_pool: Option<Duration>,
     /// The maximum number of storage slots that can be expected to be used by a user operation during validation
     pub max_expected_storage_slots: usize,
+    /// Master switch for poison user operation handling. When disabled, bundle
+    /// outcomes change no operation state and no operation is ever suspected or
+    /// removed by that flow.
+    pub suspect_tracking_enabled: bool,
     /// Number of non-terminal RPC submission failures before a user operation becomes a suspect
     pub rpc_failures_before_suspect: u32,
     /// Number of non-terminal RPC submission failures a suspect is allowed before removal.

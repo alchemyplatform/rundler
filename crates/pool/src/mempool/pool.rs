@@ -52,6 +52,7 @@ pub(crate) struct PoolInnerConfig {
     da_gas_tracking_enabled: bool,
     max_time_in_pool: Option<Duration>,
     verification_gas_limit_efficiency_reject_threshold: f64,
+    suspect_tracking_enabled: bool,
     rpc_failures_before_suspect: u32,
     max_suspect_rpc_failures: u32,
     suspect_rpc_backoff_initial: Duration,
@@ -71,6 +72,7 @@ impl From<PoolConfig> for PoolInnerConfig {
             max_time_in_pool: config.max_time_in_pool,
             verification_gas_limit_efficiency_reject_threshold: config
                 .verification_gas_limit_efficiency_reject_threshold,
+            suspect_tracking_enabled: config.suspect_tracking_enabled,
             rpc_failures_before_suspect: config.rpc_failures_before_suspect,
             max_suspect_rpc_failures: config.max_suspect_rpc_failures,
             suspect_rpc_backoff_initial: config.suspect_rpc_backoff_initial,
@@ -270,6 +272,13 @@ where
         provider_event_active: bool,
         now: Instant,
     ) -> Vec<(B256, OpRemovalReason)> {
+        // Master switch for poison UO handling: when disabled, bundle
+        // outcomes change no UO state and no operation is ever suspected
+        // or removed by this flow.
+        if !self.config.suspect_tracking_enabled {
+            return Vec::new();
+        }
+
         let suspect_threshold = self.config.rpc_failures_before_suspect;
         let mut to_remove = Vec::new();
 
@@ -2411,6 +2420,40 @@ mod tests {
     }
 
     #[test]
+    fn disabled_suspect_tracking_ignores_bundle_outcomes() {
+        let mut pool = pool_with_conf(PoolInnerConfig {
+            suspect_tracking_enabled: false,
+            suspect_rpc_backoff_initial: Duration::ZERO,
+            ..conf()
+        });
+        let hash = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+
+        for _ in 0..10 {
+            let to_remove = pool.apply_bundle_outcome(
+                &[hash],
+                BundleOutcome::NonTerminalFailure,
+                false,
+                Instant::now(),
+            );
+            assert!(to_remove.is_empty());
+        }
+        let terminal = pool.apply_bundle_outcome(
+            &[hash],
+            BundleOutcome::TerminalFailure,
+            false,
+            Instant::now(),
+        );
+        assert!(terminal.is_empty());
+        pool.apply_bundle_outcome(&[hash], BundleOutcome::MarkSuspect, false, Instant::now());
+
+        assert_eq!(pool.by_hash[&hash].failures(), 0);
+        assert_eq!(pool.best_operations().count(), 1);
+        assert_eq!(pool.due_suspect_operations(Instant::now()).count(), 0);
+    }
+
+    #[test]
     fn bundle_outcome_ignores_unknown_hashes() {
         let pool = pool();
         let to_remove = pool.apply_bundle_outcome(
@@ -2435,6 +2478,7 @@ mod tests {
             da_gas_tracking_enabled: false,
             max_time_in_pool: None,
             verification_gas_limit_efficiency_reject_threshold: 0.5,
+            suspect_tracking_enabled: true,
             rpc_failures_before_suspect: 3,
             max_suspect_rpc_failures: 3,
             suspect_rpc_backoff_initial: Duration::from_secs(1),

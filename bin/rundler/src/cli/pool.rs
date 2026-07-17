@@ -175,6 +175,16 @@ pub struct PoolArgs {
     )]
     pub max_time_in_pool_secs: Option<u64>,
 
+    /// Master switch for poison user operation handling (suspect tracking,
+    /// isolation, and removal). Disabled by default.
+    #[arg(
+        long = "pool.suspect_tracking_enabled",
+        name = "pool.suspect_tracking_enabled",
+        env = "POOL_SUSPECT_TRACKING_ENABLED",
+        default_value = "false"
+    )]
+    pub suspect_tracking_enabled: bool,
+
     /// Number of non-terminal RPC submission failures before a user operation
     /// becomes a suspect and is only submitted alone.
     #[arg(
@@ -272,6 +282,7 @@ impl PoolArgs {
                 .verification_gas_limit_efficiency_reject_threshold,
             max_time_in_pool: self.max_time_in_pool_secs.map(Duration::from_secs),
             max_expected_storage_slots: common.max_expected_storage_slots.unwrap_or(usize::MAX),
+            suspect_tracking_enabled: self.suspect_tracking_enabled,
             rpc_failures_before_suspect: self.rpc_failures_before_suspect,
             max_suspect_rpc_failures: self.max_suspect_rpc_failures,
             suspect_rpc_backoff_initial: Duration::from_secs(self.suspect_rpc_backoff_initial_secs),

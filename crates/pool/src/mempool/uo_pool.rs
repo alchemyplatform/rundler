@@ -2513,6 +2513,7 @@ mod tests {
             verification_gas_limit_efficiency_reject_threshold: 0.0,
             max_time_in_pool: None,
             max_expected_storage_slots: usize::MAX,
+            suspect_tracking_enabled: true,
             rpc_failures_before_suspect: 3,
             max_suspect_rpc_failures: 3,
             suspect_rpc_backoff_initial: Duration::from_secs(1),

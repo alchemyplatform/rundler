@@ -77,6 +77,11 @@ reject the transaction.
 | Non-terminal provider failure during a provider event | Any | Non-suspects accrue toward suspicion as normal; suspects only refresh their isolation backoff, making no removal progress. |
 | Known operational error | Any | Preserve existing behavior. |
 
+The entire flow is gated behind `--pool.suspect_tracking_enabled` (default `false`).
+When disabled, bundle outcomes change no UO state: no operation is ever suspected or
+removed by this system. This allows the mechanism to ship dark and be enabled
+deliberately once every stage — including the provider-event signal — is deployed.
+
 Provider retries and configured fallbacks are exhausted before an RPC outcome enters
 this flow. A successful fallback has no effect on UO state.
 
@@ -227,7 +232,8 @@ sees it.
   derived from the counter against the two thresholds; a success resets it. State
   dies with the UO — no separate tracker needed.
 - Add config to `PoolConfig` (`crates/pool/src/mempool/mod.rs`) and CLI args in
-  `bin/rundler/src/cli/pool.rs`: `rpc_failures_before_suspect` (default 3),
+  `bin/rundler/src/cli/pool.rs`: `suspect_tracking_enabled` (default false, the
+  master switch), `rpc_failures_before_suspect` (default 3),
   `max_suspect_rpc_failures` (default 3, 0 disables removal),
   `suspect_rpc_backoff_initial_secs` (default 1), `suspect_rpc_backoff_max_secs`
   (default 600).
