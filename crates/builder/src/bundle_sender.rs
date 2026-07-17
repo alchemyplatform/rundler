@@ -42,6 +42,7 @@ use crate::{
     assigner::{Assigner, AssignmentResult},
     bundle_proposer::{BundleData, BundleProposalRequest, BundleProposerError, BundleProposerT},
     emit::{BuilderEvent, BundleTxDetails},
+    sender::TxSenderError,
     transaction_tracker::{
         TrackerState, TrackerUpdate, TransactionTracker, TransactionTrackerError,
     },
@@ -618,9 +619,11 @@ where
                 self.increment_counter("builder_soft_cancellations", &pinned, 1);
                 state.reset();
             }
-            Err(TransactionTrackerError::Rejected)
-            | Err(TransactionTrackerError::Underpriced)
-            | Err(TransactionTrackerError::ReplacementUnderpriced) => {
+            Err(TransactionTrackerError::Sender(
+                TxSenderError::Rejected
+                | TxSenderError::Underpriced
+                | TxSenderError::ReplacementUnderpriced,
+            )) => {
                 info!(
                     "Transaction underpriced/rejected during cancellation, trying again. {cancel_res:?}"
                 );
@@ -642,19 +645,19 @@ where
                     state.update(InnerState::Cancelling(inner.to_self()));
                 }
             }
-            Err(TransactionTrackerError::NonceTooLow) => {
+            Err(TransactionTrackerError::Sender(TxSenderError::NonceTooLow)) => {
                 // reset the transaction tracker and try again
                 info!("Nonce too low during cancellation, starting new bundle attempt");
                 self.assigner.release_all(self.sender_eoa);
                 state.reset();
             }
-            Err(TransactionTrackerError::InsufficientFunds) => {
+            Err(TransactionTrackerError::Sender(TxSenderError::InsufficientFunds)) => {
                 error!("Insufficient funds during cancellation, starting new bundle attempt");
                 self.increment_counter("builder_cancellation_txns_failed", &pinned, 1);
                 self.assigner.release_all(self.sender_eoa);
                 state.reset();
             }
-            Err(TransactionTrackerError::ConditionNotMet) => {
+            Err(TransactionTrackerError::Sender(TxSenderError::ConditionNotMet)) => {
                 error!(
                     "Unexpected condition not met during cancellation, starting new bundle attempt"
                 );
@@ -662,13 +665,7 @@ where
                 self.assigner.release_all(self.sender_eoa);
                 state.reset();
             }
-            Err(
-                e @ (TransactionTrackerError::IntrinsicGasTooLow
-                | TransactionTrackerError::TerminalRpcError { .. }
-                | TransactionTrackerError::SenderUnavailable(_)
-                | TransactionTrackerError::UnrecognizedRpc { .. }
-                | TransactionTrackerError::Other(_)),
-            ) => {
+            Err(e) => {
                 error!("Failed to cancel transaction, moving back to building state: {e:#?}");
                 self.increment_counter("builder_cancellation_txns_failed", &pinned, 1);
                 self.assigner.release_all(self.sender_eoa);
@@ -974,58 +971,68 @@ where
 
                 Ok(SendBundleAttemptResult::Success(ops))
             }
-            Err(TransactionTrackerError::NonceTooLow) => {
-                self.increment_counter_ep("builder_bundle_txn_nonce_too_low", entry_point, 1);
-                warn!("Bundle attempt nonce too low");
-                Ok(SendBundleAttemptResult::NonceTooLow)
-            }
-            Err(TransactionTrackerError::Underpriced) => {
-                self.increment_counter_ep("builder_bundle_txn_underpriced", entry_point, 1);
-                warn!("Bundle attempt underpriced");
-                Ok(SendBundleAttemptResult::Underpriced)
-            }
-            Err(TransactionTrackerError::ReplacementUnderpriced) => {
-                self.increment_counter_ep("builder_bundle_replacement_underpriced", entry_point, 1);
-                warn!("Bundle attempt replacement transaction underpriced");
-                Ok(SendBundleAttemptResult::ReplacementUnderpriced)
-            }
-            Err(TransactionTrackerError::ConditionNotMet) => {
-                self.increment_counter_ep("builder_bundle_txn_condition_not_met", entry_point, 1);
-                warn!("Bundle attempt condition not met");
-                Ok(SendBundleAttemptResult::ConditionNotMet)
-            }
-            Err(TransactionTrackerError::Rejected) => {
-                self.increment_counter_ep("builder_bundle_txn_rejected", entry_point, 1);
-                warn!("Bundle attempt rejected");
-                Ok(SendBundleAttemptResult::Rejected)
-            }
-            Err(TransactionTrackerError::InsufficientFunds) => {
-                self.increment_counter_ep("builder_bundle_txn_insufficient_funds", entry_point, 1);
-                error!("Bundle attempt insufficient funds");
-                Ok(SendBundleAttemptResult::InsufficientFunds)
-            }
-            Err(TransactionTrackerError::SenderUnavailable(e)) => {
-                error!("Failed to send bundle, sender unavailable: {e:?}");
-                Err(e)
-            }
-            Err(TransactionTrackerError::IntrinsicGasTooLow) => {
-                let tx_bytes = tx.input.input().map_or_else(
-                    || String::from("0x"),
-                    |data| format!("0x{}", hex::encode(data)),
-                );
-                error!("Bundle transaction intrinsic gas too low: tx_bytes={tx_bytes}");
-                Err(anyhow::anyhow!("intrinsic gas too low"))
-            }
-            Err(TransactionTrackerError::TerminalRpcError { code, message }) => {
-                error!("Failed to send bundle with terminal RPC error {code}: {message}");
-                Err(anyhow::anyhow!("terminal RPC error {code}: {message}"))
-            }
-            Err(TransactionTrackerError::UnrecognizedRpc { code, message }) => {
-                error!("Failed to send bundle with unrecognized RPC error {code}: {message}");
-                Err(anyhow::anyhow!("unrecognized RPC error {code}: {message}"))
-            }
+            Err(TransactionTrackerError::Sender(error)) => match error {
+                TxSenderError::NonceTooLow => {
+                    self.increment_counter_ep("builder_bundle_txn_nonce_too_low", entry_point, 1);
+                    warn!("Bundle attempt nonce too low");
+                    Ok(SendBundleAttemptResult::NonceTooLow)
+                }
+                TxSenderError::Underpriced => {
+                    self.increment_counter_ep("builder_bundle_txn_underpriced", entry_point, 1);
+                    warn!("Bundle attempt underpriced");
+                    Ok(SendBundleAttemptResult::Underpriced)
+                }
+                TxSenderError::ReplacementUnderpriced => {
+                    self.increment_counter_ep(
+                        "builder_bundle_replacement_underpriced",
+                        entry_point,
+                        1,
+                    );
+                    warn!("Bundle attempt replacement transaction underpriced");
+                    Ok(SendBundleAttemptResult::ReplacementUnderpriced)
+                }
+                TxSenderError::ConditionNotMet => {
+                    self.increment_counter_ep(
+                        "builder_bundle_txn_condition_not_met",
+                        entry_point,
+                        1,
+                    );
+                    warn!("Bundle attempt condition not met");
+                    Ok(SendBundleAttemptResult::ConditionNotMet)
+                }
+                TxSenderError::Rejected => {
+                    self.increment_counter_ep("builder_bundle_txn_rejected", entry_point, 1);
+                    warn!("Bundle attempt rejected");
+                    Ok(SendBundleAttemptResult::Rejected)
+                }
+                TxSenderError::InsufficientFunds => {
+                    self.increment_counter_ep(
+                        "builder_bundle_txn_insufficient_funds",
+                        entry_point,
+                        1,
+                    );
+                    error!("Bundle attempt insufficient funds");
+                    Ok(SendBundleAttemptResult::InsufficientFunds)
+                }
+                TxSenderError::IntrinsicGasTooLow => {
+                    let tx_bytes = tx.input.input().map_or_else(
+                        || String::from("0x"),
+                        |data| format!("0x{}", hex::encode(data)),
+                    );
+                    error!("Bundle transaction intrinsic gas too low: tx_bytes={tx_bytes}");
+                    Err(anyhow::anyhow!("intrinsic gas too low"))
+                }
+                error @ (TxSenderError::TerminalRpcError { .. }
+                | TxSenderError::UnrecognizedRpc { .. }
+                | TxSenderError::SenderUnavailable(_)
+                | TxSenderError::SoftCancelFailed
+                | TxSenderError::Other(_)) => {
+                    error!("Failed to send bundle: {error}");
+                    Err(error.into())
+                }
+            },
             Err(TransactionTrackerError::Other(e)) => {
-                error!("Failed to send bundle with unexpected error: {e:?}");
+                error!("Failed to send bundle with unexpected tracker error: {e:?}");
                 Err(e)
             }
         }
@@ -2543,9 +2550,13 @@ mod tests {
         mock_make_bundle(&mut mock_proposer_t, 1, vec![(Address::ZERO, B256::ZERO)]);
 
         // should send the bundle txn, returns condition not met
-        mock_tracker
-            .expect_send_transaction()
-            .returning(|_, _, _| Box::pin(async { Err(TransactionTrackerError::ConditionNotMet) }));
+        mock_tracker.expect_send_transaction().returning(|_, _, _| {
+            Box::pin(async {
+                Err(TransactionTrackerError::Sender(
+                    TxSenderError::ConditionNotMet,
+                ))
+            })
+        });
 
         // Sender will set condition_not_met flag and pass it to next make_bundle call
         // (tested implicitly via state transition to Building with retry)

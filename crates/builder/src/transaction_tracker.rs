@@ -105,44 +105,10 @@ pub(crate) trait TransactionTracker: Send + Sync {
 /// Errors that can occur while using a `TransactionTracker`.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum TransactionTrackerError {
-    #[error("nonce too low")]
-    NonceTooLow,
-    #[error("transaction underpriced")]
-    Underpriced,
-    #[error("replacement transaction underpriced")]
-    ReplacementUnderpriced,
-    #[error("storage slot value condition not met")]
-    ConditionNotMet,
-    #[error("rejected")]
-    Rejected,
-    #[error("insufficient funds")]
-    InsufficientFunds,
-    /// The transaction's gas limit is below its intrinsic gas cost.
-    #[error("intrinsic gas too low")]
-    IntrinsicGasTooLow,
-    /// The provider rejected the transaction with an error response known to be
-    /// terminal for this chain: retrying the identical transaction cannot succeed.
-    #[error("terminal RPC error {code}: {message}")]
-    TerminalRpcError {
-        /// RPC error code.
-        code: i64,
-        /// RPC error message.
-        message: String,
-    },
-    /// The sender is unavailable due to an outage or transport error; acceptance
-    /// of the transaction is unknown.
-    #[error("sender unavailable: {0}")]
-    SenderUnavailable(anyhow::Error),
-    /// The provider returned an RPC error response that Rundler does not recognize;
-    /// acceptance of the transaction is unknown.
-    #[error("unrecognized RPC error {code}: {message}")]
-    UnrecognizedRpc {
-        /// RPC error code.
-        code: i64,
-        /// RPC error message.
-        message: String,
-    },
-    /// All other errors
+    /// The sender failed to submit or rejected the transaction.
+    #[error(transparent)]
+    Sender(#[from] TxSenderError),
+    /// Tracker-local failures (validation, signer acquisition, chain reads).
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -544,7 +510,9 @@ where
                     });
                 };
 
-                Err(TransactionTrackerError::ReplacementUnderpriced)
+                Err(TransactionTrackerError::Sender(
+                    TxSenderError::ReplacementUnderpriced,
+                ))
             }
             Err(e) => Err(e.into()),
         }
@@ -701,33 +669,6 @@ where
             return true;
         }
         false
-    }
-}
-
-impl From<TxSenderError> for TransactionTrackerError {
-    fn from(value: TxSenderError) -> Self {
-        match value {
-            TxSenderError::NonceTooLow => TransactionTrackerError::NonceTooLow,
-            TxSenderError::Underpriced => TransactionTrackerError::Underpriced,
-            TxSenderError::ReplacementUnderpriced => {
-                TransactionTrackerError::ReplacementUnderpriced
-            }
-            TxSenderError::ConditionNotMet => TransactionTrackerError::ConditionNotMet,
-            TxSenderError::Rejected => TransactionTrackerError::Rejected,
-            TxSenderError::InsufficientFunds => TransactionTrackerError::InsufficientFunds,
-            TxSenderError::IntrinsicGasTooLow => TransactionTrackerError::IntrinsicGasTooLow,
-            TxSenderError::TerminalRpcError { code, message } => {
-                TransactionTrackerError::TerminalRpcError { code, message }
-            }
-            TxSenderError::SoftCancelFailed => {
-                TransactionTrackerError::Other(anyhow::anyhow!("soft cancel failed"))
-            }
-            TxSenderError::SenderUnavailable(e) => TransactionTrackerError::SenderUnavailable(e),
-            TxSenderError::UnrecognizedRpc { code, message } => {
-                TransactionTrackerError::UnrecognizedRpc { code, message }
-            }
-            TxSenderError::Other(e) => TransactionTrackerError::Other(e),
-        }
     }
 }
 
@@ -1093,7 +1034,7 @@ mod tests {
 
         assert!(matches!(
             sent_transaction,
-            Err(TransactionTrackerError::Underpriced)
+            Err(TransactionTrackerError::Sender(TxSenderError::Underpriced))
         ));
         assert_eq!(tracker.num_pending_transactions(), 0);
         assert_eq!(
@@ -1124,7 +1065,9 @@ mod tests {
 
         assert!(matches!(
             sent_transaction,
-            Err(TransactionTrackerError::ReplacementUnderpriced)
+            Err(TransactionTrackerError::Sender(
+                TxSenderError::ReplacementUnderpriced
+            ))
         ));
         assert_eq!(tracker.num_pending_transactions(), 0);
         assert_eq!(
