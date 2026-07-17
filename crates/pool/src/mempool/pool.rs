@@ -286,10 +286,11 @@ where
                     let Some(op) = self.by_hash.get(hash) else {
                         continue;
                     };
-                    // While a provider event is active only suspects accrue
-                    // failures: suspect removal is protected by backoff-spaced
-                    // evidence rather than by outage detection.
-                    if !op.is_suspect(suspect_threshold) && provider_event_active {
+                    // A failure during a provider event is not evidence against
+                    // the op: treat the submission as if it never happened.
+                    // Retry pacing during an event is left to normal submission
+                    // cadence and provider rate limiting.
+                    if provider_event_active {
                         continue;
                     }
                     let failures = op.record_failure(
@@ -2172,8 +2173,11 @@ mod tests {
     }
 
     #[test]
-    fn provider_event_pauses_pre_suspect_counting_only() {
-        let mut pool = pool();
+    fn provider_event_pauses_failure_counting() {
+        let mut pool = pool_with_conf(PoolInnerConfig {
+            suspect_rpc_backoff_initial: Duration::from_secs(10),
+            ..conf()
+        });
         let non_suspect = pool
             .add_operation(create_op(Address::random(), 0, 1), 0, 0)
             .unwrap();
@@ -2182,21 +2186,15 @@ mod tests {
             .unwrap();
         pool.by_hash[&suspect].mark_suspect(3);
 
-        pool.apply_bundle_outcome(
-            &[non_suspect],
-            BundleOutcome::NonTerminalFailure,
-            true,
-            Instant::now(),
-        );
-        pool.apply_bundle_outcome(
-            &[suspect],
-            BundleOutcome::NonTerminalFailure,
-            true,
-            Instant::now(),
-        );
+        let now = Instant::now();
+        pool.apply_bundle_outcome(&[non_suspect], BundleOutcome::NonTerminalFailure, true, now);
+        pool.apply_bundle_outcome(&[suspect], BundleOutcome::NonTerminalFailure, true, now);
 
+        // a failure during a provider event changes no UO state
         assert_eq!(pool.by_hash[&non_suspect].failures(), 0);
-        assert_eq!(pool.by_hash[&suspect].failures(), 4);
+        assert_eq!(pool.by_hash[&suspect].failures(), 3);
+        assert!(pool.by_hash[&non_suspect].retry_due(now));
+        assert!(pool.by_hash[&suspect].retry_due(now));
     }
 
     #[test]

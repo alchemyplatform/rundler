@@ -108,8 +108,8 @@ pub(crate) trait Mempool: Send + Sync {
     /// Reports the final outcome of a bundle submission attempt for the given
     /// operations, for poison user operation tracking.
     ///
-    /// While `provider_event_active` is true, non-terminal failures do not
-    /// advance the failure counts of non-suspect operations.
+    /// While `provider_event_active` is true, a non-terminal failure is not
+    /// evidence against its operations and changes no operation state.
     fn report_bundle_outcome(
         &self,
         ops: &[B256],

@@ -135,8 +135,8 @@ pub trait Pool: Send + Sync {
     /// Report the final outcome of a bundle submission attempt for the given
     /// operations, for poison user operation tracking.
     ///
-    /// `provider_event_active` gates suspect creation: while true, non-terminal
-    /// failures do not advance the failure counts of non-suspect operations.
+    /// While `provider_event_active` is true, a non-terminal failure is not
+    /// evidence against its operations and changes no operation state.
     async fn report_bundle_outcome(
         &self,
         entry_point: Address,
