@@ -14,6 +14,7 @@
 mod bloxroute;
 mod fallback;
 mod flashbots;
+mod health;
 mod polygon_private;
 mod raw;
 
@@ -25,6 +26,7 @@ pub(crate) use bloxroute::PolygonBloxrouteTransactionSender;
 use enum_dispatch::enum_dispatch;
 pub(crate) use fallback::FallbackTransactionSender;
 pub(crate) use flashbots::FlashbotsTransactionSender;
+pub(crate) use health::ProviderEventSignal;
 #[cfg(test)]
 use mockall::automock;
 pub(crate) use raw::RawTransactionSender;

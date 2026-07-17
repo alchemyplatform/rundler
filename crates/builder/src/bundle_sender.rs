@@ -43,7 +43,7 @@ use crate::{
     assigner::{Assigner, AssignmentResult},
     bundle_proposer::{BundleData, BundleProposalRequest, BundleProposerError, BundleProposerT},
     emit::{BuilderEvent, BundleTxDetails},
-    sender::{RpcOutcomeClass, TxSenderError},
+    sender::{ProviderEventSignal, RpcOutcomeClass, TxSenderError},
     transaction_tracker::{
         TrackerState, TrackerUpdate, TransactionTracker, TransactionTrackerError,
     },
@@ -81,6 +81,10 @@ pub(crate) struct BundleSenderImpl<T, C> {
     pool: C,
     settings: Settings,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
+    /// Provider-health signal for the submission route, shared with the other
+    /// builders on the route. Final submission outcomes are recorded here and
+    /// its state gates poison user operation evidence in the pool.
+    provider_event_signal: Arc<ProviderEventSignal>,
 }
 
 pub enum BundleSenderAction {
@@ -230,6 +234,7 @@ where
         pool: C,
         settings: Settings,
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
+        provider_event_signal: Arc<ProviderEventSignal>,
     ) -> Self {
         Self {
             builder_tag,
@@ -244,6 +249,7 @@ where
             pool,
             settings,
             event_sender,
+            provider_event_signal,
         }
     }
 
@@ -946,6 +952,8 @@ where
             Ok(tx_hash) => {
                 let ops = Arc::new(ops);
 
+                self.provider_event_signal.record_success();
+
                 self.emit_for_entrypoint(
                     entry_point,
                     BuilderEvent::formed_bundle(
@@ -983,6 +991,8 @@ where
             }
             Err(TransactionTrackerError::Sender(error)) => {
                 match error.classify() {
+                    // Terminal errors definitively reject the transaction and
+                    // are excluded from the provider-health window.
                     RpcOutcomeClass::Terminal => {
                         self.report_bundle_outcome(
                             entry_point,
@@ -992,6 +1002,10 @@ where
                         .await;
                     }
                     RpcOutcomeClass::NonTerminal => {
+                        // Record before reporting so the report is gated by
+                        // the freshest signal state, including an event this
+                        // failure itself triggers.
+                        self.provider_event_signal.record_failure();
                         self.report_bundle_outcome(
                             entry_point,
                             uo_hashes,
@@ -1095,9 +1109,6 @@ where
 
     /// Reports the final outcome of a bundle submission attempt to the pool for
     /// poison user operation tracking. Best effort: failures are logged.
-    ///
-    /// Provider-event detection is not implemented yet, so
-    /// `provider_event_active` is always false.
     async fn report_bundle_outcome(
         &self,
         entry_point: Address,
@@ -1109,7 +1120,12 @@ where
         }
         if let Err(error) = self
             .pool
-            .report_bundle_outcome(entry_point, ops, outcome, false)
+            .report_bundle_outcome(
+                entry_point,
+                ops,
+                outcome,
+                self.provider_event_signal.is_active(),
+            )
             .await
         {
             warn!("Failed to report bundle outcome to pool: {error}");
@@ -1843,6 +1859,9 @@ mod tests {
                 ..
             })
         ));
+
+        // the accepted submission was recorded in the provider-health window
+        assert_eq!(sender.provider_event_signal.observations(), 1);
     }
 
     #[tokio::test]
@@ -2774,7 +2793,11 @@ mod tests {
         ));
     }
 
-    async fn run_send_error_reports_outcome(error: TxSenderError, outcome: BundleOutcome) {
+    async fn run_send_error_reports_outcome(
+        error: TxSenderError,
+        outcome: BundleOutcome,
+        provider_event_active: bool,
+    ) {
         let Mocks {
             mut mock_proposer_t,
             mut mock_tracker,
@@ -2803,8 +2826,10 @@ mod tests {
             .returning(|_, _| Ok(vec![demo_pool_op()]));
         mock_pool
             .expect_report_bundle_outcome()
-            .withf(move |_, ops, reported, provider_event_active| {
-                ops == &[B256::ZERO] && *reported == outcome && !provider_event_active
+            .withf(move |_, ops, reported, event_active| {
+                ops == &[B256::ZERO]
+                    && *reported == outcome
+                    && *event_active == provider_event_active
             })
             .times(1)
             .returning(|_, _, _, _| Ok(()));
@@ -2831,8 +2856,31 @@ mod tests {
 
         let mut sender = new_sender(mock_proposer_t, mock_pool);
 
+        let observations_before = if provider_event_active {
+            // Saturate the signal's window with failures to activate an event.
+            for _ in 0..10 {
+                sender.provider_event_signal.record_failure();
+            }
+            assert!(sender.provider_event_signal.is_active());
+            10
+        } else {
+            0
+        };
+
         let update = state.wait_for_trigger().await.unwrap();
         sender.step_after_trigger(&mut state, update).await.unwrap();
+
+        // Only non-terminal failures are recorded in the provider-health
+        // window; terminal errors are excluded.
+        let expected_observations = if outcome == BundleOutcome::NonTerminalFailure {
+            observations_before + 1
+        } else {
+            observations_before
+        };
+        assert_eq!(
+            sender.provider_event_signal.observations(),
+            expected_observations
+        );
     }
 
     #[tokio::test]
@@ -2843,6 +2891,7 @@ mod tests {
                 message: "internal error".to_string(),
             },
             BundleOutcome::TerminalFailure,
+            false,
         )
         .await;
     }
@@ -2852,6 +2901,17 @@ mod tests {
         run_send_error_reports_outcome(
             TxSenderError::SenderUnavailable(anyhow::anyhow!("provider outage")),
             BundleOutcome::NonTerminalFailure,
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_non_terminal_error_during_provider_event() {
+        run_send_error_reports_outcome(
+            TxSenderError::SenderUnavailable(anyhow::anyhow!("provider outage")),
+            BundleOutcome::NonTerminalFailure,
+            true,
         )
         .await;
     }
@@ -3016,6 +3076,7 @@ mod tests {
                 max_replacement_underpriced_blocks: 3,
             },
             broadcast::channel(1000).0,
+            Arc::new(ProviderEventSignal::default()),
         )
     }
 
@@ -3049,6 +3110,7 @@ mod tests {
                 max_replacement_underpriced_blocks: 3,
             },
             broadcast::channel(1000).0,
+            Arc::new(ProviderEventSignal::default()),
         )
     }
 

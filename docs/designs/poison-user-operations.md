@@ -173,8 +173,10 @@ state.
 
 ## State ownership
 
-The submission route owns the provider-event signal; the pool consumes it as a single
-boolean gate on suspect removal progress. The pool owns each UO's failure counter (from
+One provider-event signal exists per submission route, shared by the route's builders;
+the bundle sender records final outcomes into it downstream of provider retries and
+fallbacks, and the pool consumes it as a single boolean gate on suspect removal
+progress. The pool owns each UO's failure counter (from
 which suspect status is derived) and suspect retry time so they are shared across
 builders and cleared with the UO lifecycle. This state is in-memory and does not track
 transaction hashes for deduplication.
@@ -297,15 +299,19 @@ exclusion behind PR 4.
 ### PR 5 — Provider-event signal
 
 - Implement the rolling window (last 20 non-neutral final outcomes; enter event at ≥10
-  observations with ≥30% failures, exit below 10%) as a small shared struct owned by
-  the submission route. Record outcomes in `FallbackTransactionSender`
-  (`crates/builder/src/sender/fallback.rs`) after retries/fallbacks are exhausted —
-  success, `ProviderFailure`, or neutral (excluded). Non-fallback senders wrap the same
-  recorder.
-- Expose it as a shared `Arc` boolean checked by the bundle sender when calling
-  `report_bundle_outcome` (the `provider_event_active` flag from PR 2). Its only
-  effect: pause suspect removal progress. Suspect creation and backoff are
-  unaffected, and no counters are cleared on enter/exit.
+  observations with ≥30% failures, exit below 10%) as a small shared struct
+  (`ProviderEventSignal`, `crates/builder/src/sender/health.rs`), one per submission
+  route, shared by the route's builders.
+- Record outcomes in the bundle sender where it already classifies final submission
+  results (`send_bundle_from_data`): this sits downstream of the
+  `FallbackTransactionSender`'s internal retries and failover, so only final outcomes
+  after retries/fallbacks are observed — success, non-terminal provider failure, or
+  neutral/terminal (excluded). Cancellation transactions are not recorded.
+- The bundle sender checks the signal when calling `report_bundle_outcome` (the
+  `provider_event_active` flag from PR 2), recording a failure before reporting it so
+  the report is gated by the freshest state. The signal's only effect: pause suspect
+  removal progress. Suspect creation and backoff are unaffected, and no counters are
+  cleared on enter/exit.
 - Consider recording only transport-level failures (timeouts, connection failures,
   sender unavailable) in the window and excluding error responses: a node that
   evaluates a transaction and answers is not an outage, and rejected-with-a-response
