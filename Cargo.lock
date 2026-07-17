@@ -5416,11 +5416,13 @@ version = "0.11.0"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
+ "alloy-json-rpc",
  "alloy-network",
  "alloy-primitives",
  "alloy-rpc-types-eth",
  "alloy-signer",
  "alloy-signer-local",
+ "alloy-transport",
  "anyhow",
  "async-trait",
  "enum_dispatch",

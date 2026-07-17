@@ -108,3 +108,26 @@ impl<P> RawTransactionSender<P> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rundler_provider::MockEvmProvider;
+
+    use super::*;
+    use crate::sender::rpc_error_response;
+
+    #[test]
+    fn promotes_internal_error_only_when_flagged() {
+        let flagged = RawTransactionSender::new(MockEvmProvider::new(), false, true);
+        assert!(matches!(
+            flagged.map_provider_error(rpc_error_response(-32000, "internal error")),
+            TxSenderError::TerminalRpcError { .. }
+        ));
+
+        let unflagged = RawTransactionSender::new(MockEvmProvider::new(), false, false);
+        assert!(matches!(
+            unflagged.map_provider_error(rpc_error_response(-32000, "internal error")),
+            TxSenderError::UnrecognizedRpc { .. }
+        ));
+    }
+}

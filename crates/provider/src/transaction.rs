@@ -158,6 +158,11 @@ mod tests {
                 TransactionSubmissionError::InsufficientFunds,
             ),
             (
+                "intrinsic gas too low: gas 20000, minimum needed 21000",
+                -32000,
+                TransactionSubmissionError::IntrinsicGasTooLow,
+            ),
+            (
                 "storage slot value condition not met",
                 -32000,
                 TransactionSubmissionError::ConditionNotMet,

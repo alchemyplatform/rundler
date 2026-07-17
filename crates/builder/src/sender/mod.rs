@@ -17,6 +17,8 @@ mod flashbots;
 mod polygon_private;
 mod raw;
 
+#[cfg(test)]
+use alloy_json_rpc::{ErrorPayload, RpcError};
 use alloy_primitives::{Address, B256};
 use anyhow::Context;
 pub(crate) use bloxroute::PolygonBloxrouteTransactionSender;
@@ -337,6 +339,16 @@ pub(crate) enum SenderConstructorErrors {
     Other(#[from] anyhow::Error),
 }
 
+/// Builds the `ProviderError` for a JSON-RPC error response, for tests.
+#[cfg(test)]
+pub(crate) fn rpc_error_response(code: i64, message: &str) -> ProviderError {
+    ProviderError::RPC(RpcError::ErrorResp(ErrorPayload {
+        code,
+        message: message.to_string().into(),
+        data: None,
+    }))
+}
+
 fn create_hard_cancel_tx(to: Address, nonce: u64, gas_fees: GasFees) -> TransactionRequest {
     TransactionRequest::default()
         .to(to)
@@ -397,7 +409,100 @@ impl From<TransactionSubmissionError> for TxSenderError {
 
 #[cfg(test)]
 mod tests {
-    use super::TxSenderError;
+    use alloy_transport::TransportErrorKind;
+    use rundler_provider::ProviderError;
+
+    use super::{RpcOutcomeClass, TxSenderError};
+
+    #[test]
+    fn classifies_rpc_outcomes() {
+        let cases = [
+            (TxSenderError::IntrinsicGasTooLow, RpcOutcomeClass::Terminal),
+            (
+                TxSenderError::TerminalRpcError {
+                    code: -32000,
+                    message: "internal error".to_string(),
+                },
+                RpcOutcomeClass::Terminal,
+            ),
+            (
+                TxSenderError::SenderUnavailable(anyhow::anyhow!("connection refused")),
+                RpcOutcomeClass::NonTerminal,
+            ),
+            (
+                TxSenderError::UnrecognizedRpc {
+                    code: -32000,
+                    message: "internal error".to_string(),
+                },
+                RpcOutcomeClass::NonTerminal,
+            ),
+            (TxSenderError::Underpriced, RpcOutcomeClass::Neutral),
+            (TxSenderError::NonceTooLow, RpcOutcomeClass::Neutral),
+            (
+                TxSenderError::Other(anyhow::anyhow!("signing failed")),
+                RpcOutcomeClass::Neutral,
+            ),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(error.classify(), expected, "error: {error}");
+        }
+    }
+
+    #[test]
+    fn maps_unrecognized_rpc_response_to_unrecognized_rpc() {
+        let error = TxSenderError::from(super::rpc_error_response(-32000, "internal error"));
+
+        assert!(matches!(
+            error,
+            TxSenderError::UnrecognizedRpc { code: -32000, ref message } if message == "internal error"
+        ));
+    }
+
+    #[test]
+    fn maps_transport_failure_to_sender_unavailable() {
+        let error = TxSenderError::from(ProviderError::RPC(TransportErrorKind::custom_str(
+            "connection refused",
+        )));
+
+        assert!(matches!(error, TxSenderError::SenderUnavailable(_)));
+    }
+
+    #[test]
+    fn promotes_internal_error_to_terminal() {
+        let error = TxSenderError::UnrecognizedRpc {
+            code: -32000,
+            message: " Internal Error ".to_string(),
+        }
+        .promote_terminal_internal_error();
+
+        assert!(matches!(
+            error,
+            TxSenderError::TerminalRpcError { code: -32000, .. }
+        ));
+    }
+
+    #[test]
+    fn does_not_promote_other_errors() {
+        let cases = [
+            TxSenderError::UnrecognizedRpc {
+                code: -32603,
+                message: "internal error".to_string(),
+            },
+            TxSenderError::UnrecognizedRpc {
+                code: -32000,
+                message: "internal error: tx pool full".to_string(),
+            },
+            TxSenderError::SenderUnavailable(anyhow::anyhow!("internal error")),
+        ];
+
+        for error in cases {
+            assert!(!matches!(
+                error.promote_terminal_internal_error(),
+                TxSenderError::TerminalRpcError { .. }
+            ));
+        }
+    }
 
     #[test]
     fn parses_cronos_invalid_sequence_as_nonce_too_low() {

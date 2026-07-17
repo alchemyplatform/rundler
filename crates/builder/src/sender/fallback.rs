@@ -320,6 +320,32 @@ mod tests {
         }
     }
 
+    struct ErrSender {
+        make: fn() -> TxSenderError,
+    }
+
+    #[async_trait::async_trait]
+    impl TransactionSender for ErrSender {
+        async fn send_transaction(
+            &self,
+            _tx: TransactionRequest,
+            _expected_storage: &ExpectedStorage,
+            _signer: &SignerLease,
+        ) -> super::Result<B256> {
+            Err((self.make)())
+        }
+
+        async fn cancel_transaction(
+            &self,
+            _tx_hash: B256,
+            _nonce: u64,
+            _gas_fees: GasFees,
+            _signer: &SignerLease,
+        ) -> super::Result<CancelTxInfo> {
+            unimplemented!()
+        }
+    }
+
     fn make_sender(
         primary: impl TransactionSender + 'static,
         fallback: impl TransactionSender + 'static,
@@ -427,6 +453,64 @@ mod tests {
             .unwrap();
         assert_eq!(hash, fallback_hash);
         assert!(sender.last_tx_used_fallback.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn unrecognized_rpc_activates_fallback_at_threshold() {
+        let fallback_hash = B256::repeat_byte(0x02);
+        let sender = make_sender(
+            ErrSender {
+                make: || TxSenderError::UnrecognizedRpc {
+                    code: -32000,
+                    message: "internal error".to_string(),
+                },
+            },
+            AlwaysOkSender {
+                hash: fallback_hash,
+            },
+            60,
+            1,
+        );
+
+        let hash = sender
+            .send_transaction(
+                TransactionRequest::default(),
+                &ExpectedStorage::default(),
+                &test_signer(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(hash, fallback_hash);
+    }
+
+    #[tokio::test]
+    async fn terminal_error_does_not_activate_fallback() {
+        let sender = make_sender(
+            ErrSender {
+                make: || TxSenderError::TerminalRpcError {
+                    code: -32000,
+                    message: "internal error".to_string(),
+                },
+            },
+            AlwaysOkSender {
+                hash: B256::repeat_byte(0x02),
+            },
+            60,
+            1,
+        );
+
+        let result = sender
+            .send_transaction(
+                TransactionRequest::default(),
+                &ExpectedStorage::default(),
+                &test_signer(),
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(TxSenderError::TerminalRpcError { .. })
+        ));
+        assert!(matches!(sender.current_sender(), ActiveSender::Primary));
     }
 
     #[tokio::test]
