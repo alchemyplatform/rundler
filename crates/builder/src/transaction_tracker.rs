@@ -117,6 +117,9 @@ pub(crate) enum TransactionTrackerError {
     Rejected,
     #[error("insufficient funds")]
     InsufficientFunds,
+    /// The transaction's gas limit is below its intrinsic gas cost.
+    #[error("intrinsic gas too low")]
+    IntrinsicGasTooLow,
     /// The sender is unavailable due to an outage or transport error; acceptance
     /// of the transaction is unknown.
     #[error("sender unavailable: {0}")]
@@ -703,6 +706,7 @@ impl From<TxSenderError> for TransactionTrackerError {
             TxSenderError::ConditionNotMet => TransactionTrackerError::ConditionNotMet,
             TxSenderError::Rejected => TransactionTrackerError::Rejected,
             TxSenderError::InsufficientFunds => TransactionTrackerError::InsufficientFunds,
+            TxSenderError::IntrinsicGasTooLow => TransactionTrackerError::IntrinsicGasTooLow,
             TxSenderError::SoftCancelFailed => {
                 TransactionTrackerError::Other(anyhow::anyhow!("soft cancel failed"))
             }

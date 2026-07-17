@@ -71,6 +71,9 @@ pub(crate) enum TxSenderError {
     /// Insufficient funds for transaction
     #[error("insufficient funds for transaction")]
     InsufficientFunds,
+    /// Transaction gas limit is below its intrinsic gas cost
+    #[error("intrinsic gas too low")]
+    IntrinsicGasTooLow,
     /// Sender is unavailable due to an outage or transport error.
     ///
     /// When a fallback sender is configured this triggers failover.
@@ -112,6 +115,7 @@ impl TxSenderError {
     #[allow(dead_code)] // consumed once the bundle sender reports outcomes to the pool
     pub(crate) fn classify(&self) -> RpcOutcomeClass {
         match self {
+            TxSenderError::IntrinsicGasTooLow => RpcOutcomeClass::Terminal,
             TxSenderError::SenderUnavailable(_) | TxSenderError::UnrecognizedRpc { .. } => {
                 RpcOutcomeClass::NonTerminal
             }
@@ -355,6 +359,7 @@ impl From<TransactionSubmissionError> for TxSenderError {
             TransactionSubmissionError::ConditionNotMet => Self::ConditionNotMet,
             TransactionSubmissionError::Rejected => Self::Rejected,
             TransactionSubmissionError::InsufficientFunds => Self::InsufficientFunds,
+            TransactionSubmissionError::IntrinsicGasTooLow => Self::IntrinsicGasTooLow,
         }
     }
 }

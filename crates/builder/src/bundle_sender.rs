@@ -663,7 +663,8 @@ where
                 state.reset();
             }
             Err(
-                e @ (TransactionTrackerError::SenderUnavailable(_)
+                e @ (TransactionTrackerError::IntrinsicGasTooLow
+                | TransactionTrackerError::SenderUnavailable(_)
                 | TransactionTrackerError::UnrecognizedRpc { .. }
                 | TransactionTrackerError::Other(_)),
             ) => {
@@ -1006,17 +1007,16 @@ where
                 error!("Failed to send bundle, sender unavailable: {e:?}");
                 Err(e)
             }
+            Err(TransactionTrackerError::IntrinsicGasTooLow) => {
+                let tx_bytes = tx.input.input().map_or_else(
+                    || String::from("0x"),
+                    |data| format!("0x{}", hex::encode(data)),
+                );
+                error!("Bundle transaction intrinsic gas too low: tx_bytes={tx_bytes}");
+                Err(anyhow::anyhow!("intrinsic gas too low"))
+            }
             Err(TransactionTrackerError::UnrecognizedRpc { code, message }) => {
                 error!("Failed to send bundle with unrecognized RPC error {code}: {message}");
-                if Self::is_intrinsic_gas_too_low_error(&message) {
-                    let tx_bytes = tx.input.input().map_or_else(
-                        || String::from("0x"),
-                        |data| format!("0x{}", hex::encode(data)),
-                    );
-                    error!(
-                        "Bundle transaction bytes for intrinsic gas too low: tx_bytes={tx_bytes}"
-                    );
-                }
                 Err(anyhow::anyhow!("unrecognized RPC error {code}: {message}"))
             }
             Err(TransactionTrackerError::Other(e)) => {
@@ -1024,10 +1024,6 @@ where
                 Err(e)
             }
         }
-    }
-
-    fn is_intrinsic_gas_too_low_error(message: &str) -> bool {
-        message.to_lowercase().contains("intrinsic gas too low")
     }
 
     /// Emits an event for a specific entrypoint (used for shared signer support)
