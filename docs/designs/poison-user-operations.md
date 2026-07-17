@@ -106,30 +106,39 @@ is entered or exited.
 
 ## Non-terminal RPC evidence
 
+Each UO carries a single failure counter measured against two thresholds. Suspect
+status is derived, not stored: a UO is a suspect once its counter reaches
+`--pool.rpc_failures_before_suspect` (default `3`), and is removed
+`--pool.max_suspect_rpc_failures` (default `3`) failures later.
+
 1. Outside a provider event, a final non-terminal provider failure increments the
-   pre-suspect count of every UO in the failed bundle. During an event, pre-suspect
-   counts do not advance.
-2. A successful submission clears the pre-suspect counts of every UO in that bundle.
-3. At `--pool.rpc_failures_before_suspect` (default `3`), a UO becomes a suspect and its
-   count resets.
-4. A final provider failure from its single-UO attempt schedules an exponentially
-   increasing retry delay with jitter.
-5. The failure also increments the suspect's removal count, regardless of
-   provider-event state.
-6. At `--pool.max_suspect_rpc_failures` (default `3`), the pool removes the UO and logs
-   `RepeatedNonTerminalRpcFailure`.
+   failure counter of every UO in the failed bundle. During an event, only counters
+   already past the suspect threshold advance.
+2. A successful submission resets the failure counter of every UO in that bundle,
+   clearing suspect status.
+3. At the suspect threshold the UO is excluded from normal bundles and becomes
+   eligible for an immediate isolation attempt.
+4. Each failure past the suspect threshold schedules an exponentially increasing
+   retry delay with jitter, and counts toward removal regardless of provider-event
+   state.
+5. At `suspect threshold + max_suspect_rpc_failures` total failures, the pool removes
+   the UO and logs `RepeatedNonTerminalRpcFailure`.
+
+Ambiguous multi-UO terminal failures and unattributed mined reverts force suspicion
+by raising the counter directly to the suspect threshold, never lowering it.
 
 `--pool.max_suspect_rpc_failures=0` disables RPC-based removal. Provider events pause
 pre-suspect counting only; suspect removal counting and backoff continue.
 
-Suspect backoff is configured with `--pool.suspect_rpc_backoff_initial_secs` and
-`--pool.suspect_rpc_backoff_max_secs`. The schedule is load-bearing for the
-false-removal bound: the cumulative delay across `max_suspect_rpc_failures` consecutive
-attempts must exceed the longest provider incident that removal should tolerate, so
-that a single incident contributes at most one removal increment. With doubling from a
-60-second initial, three increments span only about three minutes; tolerating a
-30-minute incident requires a larger initial (for example 600 seconds: 10 m + 20 m
-between increments), a steeper curve, or a higher removal threshold.
+Suspect backoff is configured with `--pool.suspect_rpc_backoff_initial_secs`
+(default `1`) and `--pool.suspect_rpc_backoff_max_secs` (default `600`). The schedule
+bounds false removal: the cumulative delay across `max_suspect_rpc_failures`
+consecutive attempts must exceed the longest provider incident that removal should
+tolerate, so that a single incident contributes at most one removal increment. The
+defaults favor fast poison eviction — the first three increments span only a few
+seconds, so a provider blip can remove a suspect. Tolerating a 30-minute incident
+requires a larger initial (for example 600 seconds: 10 m + 20 m between increments),
+a steeper curve, or a higher removal threshold.
 
 ## Suspect scheduling
 
@@ -152,10 +161,10 @@ state.
 ## State ownership
 
 The submission route owns the provider-event signal; the pool consumes it as a single
-boolean gate on pre-suspect counting. The pool owns pre-suspect counts, suspect status,
-suspect removal counts, and suspect retry times so they are shared across builders and
-cleared with the UO lifecycle. This state is in-memory and does not track transaction
-hashes for deduplication.
+boolean gate on pre-suspect counting. The pool owns each UO's failure counter (from
+which suspect status is derived) and suspect retry time so they are shared across
+builders and cleared with the UO lifecycle. This state is in-memory and does not track
+transaction hashes for deduplication.
 
 ## Tradeoffs
 
@@ -203,25 +212,32 @@ sees it.
 ### PR 2 — Pool-owned suspect state + trait surface
 
 - Add per-UO mutable state to `OrderedPoolOperation`
-  (`crates/pool/src/mempool/pool.rs`), which already uses interior `RwLock`s:
-  `pre_suspect_failures: u32`, `suspect: bool`, `suspect_removal_failures: u32`,
-  `retry_after: Option<Instant>`. State dies with the UO — no separate tracker needed.
+  (`crates/pool/src/mempool/pool.rs`), which already uses interior `RwLock`s: a single
+  `failures: u32` counter plus `retry_after: Option<Instant>`. Suspect status is
+  derived from the counter against the two thresholds; a success resets it. State
+  dies with the UO — no separate tracker needed.
 - Add config to `PoolConfig` (`crates/pool/src/mempool/mod.rs`) and CLI args in
   `bin/rundler/src/cli/pool.rs`: `rpc_failures_before_suspect` (default 3),
   `max_suspect_rpc_failures` (default 3, 0 disables removal),
-  `suspect_rpc_backoff_initial_secs`, `suspect_rpc_backoff_max_secs`.
-- Add one new `Pool` trait method (`crates/types/src/pool/traits.rs`), roughly
-  `report_bundle_outcome(ops, outcome, provider_event_active)`, where outcome is
-  success / non-terminal failure / terminal failure / mark-suspect. The pool applies
-  the failure-flow table internally: clear counts on success, increment pre-suspect
-  counts (unless a provider event is active), promote to suspect at threshold,
-  increment removal counts + compute backoff for isolated suspects, remove at
-  `max_suspect_rpc_failures` with a new
-  `OpRemovalReason::RepeatedNonTerminalRpcFailure` (`crates/pool/src/emit.rs`).
-  Implement in `UoPool`, `LocalPoolHandle`, and the remote protobuf client/server.
-- Exclude suspects from `best_operations` (`crates/pool/src/mempool/uo_pool.rs`) and
-  expose suspects whose `retry_after` has elapsed (a flag on the existing summaries
-  query is simpler than a new method).
+  `suspect_rpc_backoff_initial_secs` (default 1), `suspect_rpc_backoff_max_secs`
+  (default 600).
+- Add one new `Pool` trait method (`crates/types/src/pool/traits.rs`),
+  `report_bundle_outcome(entry_point, ops, outcome, provider_event_active)`, where
+  outcome is success / non-terminal failure / terminal failure / mark-suspect. The
+  pool applies the failure-flow table internally: reset counters on success,
+  increment counters on non-terminal failure (skipping non-suspects while a provider
+  event is active), compute backoff for isolated suspects, remove at the removal
+  threshold with a new `OpRemovalReason::RepeatedNonTerminalRpcFailure`, and remove
+  terminally rejected singletons with `OpRemovalReason::TerminalRpcError`
+  (`crates/pool/src/emit.rs`). Implement in `UoPool`, `LocalPoolHandle`, and the
+  remote protobuf client/server.
+- Exclude suspects from `best_operations` (`crates/pool/src/mempool/pool.rs`). Rather
+  than a new query method, `get_ops_summaries` takes a `max_suspects` cap and appends
+  due suspects (retry delay elapsed) to its response, marked with a `suspect` flag on
+  `PoolOperationSummary`; the assigner passes `max_suspects: 0` until PR 4. Because
+  the flag rides on the summary, this degrades gracefully if PR 3 lands first:
+  requesting no suspects leaves them waiting invisibly, and any nonzero cap without
+  isolation scheduling simply restores today's behavior.
 
 ### PR 3 — Failure flow in the bundle sender
 

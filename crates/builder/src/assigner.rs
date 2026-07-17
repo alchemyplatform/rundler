@@ -204,6 +204,7 @@ impl Assigner {
                 self.pool.get_ops_summaries(
                     ep.address,
                     self.max_pool_ops_per_request,
+                    0, // suspect isolation scheduling is not implemented yet
                     ep.filter_id.clone(),
                 )
             })
@@ -382,6 +383,7 @@ impl Assigner {
             .get_ops_summaries(
                 entry_point,
                 self.max_pool_ops_per_request,
+                0, // suspect isolation scheduling is not implemented yet
                 filter_id.clone(),
             )
             .await?;
@@ -847,7 +849,7 @@ mod tests {
         let ops_cloned = ops.clone();
         mock_pool
             .expect_get_ops_summaries()
-            .returning(move |_, _, _| {
+            .returning(move |_, _, _, _| {
                 Ok(ops_cloned.iter().map(|op| op.into()).collect::<Vec<_>>())
             });
         mock_pool
@@ -867,7 +869,7 @@ mod tests {
         let ep2_ops_clone = ep2_ops.clone();
         mock_pool
             .expect_get_ops_summaries()
-            .returning(move |ep, _, _| {
+            .returning(move |ep, _, _, _| {
                 if ep == TEST_ENTRY_POINT {
                     Ok(ep1_ops_clone.iter().map(|op| op.into()).collect())
                 } else {
@@ -1252,7 +1254,7 @@ mod tests {
         let ep2_ops_clone = ep2_ops.clone();
         mock_pool
             .expect_get_ops_summaries()
-            .returning(move |ep, _, _| {
+            .returning(move |ep, _, _, _| {
                 if ep == TEST_ENTRY_POINT {
                     Ok(ep1_ops_clone.iter().map(|op| op.into()).collect())
                 } else {
@@ -1317,7 +1319,7 @@ mod tests {
         let all_ops_for_summaries = all_ops.clone();
         mock_pool
             .expect_get_ops_summaries()
-            .returning(move |_, _, _| {
+            .returning(move |_, _, _, _| {
                 Ok(all_ops_for_summaries
                     .iter()
                     .map(|op| op.into())
@@ -1416,7 +1418,7 @@ mod tests {
 
         mock_pool
             .expect_get_ops_summaries()
-            .returning(move |ep, _, _| {
+            .returning(move |ep, _, _, _| {
                 let count = call_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 if count < 2 {
                     // First call (assign_work queries both EPs): return ops
@@ -1504,7 +1506,7 @@ mod tests {
         let mut mock_pool = MockPool::new();
         mock_pool
             .expect_get_ops_summaries()
-            .returning(move |_, _, _| {
+            .returning(move |_, _, _, _| {
                 Ok(low_fee_ops.iter().map(|op| op.into()).collect::<Vec<_>>())
             });
 

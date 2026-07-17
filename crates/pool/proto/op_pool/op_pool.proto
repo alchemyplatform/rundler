@@ -228,6 +228,9 @@ message PoolOperationSummary {
   bytes gas_limit = 7;
   // Maximum WEI the bundler will pay (empty if not sponsored)
   bytes bundler_sponsorship_max_cost = 8;
+  // Whether the operation is suspected of poisoning bundles and must only be
+  // submitted alone
+  bool suspect = 9;
 }
 
 // Data associated with a user operation for DA gas calculations
@@ -318,6 +321,10 @@ service OpPool {
   // Notify the pool about a pending bundle transaction
   rpc NotifyPendingBundle(NotifyPendingBundleRequest) returns (NotifyPendingBundleResponse);
 
+  // Report the final outcome of a bundle submission attempt, for poison
+  // user operation tracking
+  rpc ReportBundleOutcome(ReportBundleOutcomeRequest) returns (ReportBundleOutcomeResponse);
+
   // Get extended status for a user operation
   rpc GetOpStatus(GetOpStatusRequest) returns (GetOpStatusResponse);
 }
@@ -366,13 +373,16 @@ message GetOpsSuccess {
   repeated MempoolOp ops = 1;
 }
 
-message GetOpsSummariesRequest {  
+message GetOpsSummariesRequest {
   // The serialized entry point address
   bytes entry_point = 1;
-  // The maximum number of UserOperations to return
+  // The maximum number of non-suspect UserOperations to return
   uint64 max_ops = 2;
-  // The filter ID to apply to the UserOperations 
+  // The filter ID to apply to the UserOperations
   string filter_id = 3;
+  // The maximum number of due suspect UserOperations to return, in addition
+  // to `max_ops`
+  uint64 max_suspects = 4;
 }
 message GetOpsSummariesResponse {
   oneof result {
@@ -644,6 +654,38 @@ message NotifyPendingBundleResponse {
   }
 }
 message NotifyPendingBundleSuccess {}
+
+// Final outcome of a bundle submission attempt, for poison user operation
+// tracking
+enum BundleOutcome {
+  BUNDLE_OUTCOME_UNSPECIFIED = 0;
+  // The bundle transaction was accepted by the provider
+  BUNDLE_OUTCOME_SUCCESS = 1;
+  // Transport failure, timeout, or ambiguous rejection; acceptance unknown
+  BUNDLE_OUTCOME_NON_TERMINAL_FAILURE = 2;
+  // Final rejection; retrying the identical transaction cannot succeed
+  BUNDLE_OUTCOME_TERMINAL_FAILURE = 3;
+  // Mark every operation in the bundle as suspect
+  BUNDLE_OUTCOME_MARK_SUSPECT = 4;
+}
+
+message ReportBundleOutcomeRequest {
+  // The serialized entry point address
+  bytes entry_point = 1;
+  // The serialized UserOperation hashes in the bundle
+  repeated bytes hashes = 2;
+  // The outcome of the bundle submission attempt
+  BundleOutcome outcome = 3;
+  // Whether a provider health event was active at submission time
+  bool provider_event_active = 4;
+}
+message ReportBundleOutcomeResponse {
+  oneof result {
+    ReportBundleOutcomeSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message ReportBundleOutcomeSuccess {}
 
 message GetOpStatusRequest {
   bytes hash = 1;

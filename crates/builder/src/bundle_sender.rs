@@ -1683,7 +1683,7 @@ mod tests {
         mock_pool
             .expect_get_ops_summaries()
             .times(1)
-            .returning(|_, _, _| {
+            .returning(|_, _, _, _| {
                 Ok(vec![pool_op_summary(
                     ENTRY_POINT_ADDRESS_V0_6,
                     Address::ZERO,
@@ -1731,7 +1731,7 @@ mod tests {
         mock_pool
             .expect_get_ops_summaries()
             .times(1)
-            .returning(|_, _, _| {
+            .returning(|_, _, _, _| {
                 Ok(vec![pool_op_summary(
                     ENTRY_POINT_ADDRESS_V0_6,
                     Address::ZERO,
@@ -1804,15 +1804,17 @@ mod tests {
         // The other EP is never queried since the builder is pinned.
         mock_pool
             .expect_get_ops_summaries()
-            .withf(move |entry_point, _, filter| {
+            .withf(move |entry_point, _, _, filter| {
                 *entry_point == pinned_entry_point
                     && filter.as_deref() == expected_filter.as_deref()
             })
             .times(1)
-            .returning(move |_, _, _| Ok(vec![pool_op_summary(pinned_entry_point, Address::ZERO)]));
+            .returning(move |_, _, _, _| {
+                Ok(vec![pool_op_summary(pinned_entry_point, Address::ZERO)])
+            });
         mock_pool
             .expect_get_ops_summaries()
-            .withf(move |entry_point, _, _| *entry_point == other_entry_point)
+            .withf(move |entry_point, _, _, _| *entry_point == other_entry_point)
             .times(0);
 
         mock_pool
@@ -1883,19 +1885,21 @@ mod tests {
         // along with the other EP.
         mock_pool
             .expect_get_ops_summaries()
-            .withf(move |entry_point, _, filter| {
+            .withf(move |entry_point, _, _, filter| {
                 *entry_point == pinned_entry_point
                     && filter.as_deref() == expected_filter.as_deref()
             })
             .times(2)
-            .returning(move |_, _, _| Ok(vec![pool_op_summary(pinned_entry_point, Address::ZERO)]));
+            .returning(move |_, _, _, _| {
+                Ok(vec![pool_op_summary(pinned_entry_point, Address::ZERO)])
+            });
         mock_pool
             .expect_get_ops_summaries()
-            .withf(move |entry_point, _, filter| {
+            .withf(move |entry_point, _, _, filter| {
                 *entry_point == other_entry_point && filter.is_none()
             })
             .times(1)
-            .returning(move |_, _, _| {
+            .returning(move |_, _, _, _| {
                 Ok(vec![PoolOperationSummary {
                     hash: B256::from([1; 32]),
                     ..pool_op_summary(other_entry_point, Address::from([1; 20]))
@@ -2123,7 +2127,7 @@ mod tests {
         mock_pool
             .expect_get_ops_summaries()
             .times(1)
-            .returning(|_, _, _| {
+            .returning(|_, _, _, _| {
                 Ok(vec![PoolOperationSummary {
                     max_fee_per_gas: 10,
                     max_priority_fee_per_gas: 2,
@@ -2276,7 +2280,7 @@ mod tests {
         mock_pool
             .expect_get_ops_summaries()
             .times(2)
-            .returning(|_, _, _| {
+            .returning(|_, _, _, _| {
                 Ok(vec![pool_op_summary(
                     ENTRY_POINT_ADDRESS_V0_6,
                     Address::from([9; 20]),
@@ -2341,7 +2345,9 @@ mod tests {
         mock_pool
             .expect_get_ops_summaries()
             .times(3)
-            .returning(move |_, _, _| Ok(vec![pool_op_summary(ENTRY_POINT_ADDRESS_V0_6, sender)]));
+            .returning(move |_, _, _, _| {
+                Ok(vec![pool_op_summary(ENTRY_POINT_ADDRESS_V0_6, sender)])
+            });
         mock_pool
             .expect_get_ops_by_hashes()
             .times(1)
@@ -2420,7 +2426,9 @@ mod tests {
 
         mock_pool
             .expect_get_ops_summaries()
-            .returning(move |_, _, _| Ok(vec![pool_op_summary(ENTRY_POINT_ADDRESS_V0_6, sender)]));
+            .returning(move |_, _, _, _| {
+                Ok(vec![pool_op_summary(ENTRY_POINT_ADDRESS_V0_6, sender)])
+            });
         mock_pool
             .expect_get_ops_by_hashes()
             .returning(|_, _| Ok(vec![demo_pool_op()]));
@@ -2536,7 +2544,7 @@ mod tests {
         mock_pool
             .expect_get_ops_summaries()
             .times(1)
-            .returning(|_, _, _| {
+            .returning(|_, _, _, _| {
                 Ok(vec![pool_op_summary(
                     ENTRY_POINT_ADDRESS_V0_6,
                     Address::ZERO,
@@ -2864,6 +2872,7 @@ mod tests {
             max_priority_fee_per_gas: 0,
             gas_limit: 0,
             bundler_sponsorship_max_cost: None,
+            suspect: false,
         }
     }
 

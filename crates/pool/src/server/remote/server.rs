@@ -26,7 +26,10 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use rundler_task::{
     GracefulShutdown, TaskSpawner,
-    grpc::{grpc_metrics::GrpcMetricsLayer, protos::from_bytes},
+    grpc::{
+        grpc_metrics::GrpcMetricsLayer,
+        protos::{ConversionError, from_bytes},
+    },
 };
 use rundler_types::{
     EntityUpdate, UserOperationId, UserOperationVariant,
@@ -39,7 +42,7 @@ use tonic::{Request, Response, Result, Status, transport::Server};
 
 use super::protos::{
     AddOpRequest, AddOpResponse, AddOpSuccess, AdminSetTrackingRequest, AdminSetTrackingResponse,
-    AdminSetTrackingSuccess, DebugClearStateRequest, DebugClearStateResponse,
+    AdminSetTrackingSuccess, BundleOutcome, DebugClearStateRequest, DebugClearStateResponse,
     DebugClearStateSuccess, DebugDumpMempoolRequest, DebugDumpMempoolResponse,
     DebugDumpMempoolSuccess, DebugDumpPaymasterBalancesRequest, DebugDumpPaymasterBalancesResponse,
     DebugDumpPaymasterBalancesSuccess, DebugDumpReputationRequest, DebugDumpReputationResponse,
@@ -54,16 +57,19 @@ use super::protos::{
     MempoolOp, NotifyPendingBundleRequest, NotifyPendingBundleResponse, NotifyPendingBundleSuccess,
     OP_POOL_FILE_DESCRIPTOR_SET, PoolOperationStatus, PoolOperationSummary, RemoveOpByIdRequest,
     RemoveOpByIdResponse, RemoveOpByIdSuccess, RemoveOpsRequest, RemoveOpsResponse,
-    RemoveOpsSuccess, ReputationStatus, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse,
-    TryUoFromProto, UpdateEntitiesRequest, UpdateEntitiesResponse, UpdateEntitiesSuccess,
-    add_op_response, admin_set_tracking_response, debug_clear_state_response,
-    debug_dump_mempool_response, debug_dump_paymaster_balances_response,
-    debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
-    get_op_by_id_response, get_op_status_response, get_ops_by_hashes_response, get_ops_response,
+    RemoveOpsSuccess, ReportBundleOutcomeRequest, ReportBundleOutcomeResponse,
+    ReportBundleOutcomeSuccess, ReputationStatus, SubscribeNewHeadsRequest,
+    SubscribeNewHeadsResponse, TryUoFromProto, UpdateEntitiesRequest, UpdateEntitiesResponse,
+    UpdateEntitiesSuccess, add_op_response, admin_set_tracking_response,
+    debug_clear_state_response, debug_dump_mempool_response,
+    debug_dump_paymaster_balances_response, debug_dump_reputation_response,
+    debug_set_reputation_response, get_op_by_hash_response, get_op_by_id_response,
+    get_op_status_response, get_ops_by_hashes_response, get_ops_response,
     get_ops_summaries_response, get_reputation_status_response, get_stake_status_response,
     notify_pending_bundle_response,
     op_pool_server::{OpPool, OpPoolServer},
-    remove_op_by_id_response, remove_ops_response, update_entities_response,
+    remove_op_by_id_response, remove_ops_response, report_bundle_outcome_response,
+    update_entities_response,
 };
 use crate::server::local::LocalPoolHandle;
 
@@ -229,7 +235,7 @@ impl OpPool for OpPoolImpl {
 
         let resp = match self
             .local_pool
-            .get_ops_summaries(ep, req.max_ops, filter_id)
+            .get_ops_summaries(ep, req.max_ops, req.max_suspects, filter_id)
             .await
         {
             Ok(summaries) => GetOpsSummariesResponse {
@@ -358,6 +364,49 @@ impl OpPool for OpPoolImpl {
             },
             Err(error) => RemoveOpsResponse {
                 result: Some(remove_ops_response::Result::Failure(error.into())),
+            },
+        };
+
+        Ok(Response::new(resp))
+    }
+
+    async fn report_bundle_outcome(
+        &self,
+        request: Request<ReportBundleOutcomeRequest>,
+    ) -> Result<Response<ReportBundleOutcomeResponse>> {
+        let req = request.into_inner();
+        let ep = self.get_entry_point(&req.entry_point)?;
+
+        let hashes: Vec<B256> = req
+            .hashes
+            .into_iter()
+            .map(|h| {
+                if h.len() != 32 {
+                    return Err(Status::invalid_argument("Hash must be 32 bytes long"));
+                }
+                Ok(B256::from_slice(&h))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let outcome = BundleOutcome::try_from(req.outcome)
+            .map_err(|_| Status::invalid_argument("Invalid bundle outcome"))?
+            .try_into()
+            .map_err(|e: ConversionError| Status::invalid_argument(e.to_string()))?;
+
+        let resp = match self
+            .local_pool
+            .report_bundle_outcome(ep, hashes, outcome, req.provider_event_active)
+            .await
+        {
+            Ok(_) => ReportBundleOutcomeResponse {
+                result: Some(report_bundle_outcome_response::Result::Success(
+                    ReportBundleOutcomeSuccess {},
+                )),
+            },
+            Err(error) => ReportBundleOutcomeResponse {
+                result: Some(report_bundle_outcome_response::Result::Failure(
+                    error.into(),
+                )),
             },
         };
 

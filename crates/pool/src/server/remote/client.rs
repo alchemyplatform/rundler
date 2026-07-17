@@ -25,8 +25,9 @@ use rundler_types::{
     EntityUpdate, UserOperationId, UserOperationPermissions, UserOperationVariant,
     chain::ChainSpec,
     pool::{
-        NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation, PoolOperationStatus,
-        PoolOperationSummary, PoolResult, Reputation, ReputationStatus, StakeStatus,
+        BundleOutcome, NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation,
+        PoolOperationStatus, PoolOperationSummary, PoolResult, Reputation, ReputationStatus,
+        StakeStatus,
     },
 };
 use rundler_utils::retry::{self, UnlimitedRetryOpts};
@@ -52,7 +53,8 @@ use super::protos::{
     debug_set_reputation_response, get_op_by_hash_response, get_op_by_id_response,
     get_ops_by_hashes_response, get_ops_response, get_ops_summaries_response,
     get_reputation_status_response, get_stake_status_response, op_pool_client::OpPoolClient,
-    remove_op_by_id_response, remove_ops_response, update_entities_response,
+    remove_op_by_id_response, remove_ops_response, report_bundle_outcome_response,
+    update_entities_response,
 };
 
 /// Remote pool client
@@ -226,6 +228,7 @@ impl Pool for RemotePoolClient {
         &self,
         entry_point: Address,
         max_ops: u64,
+        max_suspects: u64,
         filter_id: Option<String>,
     ) -> PoolResult<Vec<PoolOperationSummary>> {
         let res = self
@@ -234,6 +237,7 @@ impl Pool for RemotePoolClient {
             .get_ops_summaries(protos::GetOpsSummariesRequest {
                 entry_point: entry_point.to_proto_bytes(),
                 max_ops,
+                max_suspects,
                 filter_id: filter_id.unwrap_or_default(),
             })
             .await
@@ -376,6 +380,36 @@ impl Pool for RemotePoolClient {
         match res {
             Some(remove_ops_response::Result::Success(_)) => Ok(()),
             Some(remove_ops_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(PoolError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
+    async fn report_bundle_outcome(
+        &self,
+        entry_point: Address,
+        ops: Vec<B256>,
+        outcome: BundleOutcome,
+        provider_event_active: bool,
+    ) -> PoolResult<()> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .report_bundle_outcome(protos::ReportBundleOutcomeRequest {
+                entry_point: entry_point.to_proto_bytes(),
+                hashes: ops.into_iter().map(|h| h.to_proto_bytes()).collect(),
+                outcome: protos::BundleOutcome::from(outcome) as i32,
+                provider_event_active,
+            })
+            .await
+            .map_err(anyhow::Error::from)?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(report_bundle_outcome_response::Result::Success(_)) => Ok(()),
+            Some(report_bundle_outcome_response::Result::Failure(f)) => Err(f.try_into()?),
             None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,

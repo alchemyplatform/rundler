@@ -5501,6 +5501,7 @@ dependencies = [
  "mockall",
  "parking_lot",
  "prost 0.13.4",
+ "rand 0.8.5",
  "reth-tasks",
  "rundler-contracts",
  "rundler-provider",

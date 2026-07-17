@@ -146,6 +146,12 @@ pub enum OpRemovalReason {
         /// Hash of the new operation that replaced this one
         replaced_by: B256,
     },
+    /// Op was removed because the provider terminally rejected its
+    /// single-operation bundle
+    TerminalRpcError,
+    /// Op was removed because, while isolated as a suspect, it repeatedly
+    /// failed submission with non-terminal RPC errors
+    RepeatedNonTerminalRpcFailure,
 }
 
 impl EntitySummary {

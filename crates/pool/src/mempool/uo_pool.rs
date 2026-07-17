@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, sync::Arc, time::Instant};
 
 use alloy_primitives::{Address, B256, Bytes, U256, utils::format_units};
 use anyhow::Context;
@@ -29,8 +29,8 @@ use rundler_types::{
     Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, GasFees, UserOperation,
     UserOperationId, UserOperationPermissions, UserOperationVariant,
     pool::{
-        MempoolError, PaymasterMetadata, PoolOperation, PoolOperationStatus, Reputation,
-        ReputationStatus, StakeStatus,
+        BundleOutcome, MempoolError, PaymasterMetadata, PoolOperation, PoolOperationStatus,
+        Reputation, ReputationStatus, StakeStatus,
     },
 };
 use rundler_utils::{emit::WithEntryPoint, guard_timer::CustomTimerGuard};
@@ -120,6 +120,29 @@ where
             entry_point: self.config.entry_point,
             event,
         });
+    }
+
+    fn remove_operations_with_reason(&self, hashes: &[B256], reason: OpRemovalReason) {
+        let mut count: u64 = 0;
+        let mut removed_hashes = vec![];
+        {
+            let mut state = self.state.write();
+            for hash in hashes {
+                if let Some(op) = state.pool.remove_operation_by_hash(*hash) {
+                    self.paymaster.remove_operation(&op.uo.id());
+                    count += 1;
+                    removed_hashes.push(*hash);
+                }
+            }
+        }
+
+        for hash in removed_hashes {
+            self.emit(OpPoolEvent::RemovedOp {
+                op_hash: hash,
+                reason: reason.clone(),
+            })
+        }
+        self.ep_specific_metrics.removed_operations.increment(count);
     }
 
     fn throttle_entity(&self, entity: Entity) {
@@ -790,26 +813,7 @@ where
     }
 
     fn remove_operations(&self, hashes: &[B256]) {
-        let mut count: u64 = 0;
-        let mut removed_hashes = vec![];
-        {
-            let mut state = self.state.write();
-            for hash in hashes {
-                if let Some(op) = state.pool.remove_operation_by_hash(*hash) {
-                    self.paymaster.remove_operation(&op.uo.id());
-                    count += 1;
-                    removed_hashes.push(*hash);
-                }
-            }
-        }
-
-        for hash in removed_hashes {
-            self.emit(OpPoolEvent::RemovedOp {
-                op_hash: hash,
-                reason: OpRemovalReason::Requested,
-            })
-        }
-        self.ep_specific_metrics.removed_operations.increment(count);
+        self.remove_operations_with_reason(hashes, OpRemovalReason::Requested);
     }
 
     fn get_op_by_id(&self, id: &UserOperationId) -> Option<Arc<PoolOperation>> {
@@ -899,6 +903,39 @@ where
             .filter(|op| filter_id == op.filter_id)
             .take(max)
             .collect())
+    }
+
+    fn due_suspect_operations(
+        &self,
+        max: usize,
+        filter_id: Option<String>,
+    ) -> MempoolResult<Vec<Arc<PoolOperation>>> {
+        let state = self.state.read();
+
+        Ok(state
+            .pool
+            .due_suspect_operations(Instant::now())
+            .filter(|op| filter_id == op.filter_id)
+            .take(max)
+            .collect())
+    }
+
+    fn report_bundle_outcome(
+        &self,
+        ops: &[B256],
+        outcome: BundleOutcome,
+        provider_event_active: bool,
+    ) {
+        let to_remove = {
+            let state = self.state.read();
+            state
+                .pool
+                .apply_bundle_outcome(ops, outcome, provider_event_active, Instant::now())
+        };
+
+        for (hash, reason) in to_remove {
+            self.remove_operations_with_reason(&[hash], reason);
+        }
     }
 
     fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation>> {
@@ -1049,7 +1086,7 @@ struct UoPoolMetrics {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, str::FromStr, vec};
+    use std::{collections::HashMap, str::FromStr, time::Duration, vec};
 
     use alloy_primitives::{Address, Bytes, Log as PrimitiveLog, LogData, address, bytes, uint};
     use alloy_rpc_types_eth::TransactionReceipt as AlloyTransactionReceipt;
@@ -1123,6 +1160,58 @@ mod tests {
         check_ops(pool.best_operations(3, None).unwrap(), uos);
         pool.remove_operations(&hashes);
         assert_eq!(pool.best_operations(3, None).unwrap(), vec![]);
+    }
+
+    #[tokio::test]
+    async fn report_bundle_outcome_removes_after_repeated_failures() {
+        let op = create_op(Address::random(), 0, 0, None);
+        let pool = create_pool(vec![op.clone()]);
+        let hash = pool
+            .add_operation(OperationOrigin::Local, op.op, default_perms())
+            .await
+            .unwrap();
+
+        // suspect threshold 3 + removal allowance 3 = removal at the 6th failure
+        for _ in 0..5 {
+            pool.report_bundle_outcome(&[hash], BundleOutcome::NonTerminalFailure, false);
+            assert!(pool.get_user_operation_by_hash(hash).is_some());
+        }
+        pool.report_bundle_outcome(&[hash], BundleOutcome::NonTerminalFailure, false);
+        assert!(pool.get_user_operation_by_hash(hash).is_none());
+    }
+
+    #[tokio::test]
+    async fn report_bundle_outcome_success_clears_suspect() {
+        let op = create_op(Address::random(), 0, 0, None);
+        let uos = vec![op.op.clone()];
+        let pool = create_pool(vec![op.clone()]);
+        let hash = pool
+            .add_operation(OperationOrigin::Local, op.op, default_perms())
+            .await
+            .unwrap();
+
+        for _ in 0..3 {
+            pool.report_bundle_outcome(&[hash], BundleOutcome::NonTerminalFailure, false);
+        }
+        assert_eq!(pool.best_operations(1, None).unwrap(), vec![]);
+        check_ops(pool.due_suspect_operations(1, None).unwrap(), uos.clone());
+
+        pool.report_bundle_outcome(&[hash], BundleOutcome::Success, false);
+        check_ops(pool.best_operations(1, None).unwrap(), uos);
+        assert_eq!(pool.due_suspect_operations(1, None).unwrap(), vec![]);
+    }
+
+    #[tokio::test]
+    async fn report_bundle_outcome_terminal_removes_single() {
+        let op = create_op(Address::random(), 0, 0, None);
+        let pool = create_pool(vec![op.clone()]);
+        let hash = pool
+            .add_operation(OperationOrigin::Local, op.op, default_perms())
+            .await
+            .unwrap();
+
+        pool.report_bundle_outcome(&[hash], BundleOutcome::TerminalFailure, false);
+        assert!(pool.get_user_operation_by_hash(hash).is_none());
     }
 
     #[tokio::test]
@@ -2424,6 +2513,10 @@ mod tests {
             verification_gas_limit_efficiency_reject_threshold: 0.0,
             max_time_in_pool: None,
             max_expected_storage_slots: usize::MAX,
+            rpc_failures_before_suspect: 3,
+            max_suspect_rpc_failures: 3,
+            suspect_rpc_backoff_initial: Duration::from_secs(1),
+            suspect_rpc_backoff_max: Duration::from_secs(600),
         }
     }
 
