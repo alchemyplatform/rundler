@@ -39,7 +39,7 @@ struct FallbackSenderMetrics {
     #[metric(describe = "total successful sends via the fallback")]
     fallback_sends: Counter,
     #[metric(
-        describe = "total SenderUnavailable errors from the primary, including those below the failover threshold"
+        describe = "total failover-eligible errors from the primary, including those below the failover threshold"
     )]
     primary_unavailable: Counter,
 }
@@ -51,7 +51,8 @@ enum ActiveSender {
 }
 
 /// A transaction sender that transparently fails over to a fallback sender when
-/// the primary returns [`TxSenderError::SenderUnavailable`].
+/// the primary returns [`TxSenderError::SenderUnavailable`] or
+/// [`TxSenderError::UnrecognizedRpc`].
 ///
 /// Recovery is passive: after `recovery_interval` has elapsed the next send
 /// attempt re-tries the primary. On success the primary is reinstated; on
@@ -168,7 +169,9 @@ impl TransactionSender for FallbackTransactionSender {
                 self.metrics.primary_sends.increment(1);
                 Ok(hash)
             }
-            Err(TxSenderError::SenderUnavailable(e)) => {
+            Err(
+                e @ (TxSenderError::SenderUnavailable(_) | TxSenderError::UnrecognizedRpc { .. }),
+            ) => {
                 self.metrics.primary_unavailable.increment(1);
                 let failures = self.consecutive_failures.fetch_add(1, Ordering::AcqRel) + 1;
                 if failures >= self.failure_threshold {
@@ -188,7 +191,7 @@ impl TransactionSender for FallbackTransactionSender {
                         error = %e,
                         "Primary sender unavailable, will activate fallback after threshold"
                     );
-                    Err(TxSenderError::SenderUnavailable(e))
+                    Err(e)
                 }
             }
             Err(e) => Err(e),

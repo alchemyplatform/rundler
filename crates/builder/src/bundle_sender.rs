@@ -662,7 +662,11 @@ where
                 self.assigner.release_all(self.sender_eoa);
                 state.reset();
             }
-            Err(TransactionTrackerError::Other(e)) => {
+            Err(
+                e @ (TransactionTrackerError::SenderUnavailable(_)
+                | TransactionTrackerError::UnrecognizedRpc { .. }
+                | TransactionTrackerError::Other(_)),
+            ) => {
                 error!("Failed to cancel transaction, moving back to building state: {e:#?}");
                 self.increment_counter("builder_cancellation_txns_failed", &pinned, 1);
                 self.assigner.release_all(self.sender_eoa);
@@ -998,9 +1002,13 @@ where
                 error!("Bundle attempt insufficient funds");
                 Ok(SendBundleAttemptResult::InsufficientFunds)
             }
-            Err(TransactionTrackerError::Other(e)) => {
-                error!("Failed to send bundle with unexpected error: {e:?}");
-                if Self::is_intrinsic_gas_too_low_error(&e) {
+            Err(TransactionTrackerError::SenderUnavailable(e)) => {
+                error!("Failed to send bundle, sender unavailable: {e:?}");
+                Err(e)
+            }
+            Err(TransactionTrackerError::UnrecognizedRpc { code, message }) => {
+                error!("Failed to send bundle with unrecognized RPC error {code}: {message}");
+                if Self::is_intrinsic_gas_too_low_error(&message) {
                     let tx_bytes = tx.input.input().map_or_else(
                         || String::from("0x"),
                         |data| format!("0x{}", hex::encode(data)),
@@ -1009,15 +1017,17 @@ where
                         "Bundle transaction bytes for intrinsic gas too low: tx_bytes={tx_bytes}"
                     );
                 }
+                Err(anyhow::anyhow!("unrecognized RPC error {code}: {message}"))
+            }
+            Err(TransactionTrackerError::Other(e)) => {
+                error!("Failed to send bundle with unexpected error: {e:?}");
                 Err(e)
             }
         }
     }
 
-    fn is_intrinsic_gas_too_low_error(error: &anyhow::Error) -> bool {
-        format!("{error:#}")
-            .to_lowercase()
-            .contains("intrinsic gas too low")
+    fn is_intrinsic_gas_too_low_error(message: &str) -> bool {
+        message.to_lowercase().contains("intrinsic gas too low")
     }
 
     /// Emits an event for a specific entrypoint (used for shared signer support)

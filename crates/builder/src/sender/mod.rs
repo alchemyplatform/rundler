@@ -71,14 +71,60 @@ pub(crate) enum TxSenderError {
     /// Insufficient funds for transaction
     #[error("insufficient funds for transaction")]
     InsufficientFunds,
-    /// Sender is unavailable due to an outage or unrecognized error.
+    /// Sender is unavailable due to an outage or transport error.
     ///
     /// When a fallback sender is configured this triggers failover.
     #[error("sender unavailable: {0}")]
     SenderUnavailable(anyhow::Error),
+    /// The provider returned an RPC error response that Rundler does not recognize.
+    ///
+    /// The node judged the transaction but the meaning is unknown, so acceptance is
+    /// ambiguous. When a fallback sender is configured this triggers failover.
+    #[error("unrecognized RPC error {code}: {message}")]
+    UnrecognizedRpc {
+        /// RPC error code.
+        code: i64,
+        /// RPC error message.
+        message: String,
+    },
     /// All other errors
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+/// Classification of a submission failure for poison user operation handling.
+///
+/// See `docs/designs/poison-user-operations.md`.
+#[allow(dead_code)] // consumed once the bundle sender reports outcomes to the pool
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RpcOutcomeClass {
+    /// Final rejection; retrying the identical transaction cannot succeed.
+    Terminal,
+    /// Transport failure, timeout, outage, or ambiguous rejection; acceptance unknown.
+    NonTerminal,
+    /// Known operational error with dedicated handling; evidence of neither user
+    /// operation poison nor provider health.
+    Neutral,
+}
+
+impl TxSenderError {
+    /// Classifies this error for poison user operation handling.
+    #[allow(dead_code)] // consumed once the bundle sender reports outcomes to the pool
+    pub(crate) fn classify(&self) -> RpcOutcomeClass {
+        match self {
+            TxSenderError::SenderUnavailable(_) | TxSenderError::UnrecognizedRpc { .. } => {
+                RpcOutcomeClass::NonTerminal
+            }
+            TxSenderError::Underpriced
+            | TxSenderError::ReplacementUnderpriced
+            | TxSenderError::NonceTooLow
+            | TxSenderError::ConditionNotMet
+            | TxSenderError::Rejected
+            | TxSenderError::SoftCancelFailed
+            | TxSenderError::InsufficientFunds
+            | TxSenderError::Other(_) => RpcOutcomeClass::Neutral,
+        }
+    }
 }
 
 pub(crate) type Result<T> = std::result::Result<T, TxSenderError>;
@@ -274,18 +320,15 @@ impl From<ProviderError> for TxSenderError {
                     if let Some(known) = parse_known_call_execution_failed(&e.message, e.code) {
                         return known;
                     }
-                    // Unrecognized RPC error: -32000s from us should be rare, so treat
-                    // as a provider outage and log for debugging.
                     tracing::warn!(
                         rpc_error_code = e.code,
                         rpc_error_message = %e.message,
-                        "Unrecognized RPC error from provider, treating as sender unavailable"
+                        "Unrecognized RPC error response from provider"
                     );
-                    TxSenderError::SenderUnavailable(anyhow::anyhow!(
-                        "unrecognized RPC error {}: {}",
-                        e.code,
-                        e.message
-                    ))
+                    TxSenderError::UnrecognizedRpc {
+                        code: e.code,
+                        message: e.message.to_string(),
+                    }
                 } else {
                     tracing::warn!(
                         error = ?value,

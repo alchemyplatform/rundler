@@ -117,6 +117,19 @@ pub(crate) enum TransactionTrackerError {
     Rejected,
     #[error("insufficient funds")]
     InsufficientFunds,
+    /// The sender is unavailable due to an outage or transport error; acceptance
+    /// of the transaction is unknown.
+    #[error("sender unavailable: {0}")]
+    SenderUnavailable(anyhow::Error),
+    /// The provider returned an RPC error response that Rundler does not recognize;
+    /// acceptance of the transaction is unknown.
+    #[error("unrecognized RPC error {code}: {message}")]
+    UnrecognizedRpc {
+        /// RPC error code.
+        code: i64,
+        /// RPC error message.
+        message: String,
+    },
     /// All other errors
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -693,9 +706,10 @@ impl From<TxSenderError> for TransactionTrackerError {
             TxSenderError::SoftCancelFailed => {
                 TransactionTrackerError::Other(anyhow::anyhow!("soft cancel failed"))
             }
-            // SenderUnavailable reaching here means no fallback is configured; treat
-            // it as a transient error so the bundle sender retries next cycle.
-            TxSenderError::SenderUnavailable(e) => TransactionTrackerError::Other(e),
+            TxSenderError::SenderUnavailable(e) => TransactionTrackerError::SenderUnavailable(e),
+            TxSenderError::UnrecognizedRpc { code, message } => {
+                TransactionTrackerError::UnrecognizedRpc { code, message }
+            }
             TxSenderError::Other(e) => TransactionTrackerError::Other(e),
         }
     }
