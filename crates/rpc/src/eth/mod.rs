@@ -20,17 +20,18 @@ pub(crate) use router::*;
 mod error;
 pub(crate) use error::{EthResult, EthRpcError};
 mod events;
-pub(crate) use events::{UserOperationEventProviderV0_6, UserOperationEventProviderV0_7};
+pub(crate) use events::{
+    EventBlockOptions, UserOperationEventProviderV0_6, UserOperationEventProviderV0_7,
+};
 mod server;
 
 use alloy_primitives::{Address, B256, U64};
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_provider::StateOverride;
-use rundler_types::BlockTag;
 
 use crate::types::{
-    RpcGasEstimate, RpcUserOperation, RpcUserOperationByHash, RpcUserOperationOptionalGas,
-    RpcUserOperationPermissions, RpcUserOperationReceipt,
+    RpcBlockOption, RpcBlockOptionOrTag, RpcGasEstimate, RpcPermissions, RpcUserOperation,
+    RpcUserOperationByHash, RpcUserOperationOptionalGas, RpcUserOperationReceipt,
 };
 
 /// Eth API
@@ -38,12 +39,12 @@ use crate::types::{
 #[cfg_attr(test, automock)]
 pub trait EthApi {
     /// Sends a user operation to the pool.
-    #[method(name = "sendUserOperation")]
+    #[method(name = "sendUserOperation", with_extensions)]
     async fn send_user_operation(
         &self,
         op: RpcUserOperation,
         entry_point: Address,
-        permissions: Option<RpcUserOperationPermissions>,
+        permissions: Option<RpcPermissions>,
     ) -> RpcResult<B256>;
 
     /// Estimates the gas fields for a user operation.
@@ -56,18 +57,23 @@ pub trait EthApi {
     ) -> RpcResult<RpcGasEstimate>;
 
     /// Returns the user operation with the given hash.
-    #[method(name = "getUserOperationByHash")]
+    #[method(name = "getUserOperationByHash", with_extensions)]
     async fn get_user_operation_by_hash(
         &self,
         hash: B256,
+        block_option: Option<RpcBlockOption>,
     ) -> RpcResult<Option<RpcUserOperationByHash>>;
 
     /// Returns the user operation receipt with the given hash.
-    #[method(name = "getUserOperationReceipt")]
+    ///
+    /// NOTE: the parameter identifier `tag` is part of the named-params wire API
+    /// (jsonrpsee matches object-form params by argument name) and predates the block
+    /// option — do not rename it.
+    #[method(name = "getUserOperationReceipt", with_extensions)]
     async fn get_user_operation_receipt(
         &self,
         hash: B256,
-        tag: Option<BlockTag>,
+        tag: Option<RpcBlockOptionOrTag>,
     ) -> RpcResult<Option<RpcUserOperationReceipt>>;
 
     /// Returns the supported entry points addresses

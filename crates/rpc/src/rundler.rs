@@ -17,6 +17,7 @@ use alloy_primitives::{Address, B256, U64, U128, U256};
 use anyhow::Context;
 use async_trait::async_trait;
 use futures_util::future;
+use http::Extensions;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_provider::{EvmProvider, FeeEstimator};
 use rundler_types::{
@@ -29,10 +30,11 @@ use rundler_types::{
 use tracing::instrument;
 
 use crate::{
-    eth::{EntryPointRouter, EthResult, EthRpcError},
+    eth::{EntryPointRouter, EthResult, EthRpcError, EventBlockOptions},
     types::{
-        RpcDelegationStatus, RpcMinedUserOperation, RpcSuggestedGasFees, RpcUserOperation,
-        RpcUserOperationGasPrice, RpcUserOperationStatus, UOStatusEnum, UserOperationStatusEnum,
+        MaxBlockRange, RpcBlockOption, RpcDelegationStatus, RpcMinedUserOperation,
+        RpcSuggestedGasFees, RpcUserOperation, RpcUserOperationGasPrice, RpcUserOperationStatus,
+        UOStatusEnum, UserOperationStatusEnum,
     },
     utils::{self, TryIntoRundlerType},
 };
@@ -93,8 +95,12 @@ pub trait RundlerApi {
     ) -> RpcResult<Option<RpcMinedUserOperation>>;
 
     /// Gets the status of a user operation by user operation hash
-    #[method(name = "getUserOperationStatus")]
-    async fn get_user_operation_status(&self, uo_hash: B256) -> RpcResult<RpcUserOperationStatus>;
+    #[method(name = "getUserOperationStatus", with_extensions)]
+    async fn get_user_operation_status(
+        &self,
+        uo_hash: B256,
+        block_option: Option<RpcBlockOption>,
+    ) -> RpcResult<RpcUserOperationStatus>;
 
     /// Gets the required fees for a sender nonce
     #[method(name = "getPendingUserOperationBySenderNonce")]
@@ -182,10 +188,19 @@ where
     }
 
     #[instrument(skip_all, fields(rpc_method = "rundler_getUserOperationStatus"))]
-    async fn get_user_operation_status(&self, uo_hash: B256) -> RpcResult<RpcUserOperationStatus> {
+    async fn get_user_operation_status(
+        &self,
+        ext: &Extensions,
+        uo_hash: B256,
+        block_option: Option<RpcBlockOption>,
+    ) -> RpcResult<RpcUserOperationStatus> {
+        let block_options = EventBlockOptions {
+            block_option: block_option.map(|o| o.into()),
+            max_block_range: ext.get::<MaxBlockRange>().map(|r| r.0),
+        };
         utils::safe_call_rpc_handler(
             "rundler_getUserOperationStatus",
-            RundlerApi::get_user_operation_status(self, uo_hash),
+            RundlerApi::get_user_operation_status(self, uo_hash, block_options),
         )
         .await
     }
@@ -370,7 +385,16 @@ where
         }
     }
 
-    async fn get_user_operation_status(&self, uo_hash: B256) -> EthResult<RpcUserOperationStatus> {
+    async fn get_user_operation_status(
+        &self,
+        uo_hash: B256,
+        block_options: EventBlockOptions,
+    ) -> EthResult<RpcUserOperationStatus> {
+        let block_options = block_options
+            .resolve(&self.evm_provider)
+            .await
+            .map_err(EthRpcError::from)?;
+
         // Fetch pool status first to get preconf info for the mined query
         let op_status = self
             .pool_server
@@ -391,6 +415,10 @@ where
                     &pool_status.entry_point,
                     uo_hash,
                     Some(preconf_info.tx_hash),
+                    EventBlockOptions {
+                        block_option: None,
+                        ..block_options
+                    },
                 )
                 .await;
             match ret {
@@ -405,7 +433,7 @@ where
         } else {
             let mined_futs = self.entry_point_router.entry_points().map(|ep| {
                 self.entry_point_router
-                    .get_mined_and_receipt(ep, uo_hash, None)
+                    .get_mined_and_receipt(ep, uo_hash, None, block_options)
             });
             future::try_join_all(mined_futs)
                 .await

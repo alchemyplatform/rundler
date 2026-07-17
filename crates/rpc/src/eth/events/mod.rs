@@ -11,8 +11,9 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use alloy_eips::{BlockId, BlockNumberOrTag};
 use alloy_primitives::{Address, B256};
-use rundler_provider::{Log, ProviderError, TransactionReceipt};
+use rundler_provider::{EvmProvider, FilterBlockOption, Log, ProviderError, TransactionReceipt};
 use thiserror::Error;
 use tracing::instrument;
 
@@ -25,11 +26,38 @@ pub(crate) use v0_6::UserOperationEventProviderV0_6;
 mod v0_7;
 pub(crate) use v0_7::UserOperationEventProviderV0_7;
 
+/// Options scoping the block window searched for user operation events.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct EventBlockOptions {
+    /// Caller-supplied block range or hash to search. When set, the fallback retry is
+    /// disabled and the option is used as-is (after tag resolution and validation).
+    pub(crate) block_option: Option<FilterBlockOption>,
+    /// Per-request override of the maximum event block distance.
+    pub(crate) max_block_range: Option<u64>,
+}
+
+impl EventBlockOptions {
+    /// Resolve any block tags in the block option to concrete block numbers.
+    ///
+    /// RPC handlers call this once per request so the resolved options can be fanned out
+    /// to multiple entry point routes without each route re-resolving the tags via RPC.
+    pub(crate) async fn resolve<P: EvmProvider>(self, provider: &P) -> EventProviderResult<Self> {
+        Ok(Self {
+            block_option: match self.block_option {
+                Some(bo) => Some(resolve_block_option(provider, bo).await?),
+                None => None,
+            },
+            ..self
+        })
+    }
+}
+
 #[async_trait::async_trait]
 pub(crate) trait UserOperationEventProvider: Send + Sync {
     async fn get_mined_by_hash(
         &self,
         hash: B256,
+        block_options: EventBlockOptions,
     ) -> EventProviderResult<Option<RpcUserOperationByHash>>;
 
     async fn get_mined_from_tx_receipt(
@@ -38,8 +66,11 @@ pub(crate) trait UserOperationEventProvider: Send + Sync {
         tx_receipt: TransactionReceipt,
     ) -> EventProviderResult<Option<RpcUserOperationByHash>>;
 
-    async fn get_receipt(&self, hash: B256)
-    -> EventProviderResult<Option<RpcUserOperationReceipt>>;
+    async fn get_receipt(
+        &self,
+        hash: B256,
+        block_options: EventBlockOptions,
+    ) -> EventProviderResult<Option<RpcUserOperationReceipt>>;
 
     async fn get_receipt_from_tx_hash(
         &self,
@@ -59,6 +90,7 @@ pub(crate) trait UserOperationEventProvider: Send + Sync {
         &self,
         hash: B256,
         bundle_transaction: Option<B256>,
+        block_options: EventBlockOptions,
     ) -> EventProviderResult<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>>;
 }
 
@@ -92,10 +124,75 @@ pub enum EventProviderError {
     /// Error processing logs (includes invalid sequence, no matching logs, decode failures)
     #[error("log processing error: {0}")]
     LogProcessingError(String),
+
+    /// Invalid request
+    #[error("invalid event request: {0}")]
+    InvalidRequest(String),
 }
 
 /// Type alias for results from event provider operations
 pub(crate) type EventProviderResult<T> = Result<T, EventProviderError>;
+
+/// Resolve any block tags in a filter block option to concrete block numbers.
+///
+/// RPC handlers call this once per request so the resolved option can be fanned out to
+/// multiple entry point routes without each route re-resolving the tags via RPC.
+pub(crate) async fn resolve_block_option<P: EvmProvider>(
+    provider: &P,
+    block_option: FilterBlockOption,
+) -> EventProviderResult<FilterBlockOption> {
+    match block_option {
+        FilterBlockOption::Range {
+            from_block,
+            to_block,
+        } => {
+            let (from_block, to_block) = match (from_block, to_block) {
+                // both bounds are the same tag: resolve once
+                (Some(from), Some(to)) if from == to => {
+                    let number = resolve_block_number(provider, from).await?;
+                    (Some(number.into()), Some(number.into()))
+                }
+                (from, to) => {
+                    let from = match from {
+                        Some(block) => Some(resolve_block_number(provider, block).await?.into()),
+                        None => None,
+                    };
+                    let to = match to {
+                        Some(block) => Some(resolve_block_number(provider, block).await?.into()),
+                        None => None,
+                    };
+                    (from, to)
+                }
+            };
+            Ok(FilterBlockOption::Range {
+                from_block,
+                to_block,
+            })
+        }
+        FilterBlockOption::AtBlockHash(_) => Ok(block_option),
+    }
+}
+
+/// Resolve a block number or tag to a concrete block number.
+pub(crate) async fn resolve_block_number<P: EvmProvider>(
+    provider: &P,
+    block: BlockNumberOrTag,
+) -> EventProviderResult<u64> {
+    match block {
+        BlockNumberOrTag::Number(block) => Ok(block),
+        tag => {
+            // The tag is caller-supplied, so an unresolvable tag (e.g. "pending" on a
+            // chain whose node returns no pending block) is an invalid request, not an
+            // internal error.
+            let Some(block) = provider.get_block(BlockId::Number(tag)).await? else {
+                return Err(EventProviderError::InvalidRequest(format!(
+                    "block \"{tag}\" not found"
+                )));
+            };
+            Ok(block.number())
+        }
+    }
+}
 
 // This method takes a user operation event and a transaction receipt and filters out all the logs
 // relevant to the user operation. Since there are potentially many user operations in a transaction,

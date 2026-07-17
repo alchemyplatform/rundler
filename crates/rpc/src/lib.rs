@@ -39,6 +39,7 @@ pub use types::RpcDelegationStatus;
 mod task;
 pub use task::{Args as RpcTaskArgs, RpcTask};
 
+mod permissions_middleware;
 mod rpc_metrics;
 mod types;
 mod utils;

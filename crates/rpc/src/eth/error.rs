@@ -532,6 +532,8 @@ impl From<EventProviderError> for EthRpcError {
                 error: provider_err,
                 context: None,
             }),
+            // Caller-supplied request was invalid, return invalid params
+            EventProviderError::InvalidRequest(message) => Self::InvalidParams(message),
             // Log full details server-side, return generic message to user
             other => {
                 tracing::error!("event provider error: {}", other);

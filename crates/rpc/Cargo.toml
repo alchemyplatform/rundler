@@ -11,6 +11,7 @@ publish = false
 alloy-consensus.workspace = true
 
 alloy-contract.workspace = true
+alloy-eips.workspace = true
 alloy-json-rpc.workspace = true
 alloy-primitives.workspace = true
 alloy-sol-types.workspace = true
@@ -45,3 +46,4 @@ mockall.workspace = true
 rundler-provider = { workspace = true, features = ["test-utils"] }
 rundler-sim = { workspace = true, features = ["test-utils"] }
 rundler-types = { workspace = true, features = ["test-utils"] }
+serde_json.workspace = true

@@ -26,6 +26,62 @@ Methods defined by the [ERC-7769 spec](https://eips.ethereum.org/EIPS/eip-7769#r
 | `eth_getUserOperationByHash`   |    ✅     |
 | `eth_getUserOperationReceipt`  |    ✅     |
 
+#### Block Option Parameter
+
+`eth_getUserOperationByHash` and `eth_getUserOperationReceipt` locate user operations by searching for the `UserOperationEvent` log via `eth_getLogs`. By default the search covers the last `--user_operation_event_block_distance` blocks (all blocks if unset). Both methods accept a non-standard optional 2nd positional parameter to scope this search. This is useful when the caller already knows where the operation was mined, or needs to search outside the default window.
+
+The parameter is one of:
+
+- A block range object: `{ fromBlock, toBlock }`, where each field is an optional string containing either a hex-encoded block number (`0x`-quantity, e.g. `"0x64"` — decimal JSON numbers are rejected) or a block tag (`"latest"`, `"earliest"`, `"pending"`, `"safe"`, `"finalized"`; case-insensitive). Unknown fields in the object are rejected. When the node enforces a maximum event block range (`--user_operation_event_block_distance`, or a per-request `X-Rundler-Max-Block-Range` override), both fields are required so the range can be validated. A range wider than the maximum, or with `fromBlock` greater than `toBlock`, is rejected with an invalid params error (`-32602`).
+- A block hash (as a string): only the given block is searched.
+
+```
+# Request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "eth_getUserOperationByHash",
+  "params": [
+    "0x...", // user operation hash
+    { "fromBlock": "0x64", "toBlock": "0xc8" } // optional, block range or block hash
+  ]
+}
+```
+
+`eth_getUserOperationReceipt` additionally accepts a block tag for this parameter: `"LATEST"` (default) or `"PENDING"`, also accepted in lowercase (but not mixed case). On networks that support preconfirmations, `"PENDING"` allows the receipt of a preconfirmed user operation to be returned before it lands onchain.
+
+An empty range object `{}` is treated exactly as if the parameter was omitted. If only one bound is supplied and no maximum block range is enforced, the missing bound is left to the node's `eth_getLogs` default (typically `latest`).
+
+NOTE: when a block option is supplied, the `--user_operation_event_block_distance_fallback` retry behavior is disabled and the supplied option is used as-is.
+
+#### Per-request permissions (HTTP headers)
+
+When Rundler runs behind a trusted gateway, per-request policy can be supplied via discrete HTTP headers instead of (or in addition to) the legacy positional `permissions` parameter on `eth_sendUserOperation`. The headers are parsed by a transport-level middleware and delivered to the RPC handlers, so they apply across the relevant methods without changing any method's JSON-RPC parameters.
+
+Headers are **only honored when permissions are enabled** (`--rpc.permissions_enabled`) — the same trust assumption as the positional parameter. When permissions are disabled the headers are ignored entirely.
+
+| Header                                 | Type               | Field                            |
+| -------------------------------------- | ------------------ | -------------------------------- |
+| `X-Rundler-Max-Block-Range`            | int                | — (header only, see below)       |
+| `X-Rundler-Trusted`                    | `true`/`false`     | `trusted`                        |
+| `X-Rundler-Max-Ops-In-Pool-For-Sender` | int                | `maxAllowedInPoolForSender`      |
+| `X-Rundler-Underpriced-Accept-Pct`     | int (0–100)        | `underpricedAcceptPct`           |
+| `X-Rundler-Underpriced-Bundle-Pct`     | int (0–100)        | `underpricedBundlePct`           |
+| `X-Rundler-Eip7702-Disabled`           | `true`/`false`     | `eip7702Disabled`                |
+| `X-Rundler-Sponsorship-Max-Cost`       | U256, `0x`-hex     | `bundlerSponsorship.maxCost`     |
+| `X-Rundler-Sponsorship-Valid-Until`    | int (unix seconds) | `bundlerSponsorship.validUntil`  |
+
+Parsing rules:
+
+- Every header is optional; an absent header leaves its field at the default.
+- A malformed value fails the request closed with `400 Bad Request` — a bad policy header must never silently fall through to defaults.
+- Supplying the same header more than once is ambiguous and is rejected with `400`.
+- The sponsorship pair (`X-Rundler-Sponsorship-Max-Cost` and `X-Rundler-Sponsorship-Valid-Until`) is coupled: supply both or neither. Supplying exactly one is rejected with `400`.
+
+`X-Rundler-Max-Block-Range` overrides `--user_operation_event_block_distance` for the event lookup on `eth_getUserOperationByHash`, `eth_getUserOperationReceipt`, and `rundler_getUserOperationStatus`, and also caps the `--user_operation_event_block_distance_fallback` retry window. It is lookup configuration, not a user operation permission: it has no counterpart in the positional `permissions` parameter and never affects `eth_sendUserOperation`.
+
+On `eth_sendUserOperation`, when both the permission headers and the positional `permissions` parameter are present, **the headers take precedence** (`X-Rundler-Max-Block-Range` does not count as a permission header for this purpose). The positional parameter remains supported for backwards compatibility and is deprecated in favor of the headers.
+
 ### `debug_` Namespace
 
 Method defined by the [ERC-7769 spec](https://eips.ethereum.org/EIPS/eip-7769#rpc-methods-debug-namespace). Used only for debugging/testing and should be disabled on production APIs.
@@ -306,6 +362,8 @@ NOTE: The returned user operation receipt is slightly different than the receipt
 
 Gets the status of a user operation by hash. Intended for use cases where the user wants a single RPC call to retrieve the status of a user operation, as well as its receipt if that user operation is mined.
 
+Accepts an optional 2nd positional parameter to scope the search for the mined user operation event: a block range object or block hash, as described in [Block Option Parameter](#block-option-parameter) (block tags are not supported here).
+
 Possible statuses:
 
 - "unknown": the user operation is not mined or pending in the mempool.
@@ -338,6 +396,7 @@ The `pendingBundle` object contains:
   "method": "rundler_getUserOperationStatus",
   "params": [
     "0x...", // user operation hash
+    { "fromBlock": "0x64", "toBlock": "0xc8" } // optional, block range or block hash
   ]
 }
 
@@ -562,6 +621,8 @@ Currently, it simply queries each the `Pool` and the `Builder` servers to check 
 ## User Operation Permissions
 
 Rundler supports a non-standard 3rd positional parameter on `eth_sendUserOperation` to enabled special permissions on a per-user operation basis. If `rpc.permissions_enabled` is set, these permissions will be sent to the mempool. If disabled, the permissions will be ignored.
+
+NOTE: this positional parameter is deprecated in favor of the [per-request permission headers](#per-request-permissions-http-headers), which carry the same fields. When both are supplied, the headers take precedence.
 
 These permissions are meant to be used only by trusted connections. For example, an internal proxy that has a trusted relationship with a sender can tag that user operation as `trusted` and skip complex untrusted simulation.
 

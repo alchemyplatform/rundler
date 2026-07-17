@@ -5565,6 +5565,7 @@ version = "0.11.0"
 dependencies = [
  "alloy-consensus",
  "alloy-contract",
+ "alloy-eips",
  "alloy-json-rpc",
  "alloy-primitives",
  "alloy-rpc-types-eth",
@@ -5585,6 +5586,7 @@ dependencies = [
  "rundler-types",
  "rundler-utils",
  "serde",
+ "serde_json",
  "strum 0.26.3",
  "thiserror 1.0.69",
  "tokio",
