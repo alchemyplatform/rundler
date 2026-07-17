@@ -112,7 +112,6 @@ pub(crate) enum TxSenderError {
 /// Classification of a submission failure for poison user operation handling.
 ///
 /// See `docs/designs/poison-user-operations.md`.
-#[allow(dead_code)] // consumed once the bundle sender reports outcomes to the pool
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RpcOutcomeClass {
     /// Final rejection; retrying the identical transaction cannot succeed.
@@ -126,7 +125,6 @@ pub(crate) enum RpcOutcomeClass {
 
 impl TxSenderError {
     /// Classifies this error for poison user operation handling.
-    #[allow(dead_code)] // consumed once the bundle sender reports outcomes to the pool
     pub(crate) fn classify(&self) -> RpcOutcomeClass {
         match self {
             TxSenderError::IntrinsicGasTooLow | TxSenderError::TerminalRpcError { .. } => {

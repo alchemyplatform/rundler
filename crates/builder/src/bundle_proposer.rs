@@ -129,6 +129,40 @@ impl BundleData {
     }
 }
 
+/// Result of processing a reverted bundle transaction, per the failure flow in
+/// `docs/designs/poison-user-operations.md`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RevertOutcome {
+    /// Op hashes to remove from the pool.
+    pub(crate) to_remove: Vec<B256>,
+    /// Op hashes to mark suspect in the pool.
+    pub(crate) to_mark_suspect: Vec<B256>,
+}
+
+impl RevertOutcome {
+    /// Outcome that removes the given operations.
+    fn remove(to_remove: Vec<B256>) -> Self {
+        Self {
+            to_remove,
+            ..Self::default()
+        }
+    }
+
+    /// Outcome for a revert attributable to no single operation: a sole
+    /// operation is removed, while every operation of a larger bundle is
+    /// marked suspect.
+    fn unattributed(hashes: Vec<B256>) -> Self {
+        if hashes.len() > 1 {
+            Self {
+                to_mark_suspect: hashes,
+                ..Self::default()
+            }
+        } else {
+            Self::remove(hashes)
+        }
+    }
+}
+
 /// Request parameters for building a bundle.
 #[derive(Debug)]
 pub(crate) struct BundleProposalRequest {
@@ -164,9 +198,10 @@ pub(crate) trait BundleProposerT: Send + Sync {
     async fn make_bundle(&self, request: BundleProposalRequest)
     -> BundleProposerResult<BundleData>;
 
-    /// Process a reverted bundle transaction and return op hashes to remove from pool.
+    /// Process a reverted bundle transaction and return op hashes to remove from
+    /// pool or mark suspect.
     /// Fetches the trace and transaction internally, then decodes and processes the revert.
-    async fn process_revert(&self, tx_hash: B256) -> anyhow::Result<Vec<B256>>;
+    async fn process_revert(&self, tx_hash: B256) -> anyhow::Result<RevertOutcome>;
 }
 
 pub(crate) struct BundleProposerImpl<EP, BP> {
@@ -402,7 +437,7 @@ where
         })
     }
 
-    async fn process_revert(&self, tx_hash: B256) -> anyhow::Result<Vec<B256>> {
+    async fn process_revert(&self, tx_hash: B256) -> anyhow::Result<RevertOutcome> {
         let address = *self.ep_providers.entry_point().address();
         let chain_spec = &self.settings.chain_spec;
 
@@ -452,19 +487,22 @@ where
                 }
             };
 
+        let all_op_hashes: Vec<B256> = ops
+            .iter()
+            .flat_map(|ops| ops.user_ops.iter().map(|op| op.hash()))
+            .collect();
+
         let Some(revert_data) = revert_data else {
-            // No revert data - remove all ops
-            return Ok(ops
-                .iter()
-                .flat_map(|ops| ops.user_ops.iter().map(|op| op.hash()))
-                .collect());
+            // No revert data attributes the revert to no single op
+            warn!("no revert data for reverted bundle, treating as unattributed");
+            return Ok(RevertOutcome::unattributed(all_op_hashes));
         };
 
         // If we have a submission proxy, use it to process the revert first
         if let Some(proxy) = &self.settings.submission_proxy {
             let to_remove = proxy.process_revert(revert_data, &ops).await;
             if !to_remove.is_empty() {
-                return Ok(to_remove);
+                return Ok(RevertOutcome::remove(to_remove));
             }
         }
 
@@ -486,29 +524,31 @@ where
             }
             Some(HandleOpsOut::FailedOp(index, _)) => {
                 warn!("removing op from pool for reverted bundle op index {index:?}");
-                Ok(ops
-                    .iter()
-                    .flat_map(|ops| ops.user_ops.iter())
-                    .nth(index)
-                    .map(|op| vec![op.hash()])
-                    .unwrap_or_default())
+                Ok(RevertOutcome::remove(
+                    ops.iter()
+                        .flat_map(|ops| ops.user_ops.iter())
+                        .nth(index)
+                        .map(|op| vec![op.hash()])
+                        .unwrap_or_default(),
+                ))
             }
             Some(HandleOpsOut::SignatureValidationFailed(aggregator)) => {
                 warn!(
                     "removing all ops from pool for reverted bundle for aggregator {aggregator:?}"
                 );
-                Ok(ops
-                    .iter()
-                    .find(|op| op.aggregator == aggregator)
-                    .map(|ops| ops.user_ops.iter().map(|op| op.hash()).collect())
-                    .unwrap_or_default())
+                Ok(RevertOutcome::remove(
+                    ops.iter()
+                        .find(|op| op.aggregator == aggregator)
+                        .map(|ops| ops.user_ops.iter().map(|op| op.hash()).collect())
+                        .unwrap_or_default(),
+                ))
             }
             None | Some(HandleOpsOut::Revert(_)) | Some(HandleOpsOut::PostOpRevert) => {
-                warn!("removing all ops from pool for reverted bundle");
-                Ok(ops
-                    .iter()
-                    .flat_map(|ops| ops.user_ops.iter().map(|op| op.hash()))
-                    .collect())
+                warn!(
+                    "unattributed revert for bundle of {} ops",
+                    all_op_hashes.len()
+                );
+                Ok(RevertOutcome::unattributed(all_op_hashes))
             }
         }
     }
@@ -4904,5 +4944,37 @@ mod tests {
         agg.expect_aggregate_signatures()
             .returning(move |_| Ok(signature.clone()));
         agg
+    }
+
+    #[test]
+    fn test_unattributed_revert_of_sole_op_removes() {
+        let hash = B256::repeat_byte(1);
+        assert_eq!(
+            RevertOutcome::unattributed(vec![hash]),
+            RevertOutcome {
+                to_remove: vec![hash],
+                to_mark_suspect: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn test_unattributed_revert_of_multiple_ops_marks_suspect() {
+        let hashes = vec![B256::repeat_byte(1), B256::repeat_byte(2)];
+        assert_eq!(
+            RevertOutcome::unattributed(hashes.clone()),
+            RevertOutcome {
+                to_remove: vec![],
+                to_mark_suspect: hashes,
+            }
+        );
+    }
+
+    #[test]
+    fn test_unattributed_revert_of_no_ops_is_empty() {
+        assert_eq!(
+            RevertOutcome::unattributed(vec![]),
+            RevertOutcome::default()
+        );
     }
 }
