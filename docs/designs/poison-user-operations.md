@@ -175,6 +175,107 @@ hashes for deduplication.
 - **Backoff versus recovery latency:** per-suspect backoff prevents hot loops and resource
   churn, but delays successful retry after a transient failure.
 
+## Implementation plan
+
+Five self-contained PRs that build in order. PRs 1–2 are inert plumbing (no visible
+behavior change), PR 3 is the behavior switch, and PRs 4–5 are independent of each
+other once PR 3 lands.
+
+### PR 1 — Terminal vs. non-terminal error classification (foundation)
+
+Everything downstream depends on knowing whether a submission failure is terminal,
+non-terminal, or neutral. Today that distinction is destroyed before the bundle sender
+sees it.
+
+- Add a classification to `TxSenderError` (`crates/builder/src/sender/mod.rs`):
+  terminal (final rejection, don't retry unchanged), non-terminal (transport failure,
+  timeout, `SenderUnavailable`, rate-limit exhaustion), neutral (underpriced,
+  nonce-too-low, other known operational errors). A small `enum RpcOutcomeClass` plus a
+  `classify()` method is enough.
+- Fix the collapse in `From<TxSenderError> for TransactionTrackerError`
+  (`crates/builder/src/transaction_tracker.rs`), where `SenderUnavailable` and `Other`
+  both become `TransactionTrackerError::Other`. The tracker error must carry the class
+  through to `bundle_sender.rs`.
+- Route the `-32000: internal error` class to non-terminal-ambiguous (it currently maps
+  to `SenderUnavailable`). Per this design, this supersedes the PR #1304 approach —
+  that PR's remove-all behavior must not land alongside this.
+
+### PR 2 — Pool-owned suspect state + trait surface
+
+- Add per-UO mutable state to `OrderedPoolOperation`
+  (`crates/pool/src/mempool/pool.rs`), which already uses interior `RwLock`s:
+  `pre_suspect_failures: u32`, `suspect: bool`, `suspect_removal_failures: u32`,
+  `retry_after: Option<Instant>`. State dies with the UO — no separate tracker needed.
+- Add config to `PoolConfig` (`crates/pool/src/mempool/mod.rs`) and CLI args in
+  `bin/rundler/src/cli/pool.rs`: `rpc_failures_before_suspect` (default 3),
+  `max_suspect_rpc_failures` (default 3, 0 disables removal),
+  `suspect_rpc_backoff_initial_secs`, `suspect_rpc_backoff_max_secs`.
+- Add one new `Pool` trait method (`crates/types/src/pool/traits.rs`), roughly
+  `report_bundle_outcome(ops, outcome, provider_event_active)`, where outcome is
+  success / non-terminal failure / terminal failure / mark-suspect. The pool applies
+  the failure-flow table internally: clear counts on success, increment pre-suspect
+  counts (unless a provider event is active), promote to suspect at threshold,
+  increment removal counts + compute backoff for isolated suspects, remove at
+  `max_suspect_rpc_failures` with a new
+  `OpRemovalReason::RepeatedNonTerminalRpcFailure` (`crates/pool/src/emit.rs`).
+  Implement in `UoPool`, `LocalPoolHandle`, and the remote protobuf client/server.
+- Exclude suspects from `best_operations` (`crates/pool/src/mempool/uo_pool.rs`) and
+  expose suspects whose `retry_after` has elapsed (a flag on the existing summaries
+  query is simpler than a new method).
+
+### PR 3 — Failure flow in the bundle sender
+
+Wire `bundle_sender.rs` to call `report_bundle_outcome` per the failure-flow table:
+
+- **Attributed execution failures**: already removed via `rejected_op_hashes` —
+  unchanged.
+- **Unattributed mined revert** (`handle_pending_state` → `process_revert`, decoding in
+  `bundle_proposer.rs`): the `None | Revert | PostOpRevert` arm currently removes all
+  ops; change to remove if bundle size is 1, mark all suspect if greater than 1.
+  `FailedOp` stays remove-attributed.
+- **Terminal RPC error**: same size-1-remove / larger-suspect branch, in the
+  `Err(error)` arm of `handle_building_state` using PR 1's classification.
+- **Non-terminal failure**: report to the pool so it increments pre-suspect counts
+  (normal bundle) or removal count + backoff (isolation bundle). The sender needs to
+  know which kind of bundle it sent — a flag on the assignment (PR 4) or on the send
+  context.
+- **Success**: report so the pool clears pre-suspect counts for the bundle's ops.
+
+Risk note: once the multi-UO remove-all path becomes mark-suspect, suspects sit
+excluded from bundles with nothing draining them until PR 4 lands. Either land PR 3
+and PR 4 together, or keep suspects eligible for normal bundles in PR 3 and gate
+exclusion behind PR 4.
+
+### PR 4 — Suspect scheduling in the assigner
+
+- In `Assigner` (`crates/builder/src/assigner.rs`, which already holds `num_signers`):
+  when assigning work, fetch due suspects alongside normal summaries. While normal work
+  is eligible, cap new isolation assignments at `max(1, num_signers / 2)`; when normal
+  work is exhausted, let any idle builder isolate. Recompute the limit per assignment;
+  never cancel in-flight isolation work.
+- An isolation assignment is a single-UO bundle for one suspect, tagged so the bundle
+  sender reports outcomes down the suspect path (PR 3). Mined revert or terminal error
+  in isolation removes immediately; success follows normal tracking and clears suspect
+  state; other failures keep it suspect and back off.
+- The one-builder caveat (no two-way starvation guarantee with a single signer) needs
+  no code — document it on the CLI args.
+
+### PR 5 — Provider-event signal
+
+- Implement the rolling window (last 20 non-neutral final outcomes; enter event at ≥10
+  observations with ≥30% failures, exit below 10%) as a small shared struct owned by
+  the submission route. Record outcomes in `FallbackTransactionSender`
+  (`crates/builder/src/sender/fallback.rs`) after retries/fallbacks are exhausted —
+  success, `ProviderFailure`, or neutral (excluded). Non-fallback senders wrap the same
+  recorder.
+- Expose it as a shared `Arc` boolean checked by the bundle sender when calling
+  `report_bundle_outcome` (the `provider_event_active` flag from PR 2). Its only
+  effect: pause pre-suspect counting. No counters are cleared on enter/exit, and
+  suspect backoff/removal counting are unaffected.
+- Ships last deliberately — without it the system is fully functional, just without
+  outage protection for suspect creation (removal is already protected by backoff
+  spacing from PR 2).
+
 ## Related work
 
 - **EIP-7702 auth-nonce recheck at bundle assembly** (fix 2 in
