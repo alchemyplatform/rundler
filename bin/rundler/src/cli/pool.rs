@@ -187,6 +187,10 @@ pub struct PoolArgs {
 
     /// Number of non-terminal RPC submission failures before a user operation
     /// becomes a suspect and is only submitted alone.
+    ///
+    /// With a single builder signer, the scheduler cannot guarantee progress
+    /// for both suspect and normal work when both remain continuously
+    /// eligible.
     #[arg(
         long = "pool.rpc_failures_before_suspect",
         name = "pool.rpc_failures_before_suspect",

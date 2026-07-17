@@ -22,6 +22,7 @@ use rand::Rng;
 use rundler_provider::FeeEstimator;
 use rundler_task::TaskSpawner;
 use rundler_types::{
+    UserOperation,
     builder::BundlingMode,
     chain::ChainSpec,
     pool::{AddressUpdate, BundleOutcome, NewHead, Pool},
@@ -776,6 +777,11 @@ where
                 let entry_point = assignment.entry_point;
                 let filter_id = assignment.filter_id;
                 let ops = assignment.operations;
+
+                if assignment.is_isolation {
+                    let hashes: Vec<B256> = ops.iter().map(|op| op.uo.hash()).collect();
+                    info!("Sending isolation bundle for suspect ops {hashes:?}");
+                }
 
                 // Build and send bundle. Keep this as a single result path so assigner
                 // cleanup runs for all outcomes, including hard errors.
