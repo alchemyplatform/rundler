@@ -286,11 +286,18 @@ where
                     let Some(op) = self.by_hash.get(hash) else {
                         continue;
                     };
-                    // A failure during a provider event is not evidence against
-                    // the op: treat the submission as if it never happened.
-                    // Retry pacing during an event is left to normal submission
-                    // cadence and provider rate limiting.
-                    if provider_event_active {
+                    // Removal progress pauses during a provider event so that
+                    // provider issues cannot remove operations, but suspect
+                    // analysis continues: gating suspicion too would let a
+                    // poison herd large enough to trip the event keep riding
+                    // in normal bundles for as long as it sustains the event.
+                    if provider_event_active && op.is_suspect(suspect_threshold) {
+                        op.reschedule_retry(
+                            now,
+                            suspect_threshold,
+                            self.config.suspect_rpc_backoff_initial,
+                            self.config.suspect_rpc_backoff_max,
+                        );
                         continue;
                     }
                     let failures = op.record_failure(
@@ -1047,6 +1054,24 @@ impl OrderedPoolOperation {
                 Some(now + Self::suspect_backoff(backoff_initial, backoff_max, exponent));
         }
         state.failures
+    }
+
+    /// Schedules the next isolation retry without recording a failure, for
+    /// suspect failures that are not evidence against the operation (during a
+    /// provider event). No-op unless the operation is a suspect.
+    fn reschedule_retry(
+        &self,
+        now: Instant,
+        suspect_threshold: u32,
+        backoff_initial: Duration,
+        backoff_max: Duration,
+    ) {
+        let mut state = self.suspect_state.write();
+        if state.failures >= suspect_threshold {
+            let exponent = state.failures - suspect_threshold;
+            state.retry_after =
+                Some(now + Self::suspect_backoff(backoff_initial, backoff_max, exponent));
+        }
     }
 
     /// Backoff delay doubling from `initial` with ±20% jitter, capped at `max`.
@@ -2173,7 +2198,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_event_pauses_failure_counting() {
+    fn provider_event_pauses_removal_progress_only() {
         let mut pool = pool_with_conf(PoolInnerConfig {
             suspect_rpc_backoff_initial: Duration::from_secs(10),
             ..conf()
@@ -2187,14 +2212,26 @@ mod tests {
         pool.by_hash[&suspect].mark_suspect(3);
 
         let now = Instant::now();
-        pool.apply_bundle_outcome(&[non_suspect], BundleOutcome::NonTerminalFailure, true, now);
-        pool.apply_bundle_outcome(&[suspect], BundleOutcome::NonTerminalFailure, true, now);
+        for _ in 0..10 {
+            let to_remove = pool.apply_bundle_outcome(
+                &[non_suspect, suspect],
+                BundleOutcome::NonTerminalFailure,
+                true,
+                now,
+            );
+            // no removal ever fires during a provider event
+            assert!(to_remove.is_empty());
+        }
 
-        // a failure during a provider event changes no UO state
-        assert_eq!(pool.by_hash[&non_suspect].failures(), 0);
+        // suspect analysis continues during the event: the non-suspect accrues
+        // failures, is promoted at the threshold, and then freezes
+        assert_eq!(pool.by_hash[&non_suspect].failures(), 3);
+        // an existing suspect makes no removal progress
         assert_eq!(pool.by_hash[&suspect].failures(), 3);
-        assert!(pool.by_hash[&non_suspect].retry_due(now));
-        assert!(pool.by_hash[&suspect].retry_due(now));
+        // but its isolation retries stay spaced: 10s initial with ±20% jitter
+        let suspect_op = &pool.by_hash[&suspect];
+        assert!(!suspect_op.retry_due(now + Duration::from_millis(7_900)));
+        assert!(suspect_op.retry_due(now + Duration::from_millis(12_100)));
     }
 
     #[test]

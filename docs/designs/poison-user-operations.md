@@ -8,9 +8,11 @@ Status: Draft
    fail, preventing them from blocking bundle submission indefinitely.
 2. **Fairness:** schedule healthy and suspect UOs so neither work class can starve the
    other.
-3. **Provider resilience:** once a provider-health event is detected, stop punishing
-   UOs entirely — no suspicion, no removal progress. Detection is best effort; the
-   suspect backoff schedule spaces evidence to bound damage from undetected incidents.
+3. **Provider resilience:** once a provider-health event is detected, no UO makes
+   progress toward removal, so provider issues cannot remove operations. Suspect
+   analysis continues during events because suspicion is recoverable and isolation is
+   what protects bundling. Detection is best effort; the suspect backoff schedule
+   spaces evidence to bound damage from undetected incidents.
 
 ## How the goals are achieved
 
@@ -39,13 +41,20 @@ both remain continuously eligible.
 
 ### Provider resilience
 
-A failure during a detected provider event is not evidence against a UO. Only final
-outcomes after provider retries and fallbacks affect the provider-event signal, and
-while an event is active, a non-terminal failure changes no UO state — no counter
-advances toward suspicion or removal — so a detected outage can neither mass-convert
-the pool into suspects nor remove UOs. Submissions during an event are treated as if
-they never happened; retry pacing is left to normal submission cadence and provider
-rate limiting, as it is for normal bundles.
+A detected provider event pauses removal, not analysis. While an event is active,
+non-terminal failures still count toward suspicion — quarantine keeps working — but a
+suspect's counter freezes: it makes no progress toward removal, and failures during
+the event never contribute to a later removal. Suspects failing during an event still
+refresh their isolation backoff so retries stay spaced.
+
+Suspicion deliberately stays live during events because gating it is exploitable: a
+herd of poison UOs large enough to trip the provider-event signal with its own
+failures would otherwise keep riding in normal bundles — unsuspectable for exactly as
+long as it sustains the event. With analysis live, such a herd is quarantined into
+isolation even while the event is active; once quarantined, normal bundles recover,
+the event clears, and removal resumes. The cost is that a genuine outage progressively
+suspects the UOs it touches; suspicion is recoverable, so after recovery each false
+suspect clears itself with one successful singleton, at isolation throughput.
 
 Detection requires a rolling sample, so failures observed before the signal activates
 still count; the suspect backoff schedule spaces those increments to bound the damage
@@ -65,7 +74,7 @@ reject the transaction.
 | Terminal RPC error | More than 1 | Mark every UO as suspect immediately. |
 | Non-terminal provider failure while provider is healthy | Any | Increment each non-suspect UO's RPC-failure count; mark it suspect at the configured threshold. |
 | Non-terminal provider failure from an isolated suspect | 1 | Increment its suspect removal count, back off, and remove it at the configured threshold. |
-| Non-terminal provider failure during a provider event | Any | No UO state change. |
+| Non-terminal provider failure during a provider event | Any | Non-suspects accrue toward suspicion as normal; suspects only refresh their isolation backoff, making no removal progress. |
 | Known operational error | Any | Preserve existing behavior. |
 
 Provider retries and configured fallbacks are exhausted before an RPC outcome enters
@@ -98,9 +107,9 @@ Initial parameters:
 Different enter and exit thresholds prevent flapping. The signal does not change bundle
 construction or submission rate; existing provider rate limiting handles request pacing.
 
-The signal has exactly one effect: while a provider event is active, a non-terminal
-failure changes no UO state, so no new suspects are created and no suspects progress
-toward removal. No counter state is cleared when an event is entered or exited.
+The signal has exactly one effect: while a provider event is active, suspects make no
+progress toward removal. Suspect creation and isolation backoff are unaffected. No
+counter state is cleared when an event is entered or exited.
 
 ## Non-terminal RPC evidence
 
@@ -109,9 +118,9 @@ status is derived, not stored: a UO is a suspect once its counter reaches
 `--pool.rpc_failures_before_suspect` (default `3`), and is removed
 `--pool.max_suspect_rpc_failures` (default `3`) failures later.
 
-1. Outside a provider event, a final non-terminal provider failure increments the
-   failure counter of every UO in the failed bundle. During an event, no counters
-   advance.
+1. A final non-terminal provider failure increments the failure counter of every
+   non-suspect UO in the failed bundle. During a provider event, suspects' counters
+   freeze; non-suspects continue to accrue.
 2. A successful submission resets the failure counter of every UO in that bundle,
    clearing suspect status.
 3. At the suspect threshold the UO is excluded from normal bundles and becomes
@@ -125,11 +134,11 @@ Ambiguous multi-UO terminal failures and unattributed mined reverts force suspic
 by raising the counter directly to the suspect threshold, never lowering it.
 
 `--pool.max_suspect_rpc_failures=0` disables RPC-based removal. Provider events pause
-all failure counting; failures during an event change no UO state.
+removal progress only; suspect creation and isolation backoff continue.
 
 Suspect backoff is configured with `--pool.suspect_rpc_backoff_initial_secs`
 (default `1`) and `--pool.suspect_rpc_backoff_max_secs` (default `600`). Detected
-provider events do not count against UOs at all; the backoff schedule bounds false
+provider events pause removal progress entirely; the backoff schedule bounds false
 removal from incidents the signal misses (detection lag, or failure rates below the
 event threshold): the cumulative delay across `max_suspect_rpc_failures` consecutive
 attempts must exceed the longest undetected incident that removal should tolerate.
@@ -159,28 +168,29 @@ state.
 ## State ownership
 
 The submission route owns the provider-event signal; the pool consumes it as a single
-boolean gate on failure counting. The pool owns each UO's failure counter (from
+boolean gate on suspect removal progress. The pool owns each UO's failure counter (from
 which suspect status is derived) and suspect retry time so they are shared across
 builders and cleared with the UO lifecycle. This state is in-memory and does not track
 transaction hashes for deduplication.
 
 ## Tradeoffs
 
-- **Liveness versus false removal:** eventual removal protects bundling, but a
-  poison UO that keeps the provider-event signal active (its own failures feed the
-  window) is never removed while the event lasts, and failures persisting across the
-  backoff span during an undetected incident can still remove a healthy UO. Higher
-  thresholds and longer backoff reduce false removals but extend poison lifetime.
+- **Liveness versus false removal:** eventual removal protects bundling, but
+  failures persisting across the backoff span during an undetected incident can
+  still remove a healthy UO. Higher thresholds and longer backoff reduce false
+  removals but extend poison lifetime. Poison that sustains a provider event is
+  quarantined but not removed until the event clears; bundling is protected by the
+  quarantine, and pool size and age limits bound the accumulation.
 - **Isolation versus throughput:** singleton attempts identify poison UOs without adding
   innocent fillers, but consume more transactions than normal bundles. The dynamic
   isolation limit preserves normal capacity at the cost of slower suspect draining.
-- **Provider protection versus poison detection:** pausing all failure counting during
-  provider events prevents false suspicion and false removal, but a poison UO
-  encountered during an event makes no progress toward identification or removal until
-  the event clears. Detection lag can still create false suspects before the signal
-  activates; each costs one wasted singleton attempt after recovery and then
-  self-clears. An outage that outlasts detection lag may still suspect part of the
-  pool, which drains at singleton throughput after recovery.
+- **Provider protection versus poison detection:** pausing removal during provider
+  events guarantees provider issues cannot remove UOs, at the cost that poison
+  sustaining an event lingers in isolation until the event clears. Keeping suspect
+  analysis live during events closes the herd loophole but means a genuine outage
+  progressively suspects the UOs it touches; each false suspect self-clears with one
+  successful singleton after recovery, so a long outage drains at isolation
+  throughput afterward.
 - **Backoff versus recovery latency:** per-suspect backoff prevents hot loops and resource
   churn, but delays successful retry after a transient failure.
 
@@ -225,9 +235,10 @@ sees it.
   `report_bundle_outcome(entry_point, ops, outcome, provider_event_active)`, where
   outcome is success / non-terminal failure / terminal failure / mark-suspect. The
   pool applies the failure-flow table internally: reset counters on success,
-  increment counters on non-terminal failure (a no-op while a provider event is
-  active), compute backoff for isolated suspects, remove at the removal
-  threshold with a new `OpRemovalReason::RepeatedNonTerminalRpcFailure`, and remove
+  increment counters on non-terminal failure (suspects' counters freeze while a
+  provider event is active), compute backoff for isolated suspects, remove at the
+  removal threshold with a new `OpRemovalReason::RepeatedNonTerminalRpcFailure`, and
+  remove
   terminally rejected singletons with `OpRemovalReason::TerminalRpcError`
   (`crates/pool/src/emit.rs`). Implement in `UoPool`, `LocalPoolHandle`, and the
   remote protobuf client/server.
@@ -286,8 +297,13 @@ exclusion behind PR 4.
   recorder.
 - Expose it as a shared `Arc` boolean checked by the bundle sender when calling
   `report_bundle_outcome` (the `provider_event_active` flag from PR 2). Its only
-  effect: pause all failure counting, so failures during an event change no UO
-  state. No counters are cleared on enter/exit.
+  effect: pause suspect removal progress. Suspect creation and backoff are
+  unaffected, and no counters are cleared on enter/exit.
+- Consider recording only transport-level failures (timeouts, connection failures,
+  sender unavailable) in the window and excluding error responses: a node that
+  evaluates a transaction and answers is not an outage, and rejected-with-a-response
+  is what poison looks like, so this keeps poison herds from tripping the signal at
+  all.
 - Ships last deliberately — without it the system is fully functional, just without
   outage protection (bounded in the interim only by the backoff spacing from PR 2).
 
