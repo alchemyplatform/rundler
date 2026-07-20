@@ -205,7 +205,7 @@ pub struct PoolArgs {
         long = "pool.max_suspect_rpc_failures",
         name = "pool.max_suspect_rpc_failures",
         env = "POOL_MAX_SUSPECT_RPC_FAILURES",
-        default_value = "3"
+        default_value = "8"
     )]
     pub max_suspect_rpc_failures: u32,
 

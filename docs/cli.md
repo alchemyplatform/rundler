@@ -215,7 +215,7 @@ List of command line options for configuring the Pool.
 - `--pool.rpc_failures_before_suspect`: Number of non-terminal RPC submission failures before a UO becomes a suspect and is only submitted alone (default: `3`)
   - env: _POOL_RPC_FAILURES_BEFORE_SUSPECT_
   - See [poison user operations](./designs/poison-user-operations.md) for details. With a single builder signer, the scheduler cannot guarantee progress for both suspect and normal work when both remain continuously eligible.
-- `--pool.max_suspect_rpc_failures`: Number of non-terminal RPC submission failures a suspect is allowed before it is removed from the pool. `0` disables removal. (default: `3`)
+- `--pool.max_suspect_rpc_failures`: Number of non-terminal RPC submission failures a suspect is allowed before it is removed from the pool. `0` disables removal. (default: `8`)
   - env: _POOL_MAX_SUSPECT_RPC_FAILURES_
   - The suspect backoff schedule spaces these failures; a provider incident outlasting the cumulative backoff can remove healthy UOs. Raise this threshold to tolerate longer incidents.
 - `--pool.suspect_rpc_backoff_initial_secs`: Initial delay in seconds between suspect isolation attempts, doubling with each failure (default: `1`)

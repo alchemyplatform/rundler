@@ -121,7 +121,7 @@ counter state is cleared when an event is entered or exited.
 Each UO carries a single failure counter measured against two thresholds. Suspect
 status is derived, not stored: a UO is a suspect once its counter reaches
 `--pool.rpc_failures_before_suspect` (default `3`), and is removed
-`--pool.max_suspect_rpc_failures` (default `3`) failures later.
+`--pool.max_suspect_rpc_failures` (default `8`) failures later.
 
 1. A final non-terminal provider failure increments the failure counter of every
    non-suspect UO in the failed bundle. During a provider event, suspects' counters
@@ -147,10 +147,11 @@ provider events pause removal progress entirely; the backoff schedule bounds fal
 removal from incidents the signal misses (detection lag, or failure rates below the
 event threshold): the cumulative delay across `max_suspect_rpc_failures` consecutive
 attempts must exceed the longest undetected incident that removal should tolerate.
-The defaults favor fast poison eviction — the first three increments span only a few
-seconds — and lean on the provider-event signal for outage protection. Tolerating
-longer undetected incidents requires a larger initial, a steeper curve, or a higher
-removal threshold.
+The defaults spend roughly four minutes of cumulative backoff (1+2+4+8+16+32+64+128s
+before jitter) across the 8 allowed failures before removal, giving the
+provider-event signal a real chance to observe a genuine incident and pause removal
+before it fires. Tolerating longer undetected incidents still requires a larger
+initial, a steeper curve, or a higher removal threshold.
 
 ## Suspect scheduling
 
@@ -234,7 +235,7 @@ sees it.
 - Add config to `PoolConfig` (`crates/pool/src/mempool/mod.rs`) and CLI args in
   `bin/rundler/src/cli/pool.rs`: `suspect_tracking_enabled` (default false, the
   master switch), `rpc_failures_before_suspect` (default 3),
-  `max_suspect_rpc_failures` (default 3, 0 disables removal),
+  `max_suspect_rpc_failures` (default 8, 0 disables removal),
   `suspect_rpc_backoff_initial_secs` (default 1), `suspect_rpc_backoff_max_secs`
   (default 600).
 - Add one new `Pool` trait method (`crates/types/src/pool/traits.rs`),
