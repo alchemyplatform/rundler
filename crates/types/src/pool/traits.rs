@@ -96,9 +96,15 @@ pub trait Pool: Send + Sync {
 
     /// Get summaries of operations from the pool
     ///
-    /// Returns up to `max_ops` non-suspect operations, plus up to `max_suspects`
-    /// suspect operations whose isolation retry delay has elapsed, marked with
-    /// `suspect: true`. Suspects do not count against `max_ops`.
+    /// Returns up to `max_ops` non-suspect operations, followed by up to
+    /// `max_suspects` suspect operations whose isolation retry delay has
+    /// elapsed, marked with `suspect: true`. Suspects do not count against
+    /// `max_ops` and are always ordered after non-suspects in the returned
+    /// vec — but that ordering is an implementation detail, not something to
+    /// index into: callers that need to separate the two groups (e.g. the
+    /// builder's assigner) must partition on the `suspect` flag on each
+    /// summary rather than assume position, since the non-suspect share can
+    /// itself be shorter than `max_ops`.
     async fn get_ops_summaries(
         &self,
         entry_point: Address,

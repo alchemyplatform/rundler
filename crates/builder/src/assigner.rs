@@ -257,18 +257,43 @@ impl Assigner {
             } else {
                 (self.num_signers / 2).max(1)
             };
-            let isolating_count = self.state.lock().unwrap().isolating_builders.len();
-            if isolating_count < isolation_limit
-                && let Some(assignment) = self
+            // Reserve the isolation slot under the same lock as the capacity
+            // check: concurrent builders calling assign_work must not both
+            // read a count below the limit and then both insert, exceeding
+            // isolation_limit. Released below if no suspect ends up
+            // claimable, so a failed attempt doesn't waste the slot.
+            let reserved = {
+                let mut state = self.state.lock().unwrap();
+                state.isolating_builders.len() < isolation_limit
+                    && state.isolating_builders.insert(builder_address)
+            };
+            if reserved {
+                match self
                     .assign_isolation_work(
                         builder_address,
                         suspect_candidates,
                         max_sim_block_number,
                         &required_fees,
                     )
-                    .await?
-            {
-                return Ok(AssignmentResult::Assigned(assignment));
+                    .await
+                {
+                    Ok(Some(assignment)) => return Ok(AssignmentResult::Assigned(assignment)),
+                    Ok(None) => {
+                        self.state
+                            .lock()
+                            .unwrap()
+                            .isolating_builders
+                            .remove(&builder_address);
+                    }
+                    Err(e) => {
+                        self.state
+                            .lock()
+                            .unwrap()
+                            .isolating_builders
+                            .remove(&builder_address);
+                        return Err(e);
+                    }
+                }
             }
         }
 
@@ -406,6 +431,10 @@ impl Assigner {
 
     /// Attempts to assign a single-operation isolation bundle for one due
     /// suspect. Returns `None` if no suspect is claimable by this builder.
+    ///
+    /// The caller must have already reserved `builder_address`'s isolation
+    /// slot in `isolating_builders` before calling this, and releases it if
+    /// `None` or an error is returned.
     async fn assign_isolation_work(
         &self,
         builder_address: Address,
@@ -434,7 +463,7 @@ impl Assigner {
                 );
                 {
                     let mut state = self.state.lock().unwrap();
-                    state.isolating_builders.insert(builder_address);
+                    // isolating_builders was already reserved by the caller.
                     // Pin so revert processing can find the proposer; suspects
                     // do not refresh starvation tracking for normal work.
                     state
@@ -925,6 +954,8 @@ fn ep_metrics_for_key(key: &ProposerKey) -> PerEntrypointMetrics {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use alloy_primitives::B256;
     use rundler_types::{
         EntityInfos, UserOperation, UserOperationPermissions, ValidTimeRange,
@@ -1279,6 +1310,77 @@ mod tests {
 
         let second = assign_expect_default(&assigner, address(11)).await;
         assert!(second.is_isolation);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_isolation_reservation_atomic_under_concurrency() {
+        // 2 suspects + 1 normal op with 2 signers: isolation limit is 1.
+        // Two builders race to isolate concurrently; the capacity check and
+        // the isolating_builders reservation must happen under the same lock
+        // so at most 1 can claim the single slot, even when both requests
+        // are genuinely running in parallel (not just interleaved awaits).
+        let ops = create_test_ops(&[address(1), address(2), address(3)]);
+        let suspect_senders = [address(2), address(3)];
+        let ops_for_summaries = ops.clone();
+        let mut mock_pool = MockPool::new();
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(move |_, _, max_suspects, _| {
+                Ok(ops_for_summaries
+                    .iter()
+                    .map(|op| {
+                        let mut summary: PoolOperationSummary = op.into();
+                        summary.suspect = suspect_senders.contains(&op.uo.sender());
+                        summary
+                    })
+                    .filter(|summary| !summary.suspect || max_suspects > 0)
+                    .collect::<Vec<_>>())
+            });
+        let ops_for_hashes = ops.clone();
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .returning(move |_, hashes| {
+                // Widen the race window so both concurrent callers are
+                // inside assign_isolation_work at the same time.
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                Ok(ops_for_hashes
+                    .iter()
+                    .filter(|op| hashes.contains(&op.uo.hash()))
+                    .cloned()
+                    .collect::<Vec<_>>())
+            });
+
+        let assigner = Arc::new(Assigner::new(
+            Box::new(mock_pool),
+            test_entrypoints(),
+            2,
+            10,
+            10,
+            0.50,
+        ));
+
+        let a1 = assigner.clone();
+        let a2 = assigner.clone();
+        let h1 = tokio::spawn(async move {
+            a1.assign_work(address(10), u64::MAX, GasFees::default())
+                .await
+        });
+        let h2 = tokio::spawn(async move {
+            a2.assign_work(address(11), u64::MAX, GasFees::default())
+                .await
+        });
+
+        let r1 = h1.await.unwrap().unwrap();
+        let r2 = h2.await.unwrap().unwrap();
+
+        let isolating_count = [&r1, &r2]
+            .into_iter()
+            .filter(|r| matches!(r, AssignmentResult::Assigned(a) if a.is_isolation))
+            .count();
+        assert_eq!(
+            isolating_count, 1,
+            "exactly one concurrent request should claim the single isolation slot"
+        );
     }
 
     #[tokio::test]
