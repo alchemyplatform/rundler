@@ -280,11 +280,21 @@ where
         provider_event_active: bool,
         now: Instant,
     ) -> Vec<(B256, OpRemovalReason)> {
-        // Master switch for poison UO handling: when disabled, bundle
-        // outcomes change no UO state and no operation is ever suspected
-        // or removed by this flow.
+        // Master switch for poison UO handling: when disabled, no suspect
+        // state is tracked, so `MarkSuspect` has nothing to fall back on and
+        // reverts to the behavior it replaced — removing every op in an
+        // unattributed multi-op revert — so those ops are not left live with
+        // no path to eviction. Every other outcome is genuinely new
+        // functionality with no pre-existing behavior, so it stays a no-op.
         if !self.config.suspect_tracking_enabled {
-            return Vec::new();
+            return match outcome {
+                BundleOutcome::MarkSuspect => ops
+                    .iter()
+                    .filter(|hash| self.by_hash.contains_key(*hash))
+                    .map(|hash| (*hash, OpRemovalReason::Requested))
+                    .collect(),
+                _ => Vec::new(),
+            };
         }
 
         let suspect_threshold = self.config.rpc_failures_before_suspect;
@@ -2513,7 +2523,14 @@ mod tests {
             Instant::now(),
         );
         assert!(terminal.is_empty());
-        pool.apply_bundle_outcome(&[hash], BundleOutcome::MarkSuspect, false, Instant::now());
+
+        // MarkSuspect is the one exception: with tracking off there is no
+        // suspect state to fall back on, so it reverts to the pre-feature
+        // behavior it replaced and removes the op outright, rather than
+        // silently leaving an unattributed-revert op live forever.
+        let mark_suspect =
+            pool.apply_bundle_outcome(&[hash], BundleOutcome::MarkSuspect, false, Instant::now());
+        assert_eq!(mark_suspect, vec![(hash, OpRemovalReason::Requested)]);
 
         assert_eq!(pool.by_hash[&hash].failures(), 0);
         assert_eq!(pool.best_operations().count(), 1);

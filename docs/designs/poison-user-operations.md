@@ -78,9 +78,14 @@ reject the transaction.
 | Known operational error | Any | Preserve existing behavior. |
 
 The entire flow is gated behind `--pool.suspect_tracking_enabled` (default `false`).
-When disabled, bundle outcomes change no UO state: no operation is ever suspected or
-removed by this system. This allows the mechanism to ship dark and be enabled
-deliberately once every stage — including the provider-event signal — is deployed.
+When disabled, no operation is ever suspected, and no new removal path (RPC-failure
+thresholds, terminal-error suspicion) fires. The one exception: an unattributed
+multi-op revert still removes every op, exactly as it did before this system existed —
+disabling the switch must not regress bundling to the pre-feature livelock this
+mechanism was partly designed to close (see
+`INVESTIGATION-empty-revert-bundle-livelock.md`). This allows the mechanism to ship
+dark and be enabled deliberately once every stage — including the provider-event
+signal — is deployed.
 
 Provider retries and configured fallbacks are exhausted before an RPC outcome enters
 this flow. A successful fallback has no effect on UO state.

@@ -1215,6 +1215,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn report_bundle_outcome_mark_suspect_removes_when_tracking_disabled() {
+        // With the master switch off there is no suspect state to mark, so an
+        // unattributed multi-op revert (MarkSuspect) must fall back to the
+        // pre-feature behavior of removing the op outright, rather than
+        // silently leaving it live with no path to eviction.
+        let op = create_op(Address::random(), 0, 0, None);
+        let config = PoolConfig {
+            suspect_tracking_enabled: false,
+            ..default_config()
+        };
+        let pool = create_pool_with_config(config, vec![op.clone()]);
+        let hash = pool
+            .add_operation(OperationOrigin::Local, op.op, default_perms())
+            .await
+            .unwrap();
+
+        pool.report_bundle_outcome(&[hash], BundleOutcome::MarkSuspect, false);
+        assert!(pool.get_user_operation_by_hash(hash).is_none());
+    }
+
+    #[tokio::test]
     async fn clear() {
         let ops = vec![
             create_op(Address::random(), 0, 3, None),

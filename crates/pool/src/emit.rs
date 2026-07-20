@@ -103,7 +103,7 @@ pub enum EntityReputation {
 }
 
 /// Reason an operation was removed from the pool
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum OpRemovalReason {
     /// Removal was requested
     Requested,
