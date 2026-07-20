@@ -238,9 +238,15 @@ where
     }
 
     pub(crate) fn best_operations(&self) -> impl Iterator<Item = Arc<PoolOperation>> + '_ {
+        // Master switch: when disabled, no operation is ever treated as a
+        // suspect, regardless of `rpc_failures_before_suspect` (a threshold of
+        // 0 would otherwise mark every fresh operation suspect and empty this
+        // iterator).
+        let suspect_tracking_enabled = self.config.suspect_tracking_enabled;
+        let suspect_threshold = self.config.rpc_failures_before_suspect;
         self.best
             .iter()
-            .filter(|o| !o.is_suspect(self.config.rpc_failures_before_suspect))
+            .filter(move |o| !suspect_tracking_enabled || !o.is_suspect(suspect_threshold))
             .map(|o| o.po.clone())
     }
 
@@ -250,10 +256,12 @@ where
         &self,
         now: Instant,
     ) -> impl Iterator<Item = Arc<PoolOperation>> + '_ {
+        let suspect_tracking_enabled = self.config.suspect_tracking_enabled;
+        let suspect_threshold = self.config.rpc_failures_before_suspect;
         self.best
             .iter()
             .filter(move |o| {
-                o.is_suspect(self.config.rpc_failures_before_suspect) && o.retry_due(now)
+                suspect_tracking_enabled && o.is_suspect(suspect_threshold) && o.retry_due(now)
             })
             .map(|o| o.po.clone())
     }
@@ -316,7 +324,9 @@ where
                         self.config.suspect_rpc_backoff_max,
                     );
                     if self.config.max_suspect_rpc_failures > 0
-                        && failures >= suspect_threshold + self.config.max_suspect_rpc_failures
+                        && failures
+                            >= suspect_threshold
+                                .saturating_add(self.config.max_suspect_rpc_failures)
                     {
                         to_remove.push((*hash, OpRemovalReason::RepeatedNonTerminalRpcFailure));
                     }
@@ -1056,7 +1066,7 @@ impl OrderedPoolOperation {
         backoff_max: Duration,
     ) -> u32 {
         let mut state = self.suspect_state.write();
-        state.failures += 1;
+        state.failures = state.failures.saturating_add(1);
         if state.failures > suspect_threshold {
             let exponent = state.failures - suspect_threshold - 1;
             state.retry_after =
@@ -2244,6 +2254,45 @@ mod tests {
     }
 
     #[test]
+    fn provider_event_resumes_removal_progress_after_clearing() {
+        // threshold 3, max_suspect_rpc_failures 3: removal at 6 total failures
+        let mut pool = pool_with_conf(PoolInnerConfig {
+            suspect_rpc_backoff_initial: Duration::ZERO,
+            ..conf()
+        });
+        let suspect = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+        pool.by_hash[&suspect].mark_suspect(3);
+
+        let now = Instant::now();
+        for _ in 0..5 {
+            let to_remove =
+                pool.apply_bundle_outcome(&[suspect], BundleOutcome::NonTerminalFailure, true, now);
+            // failures during the event never contribute to a later removal
+            assert!(to_remove.is_empty());
+        }
+        assert_eq!(pool.by_hash[&suspect].failures(), 3);
+
+        // event clears: removal progress resumes from the frozen count, not from 0
+        pool.apply_bundle_outcome(&[suspect], BundleOutcome::NonTerminalFailure, false, now);
+        assert_eq!(pool.by_hash[&suspect].failures(), 4);
+        let to_remove =
+            pool.apply_bundle_outcome(&[suspect], BundleOutcome::NonTerminalFailure, false, now);
+        assert_eq!(pool.by_hash[&suspect].failures(), 5);
+        assert!(to_remove.is_empty());
+
+        let to_remove =
+            pool.apply_bundle_outcome(&[suspect], BundleOutcome::NonTerminalFailure, false, now);
+        assert_eq!(to_remove.len(), 1);
+        assert_eq!(to_remove[0].0, suspect);
+        assert!(matches!(
+            to_remove[0].1,
+            OpRemovalReason::RepeatedNonTerminalRpcFailure
+        ));
+    }
+
+    #[test]
     fn suspect_failure_schedules_backoff() {
         let mut pool = pool_with_conf(PoolInnerConfig {
             suspect_rpc_backoff_initial: Duration::from_secs(10),
@@ -2417,6 +2466,24 @@ mod tests {
 
         assert_eq!(pool.by_hash[&fresh].failures(), 3);
         assert_eq!(pool.by_hash[&seasoned].failures(), 5);
+    }
+
+    #[test]
+    fn disabled_suspect_tracking_ignores_zero_threshold() {
+        // A threshold of 0 would make every fresh op appear suspect
+        // (`failures >= 0`); the master switch must still guarantee that
+        // disabling suspect tracking never removes operations from
+        // `best_operations`.
+        let mut pool = pool_with_conf(PoolInnerConfig {
+            suspect_tracking_enabled: false,
+            rpc_failures_before_suspect: 0,
+            ..conf()
+        });
+        pool.add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+
+        assert_eq!(pool.best_operations().count(), 1);
+        assert_eq!(pool.due_suspect_operations(Instant::now()).count(), 0);
     }
 
     #[test]
