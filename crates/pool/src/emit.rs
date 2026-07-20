@@ -47,6 +47,18 @@ pub enum OpPoolEvent {
         /// Removal reason
         reason: OpRemovalReason,
     },
+    /// An operation was marked as a poison-UO suspect
+    MarkedSuspect {
+        /// Operation hash
+        op_hash: B256,
+        /// What triggered the suspicion
+        trigger: SuspectTrigger,
+    },
+    /// A suspect operation was cleared by a successful submission
+    SuspectCleared {
+        /// Operation hash
+        op_hash: B256,
+    },
     /// All operations for an entity were removed from the pool
     RemovedEntity {
         /// The removed entity
@@ -154,6 +166,18 @@ pub enum OpRemovalReason {
     RepeatedNonTerminalRpcFailure,
 }
 
+/// What triggered a UO being marked suspect. See
+/// `docs/designs/poison-user-operations.md`.
+#[derive(Clone, Copy, Debug)]
+pub enum SuspectTrigger {
+    /// An ambiguous multi-UO failure (unattributed mined revert or terminal
+    /// RPC error on a bundle of more than one op) forced suspicion
+    /// immediately.
+    MultiOpFailure,
+    /// The non-terminal RPC failure counter reached the suspect threshold.
+    Threshold,
+}
+
 impl EntitySummary {
     pub fn set_status(&mut self, kind: EntityType, status: EntityStatus) {
         match kind {
@@ -207,6 +231,20 @@ impl Display for OpPoolEvent {
                     }
                     _ => write!(f, "    Reason: {:?}", reason),
                 }
+            }
+            OpPoolEvent::MarkedSuspect { op_hash, trigger } => {
+                write!(
+                    f,
+                    "Marked op as poison UO suspect.    Op hash: {:?}    Trigger: {:?}",
+                    op_hash, trigger
+                )
+            }
+            OpPoolEvent::SuspectCleared { op_hash } => {
+                write!(
+                    f,
+                    "Cleared poison UO suspect status.    Op hash: {:?}",
+                    op_hash
+                )
             }
             OpPoolEvent::RemovedEntity { entity } => {
                 write!(

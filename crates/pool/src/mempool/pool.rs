@@ -39,7 +39,11 @@ use tokio::sync::broadcast;
 use tracing::info;
 
 use super::{MempoolResult, PoolConfig, entity_tracker::EntityCounter, size::SizeTracker};
-use crate::{PoolEvent, chain::MinedOp, emit::OpRemovalReason};
+use crate::{
+    PoolEvent,
+    chain::MinedOp,
+    emit::{OpRemovalReason, SuspectTrigger},
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PoolInnerConfig {
@@ -137,6 +141,14 @@ where
         event_sender: broadcast::Sender<WithEntryPoint<PoolEvent>>,
     ) -> Self {
         let entry_point = config.entry_point.to_string();
+        let metrics = PoolMetrics::new_with_labels(&[("entry_point", entry_point)]);
+        metrics
+            .suspect_tracking_enabled
+            .set(if config.suspect_tracking_enabled {
+                1.0
+            } else {
+                0.0
+            });
         Self {
             config,
             da_gas_oracle,
@@ -155,7 +167,7 @@ where
             pool_size: SizeTracker::default(),
             cache_size: SizeTracker::default(),
             prev_block_number: 0,
-            metrics: PoolMetrics::new_with_labels(&[("entry_point", entry_point)]),
+            metrics,
             event_sender,
         }
     }
@@ -304,7 +316,13 @@ where
             BundleOutcome::Success => {
                 for hash in ops {
                     if let Some(op) = self.by_hash.get(hash) {
+                        let was_suspect = op.is_suspect(suspect_threshold);
                         op.reset_failures();
+                        if was_suspect {
+                            self.metrics.num_suspect_ops.decrement(1.0);
+                            self.metrics.num_suspects_cleared.increment(1);
+                            self.emit(PoolEvent::SuspectCleared { op_hash: *hash });
+                        }
                     }
                 }
             }
@@ -327,18 +345,28 @@ where
                         );
                         continue;
                     }
+                    let was_suspect = op.is_suspect(suspect_threshold);
                     let failures = op.record_failure(
                         now,
                         suspect_threshold,
                         self.config.suspect_rpc_backoff_initial,
                         self.config.suspect_rpc_backoff_max,
                     );
+                    if !was_suspect && failures >= suspect_threshold {
+                        self.metrics.num_suspect_ops.increment(1.0);
+                        self.metrics.num_marked_suspect_threshold.increment(1);
+                        self.emit(PoolEvent::MarkedSuspect {
+                            op_hash: *hash,
+                            trigger: SuspectTrigger::Threshold,
+                        });
+                    }
                     if self.config.max_suspect_rpc_failures > 0
                         && failures
                             >= suspect_threshold
                                 .saturating_add(self.config.max_suspect_rpc_failures)
                     {
                         to_remove.push((*hash, OpRemovalReason::RepeatedNonTerminalRpcFailure));
+                        self.metrics.num_suspects_removed.increment(1);
                     }
                 }
             }
@@ -346,11 +374,12 @@ where
                 if let [hash] = ops {
                     if self.by_hash.contains_key(hash) {
                         to_remove.push((*hash, OpRemovalReason::TerminalRpcError));
+                        self.metrics.num_suspects_removed.increment(1);
                     }
                 } else {
                     for hash in ops {
                         if let Some(op) = self.by_hash.get(hash) {
-                            op.mark_suspect(suspect_threshold);
+                            self.mark_suspect_and_record(*hash, op, suspect_threshold);
                         }
                     }
                 }
@@ -358,13 +387,37 @@ where
             BundleOutcome::MarkSuspect => {
                 for hash in ops {
                     if let Some(op) = self.by_hash.get(hash) {
-                        op.mark_suspect(suspect_threshold);
+                        self.mark_suspect_and_record(*hash, op, suspect_threshold);
                     }
                 }
             }
         }
 
         to_remove
+    }
+
+    /// Marks an operation suspect and records the transition (suspect gauge,
+    /// multi-op-failure counter, `MarkedSuspect` event) unless it was already
+    /// a suspect, per the ambiguous multi-UO failure paths in the failure
+    /// flow table.
+    fn mark_suspect_and_record(
+        &self,
+        hash: B256,
+        op: &OrderedPoolOperation,
+        suspect_threshold: u32,
+    ) {
+        let was_suspect = op.is_suspect(suspect_threshold);
+        op.mark_suspect(suspect_threshold);
+        if !was_suspect {
+            self.metrics.num_suspect_ops.increment(1.0);
+            self.metrics
+                .num_marked_suspect_multi_op_failure
+                .increment(1);
+            self.emit(PoolEvent::MarkedSuspect {
+                op_hash: hash,
+                trigger: SuspectTrigger::MultiOpFailure,
+            });
+        }
     }
 
     pub(crate) fn all_operations(&self) -> impl Iterator<Item = Arc<PoolOperation>> + '_ {
@@ -905,6 +958,13 @@ where
         block_number: Option<u64>,
     ) -> Option<Arc<PoolOperation>> {
         let op = self.by_hash.remove(&hash)?;
+        // Recompute the current suspect population on every removal path
+        // (mined, expired, replaced, entity-removed, poison-ops removal,
+        // etc.) so the gauge never leaks regardless of why a suspect left
+        // the pool.
+        if op.is_suspect(self.config.rpc_failures_before_suspect) {
+            self.metrics.num_suspect_ops.decrement(1.0);
+        }
         let id = &op.po.uo.id();
         self.by_id.remove(id);
         self.best.remove(&op);
@@ -1205,6 +1265,24 @@ struct PoolMetrics {
     num_7702_ops_added: Counter,
     #[metric(describe = "the number of ops added")]
     num_ops_added: Counter,
+    #[metric(describe = "the number of suspect ops currently in the pool.")]
+    num_suspect_ops: Gauge,
+    #[metric(describe = "the number of ops marked suspect by an ambiguous multi-op failure.")]
+    num_marked_suspect_multi_op_failure: Counter,
+    #[metric(
+        describe = "the number of ops marked suspect by reaching the non-terminal RPC failure threshold."
+    )]
+    num_marked_suspect_threshold: Counter,
+    #[metric(describe = "the number of suspects cleared by a successful submission.")]
+    num_suspects_cleared: Counter,
+    #[metric(
+        describe = "the number of suspects removed after a terminal RPC error or repeated non-terminal RPC failures."
+    )]
+    num_suspects_removed: Counter,
+    #[metric(
+        describe = "whether poison user operation suspect tracking is enabled (1) or disabled (0)."
+    )]
+    suspect_tracking_enabled: Gauge,
 }
 
 #[cfg(test)]
