@@ -19,7 +19,7 @@ use std::{
     },
 };
 
-use metrics::Gauge;
+use metrics::{Counter, Gauge};
 use metrics_derive::Metrics;
 
 /// Number of most recent non-neutral final submission outcomes considered.
@@ -104,6 +104,7 @@ impl ProviderEventSignal {
         } else if window.len() >= MIN_OBSERVATIONS && ratio >= ENTER_FAILURE_RATIO {
             self.active.store(true, Ordering::Relaxed);
             self.metrics.provider_event_active.set(1.0);
+            self.metrics.provider_events_total.increment(1);
             tracing::warn!(
                 "Provider event detected: {failures} failures in last {} submissions, pausing poison user operation evidence",
                 window.len()
@@ -117,6 +118,8 @@ impl ProviderEventSignal {
 struct ProviderEventMetrics {
     #[metric(describe = "whether a provider-health event is currently active.")]
     provider_event_active: Gauge,
+    #[metric(describe = "the total number of times a provider-health event was entered.")]
+    provider_events_total: Counter,
 }
 
 #[cfg(test)]

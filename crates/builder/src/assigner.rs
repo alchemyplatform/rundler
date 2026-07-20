@@ -251,21 +251,29 @@ impl Assigner {
         // suspects cannot starve normal bundles; once normal work is
         // exhausted, any idle builder may drain suspects. Recomputed on every
         // assignment.
+        let isolation_limit = if candidates.is_empty() {
+            self.num_signers
+        } else {
+            (self.num_signers / 2).max(1)
+        };
+        self.metrics.isolation_limit.set(isolation_limit as f64);
+
         if !suspect_candidates.is_empty() {
-            let isolation_limit = if candidates.is_empty() {
-                self.num_signers
-            } else {
-                (self.num_signers / 2).max(1)
-            };
             // Reserve the isolation slot under the same lock as the capacity
             // check: concurrent builders calling assign_work must not both
             // read a count below the limit and then both insert, exceeding
             // isolation_limit. Released below if no suspect ends up
-            // claimable, so a failed attempt doesn't waste the slot.
+            // claimable, so a failed attempt doesn't waste the slot. The
+            // gauge is refreshed inside every critical section that touches
+            // `isolating_builders` so it can't go stale between mutations.
             let reserved = {
                 let mut state = self.state.lock().unwrap();
-                state.isolating_builders.len() < isolation_limit
-                    && state.isolating_builders.insert(builder_address)
+                let reserved = state.isolating_builders.len() < isolation_limit
+                    && state.isolating_builders.insert(builder_address);
+                self.metrics
+                    .isolating_builders
+                    .set(state.isolating_builders.len() as f64);
+                reserved
             };
             if reserved {
                 match self
@@ -279,18 +287,18 @@ impl Assigner {
                 {
                     Ok(Some(assignment)) => return Ok(AssignmentResult::Assigned(assignment)),
                     Ok(None) => {
-                        self.state
-                            .lock()
-                            .unwrap()
+                        let mut state = self.state.lock().unwrap();
+                        state.isolating_builders.remove(&builder_address);
+                        self.metrics
                             .isolating_builders
-                            .remove(&builder_address);
+                            .set(state.isolating_builders.len() as f64);
                     }
                     Err(e) => {
-                        self.state
-                            .lock()
-                            .unwrap()
+                        let mut state = self.state.lock().unwrap();
+                        state.isolating_builders.remove(&builder_address);
+                        self.metrics
                             .isolating_builders
-                            .remove(&builder_address);
+                            .set(state.isolating_builders.len() as f64);
                         return Err(e);
                     }
                 }
@@ -819,6 +827,9 @@ impl Assigner {
                 state.builder_to_uo_senders.remove(&builder_address);
                 state.builder_to_pinned_proposer.remove(&builder_address);
                 state.isolating_builders.remove(&builder_address);
+                self.metrics
+                    .isolating_builders
+                    .set(state.isolating_builders.len() as f64);
             }
         }
 
@@ -845,6 +856,9 @@ impl Assigner {
             .map(ep_metrics_for_key);
         state.builder_to_pinned_proposer.remove(&builder_address);
         state.isolating_builders.remove(&builder_address);
+        self.metrics
+            .isolating_builders
+            .set(state.isolating_builders.len() as f64);
         let Some(builder_senders) = state.builder_to_uo_senders.remove(&builder_address) else {
             return;
         };
@@ -907,6 +921,10 @@ impl Assigner {
 struct GlobalMetrics {
     #[metric(describe = "the number of active builders.")]
     active_builders: Gauge,
+    #[metric(describe = "the computed isolation capacity limit for the current assignment cycle.")]
+    isolation_limit: Gauge,
+    #[metric(describe = "the number of builders currently holding an isolation assignment.")]
+    isolating_builders: Gauge,
 }
 
 #[derive(Metrics)]

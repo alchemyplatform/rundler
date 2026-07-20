@@ -1118,6 +1118,15 @@ where
         if ops.is_empty() {
             return;
         }
+
+        let outcome_metric = match outcome {
+            BundleOutcome::Success => "builder_bundle_outcome_success",
+            BundleOutcome::NonTerminalFailure => "builder_bundle_outcome_non_terminal_failure",
+            BundleOutcome::TerminalFailure => "builder_bundle_outcome_terminal_failure",
+            BundleOutcome::MarkSuspect => "builder_bundle_outcome_mark_suspect",
+        };
+        self.increment_counter_ep(outcome_metric, entry_point, 1);
+
         if let Err(error) = self
             .pool
             .report_bundle_outcome(
@@ -1128,6 +1137,7 @@ where
             )
             .await
         {
+            self.increment_counter_ep("builder_bundle_outcome_report_failed", entry_point, 1);
             warn!("Failed to report bundle outcome to pool: {error}");
         }
     }

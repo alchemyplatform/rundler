@@ -209,8 +209,8 @@ helper (`builder_sender` scope) for anything that varies by submission route.
 | `num_suspects_cleared` | Counter | pool | Liveness | Successful submissions that reset a suspect's counter — the recovery path the provider-resilience tradeoff depends on. |
 | `num_suspects_removed` | Counter | pool | Liveness | Removals via `TerminalRpcError` or `RepeatedNonTerminalRpcFailure`, combined. |
 | `suspect_tracking_enabled` | Gauge (0/1) | pool | — | Master switch state, set once at construction; lets a dashboard confirm rollout state without cross-referencing CLI flags. |
-| `ep_isolation_limit` | Gauge, per entry point | assigner | Fairness | The computed cap for the current assignment cycle: `max(1, num_signers / 2)` while normal work is eligible, otherwise uncapped. |
-| `ep_isolating_builders` | Gauge, per entry point | assigner | Fairness | Current size of `isolating_builders`. Paired with the limit, shows whether isolation is capacity-starved or simply idle. |
+| `isolation_limit` | Gauge, global | assigner | Fairness | The computed cap for the current assignment cycle: `max(1, num_signers / 2)` while normal work is eligible, otherwise uncapped. Global, not per entry point — isolation capacity is shared by one builder pool across all configured entrypoints. |
+| `isolating_builders` | Gauge, global | assigner | Fairness | Current size of `isolating_builders`. Paired with the limit, shows whether isolation is capacity-starved or simply idle. |
 | `builder_bundle_outcome_success` / `_non_terminal_failure` / `_terminal_failure` / `_mark_suspect` | Counter, per sender + entry point | sender | Liveness / Provider resilience | One counter per `BundleOutcome` reported via `report_bundle_outcome`, at the same call sites that classify the submission result. |
 | `builder_bundle_outcome_report_failed` | Counter, per sender + entry point | sender | — | The existing "Failed to report bundle outcome to pool" warning, counted. A sustained rate means pool suspect state is silently diverging from what actually happened on submission. |
 | `provider_events_total` | Counter | sender | Provider resilience | Total enter transitions, alongside the existing `provider_event_active` gauge — a rate here is a flapping detector the gauge alone can't show. |
@@ -241,7 +241,7 @@ rather than by crate:
 
 - **Liveness** — `num_suspect_ops` over time; marked/cleared/removed rates plotted
   together to show whether isolation is keeping pace.
-- **Fairness** — `ep_isolating_builders` vs. `ep_isolation_limit` vs. `num_signers`,
+- **Fairness** — `isolating_builders` vs. `isolation_limit` vs. `num_signers`,
   alongside isolation- vs. normal-assignment rates.
 - **Provider resilience** — `provider_event_active` as a state timeline with
   `provider_events_total` rate overlaid, and suspect-removal rate on the same timeline to
