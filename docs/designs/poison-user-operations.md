@@ -324,6 +324,13 @@ exclusion behind PR 4.
   all.
 - Ships last deliberately — without it the system is fully functional, just without
   outage protection (bounded in the interim only by the backoff spacing from PR 2).
+- Deliberately independent of `FallbackTransactionSender`'s own consecutive-failure
+  failover: that counter reacts to a handful of consecutive errors from one builder's
+  primary sender so it can reroute traffic quickly, while this signal needs a larger,
+  hysteretic sample across all of a route's builders before it gates something as
+  consequential as pausing removal pool-wide. It's also circular to feed one from the
+  other — the signal only observes outcomes *after* failover has already run. The two
+  stay independently tunable.
 
 ## Related work
 
