@@ -186,6 +186,81 @@ which suspect status is derived) and suspect retry time so they are shared acros
 builders and cleared with the UO lifecycle. This state is in-memory and does not track
 transaction hashes for deduplication.
 
+## Telemetry
+
+The mechanism's internal state is otherwise invisible in production: `apply_bundle_outcome`
+performs no logging today, and the only existing signals are `ep_isolation_assignments`,
+`provider_event_active`, and generic removal logging via `OpRemovalReason`. The additions
+below are scoped to what each goal needs to be observable, not to instrument every
+internal transition.
+
+### Metrics
+
+New metrics follow the existing per-crate conventions: derived `#[derive(Metrics)]`
+structs scoped `op_pool` (pool.rs) and `builder_assigner` (assigner.rs), and per-sender,
+per-entry-point labeled counters via the bundle sender's existing `increment_counter_ep`
+helper (`builder_sender` scope) for anything that varies by submission route.
+
+| Metric | Type | Where | Goal | Purpose |
+| --- | --- | --- | --- | --- |
+| `num_suspect_ops` | Gauge | pool | Liveness | Current suspect population — the primary signal for whether suspects are accumulating faster than isolation drains them. |
+| `num_marked_suspect_multi_op_failure` | Counter | pool | Liveness | Suspicions forced immediately by an unattributed mined revert or a terminal RPC error on a bundle of more than one op. |
+| `num_marked_suspect_threshold` | Counter | pool | Liveness | Suspicions from the non-terminal failure counter reaching `rpc_failures_before_suspect`. |
+| `num_suspects_cleared` | Counter | pool | Liveness | Successful submissions that reset a suspect's counter — the recovery path the provider-resilience tradeoff depends on. |
+| `num_suspects_removed` | Counter | pool | Liveness | Removals via `TerminalRpcError` or `RepeatedNonTerminalRpcFailure`, combined. |
+| `suspect_tracking_enabled` | Gauge (0/1) | pool | — | Master switch state, set once at construction; lets a dashboard confirm rollout state without cross-referencing CLI flags. |
+| `ep_isolation_limit` | Gauge, per entry point | assigner | Fairness | The computed cap for the current assignment cycle: `max(1, num_signers / 2)` while normal work is eligible, otherwise uncapped. |
+| `ep_isolating_builders` | Gauge, per entry point | assigner | Fairness | Current size of `isolating_builders`. Paired with the limit, shows whether isolation is capacity-starved or simply idle. |
+| `builder_bundle_outcome_success` / `_non_terminal_failure` / `_terminal_failure` / `_mark_suspect` | Counter, per sender + entry point | sender | Liveness / Provider resilience | One counter per `BundleOutcome` reported via `report_bundle_outcome`, at the same call sites that classify the submission result. |
+| `builder_bundle_outcome_report_failed` | Counter, per sender + entry point | sender | — | The existing "Failed to report bundle outcome to pool" warning, counted. A sustained rate means pool suspect state is silently diverging from what actually happened on submission. |
+| `provider_events_total` | Counter | sender | Provider resilience | Total enter transitions, alongside the existing `provider_event_active` gauge — a rate here is a flapping detector the gauge alone can't show. |
+
+`ep_isolation_assignments` and `provider_event_active` (both existing) are unchanged.
+
+None of these are labeled by `op_hash`, consistent with the existing convention (the
+bundle sender labels only by `sender`/`entry_point`) and necessary to keep the Prometheus
+endpoint's cardinality bounded under a poison-op herd.
+
+### Logs
+
+Two new `OpPoolEvent` variants (`crates/pool/src/emit.rs`), logged for free at `info` via
+the existing generic sink the same way `RemovedOp` already is:
+
+- `MarkedSuspect { op_hash, trigger }` — `trigger` distinguishes multi-op-failure from
+  threshold, mirroring the metric split above.
+- `SuspectCleared { op_hash }`.
+
+`OpPoolEvent` is an in-process broadcast channel only, never serialized over the pool's
+gRPC boundary, so these additions carry no proto or remote-client cost.
+
+### Dashboards
+
+No dashboard or alerting config exists in this repo today; these panels are the first,
+built on the Prometheus endpoint already exposed by the metrics CLI. Organized by goal
+rather than by crate:
+
+- **Liveness** — `num_suspect_ops` over time; marked/cleared/removed rates plotted
+  together to show whether isolation is keeping pace.
+- **Fairness** — `ep_isolating_builders` vs. `ep_isolation_limit` vs. `num_signers`,
+  alongside isolation- vs. normal-assignment rates.
+- **Provider resilience** — `provider_event_active` as a state timeline with
+  `provider_events_total` rate overlaid, and suspect-removal rate on the same timeline to
+  visually confirm removals pause while an event is active.
+
+### Alerts
+
+- **Suspects accumulating without draining**: `num_suspect_ops` sustained high while
+  `num_suspects_cleared` is ~0 — isolation starvation or a systemic problem beyond a
+  couple poison ops.
+- **Provider event flapping**: high rate of `provider_events_total` — enter/exit
+  thresholds likely miscalibrated for that route.
+- **Sustained provider event**: `provider_event_active == 1` for longer than an
+  operator-chosen duration — treat as an outage independent of the poison-ops mechanism.
+- **Master-switch drift**: `suspect_tracking_enabled` differing across a fleet for the
+  same entry point — config skew that should never occur post-rollout.
+- **Outcome-report failures**: sustained `builder_bundle_outcome_report_failed` rate —
+  pool state silently diverging from actual submission outcomes.
+
 ## Tradeoffs
 
 - **Liveness versus false removal:** eventual removal protects bundling, but
@@ -209,9 +284,10 @@ transaction hashes for deduplication.
 
 ## Implementation plan
 
-Five self-contained PRs that build in order. PRs 1–2 are inert plumbing (no visible
-behavior change), PR 3 is the behavior switch, and PRs 4–5 are independent of each
-other once PR 3 lands.
+Six self-contained PRs that build in order. PRs 1–2 are inert plumbing (no visible
+behavior change), PR 3 is the behavior switch, PRs 4–5 are independent of each
+other once PR 3 lands, and PR 6 (telemetry) is additive and lands incrementally
+alongside 2–5 — each metric only becomes meaningful once its source PR is in.
 
 ### PR 1 — Terminal vs. non-terminal error classification (foundation)
 
@@ -331,6 +407,24 @@ exclusion behind PR 4.
   consequential as pausing removal pool-wide. It's also circular to feed one from the
   other — the signal only observes outcomes *after* failover has already run. The two
   stay independently tunable.
+
+### PR 6 — Telemetry
+
+Adds the metrics, logs, dashboards, and alerts from the Telemetry section. Independent
+of PR 4–5 internally, but each metric only becomes meaningful once its source PR has
+landed (isolation metrics need PR 4, provider-event metrics need PR 5), so it lands
+incrementally alongside them rather than all at once.
+
+- Pool metrics (extending `PoolMetrics` in `crates/pool/src/mempool/pool.rs`) and the two
+  new `OpPoolEvent` variants (`crates/pool/src/emit.rs`), wired at the
+  `apply_bundle_outcome` call sites already added in PR 2.
+- Assigner metrics (extending `PerEntrypointMetrics` in `crates/builder/src/assigner.rs`),
+  set alongside the existing `ep_isolation_assignments` increment.
+- Sender metrics (`crates/builder/src/bundle_sender.rs`), via the existing
+  `increment_counter_ep` helper at the `report_bundle_outcome` call sites (PR 3) and the
+  two existing `warn!` sites for report failures.
+- `provider_events_total` (`crates/builder/src/sender/health.rs`), incremented alongside
+  the existing `provider_event_active` gauge sets.
 
 ## Related work
 
