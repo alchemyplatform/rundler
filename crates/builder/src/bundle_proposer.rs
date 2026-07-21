@@ -65,6 +65,7 @@ pub(crate) struct Bundle<UO: UserOperation> {
     pub(crate) gas_fees: GasFees,
     pub(crate) expected_storage: ExpectedStorage,
     pub(crate) rejected_ops: Vec<UO>,
+    pub(crate) suspect_ops: Vec<UO>,
     pub(crate) entity_updates: Vec<EntityUpdate>,
 }
 
@@ -76,6 +77,7 @@ impl<UO: UserOperation> Default for Bundle<UO> {
             gas_fees: GasFees::default(),
             expected_storage: ExpectedStorage::default(),
             rejected_ops: Vec::new(),
+            suspect_ops: Vec::new(),
             entity_updates: Vec::new(),
         }
     }
@@ -118,6 +120,9 @@ pub(crate) struct BundleData {
     pub(crate) ops: Vec<(Address, B256)>,
     /// Hashes of rejected operations to remove from pool
     pub(crate) rejected_op_hashes: Vec<B256>,
+    /// Hashes of operations to mark suspect in the pool (ambiguous multi-op
+    /// revert - avoids evicting ops that may be innocent)
+    pub(crate) suspect_op_hashes: Vec<B256>,
     /// Entity updates to apply to pool
     pub(crate) entity_updates: Vec<EntityUpdate>,
 }
@@ -372,6 +377,7 @@ where
                     gas_fees: bundle_fees,
                     expected_storage: context.bundle_expected_storage.inner,
                     rejected_ops: context.rejected_ops.iter().map(|po| po.0.clone()).collect(),
+                    suspect_ops: context.suspect_ops.iter().map(|po| po.0.clone()).collect(),
                     entity_updates: context.entity_updates.into_values().collect(),
                 });
             }
@@ -382,6 +388,7 @@ where
 
         Ok(Bundle {
             rejected_ops: context.rejected_ops.iter().map(|po| po.0.clone()).collect(),
+            suspect_ops: context.suspect_ops.iter().map(|po| po.0.clone()).collect(),
             entity_updates: context.entity_updates.into_values().collect(),
             gas_fees: bundle_fees,
             ..Default::default()
@@ -411,6 +418,7 @@ where
             .map(|op| (op.sender(), op.hash()))
             .collect();
         let rejected_op_hashes: Vec<_> = bundle.rejected_ops.iter().map(|op| op.hash()).collect();
+        let suspect_op_hashes: Vec<_> = bundle.suspect_ops.iter().map(|op| op.hash()).collect();
 
         // Build the transaction if bundle is not empty
         let tx = if bundle.is_empty() {
@@ -433,6 +441,7 @@ where
             gas_fees: bundle.gas_fees,
             ops,
             rejected_op_hashes,
+            suspect_op_hashes,
             entity_updates: bundle.entity_updates,
         })
     }
@@ -1135,8 +1144,18 @@ where
         None
     }
 
-    async fn reject_bundle(&self, context: &mut ProposalContext<EP::UO>) {
-        context.reject_all();
+    // If there's a single op in the bundle, an unattributed revert leaves no
+    // ambiguity about who's responsible - reject and remove it directly. With
+    // multiple ops, removing all of them would permanently evict innocent
+    // ops that happened to share the bundle; mark them all suspect instead,
+    // mirroring RevertOutcome::unattributed's split for the post-submission
+    // on-chain revert path.
+    async fn reject_or_mark_suspect_bundle(&self, context: &mut ProposalContext<EP::UO>) {
+        if context.iter_ops().count() > 1 {
+            context.mark_all_suspect();
+        } else {
+            context.reject_all();
+        }
     }
 
     async fn reject_hash(&self, context: &mut ProposalContext<EP::UO>, hash: B256) -> bool {
@@ -1294,15 +1313,15 @@ where
 
                     if !removed {
                         warn!(
-                            "HandleOps reverted during gas estimation, proxy {proxy:?} returned no hashes to remove. Rejecting full bundle. revert data: {revert_data:?}"
+                            "HandleOps reverted during gas estimation, proxy {proxy:?} returned no hashes to remove. Rejecting/marking suspect the full bundle. revert data: {revert_data:?}"
                         );
-                        self.reject_bundle(context).await;
+                        self.reject_or_mark_suspect_bundle(context).await;
                     }
                 } else {
                     warn!(
-                        "HandleOps reverted during gas estimation. Rejecting full bundle. revert data: {revert_data:?}"
+                        "HandleOps reverted during gas estimation. Rejecting/marking suspect the full bundle. revert data: {revert_data:?}"
                     );
-                    self.reject_bundle(context).await;
+                    self.reject_or_mark_suspect_bundle(context).await;
                 }
 
                 Ok(None)
@@ -1721,6 +1740,7 @@ struct ProposalContext<UO> {
     sender_eoa: Address,
     groups_by_aggregator: LinkedHashMap<Address, AggregatorGroup<UO>>,
     rejected_ops: Vec<(UO, EntityInfos)>,
+    suspect_ops: Vec<(UO, EntityInfos)>,
     // This is a BTreeMap so that the conversion to a Vec<EntityUpdate> is deterministic, mainly for tests
     entity_updates: BTreeMap<Address, EntityUpdate>,
     bundle_expected_storage: BundleExpectedStorage,
@@ -1747,6 +1767,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
             sender_eoa,
             groups_by_aggregator: LinkedHashMap::<Address, AggregatorGroup<UO>>::new(),
             rejected_ops: Vec::<(UO, EntityInfos)>::new(),
+            suspect_ops: Vec::<(UO, EntityInfos)>::new(),
             entity_updates: BTreeMap::new(),
             bundle_expected_storage: BundleExpectedStorage::default(),
         }
@@ -1794,6 +1815,12 @@ impl<UO: UserOperation> ProposalContext<UO> {
         }
     }
 
+    fn mark_all_suspect(&mut self) {
+        for _ in 0..self.iter_ops_with_simulations().count() {
+            let _ = self.mark_suspect_index(0);
+        }
+    }
+
     /// Returns the address of the op's aggregator if the aggregator's signature
     /// may need to be recomputed.
     #[must_use = "rejected op but did not update aggregator signatures"]
@@ -1818,6 +1845,39 @@ impl<UO: UserOperation> ProposalContext<UO> {
         };
         // If we just removed the last op from a group, delete that group.
         // Otherwise, the signature is invalidated and we need to recompute it.
+        if self.groups_by_aggregator[&found_aggregator]
+            .ops_with_simulations
+            .is_empty()
+        {
+            self.groups_by_aggregator.remove(&found_aggregator);
+            None
+        } else {
+            Some(found_aggregator)
+        }
+    }
+
+    /// Same as `reject_index`, but marks the op suspect instead of rejecting
+    /// it outright.
+    #[must_use = "marked op suspect but did not update aggregator signatures"]
+    fn mark_suspect_index(&mut self, i: usize) -> Option<Address> {
+        let mut remaining_i = i;
+        let mut found_aggregator: Option<Address> = None;
+        for (&aggregator, group) in &mut self.groups_by_aggregator {
+            if remaining_i < group.ops_with_simulations.len() {
+                let suspect = group.ops_with_simulations.remove(remaining_i);
+                self.mark_op_suspect(suspect);
+                found_aggregator = Some(aggregator);
+                break;
+            }
+            remaining_i -= group.ops_with_simulations.len();
+        }
+        let Some(found_aggregator) = found_aggregator else {
+            error!(
+                "The entry point indicated a failed op at index {i}, but the bundle size is only {}",
+                i - remaining_i
+            );
+            return None;
+        };
         if self.groups_by_aggregator[&found_aggregator]
             .ops_with_simulations
             .is_empty()
@@ -1927,6 +1987,15 @@ impl<UO: UserOperation> ProposalContext<UO> {
         // remove associated storage slots
         self.bundle_expected_storage
             .remove(&rejected.simulation.expected_storage);
+    }
+
+    fn mark_op_suspect(&mut self, suspect: OpWithSimulation<UO>) {
+        self.suspect_ops
+            .push((suspect.op, suspect.simulation.entity_infos));
+
+        // remove associated storage slots
+        self.bundle_expected_storage
+            .remove(&suspect.simulation.expected_storage);
     }
 
     fn to_ops_per_aggregator(&self) -> Vec<UserOpsPerAggregator<UO>> {
@@ -3319,6 +3388,7 @@ mod tests {
             sender_eoa: Address::ZERO,
             groups_by_aggregator,
             rejected_ops: vec![],
+            suspect_ops: vec![],
             entity_updates: BTreeMap::new(),
             bundle_expected_storage: BundleExpectedStorage::default(),
         };
@@ -3368,6 +3438,7 @@ mod tests {
             sender_eoa: Address::ZERO,
             groups_by_aggregator,
             rejected_ops: vec![],
+            suspect_ops: vec![],
             entity_updates: BTreeMap::new(),
             bundle_expected_storage: BundleExpectedStorage::default(),
         };
@@ -3429,6 +3500,7 @@ mod tests {
             sender_eoa: Address::ZERO,
             groups_by_aggregator,
             rejected_ops: vec![],
+            suspect_ops: vec![],
             entity_updates: BTreeMap::new(),
             bundle_expected_storage: BundleExpectedStorage::default(),
         };
@@ -3491,6 +3563,7 @@ mod tests {
             sender_eoa: Address::ZERO,
             groups_by_aggregator: groups_without_authorization,
             rejected_ops: vec![],
+            suspect_ops: vec![],
             entity_updates: BTreeMap::new(),
             bundle_expected_storage: BundleExpectedStorage::default(),
         };
@@ -3511,6 +3584,7 @@ mod tests {
             sender_eoa: Address::ZERO,
             groups_by_aggregator: groups_with_authorization,
             rejected_ops: vec![],
+            suspect_ops: vec![],
             entity_updates: BTreeMap::new(),
             bundle_expected_storage: BundleExpectedStorage::default(),
         };
@@ -3920,6 +3994,76 @@ mod tests {
         .await;
 
         assert_eq!(bundle.ops_per_aggregator, vec![]);
+    }
+
+    #[tokio::test]
+    async fn test_ambiguous_revert_single_op_removed() {
+        let op = op_with_sender(address(1));
+
+        let bundle = mock_make_bundle(
+            vec![MockOp {
+                op: op.clone(),
+                simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                perms: UserOperationPermissions::default(),
+            }],
+            vec![],
+            vec![HandleOpsOut::Revert(bytes(1))],
+            vec![],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![],
+            None,
+            U256::MAX,
+            None,
+        )
+        .await;
+
+        assert_eq!(bundle.ops_per_aggregator, vec![]);
+        assert_eq!(bundle.rejected_ops, vec![op]);
+        assert_eq!(bundle.suspect_ops, vec![]);
+    }
+
+    #[tokio::test]
+    async fn test_ambiguous_revert_multi_op_marks_suspect() {
+        let op0 = op_with_sender(address(1));
+        let op1 = op_with_sender(address(2));
+
+        let bundle = mock_make_bundle(
+            vec![
+                MockOp {
+                    op: op0.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    perms: UserOperationPermissions::default(),
+                },
+                MockOp {
+                    op: op1.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    perms: UserOperationPermissions::default(),
+                },
+            ],
+            vec![],
+            vec![HandleOpsOut::Revert(bytes(1))],
+            vec![],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![],
+            None,
+            U256::MAX,
+            None,
+        )
+        .await;
+
+        assert_eq!(bundle.ops_per_aggregator, vec![]);
+        assert_eq!(bundle.rejected_ops, vec![]);
+        assert_eq!(bundle.suspect_ops.len(), 2);
+        assert!(bundle.suspect_ops.contains(&op0));
+        assert!(bundle.suspect_ops.contains(&op1));
     }
 
     #[tokio::test]

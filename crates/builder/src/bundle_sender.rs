@@ -893,15 +893,28 @@ where
             }
         };
 
-        join!(remove_ops_future, update_entities_future);
+        let mark_suspect_future = self.report_bundle_outcome(
+            entry_point,
+            bundle_data.suspect_op_hashes.clone(),
+            BundleOutcome::MarkSuspect,
+        );
+
+        join!(
+            remove_ops_future,
+            update_entities_future,
+            mark_suspect_future
+        );
 
         // Check if bundle is empty
         if bundle_data.is_empty() {
-            if !bundle_data.rejected_op_hashes.is_empty() || !bundle_data.entity_updates.is_empty()
+            if !bundle_data.rejected_op_hashes.is_empty()
+                || !bundle_data.suspect_op_hashes.is_empty()
+                || !bundle_data.entity_updates.is_empty()
             {
                 info!(
-                    "Empty bundle with {} rejected ops and {} rejected entities. Removed from pool.",
+                    "Empty bundle with {} rejected ops, {} suspect ops, and {} rejected entities.",
                     bundle_data.rejected_op_hashes.len(),
+                    bundle_data.suspect_op_hashes.len(),
                     bundle_data.entity_updates.len()
                 );
             }
@@ -923,9 +936,10 @@ where
         let ops = bundle_data.ops;
 
         let num_rejected = bundle_data.rejected_op_hashes.len();
+        let num_suspect = bundle_data.suspect_op_hashes.len();
         let num_updated_entities = bundle_data.entity_updates.len();
         info!(
-            "Selected bundle for {entry_point:?}: nonce: {nonce:?}. Ops: {ops:?}. Num rejected: {num_rejected}. Num updated entities: {num_updated_entities}"
+            "Selected bundle for {entry_point:?}: nonce: {nonce:?}. Ops: {ops:?}. Num rejected: {num_rejected}. Num suspect: {num_suspect}. Num updated entities: {num_updated_entities}"
         );
 
         // Send the transaction
@@ -3192,6 +3206,7 @@ mod tests {
             gas_fees: GasFees::default(),
             ops,
             rejected_op_hashes: vec![],
+            suspect_op_hashes: vec![],
             entity_updates: vec![],
         }
     }
