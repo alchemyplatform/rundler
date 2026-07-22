@@ -41,7 +41,7 @@ use crate::{
     ProposerKey,
     assigner::{Assigner, AssignmentResult},
     bundle_proposer::{BundleData, BundleProposalRequest, BundleProposerError, BundleProposerT},
-    emit::{BuilderEvent, BundleTxDetails},
+    emit::{BuilderEvent, BundleTxDetails, OpRejectionReason},
     transaction_tracker::{
         TrackerState, TrackerUpdate, TransactionTracker, TransactionTrackerError,
     },
@@ -662,6 +662,21 @@ where
                 self.assigner.release_all(self.sender_eoa);
                 state.reset();
             }
+            Err(TransactionTrackerError::UnrecognizedRpc {
+                code,
+                message,
+                tx_hash,
+            }) => {
+                error!(
+                    %tx_hash,
+                    rpc_error_code = code,
+                    rpc_error_message = %message,
+                    "Failed to cancel transaction, moving back to building state"
+                );
+                self.increment_counter("builder_cancellation_txns_failed", &pinned, 1);
+                self.assigner.release_all(self.sender_eoa);
+                state.reset();
+            }
             Err(TransactionTrackerError::Other(e)) => {
                 error!("Failed to cancel transaction, moving back to building state: {e:#?}");
                 self.increment_counter("builder_cancellation_txns_failed", &pinned, 1);
@@ -998,6 +1013,63 @@ where
                 error!("Bundle attempt insufficient funds");
                 Ok(SendBundleAttemptResult::InsufficientFunds)
             }
+            Err(TransactionTrackerError::UnrecognizedRpc {
+                code,
+                message,
+                tx_hash,
+            }) => {
+                if Self::is_internal_rpc_error(code, &message) {
+                    // Treat this error shape as terminal. Unlike an onchain bundle revert, do not
+                    // retry the bundle's operations.
+                    let uo_hashes: Vec<B256> = ops.iter().map(|(_, hash)| *hash).collect();
+                    let uo_count = uo_hashes.len();
+                    error!(
+                        %tx_hash,
+                        ?entry_point,
+                        rpc_error_code = code,
+                        rpc_error_message = %message,
+                        uo_count,
+                        "Bundle submission hit a terminal internal RPC error; removing all user operations from the pool"
+                    );
+
+                    let rejection_error =
+                        Arc::new(format!("unrecognized RPC error {code}: {message}"));
+                    for uo_hash in &uo_hashes {
+                        self.emit_for_entrypoint(
+                            entry_point,
+                            BuilderEvent::rejected_op(
+                                self.builder_tag.clone(),
+                                *uo_hash,
+                                OpRejectionReason::TerminalBundleSubmissionError {
+                                    tx_hash,
+                                    error: Arc::clone(&rejection_error),
+                                },
+                            ),
+                        );
+                    }
+
+                    if let Err(remove_error) = self.pool.remove_ops(entry_point, uo_hashes).await {
+                        error!(
+                            %tx_hash,
+                            ?entry_point,
+                            error = ?remove_error,
+                            "Failed to remove user operations from bundle after internal RPC error"
+                        );
+                    }
+                } else {
+                    error!(
+                        %tx_hash,
+                        ?entry_point,
+                        rpc_error_code = code,
+                        rpc_error_message = %message,
+                        "Failed to send bundle with unrecognized RPC error"
+                    );
+                }
+
+                Err(anyhow::anyhow!(
+                    "unrecognized RPC error {code}: {message}; transaction hash {tx_hash}"
+                ))
+            }
             Err(TransactionTrackerError::Other(e)) => {
                 error!("Failed to send bundle with unexpected error: {e:?}");
                 if Self::is_intrinsic_gas_too_low_error(&e) {
@@ -1012,6 +1084,17 @@ where
                 Err(e)
             }
         }
+    }
+
+    fn is_internal_rpc_error(code: i64, message: &str) -> bool {
+        if code != -32000 {
+            return false;
+        }
+        let message = message.trim();
+        // "internal error" is the original message shape; "Transaction rejected by chain
+        // policy" is the newer wording for the same terminal rejection.
+        message.eq_ignore_ascii_case("internal error")
+            || message.eq_ignore_ascii_case("Transaction rejected by chain policy")
     }
 
     fn is_intrinsic_gas_too_low_error(error: &anyhow::Error) -> bool {
@@ -1607,6 +1690,7 @@ mod tests {
         assigner::{AssignmentResult, EntrypointInfo},
         bundle_proposer::{BundleData, MockBundleProposerT},
         bundle_sender::{BundleSenderImpl, MockTrigger},
+        emit::BuilderEventKind,
         transaction_tracker::MockTransactionTracker,
     };
 
@@ -1751,6 +1835,192 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[tokio::test]
+    async fn test_internal_rpc_error_removes_all_bundle_ops() {
+        let Mocks {
+            mock_proposer_t,
+            mut mock_tracker,
+            mut mock_trigger,
+            mut mock_pool,
+        } = new_mocks();
+
+        let tx_hash = B256::repeat_byte(0x11);
+        let uo_hashes = vec![B256::repeat_byte(0x22), B256::repeat_byte(0x33)];
+        let expected_uo_hashes = uo_hashes.clone();
+
+        mock_trigger.expect_last_block().return_const(new_head(1));
+        mock_tracker
+            .expect_send_transaction()
+            .once()
+            .returning(move |_, _, _| {
+                Box::pin(async move {
+                    Err(TransactionTrackerError::UnrecognizedRpc {
+                        code: -32000,
+                        message: String::from("internal error"),
+                        tx_hash,
+                    })
+                })
+            });
+        mock_pool
+            .expect_remove_ops()
+            .once()
+            .withf(move |entry_point, hashes| {
+                *entry_point == ENTRY_POINT_ADDRESS_V0_6 && *hashes == expected_uo_hashes
+            })
+            .returning(|_, _| Ok(()));
+
+        let mut sender = new_sender(mock_proposer_t, mock_pool);
+        let mut event_rx = sender.event_sender.subscribe();
+        let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
+        let result = sender
+            .send_bundle_from_data(
+                &mut state,
+                ENTRY_POINT_ADDRESS_V0_6,
+                bundle_data(vec![
+                    (Address::repeat_byte(0x44), uo_hashes[0]),
+                    (Address::repeat_byte(0x55), uo_hashes[1]),
+                ]),
+                0,
+                0,
+            )
+            .await;
+
+        let error = result.expect_err("internal RPC error should fail the bundle send");
+        assert!(error.to_string().contains(&tx_hash.to_string()));
+
+        for expected_uo_hash in uo_hashes {
+            let event = event_rx
+                .try_recv()
+                .expect("removed UO should emit a rejection event");
+            assert_eq!(event.entry_point, ENTRY_POINT_ADDRESS_V0_6);
+            assert!(matches!(
+                event.event.kind,
+                BuilderEventKind::RejectedOp {
+                    op_hash,
+                    reason: OpRejectionReason::TerminalBundleSubmissionError {
+                        tx_hash: event_tx_hash,
+                        error,
+                    },
+                } if op_hash == expected_uo_hash
+                    && event_tx_hash == tx_hash
+                    && error.as_str() == "unrecognized RPC error -32000: internal error"
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_chain_policy_rejection_removes_all_bundle_ops() {
+        let Mocks {
+            mock_proposer_t,
+            mut mock_tracker,
+            mut mock_trigger,
+            mut mock_pool,
+        } = new_mocks();
+
+        let tx_hash = B256::repeat_byte(0x11);
+        let uo_hashes = vec![B256::repeat_byte(0x22), B256::repeat_byte(0x33)];
+        let expected_uo_hashes = uo_hashes.clone();
+
+        mock_trigger.expect_last_block().return_const(new_head(1));
+        mock_tracker
+            .expect_send_transaction()
+            .once()
+            .returning(move |_, _, _| {
+                Box::pin(async move {
+                    Err(TransactionTrackerError::UnrecognizedRpc {
+                        code: -32000,
+                        message: String::from("Transaction rejected by chain policy"),
+                        tx_hash,
+                    })
+                })
+            });
+        mock_pool
+            .expect_remove_ops()
+            .once()
+            .withf(move |entry_point, hashes| {
+                *entry_point == ENTRY_POINT_ADDRESS_V0_6 && *hashes == expected_uo_hashes
+            })
+            .returning(|_, _| Ok(()));
+
+        let mut sender = new_sender(mock_proposer_t, mock_pool);
+        let mut event_rx = sender.event_sender.subscribe();
+        let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
+        let result = sender
+            .send_bundle_from_data(
+                &mut state,
+                ENTRY_POINT_ADDRESS_V0_6,
+                bundle_data(vec![
+                    (Address::repeat_byte(0x44), uo_hashes[0]),
+                    (Address::repeat_byte(0x55), uo_hashes[1]),
+                ]),
+                0,
+                0,
+            )
+            .await;
+
+        let error = result.expect_err("chain policy rejection should fail the bundle send");
+        assert!(error.to_string().contains(&tx_hash.to_string()));
+
+        for expected_uo_hash in uo_hashes {
+            let event = event_rx
+                .try_recv()
+                .expect("removed UO should emit a rejection event");
+            assert_eq!(event.entry_point, ENTRY_POINT_ADDRESS_V0_6);
+            assert!(matches!(
+                event.event.kind,
+                BuilderEventKind::RejectedOp {
+                    op_hash,
+                    reason: OpRejectionReason::TerminalBundleSubmissionError {
+                        tx_hash: event_tx_hash,
+                        error,
+                    },
+                } if op_hash == expected_uo_hash
+                    && event_tx_hash == tx_hash
+                    && error.as_str()
+                        == "unrecognized RPC error -32000: Transaction rejected by chain policy"
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_other_unrecognized_rpc_error_keeps_bundle_ops() {
+        let Mocks {
+            mock_proposer_t,
+            mut mock_tracker,
+            mut mock_trigger,
+            mock_pool,
+        } = new_mocks();
+
+        let tx_hash = B256::repeat_byte(0x11);
+        mock_trigger.expect_last_block().return_const(new_head(1));
+        mock_tracker
+            .expect_send_transaction()
+            .once()
+            .returning(move |_, _, _| {
+                Box::pin(async move {
+                    Err(TransactionTrackerError::UnrecognizedRpc {
+                        code: -32001,
+                        message: String::from("server unavailable"),
+                        tx_hash,
+                    })
+                })
+            });
+
+        let mut sender = new_sender(mock_proposer_t, mock_pool);
+        let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
+        let result = sender
+            .send_bundle_from_data(
+                &mut state,
+                ENTRY_POINT_ADDRESS_V0_6,
+                bundle_data(vec![(Address::repeat_byte(0x44), B256::repeat_byte(0x22))]),
+                0,
+                0,
+            )
+            .await;
+
+        assert!(result.is_err());
     }
 
     #[tokio::test]
