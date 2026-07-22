@@ -1087,7 +1087,14 @@ where
     }
 
     fn is_internal_rpc_error(code: i64, message: &str) -> bool {
-        code == -32000 && message.trim().eq_ignore_ascii_case("internal error")
+        if code != -32000 {
+            return false;
+        }
+        let message = message.trim();
+        // "internal error" is the original message shape; "Transaction rejected by chain
+        // policy" is the newer wording for the same terminal rejection.
+        message.eq_ignore_ascii_case("internal error")
+            || message.eq_ignore_ascii_case("Transaction rejected by chain policy")
     }
 
     fn is_intrinsic_gas_too_low_error(error: &anyhow::Error) -> bool {
@@ -1899,6 +1906,80 @@ mod tests {
                 } if op_hash == expected_uo_hash
                     && event_tx_hash == tx_hash
                     && error.as_str() == "unrecognized RPC error -32000: internal error"
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_chain_policy_rejection_removes_all_bundle_ops() {
+        let Mocks {
+            mock_proposer_t,
+            mut mock_tracker,
+            mut mock_trigger,
+            mut mock_pool,
+        } = new_mocks();
+
+        let tx_hash = B256::repeat_byte(0x11);
+        let uo_hashes = vec![B256::repeat_byte(0x22), B256::repeat_byte(0x33)];
+        let expected_uo_hashes = uo_hashes.clone();
+
+        mock_trigger.expect_last_block().return_const(new_head(1));
+        mock_tracker
+            .expect_send_transaction()
+            .once()
+            .returning(move |_, _, _| {
+                Box::pin(async move {
+                    Err(TransactionTrackerError::UnrecognizedRpc {
+                        code: -32000,
+                        message: String::from("Transaction rejected by chain policy"),
+                        tx_hash,
+                    })
+                })
+            });
+        mock_pool
+            .expect_remove_ops()
+            .once()
+            .withf(move |entry_point, hashes| {
+                *entry_point == ENTRY_POINT_ADDRESS_V0_6 && *hashes == expected_uo_hashes
+            })
+            .returning(|_, _| Ok(()));
+
+        let mut sender = new_sender(mock_proposer_t, mock_pool);
+        let mut event_rx = sender.event_sender.subscribe();
+        let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
+        let result = sender
+            .send_bundle_from_data(
+                &mut state,
+                ENTRY_POINT_ADDRESS_V0_6,
+                bundle_data(vec![
+                    (Address::repeat_byte(0x44), uo_hashes[0]),
+                    (Address::repeat_byte(0x55), uo_hashes[1]),
+                ]),
+                0,
+                0,
+            )
+            .await;
+
+        let error = result.expect_err("chain policy rejection should fail the bundle send");
+        assert!(error.to_string().contains(&tx_hash.to_string()));
+
+        for expected_uo_hash in uo_hashes {
+            let event = event_rx
+                .try_recv()
+                .expect("removed UO should emit a rejection event");
+            assert_eq!(event.entry_point, ENTRY_POINT_ADDRESS_V0_6);
+            assert!(matches!(
+                event.event.kind,
+                BuilderEventKind::RejectedOp {
+                    op_hash,
+                    reason: OpRejectionReason::TerminalBundleSubmissionError {
+                        tx_hash: event_tx_hash,
+                        error,
+                    },
+                } if op_hash == expected_uo_hash
+                    && event_tx_hash == tx_hash
+                    && error.as_str()
+                        == "unrecognized RPC error -32000: Transaction rejected by chain policy"
             ));
         }
     }
