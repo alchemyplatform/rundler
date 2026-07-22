@@ -186,7 +186,10 @@ pub struct PoolArgs {
     pub suspect_tracking_enabled: bool,
 
     /// Number of non-terminal RPC submission failures before a user operation
-    /// becomes a suspect and is only submitted alone.
+    /// becomes a suspect and is only submitted alone. Must be at least 1: at
+    /// 0, every fresh operation would satisfy `failures >= threshold`
+    /// immediately, and a successful submission resetting failures to 0
+    /// would make it look suspect again on its very next attempt.
     ///
     /// With a single builder signer, the scheduler cannot guarantee progress
     /// for both suspect and normal work when both remain continuously
@@ -195,7 +198,8 @@ pub struct PoolArgs {
         long = "pool.rpc_failures_before_suspect",
         name = "pool.rpc_failures_before_suspect",
         env = "POOL_RPC_FAILURES_BEFORE_SUSPECT",
-        default_value = "3"
+        default_value = "3",
+        value_parser = clap::value_parser!(u32).range(1..)
     )]
     pub rpc_failures_before_suspect: u32,
 

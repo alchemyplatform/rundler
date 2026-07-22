@@ -16,7 +16,7 @@ use std::{
     sync::Mutex,
 };
 
-use alloy_primitives::{Address, U256};
+use alloy_primitives::{Address, B256, U256};
 use anyhow::bail;
 use metrics::{Counter, Gauge};
 use metrics_derive::Metrics;
@@ -102,6 +102,13 @@ struct State {
     /// Builders currently holding an isolation assignment for a suspect
     /// operation. Bounds isolation capacity while normal work is eligible.
     isolating_builders: HashSet<Address>,
+    /// The op hash a builder is isolating, if any. Tracked independently of
+    /// the pool's suspect flag: `Success` clears suspect status as soon as
+    /// the RPC accepts a transaction, well before it's mined, so a stuck
+    /// isolation transaction needing a fee-bump replacement would otherwise
+    /// look like ordinary work by the time it needs replacing. Cleared
+    /// wherever `builder_to_pinned_proposer`/`isolating_builders` are.
+    builder_to_isolation_hash: HashMap<Address, B256>,
 }
 
 /// A candidate entrypoint for assignment, used during priority-based selection.
@@ -163,9 +170,9 @@ impl Assigner {
     ) -> anyhow::Result<AssignmentResult> {
         // If builder has confirmed locks, stay pinned to the same entrypoint.
         // This skips the all-entrypoint pool queries and candidate sorting.
-        let pinned_target = {
+        let (pinned_target, isolation_hash) = {
             let state = self.state.lock().unwrap();
-            state
+            let pinned_target = state
                 .builder_to_pinned_proposer
                 .get(&builder_address)
                 .cloned()
@@ -181,9 +188,21 @@ impl Assigner {
                                     .is_some_and(|(_, ls)| *ls == LockState::Confirmed)
                             })
                         })
-                })
+                });
+            let isolation_hash = pinned_target.as_ref().and_then(|_| {
+                state
+                    .builder_to_isolation_hash
+                    .get(&builder_address)
+                    .copied()
+            });
+            (pinned_target, isolation_hash)
         };
         if let Some(pinned_proposer) = pinned_target {
+            if let Some(hash) = isolation_hash {
+                return self
+                    .assign_isolation_replacement(builder_address, hash, pinned_proposer)
+                    .await;
+            }
             return self
                 .assign_work_for_entrypoint(
                     builder_address,
@@ -477,6 +496,9 @@ impl Assigner {
                     state
                         .builder_to_pinned_proposer
                         .insert(builder_address, ep.key());
+                    state
+                        .builder_to_isolation_hash
+                        .insert(builder_address, hash);
                 }
                 ep_metrics_for(&ep).ep_isolation_assignments.increment(1);
 
@@ -577,6 +599,45 @@ impl Assigner {
             is_isolation: false,
         };
         tracing::info!("Builder Assigner: assignment: {assignment:?}");
+
+        Ok(AssignmentResult::Assigned(assignment))
+    }
+
+    /// Re-supplies the same single suspect operation for a pinned builder
+    /// that needs to replace a pending isolation bundle (e.g. a fee bump).
+    ///
+    /// `Success` clears an op's suspect flag as soon as the RPC accepts the
+    /// transaction, well before it is mined, so by the time a stuck
+    /// isolation transaction needs replacing, the pool no longer reports the
+    /// op as suspect. Falling through to `assign_work_for_entrypoint` at
+    /// that point would query ordinary (non-suspect) work: `assign_ops_internal`
+    /// could then merge other senders into a multi-op replacement bundle -
+    /// reintroducing exactly the contamination risk isolation exists to
+    /// prevent - or drop the op entirely if it now fails the fee/block
+    /// filters, leaving its pending transaction untracked. Tracking the
+    /// isolation hash independently of pool suspect state avoids both: this
+    /// always returns the original op alone, or no work if it has left the
+    /// pool.
+    async fn assign_isolation_replacement(
+        &self,
+        builder_address: Address,
+        hash: B256,
+        proposer_key: ProposerKey,
+    ) -> anyhow::Result<AssignmentResult> {
+        let Some(op) = self.pool.get_op_by_hash(hash).await? else {
+            tracing::warn!(
+                "Builder Assigner: isolation op {hash:?} for builder {builder_address:?} no longer in pool, cannot replace"
+            );
+            return Ok(AssignmentResult::NoOperations);
+        };
+
+        let assignment = WorkAssignment {
+            entry_point: proposer_key.0,
+            filter_id: proposer_key.1,
+            operations: vec![op],
+            is_isolation: true,
+        };
+        tracing::info!("Builder Assigner: isolation replacement assignment: {assignment:?}");
 
         Ok(AssignmentResult::Assigned(assignment))
     }
@@ -827,6 +888,7 @@ impl Assigner {
                 state.builder_to_uo_senders.remove(&builder_address);
                 state.builder_to_pinned_proposer.remove(&builder_address);
                 state.isolating_builders.remove(&builder_address);
+                state.builder_to_isolation_hash.remove(&builder_address);
                 self.metrics
                     .isolating_builders
                     .set(state.isolating_builders.len() as f64);
@@ -856,6 +918,7 @@ impl Assigner {
             .map(ep_metrics_for_key);
         state.builder_to_pinned_proposer.remove(&builder_address);
         state.isolating_builders.remove(&builder_address);
+        state.builder_to_isolation_hash.remove(&builder_address);
         self.metrics
             .isolating_builders
             .set(state.isolating_builders.len() as f64);
@@ -1328,6 +1391,47 @@ mod tests {
 
         let second = assign_expect_default(&assigner, address(11)).await;
         assert!(second.is_isolation);
+    }
+
+    #[tokio::test]
+    async fn test_isolation_replacement_stays_singleton_and_pinned() {
+        // 1 suspect + 2 normal ops. Once the isolation bundle is sent and its
+        // sender confirmed (simulating the RPC accepting it - which reports
+        // Success and clears the op's suspect flag in the real pool, well
+        // before it's mined), a replacement/fee-bump attempt for the same
+        // builder must keep re-supplying just the original suspect alone,
+        // not fall back to ordinary (now non-suspect-looking) multi-op work.
+        let ops = create_test_ops(&[address(1), address(2), address(3)]);
+        let suspect_op = ops
+            .iter()
+            .find(|op| op.uo.sender() == address(3))
+            .unwrap()
+            .clone();
+        let mut mock_pool = mock_pool_with_suspects(ops, vec![address(3)]);
+        mock_pool
+            .expect_get_op_by_hash()
+            .returning(move |hash| Ok((hash == suspect_op.uo.hash()).then(|| suspect_op.clone())));
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+
+        let isolation = assign_expect_default(&assigner, address(10)).await;
+        assert!(isolation.is_isolation);
+        assert_eq!(isolation.operations.len(), 1);
+        assert_eq!(isolation.operations[0].uo.sender(), address(3));
+
+        // Simulate the bundle sender confirming the isolation bundle was
+        // sent (this is what promotes the sender's lock to `Confirmed`,
+        // making the builder eligible for the pinned-replacement path).
+        assigner
+            .confirm_senders_drop_unused(address(10), &[address(3)])
+            .unwrap();
+
+        // Replacement attempt for the same builder: must stay singleton and
+        // keep targeting the original suspect, not the normal ops for
+        // address(1)/address(2) that a fresh query would otherwise offer.
+        let replacement = assign_expect_default(&assigner, address(10)).await;
+        assert!(replacement.is_isolation);
+        assert_eq!(replacement.operations.len(), 1);
+        assert_eq!(replacement.operations[0].uo.sender(), address(3));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

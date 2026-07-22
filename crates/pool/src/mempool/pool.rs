@@ -796,6 +796,12 @@ where
         self.count_by_address.clear();
         self.pool_size = SizeTracker::default();
         self.cache_size = SizeTracker::default();
+        // Every op (suspect or not) is gone, so the suspect gauge is
+        // unconditionally 0 - unlike the removal path, which decrements by
+        // one because it knows exactly one op with a known suspect status
+        // left, a bulk clear doesn't track how many of the cleared ops were
+        // suspects, so set rather than decrement.
+        self.metrics.num_suspect_ops.set(0.0);
         self.update_metrics();
     }
 
