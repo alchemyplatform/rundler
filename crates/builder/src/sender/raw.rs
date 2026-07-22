@@ -100,7 +100,7 @@ impl<P> RawTransactionSender<P> {
     }
 
     fn map_provider_error(&self, error: ProviderError) -> TxSenderError {
-        let error = TxSenderError::from(error);
+        let error = TxSenderError::from(error).promote_terminal_chain_policy_rejection();
         if self.internal_rpc_error_is_terminal {
             error.promote_terminal_internal_error()
         } else {
@@ -129,5 +129,23 @@ mod tests {
             unflagged.map_provider_error(rpc_error_response(-32000, "internal error")),
             TxSenderError::UnrecognizedRpc { .. }
         ));
+    }
+
+    #[test]
+    fn promotes_chain_policy_rejection_regardless_of_flag() {
+        for internal_rpc_error_is_terminal in [false, true] {
+            let sender = RawTransactionSender::new(
+                MockEvmProvider::new(),
+                false,
+                internal_rpc_error_is_terminal,
+            );
+            assert!(matches!(
+                sender.map_provider_error(rpc_error_response(
+                    -32000,
+                    "Transaction rejected by chain policy"
+                )),
+                TxSenderError::TerminalRpcError { .. }
+            ));
+        }
     }
 }

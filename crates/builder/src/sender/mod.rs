@@ -81,8 +81,10 @@ pub(crate) enum TxSenderError {
     /// The provider rejected the transaction with an error response known to be
     /// terminal for this chain: retrying the identical transaction cannot succeed.
     ///
-    /// Currently produced for `-32000: internal error` on chains with
-    /// `ChainSpec::internal_rpc_error_is_terminal`.
+    /// Produced for `-32000: internal error` on chains with
+    /// `ChainSpec::internal_rpc_error_is_terminal`, and unconditionally for
+    /// `-32000: Transaction rejected by chain policy` (Robinhood's unambiguous
+    /// wording for the same rejection, unlike the generic "internal error").
     #[error("terminal RPC error {code}: {message}")]
     TerminalRpcError {
         /// RPC error code.
@@ -162,6 +164,29 @@ impl TxSenderError {
         match self {
             TxSenderError::UnrecognizedRpc { code, message }
                 if code == -32000 && message.trim().eq_ignore_ascii_case("internal error") =>
+            {
+                TxSenderError::TerminalRpcError { code, message }
+            }
+            other => other,
+        }
+    }
+
+    /// Promotes Robinhood's `-32000: Transaction rejected by chain policy` from
+    /// ambiguous to terminal.
+    ///
+    /// Unlike the bare "internal error" message, this wording is unambiguous on its
+    /// own — no chain legitimately emits it for a transient condition — so it is
+    /// recognized unconditionally rather than behind
+    /// `ChainSpec::internal_rpc_error_is_terminal`. Kept separate from
+    /// `promote_terminal_internal_error` so the "internal error" match can be
+    /// dropped independently once Robinhood no longer emits it.
+    pub(crate) fn promote_terminal_chain_policy_rejection(self) -> Self {
+        match self {
+            TxSenderError::UnrecognizedRpc { code, message }
+                if code == -32000
+                    && message
+                        .trim()
+                        .eq_ignore_ascii_case("Transaction rejected by chain policy") =>
             {
                 TxSenderError::TerminalRpcError { code, message }
             }
@@ -508,6 +533,44 @@ mod tests {
         for error in cases {
             assert!(!matches!(
                 error.promote_terminal_internal_error(),
+                TxSenderError::TerminalRpcError { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn promotes_chain_policy_rejection_to_terminal() {
+        let error = TxSenderError::UnrecognizedRpc {
+            code: -32000,
+            message: " transaction rejected by chain policy ".to_string(),
+        }
+        .promote_terminal_chain_policy_rejection();
+
+        assert!(matches!(
+            error,
+            TxSenderError::TerminalRpcError { code: -32000, .. }
+        ));
+    }
+
+    #[test]
+    fn does_not_promote_other_errors_as_chain_policy_rejection() {
+        let cases = [
+            TxSenderError::UnrecognizedRpc {
+                code: -32603,
+                message: "Transaction rejected by chain policy".to_string(),
+            },
+            TxSenderError::UnrecognizedRpc {
+                code: -32000,
+                message: "internal error".to_string(),
+            },
+            TxSenderError::SenderUnavailable(anyhow::anyhow!(
+                "Transaction rejected by chain policy"
+            )),
+        ];
+
+        for error in cases {
+            assert!(!matches!(
+                error.promote_terminal_chain_policy_rejection(),
                 TxSenderError::TerminalRpcError { .. }
             ));
         }
