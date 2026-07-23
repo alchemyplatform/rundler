@@ -109,6 +109,17 @@ struct State {
     /// look like ordinary work by the time it needs replacing. Cleared
     /// wherever `builder_to_pinned_proposer`/`isolating_builders` are.
     builder_to_isolation_hash: HashMap<Address, B256>,
+    /// Monotonic counter incremented each time an entrypoint is chosen for an
+    /// isolation assignment. Tracked independently of `global_cycle` so
+    /// isolation rotation doesn't affect normal-work starvation accounting.
+    isolation_cycle: u64,
+    /// Tracks when each entrypoint was last chosen for an isolation
+    /// assignment (by `isolation_cycle`). Mirrors `entrypoint_last_selected`'s
+    /// role for normal work: without it, suspect candidates are attempted in
+    /// fixed config order every call, so an entrypoint with due suspects that
+    /// happen to be unassignable this cycle can permanently block isolation
+    /// slots from reaching suspects on other entrypoints.
+    entrypoint_last_isolated: HashMap<ProposerKey, u64>,
 }
 
 /// A candidate entrypoint for assignment, used during priority-based selection.
@@ -226,10 +237,16 @@ impl Assigner {
             .entrypoints
             .iter()
             .map(|ep| {
+                // Request a full page of due suspects, not just `num_signers`:
+                // suspects are returned best-fee-first, and later filtering
+                // (locks/fees/block height) happens after this query. Capping
+                // here at a small number risked permanently hiding a lower-fee
+                // but eligible suspect behind a handful of stuck/unassignable
+                // ones ahead of it in the truncated page.
                 self.pool.get_ops_summaries(
                     ep.address,
                     self.max_pool_ops_per_request,
-                    self.num_signers as u64,
+                    self.max_pool_ops_per_request,
                     ep.filter_id.clone(),
                 )
             })
@@ -278,6 +295,24 @@ impl Assigner {
         self.metrics.isolation_limit.set(isolation_limit as f64);
 
         if !suspect_candidates.is_empty() {
+            // Rotate entrypoint order by least-recently-isolated first (stable
+            // sort keeps never-isolated entrypoints in config order relative
+            // to each other). Without this, suspects are always tried in
+            // fixed config order, so an entrypoint that's always got enough
+            // due suspects to fill isolation capacity can starve every other
+            // entrypoint's suspects indefinitely - the same starvation
+            // problem entrypoint_last_selected already solves for normal work.
+            {
+                let state = self.state.lock().unwrap();
+                suspect_candidates.sort_by_key(|(ep, _)| {
+                    state
+                        .entrypoint_last_isolated
+                        .get(&ep.key())
+                        .copied()
+                        .unwrap_or(0)
+                });
+            }
+
             // Reserve the isolation slot under the same lock as the capacity
             // check: concurrent builders calling assign_work must not both
             // read a count below the limit and then both insert, exceeding
@@ -499,6 +534,14 @@ impl Assigner {
                     state
                         .builder_to_isolation_hash
                         .insert(builder_address, hash);
+                    // Record this entrypoint as most-recently-isolated so the
+                    // rotation in assign_work's caller moves on to other
+                    // entrypoints with due suspects next time.
+                    state.isolation_cycle += 1;
+                    let isolation_cycle = state.isolation_cycle;
+                    state
+                        .entrypoint_last_isolated
+                        .insert(ep.key(), isolation_cycle);
                 }
                 ep_metrics_for(&ep).ep_isolation_assignments.increment(1);
 
@@ -1539,6 +1582,36 @@ mod tests {
         assert!(matches!(result, AssignmentResult::NoOperations));
     }
 
+    #[tokio::test]
+    async fn test_suspect_query_requests_full_page_not_num_signers() {
+        // Suspects come back best-fee-first, and lock/fee/block-height
+        // filtering happens only after this query returns. Capping the
+        // query itself at `num_signers` could hide an eligible suspect
+        // behind a handful of unassignable ones ahead of it in the
+        // truncated page, so the query must request a full page (matching
+        // `max_ops`) instead.
+        let requested_max_suspects = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let requested_max_suspects_clone = requested_max_suspects.clone();
+        let mut mock_pool = MockPool::new();
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(move |_, _, max_suspects, _| {
+                requested_max_suspects_clone
+                    .store(max_suspects, std::sync::atomic::Ordering::SeqCst);
+                Ok(vec![])
+            });
+        // num_signers deliberately small and distinct from max_pool_ops_per_request
+        // so a regression back to `num_signers` would be caught.
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 2, 1024, 10, 0.50);
+        let _ = assign_default(&assigner, address(0)).await;
+
+        assert_eq!(
+            requested_max_suspects.load(std::sync::atomic::Ordering::SeqCst),
+            1024,
+            "suspect query should request a full page (max_pool_ops_per_request), not num_signers"
+        );
+    }
+
     fn address(i: u64) -> Address {
         Address::from([i as u8; 20])
     }
@@ -1645,6 +1718,96 @@ mod tests {
         assert_ne!(
             r4.entry_point, first,
             "Cycle 4: should alternate to other EP"
+        );
+    }
+
+    fn mock_pool_two_eps_with_suspects(
+        ep1_ops: Vec<PoolOperation>,
+        ep1_suspects: Vec<Address>,
+        ep2_ops: Vec<PoolOperation>,
+        ep2_suspects: Vec<Address>,
+    ) -> MockPool {
+        let mut mock_pool = MockPool::new();
+        let ep1_ops_clone = ep1_ops.clone();
+        let ep2_ops_clone = ep2_ops.clone();
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(move |ep, _, _, _| {
+                let (ops, suspects) = if ep == TEST_ENTRY_POINT {
+                    (&ep1_ops_clone, &ep1_suspects)
+                } else {
+                    (&ep2_ops_clone, &ep2_suspects)
+                };
+                Ok(ops
+                    .iter()
+                    .map(|op| {
+                        let mut summary: PoolOperationSummary = op.into();
+                        summary.suspect = suspects.contains(&op.uo.sender());
+                        summary
+                    })
+                    .collect::<Vec<_>>())
+            });
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .returning(move |ep, hashes| {
+                let ops = if ep == TEST_ENTRY_POINT {
+                    &ep1_ops
+                } else {
+                    &ep2_ops
+                };
+                Ok(ops
+                    .iter()
+                    .filter(|op| hashes.contains(&op.uo.hash()))
+                    .cloned()
+                    .collect::<Vec<_>>())
+            });
+        mock_pool
+    }
+
+    #[tokio::test]
+    async fn test_isolation_rotates_across_entrypoints() {
+        // EP1 has 2 due suspects (address(1), address(2)) plus a normal op
+        // (address(4)) so isolation stays capacity-limited to 1 slot
+        // (num_signers=2 -> isolation_limit = max(1, num_signers/2) = 1
+        // while normal work is eligible). EP2 has a single due suspect
+        // (address(3)) and no normal work.
+        //
+        // Before rotation tracking, suspect candidates were always tried in
+        // fixed config order [EP1, EP2]. Since EP1's suspects are always
+        // assignable once released, every single isolation slot would go to
+        // EP1 forever, and EP2's suspect would never be reached. With
+        // last-isolated rotation, isolation assignments should alternate
+        // between the two entrypoints instead.
+        let ep1_ops =
+            create_test_ops_for_entrypoint(&[address(1), address(2), address(4)], TEST_ENTRY_POINT);
+        let ep2_ops = create_test_ops_for_entrypoint(&[address(3)], TEST_ENTRY_POINT_2);
+        let mock_pool = mock_pool_two_eps_with_suspects(
+            ep1_ops,
+            vec![address(1), address(2)],
+            ep2_ops,
+            vec![address(3)],
+        );
+        let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 2, 1024, 1024, 0.50);
+
+        let mut entry_points = Vec::new();
+        for i in 0..4 {
+            let assignment = assign_cycle(&assigner, address(0)).await;
+            assert!(
+                assignment.is_isolation,
+                "round {i} should be an isolation assignment"
+            );
+            entry_points.push(assignment.entry_point);
+        }
+
+        assert_eq!(
+            entry_points,
+            vec![
+                TEST_ENTRY_POINT,
+                TEST_ENTRY_POINT_2,
+                TEST_ENTRY_POINT,
+                TEST_ENTRY_POINT_2,
+            ],
+            "isolation should alternate across entrypoints instead of starving EP2"
         );
     }
 

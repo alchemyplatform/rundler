@@ -129,6 +129,15 @@ impl TxSenderError {
     /// Classifies this error for poison user operation handling.
     pub(crate) fn classify(&self) -> RpcOutcomeClass {
         match self {
+            // Gas is estimated per-bundle from the included ops, so a low
+            // intrinsic gas limit is provably a function of what's in the
+            // bundle right now. Reclassifying this as Neutral wouldn't make
+            // it disappear: the same ops would be re-selected next round and
+            // reproduce the identical failure, livelocking the entrypoint.
+            // Terminal removal/suspicion of the offending op(s) is what
+            // breaks that loop - the exact case poison-op handling exists
+            // for - even though the failure surfaces on the bundle as a
+            // whole rather than a single attributable op.
             TxSenderError::IntrinsicGasTooLow | TxSenderError::TerminalRpcError { .. } => {
                 RpcOutcomeClass::Terminal
             }
