@@ -47,7 +47,7 @@ use crate::{
     bundle_sender::{self, BundleSender, BundleSenderAction, BundleSenderImpl},
     delegation_sender::{DelegationSenderTask, Settings as DelegationSettings},
     emit::BuilderEvent,
-    sender::TransactionSenderArgs,
+    sender::{ProviderEventSignal, TransactionSenderArgs},
     server::{self, LocalBuilderBuilder},
     transaction_tracker::{self, TransactionTrackerImpl},
 };
@@ -487,6 +487,10 @@ where
             }),
         );
 
+        // All builders submit through the same route (sender_args), so they
+        // share one provider-health signal.
+        let provider_event_signal = Arc::new(ProviderEventSignal::default());
+
         let mut bundle_sender_actions = vec![];
         for i in 0..self.args.num_signers {
             let bundle_sender_action = self
@@ -497,6 +501,7 @@ where
                     proposers.clone(),
                     i as usize,
                     heads_tx.subscribe(),
+                    provider_event_signal.clone(),
                 )
                 .await?;
             bundle_sender_actions.push(bundle_sender_action);
@@ -504,6 +509,7 @@ where
         Ok((bundle_sender_actions, heads_tx))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn create_bundle_builder<T>(
         &self,
         task_spawner: &T,
@@ -512,6 +518,7 @@ where
         proposers: Arc<HashMap<ProposerKey, Box<dyn BundleProposerT>>>,
         index: usize,
         heads_rx: broadcast::Receiver<Arc<NewHead>>,
+        provider_event_signal: Arc<ProviderEventSignal>,
     ) -> anyhow::Result<mpsc::Sender<BundleSenderAction>>
     where
         T: TaskSpawnerExt,
@@ -559,6 +566,7 @@ where
             self.pool.clone(),
             sender_settings,
             self.event_sender.clone(),
+            provider_event_signal,
         );
 
         // Spawn each sender as its own independent task

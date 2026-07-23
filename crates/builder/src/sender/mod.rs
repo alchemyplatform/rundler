@@ -14,15 +14,19 @@
 mod bloxroute;
 mod fallback;
 mod flashbots;
+mod health;
 mod polygon_private;
 mod raw;
 
+#[cfg(test)]
+use alloy_json_rpc::{ErrorPayload, RpcError};
 use alloy_primitives::{Address, B256};
 use anyhow::Context;
 pub(crate) use bloxroute::PolygonBloxrouteTransactionSender;
 use enum_dispatch::enum_dispatch;
 pub(crate) use fallback::FallbackTransactionSender;
 pub(crate) use flashbots::FlashbotsTransactionSender;
+pub(crate) use health::ProviderEventSignal;
 #[cfg(test)]
 use mockall::automock;
 pub(crate) use raw::RawTransactionSender;
@@ -31,7 +35,7 @@ use rundler_provider::{
     transaction::{self, TransactionSubmissionError},
 };
 use rundler_signer::SignerLease;
-use rundler_types::{ExpectedStorage, GasFees};
+use rundler_types::{ExpectedStorage, GasFees, chain::ChainSpec};
 use secrecy::SecretString;
 
 use crate::sender::polygon_private::PolygonPrivateSender;
@@ -71,14 +75,118 @@ pub(crate) enum TxSenderError {
     /// Insufficient funds for transaction
     #[error("insufficient funds for transaction")]
     InsufficientFunds,
-    /// Sender is unavailable due to an outage or unrecognized error.
+    /// Transaction gas limit is below its intrinsic gas cost
+    #[error("intrinsic gas too low")]
+    IntrinsicGasTooLow,
+    /// The provider rejected the transaction with an error response known to be
+    /// terminal for this chain: retrying the identical transaction cannot succeed.
+    ///
+    /// Produced by [`TxSenderError::promote_terminal_error`] for `-32000: internal
+    /// error` on chains with `ChainSpec::internal_rpc_error_is_terminal`, and
+    /// unconditionally for `-32000: Transaction rejected by chain policy`
+    /// (Robinhood's unambiguous wording for the same rejection, unlike the
+    /// generic "internal error").
+    #[error("terminal RPC error {code}: {message}")]
+    TerminalRpcError {
+        /// RPC error code.
+        code: i64,
+        /// RPC error message.
+        message: String,
+    },
+    /// Sender is unavailable due to an outage or transport error.
     ///
     /// When a fallback sender is configured this triggers failover.
     #[error("sender unavailable: {0}")]
     SenderUnavailable(anyhow::Error),
+    /// The provider returned an RPC error response that Rundler does not recognize.
+    ///
+    /// The node judged the transaction but the meaning is unknown, so acceptance is
+    /// ambiguous. When a fallback sender is configured this triggers failover.
+    #[error("unrecognized RPC error {code}: {message}")]
+    UnrecognizedRpc {
+        /// RPC error code.
+        code: i64,
+        /// RPC error message.
+        message: String,
+    },
     /// All other errors
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+/// Classification of a submission failure for poison user operation handling.
+///
+/// See `docs/designs/poison-user-operations.md`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RpcOutcomeClass {
+    /// Final rejection; retrying the identical transaction cannot succeed.
+    Terminal,
+    /// Transport failure, timeout, outage, or ambiguous rejection; acceptance unknown.
+    NonTerminal,
+    /// Known operational error with dedicated handling; evidence of neither user
+    /// operation poison nor provider health.
+    Neutral,
+}
+
+impl TxSenderError {
+    /// Classifies this error for poison user operation handling.
+    pub(crate) fn classify(&self) -> RpcOutcomeClass {
+        match self {
+            // Gas is estimated per-bundle from the included ops, so a low
+            // intrinsic gas limit is provably a function of what's in the
+            // bundle right now. Reclassifying this as Neutral wouldn't make
+            // it disappear: the same ops would be re-selected next round and
+            // reproduce the identical failure, livelocking the entrypoint.
+            // Terminal removal/suspicion of the offending op(s) is what
+            // breaks that loop - the exact case poison-op handling exists
+            // for - even though the failure surfaces on the bundle as a
+            // whole rather than a single attributable op.
+            TxSenderError::IntrinsicGasTooLow | TxSenderError::TerminalRpcError { .. } => {
+                RpcOutcomeClass::Terminal
+            }
+            TxSenderError::SenderUnavailable(_) | TxSenderError::UnrecognizedRpc { .. } => {
+                RpcOutcomeClass::NonTerminal
+            }
+            TxSenderError::Underpriced
+            | TxSenderError::ReplacementUnderpriced
+            | TxSenderError::NonceTooLow
+            | TxSenderError::ConditionNotMet
+            | TxSenderError::Rejected
+            | TxSenderError::SoftCancelFailed
+            | TxSenderError::InsufficientFunds
+            | TxSenderError::Other(_) => RpcOutcomeClass::Neutral,
+        }
+    }
+
+    /// Promotes an ambiguous `-32000: UnrecognizedRpc` response to
+    /// `TerminalRpcError` when its message is known to be a terminal,
+    /// per-transaction rejection rather than a transient or provider-health
+    /// condition.
+    ///
+    /// Two message shapes are recognized:
+    /// - `"internal error"` — only promoted on chains with
+    ///   `ChainSpec::internal_rpc_error_is_terminal`, since some providers also use
+    ///   this generic wording for transient outages.
+    /// - `"Transaction rejected by chain policy"` — Robinhood's unambiguous wording
+    ///   for the same rejection; promoted unconditionally, since no chain
+    ///   legitimately emits this phrase for a transient condition.
+    pub(crate) fn promote_terminal_error(self, chain_spec: &ChainSpec) -> Self {
+        match self {
+            TxSenderError::UnrecognizedRpc { code, message } if code == -32000 => {
+                let trimmed = message.trim();
+                let is_terminal = trimmed
+                    .eq_ignore_ascii_case("Transaction rejected by chain policy")
+                    || (chain_spec.internal_rpc_error_is_terminal
+                        && trimmed.eq_ignore_ascii_case("internal error"));
+                if is_terminal {
+                    TxSenderError::TerminalRpcError { code, message }
+                } else {
+                    TxSenderError::UnrecognizedRpc { code, message }
+                }
+            }
+            other => other,
+        }
+    }
 }
 
 pub(crate) type Result<T> = std::result::Result<T, TxSenderError>;
@@ -129,6 +237,7 @@ pub enum TransactionSenderKind {
 
 /// Transaction sender types
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum TransactionSenderArgs {
     /// Raw transaction sender
     Raw(RawSenderArgs),
@@ -149,6 +258,9 @@ pub struct RawSenderArgs {
     pub submit_url: String,
     /// If the sender should use the conditional endpoint
     pub use_conditional_rpc: bool,
+    /// Chain spec, used to classify terminal RPC errors
+    /// (see `TxSenderError::promote_terminal_error`)
+    pub chain_spec: ChainSpec,
 }
 
 /// Bloxroute sender arguments
@@ -210,6 +322,7 @@ impl TransactionSenderArgs {
                 TransactionSenderEnum::Raw(RawTransactionSender::new(
                     submitter,
                     args.use_conditional_rpc,
+                    args.chain_spec,
                 ))
             }
             Self::Flashbots(args) => TransactionSenderEnum::Flashbots(
@@ -256,6 +369,16 @@ pub(crate) enum SenderConstructorErrors {
     Other(#[from] anyhow::Error),
 }
 
+/// Builds the `ProviderError` for a JSON-RPC error response, for tests.
+#[cfg(test)]
+pub(crate) fn rpc_error_response(code: i64, message: &str) -> ProviderError {
+    ProviderError::RPC(RpcError::ErrorResp(ErrorPayload {
+        code,
+        message: message.to_string().into(),
+        data: None,
+    }))
+}
+
 fn create_hard_cancel_tx(to: Address, nonce: u64, gas_fees: GasFees) -> TransactionRequest {
     TransactionRequest::default()
         .to(to)
@@ -274,18 +397,15 @@ impl From<ProviderError> for TxSenderError {
                     if let Some(known) = parse_known_call_execution_failed(&e.message, e.code) {
                         return known;
                     }
-                    // Unrecognized RPC error: -32000s from us should be rare, so treat
-                    // as a provider outage and log for debugging.
                     tracing::warn!(
                         rpc_error_code = e.code,
                         rpc_error_message = %e.message,
-                        "Unrecognized RPC error from provider, treating as sender unavailable"
+                        "Unrecognized RPC error response from provider"
                     );
-                    TxSenderError::SenderUnavailable(anyhow::anyhow!(
-                        "unrecognized RPC error {}: {}",
-                        e.code,
-                        e.message
-                    ))
+                    TxSenderError::UnrecognizedRpc {
+                        code: e.code,
+                        message: e.message.to_string(),
+                    }
                 } else {
                     tracing::warn!(
                         error = ?value,
@@ -312,13 +432,167 @@ impl From<TransactionSubmissionError> for TxSenderError {
             TransactionSubmissionError::ConditionNotMet => Self::ConditionNotMet,
             TransactionSubmissionError::Rejected => Self::Rejected,
             TransactionSubmissionError::InsufficientFunds => Self::InsufficientFunds,
+            TransactionSubmissionError::IntrinsicGasTooLow => Self::IntrinsicGasTooLow,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::TxSenderError;
+    use alloy_transport::TransportErrorKind;
+    use rundler_provider::ProviderError;
+    use rundler_types::chain::ChainSpec;
+
+    use super::{RpcOutcomeClass, TxSenderError};
+
+    #[test]
+    fn classifies_rpc_outcomes() {
+        let cases = [
+            (TxSenderError::IntrinsicGasTooLow, RpcOutcomeClass::Terminal),
+            (
+                TxSenderError::TerminalRpcError {
+                    code: -32000,
+                    message: "internal error".to_string(),
+                },
+                RpcOutcomeClass::Terminal,
+            ),
+            (
+                TxSenderError::SenderUnavailable(anyhow::anyhow!("connection refused")),
+                RpcOutcomeClass::NonTerminal,
+            ),
+            (
+                TxSenderError::UnrecognizedRpc {
+                    code: -32000,
+                    message: "internal error".to_string(),
+                },
+                RpcOutcomeClass::NonTerminal,
+            ),
+            (TxSenderError::Underpriced, RpcOutcomeClass::Neutral),
+            (TxSenderError::NonceTooLow, RpcOutcomeClass::Neutral),
+            (
+                TxSenderError::Other(anyhow::anyhow!("signing failed")),
+                RpcOutcomeClass::Neutral,
+            ),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(error.classify(), expected, "error: {error}");
+        }
+    }
+
+    #[test]
+    fn maps_unrecognized_rpc_response_to_unrecognized_rpc() {
+        let error = TxSenderError::from(super::rpc_error_response(-32000, "internal error"));
+
+        assert!(matches!(
+            error,
+            TxSenderError::UnrecognizedRpc { code: -32000, ref message } if message == "internal error"
+        ));
+    }
+
+    #[test]
+    fn maps_transport_failure_to_sender_unavailable() {
+        let error = TxSenderError::from(ProviderError::RPC(TransportErrorKind::custom_str(
+            "connection refused",
+        )));
+
+        assert!(matches!(error, TxSenderError::SenderUnavailable(_)));
+    }
+
+    #[test]
+    fn promotes_internal_error_to_terminal() {
+        let error = TxSenderError::UnrecognizedRpc {
+            code: -32000,
+            message: " Internal Error ".to_string(),
+        }
+        .promote_terminal_error(&ChainSpec {
+            internal_rpc_error_is_terminal: true,
+            ..Default::default()
+        });
+
+        assert!(matches!(
+            error,
+            TxSenderError::TerminalRpcError { code: -32000, .. }
+        ));
+    }
+
+    #[test]
+    fn does_not_promote_internal_error_when_flag_unset() {
+        let error = TxSenderError::UnrecognizedRpc {
+            code: -32000,
+            message: "internal error".to_string(),
+        }
+        .promote_terminal_error(&ChainSpec::default());
+
+        assert!(matches!(error, TxSenderError::UnrecognizedRpc { .. }));
+    }
+
+    #[test]
+    fn does_not_promote_other_errors() {
+        let cases = [
+            TxSenderError::UnrecognizedRpc {
+                code: -32603,
+                message: "internal error".to_string(),
+            },
+            TxSenderError::UnrecognizedRpc {
+                code: -32000,
+                message: "internal error: tx pool full".to_string(),
+            },
+            TxSenderError::SenderUnavailable(anyhow::anyhow!("internal error")),
+        ];
+        // Flagged as terminal-eligible so these cases fail on their own
+        // shape (wrong code, extra suffix, wrong variant), not the flag.
+        let chain_spec = ChainSpec {
+            internal_rpc_error_is_terminal: true,
+            ..Default::default()
+        };
+
+        for error in cases {
+            assert!(!matches!(
+                error.promote_terminal_error(&chain_spec),
+                TxSenderError::TerminalRpcError { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn promotes_chain_policy_rejection_to_terminal() {
+        let error = TxSenderError::UnrecognizedRpc {
+            code: -32000,
+            message: " transaction rejected by chain policy ".to_string(),
+        }
+        .promote_terminal_error(&ChainSpec::default());
+
+        assert!(matches!(
+            error,
+            TxSenderError::TerminalRpcError { code: -32000, .. }
+        ));
+    }
+
+    #[test]
+    fn does_not_promote_other_errors_as_chain_policy_rejection() {
+        let cases = [
+            TxSenderError::UnrecognizedRpc {
+                code: -32603,
+                message: "Transaction rejected by chain policy".to_string(),
+            },
+            TxSenderError::UnrecognizedRpc {
+                code: -32000,
+                message: "internal error".to_string(),
+            },
+            TxSenderError::SenderUnavailable(anyhow::anyhow!(
+                "Transaction rejected by chain policy"
+            )),
+        ];
+        let chain_spec = ChainSpec::default();
+
+        for error in cases {
+            assert!(!matches!(
+                error.promote_terminal_error(&chain_spec),
+                TxSenderError::TerminalRpcError { .. }
+            ));
+        }
+    }
 
     #[test]
     fn parses_cronos_invalid_sequence_as_nonce_too_low() {

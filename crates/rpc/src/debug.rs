@@ -20,7 +20,7 @@ use futures_util::StreamExt;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_types::{
     builder::{Builder, BuilderError, BundlingMode},
-    pool::Pool,
+    pool::{BundleOutcome, Pool},
 };
 
 use crate::{
@@ -51,6 +51,22 @@ pub trait DebugApi {
     /// Note that the bundling mode must be set to `Manual` else this will fail.
     #[method(name = "bundler_sendBundleNow")]
     async fn bundler_send_bundle_now(&self) -> RpcResult<B256>;
+
+    /// Directly reports a bundle outcome to the pool for the given ops,
+    /// bypassing any real RPC submission or on-chain revert. Lets manual
+    /// poison-user-operation testing and incident response drive
+    /// `Pool::report_bundle_outcome` (see
+    /// `docs/designs/poison-user-operations.md`) deterministically -
+    /// e.g. to force-quarantine a suspected op, or to clear a false
+    /// positive. `outcome` is one of "success", "non_terminal_failure",
+    /// "terminal_failure", "mark_suspect".
+    #[method(name = "bundler_forceReportBundleOutcome")]
+    async fn bundler_force_report_bundle_outcome(
+        &self,
+        entry_point: Address,
+        ops: Vec<B256>,
+        outcome: String,
+    ) -> RpcResult<String>;
 
     /// Sets the bundling mode.
     #[method(name = "bundler_setBundlingMode")]
@@ -133,6 +149,19 @@ where
         utils::safe_call_rpc_handler(
             "bundler_sendBundleNow",
             DebugApi::bundler_send_bundle_now(self),
+        )
+        .await
+    }
+
+    async fn bundler_force_report_bundle_outcome(
+        &self,
+        entry_point: Address,
+        ops: Vec<B256>,
+        outcome: String,
+    ) -> RpcResult<String> {
+        utils::safe_call_rpc_handler(
+            "bundler_forceReportBundleOutcome",
+            DebugApi::bundler_force_report_bundle_outcome(self, entry_point, ops, outcome),
         )
         .await
     }
@@ -292,6 +321,33 @@ where
         }
 
         Ok(tx)
+    }
+
+    async fn bundler_force_report_bundle_outcome(
+        &self,
+        entry_point: Address,
+        ops: Vec<B256>,
+        outcome: String,
+    ) -> InternalRpcResult<String> {
+        let outcome = match outcome.as_str() {
+            "success" => BundleOutcome::Success,
+            "non_terminal_failure" => BundleOutcome::NonTerminalFailure,
+            "terminal_failure" => BundleOutcome::TerminalFailure,
+            "mark_suspect" => BundleOutcome::MarkSuspect,
+            other => {
+                return Err(anyhow::anyhow!(
+                    "unknown outcome {other:?}, expected one of: success, non_terminal_failure, terminal_failure, mark_suspect"
+                )
+                .into());
+            }
+        };
+
+        self.pool
+            .report_bundle_outcome(entry_point, ops, outcome, false)
+            .await
+            .context("should report bundle outcome")?;
+
+        Ok("ok".to_string())
     }
 
     async fn bundler_set_bundling_mode(&self, mode: BundlingMode) -> InternalRpcResult<String> {

@@ -33,12 +33,44 @@ use serde_json::{Value, json};
 use super::{ExpectedStorage, Result, TransactionSender, TxSenderError};
 use crate::sender::CancelTxInfo;
 
-fn map_flashbots_error(err: anyhow::Error) -> TxSenderError {
-    tracing::warn!(
-        error = %err,
-        "Flashbots request failed, treating as sender unavailable"
-    );
-    TxSenderError::SenderUnavailable(err)
+/// Errors from the Flashbots relay's raw HTTP JSON-RPC interface.
+#[derive(Debug, thiserror::Error)]
+enum FlashbotsError {
+    /// The relay responded with a well-formed JSON-RPC error object - a
+    /// verdict on this specific request, not evidence the relay is down.
+    #[error("Flashbots RPC error {code}: {message}")]
+    Rpc { code: i64, message: String },
+    /// Network failure, non-2xx status with no JSON-RPC error body, or any
+    /// other response that isn't a recognizable JSON-RPC envelope.
+    #[error(transparent)]
+    Transport(#[from] anyhow::Error),
+}
+
+impl From<FlashbotsError> for TxSenderError {
+    fn from(value: FlashbotsError) -> Self {
+        match value {
+            FlashbotsError::Rpc { code, message } => {
+                if let Some(known) = super::parse_known_call_execution_failed(&message, code) {
+                    return known;
+                }
+                tracing::warn!(
+                    rpc_error_code = code,
+                    rpc_error_message = %message,
+                    "Unrecognized Flashbots RPC error, treating as sender unavailable"
+                );
+                TxSenderError::SenderUnavailable(anyhow::anyhow!(
+                    "unrecognized Flashbots RPC error {code}: {message}"
+                ))
+            }
+            FlashbotsError::Transport(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "Flashbots request failed, treating as sender unavailable"
+                );
+                TxSenderError::SenderUnavailable(err)
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -62,8 +94,7 @@ impl TransactionSender for FlashbotsTransactionSender {
         let tx_hash = self
             .flashbots_client
             .send_private_transaction(raw_tx)
-            .await
-            .map_err(map_flashbots_error)?;
+            .await?;
 
         Ok(tx_hash)
     }
@@ -78,8 +109,7 @@ impl TransactionSender for FlashbotsTransactionSender {
         let success = self
             .flashbots_client
             .cancel_private_transaction(tx_hash)
-            .await
-            .map_err(map_flashbots_error)?;
+            .await?;
 
         if !success {
             return Err(TxSenderError::SoftCancelFailed);
@@ -142,22 +172,31 @@ struct FlashbotsSendPrivateTransactionRequest {
     preferences: Preferences,
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct FlashbotsSendPrivateTransactionResponse {
-    result: B256,
-}
-
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct FlashbotsCancelPrivateTransactionRequest {
     tx_hash: B256,
 }
 
+/// A JSON-RPC 2.0 response envelope that may carry either a `result` or an
+/// `error` object, so a well-formed RPC-level rejection from the relay can be
+/// told apart from a transport failure or a garbled response.
 #[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct FlashbotsCancelPrivateTransactionResponse {
-    result: bool,
+struct JsonRpcEnvelope<T> {
+    // Named default fns (rather than bare `#[serde(default)]`) avoid serde
+    // deriving a spurious `T: Default` bound on the whole impl - Option<T> is
+    // Default for any T, but serde's derive can't see that through a bare
+    // `Default::default()` call.
+    #[serde(default = "Option::default")]
+    result: Option<T>,
+    #[serde(default = "Option::default")]
+    error: Option<JsonRpcErrorObject>,
+}
+
+#[derive(Deserialize, Debug)]
+struct JsonRpcErrorObject {
+    code: i64,
+    message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -223,7 +262,10 @@ impl FlashbotsClient {
         }
     }
 
-    async fn send_private_transaction(&self, raw_tx: Bytes) -> anyhow::Result<B256> {
+    async fn send_private_transaction(
+        &self,
+        raw_tx: Bytes,
+    ) -> std::result::Result<B256, FlashbotsError> {
         let preferences = Preferences {
             fast: false,
             privacy: Some(Privacy {
@@ -245,17 +287,13 @@ impl FlashbotsClient {
             "id": 1
         });
 
-        let response = self.sign_send_request(body).await?;
-
-        let parsed_response = response
-            .json::<FlashbotsSendPrivateTransactionResponse>()
-            .await
-            .map_err(|e| anyhow!("failed to deserialize Flashbots response: {:?}", e))?;
-
-        Ok(parsed_response.result)
+        self.send_and_parse(body).await
     }
 
-    async fn cancel_private_transaction(&self, tx_hash: B256) -> anyhow::Result<bool> {
+    async fn cancel_private_transaction(
+        &self,
+        tx_hash: B256,
+    ) -> std::result::Result<bool, FlashbotsError> {
         let body = json!({
             "jsonrpc": "2.0",
             "method": "eth_cancelPrivateTransaction",
@@ -265,17 +303,48 @@ impl FlashbotsClient {
             "id": 1
         });
 
-        let response = self.sign_send_request(body).await?;
-
-        let parsed_response = response
-            .json::<FlashbotsCancelPrivateTransactionResponse>()
-            .await
-            .map_err(|e| anyhow!("failed to deserialize Flashbots response: {:?}", e))?;
-
-        Ok(parsed_response.result)
+        self.send_and_parse(body).await
     }
 
-    async fn sign_send_request(&self, body: Value) -> anyhow::Result<Response> {
+    /// Sends a signed JSON-RPC request and parses the response as a
+    /// [`JsonRpcEnvelope`], so a well-formed RPC-level rejection from the
+    /// relay - which can arrive on a 200 or a non-2xx status - is classified
+    /// via `FlashbotsError::Rpc` instead of being lumped in with genuine
+    /// transport failures.
+    async fn send_and_parse<T>(&self, body: Value) -> std::result::Result<T, FlashbotsError>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let response = self.sign_send_request(body).await?;
+        let status = response.status();
+        let text = response.text().await.map_err(|e| {
+            FlashbotsError::Transport(anyhow!("failed to read Flashbots response body: {e:?}"))
+        })?;
+
+        let envelope: JsonRpcEnvelope<T> = serde_json::from_str(&text).map_err(|e| {
+            FlashbotsError::Transport(anyhow!(
+                "failed to parse Flashbots response (status {status}): {e:?}, body: {text}"
+            ))
+        })?;
+
+        if let Some(error) = envelope.error {
+            return Err(FlashbotsError::Rpc {
+                code: error.code,
+                message: error.message,
+            });
+        }
+
+        envelope.result.ok_or_else(|| {
+            FlashbotsError::Transport(anyhow!(
+                "Flashbots response missing both result and error (status {status}): {text}"
+            ))
+        })
+    }
+
+    async fn sign_send_request(
+        &self,
+        body: Value,
+    ) -> std::result::Result<Response, FlashbotsError> {
         let to_sign = format!("0x{:x}", utils::keccak256(body.to_string()));
 
         let signature = self
@@ -293,19 +362,19 @@ impl FlashbotsClient {
         headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
         headers.insert("x-flashbots-signature", header_val);
 
-        // Send the request
-        let response = self
-            .http_client
+        // Send the request. Deliberately not checking status here: a
+        // well-formed JSON-RPC error can arrive on a non-2xx status just as
+        // easily as on a 200, and send_and_parse needs the body either way
+        // to tell an RPC-level rejection apart from a transport failure.
+        self.http_client
             .post(&self.relay_url)
             .headers(headers)
             .body(body.to_string())
             .send()
             .await
-            .map_err(|e| anyhow!("failed to send request to Flashbots: {:?}", e))?;
-
-        response
-            .error_for_status()
-            .map_err(|e| anyhow!("Flashbots request failed: {:?}", e))
+            .map_err(|e| {
+                FlashbotsError::Transport(anyhow!("failed to send request to Flashbots: {e:?}"))
+            })
     }
 }
 
@@ -373,4 +442,58 @@ where
         Value::Null => None,
         _ => return Err(de::Error::custom("expected a hexadecimal string")),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sender::RpcOutcomeClass;
+
+    #[test]
+    fn recognized_rpc_error_is_classified_not_sender_unavailable() {
+        let error = FlashbotsError::Rpc {
+            code: -32000,
+            message: "nonce too low".to_string(),
+        };
+        let sender_error: TxSenderError = error.into();
+        assert!(matches!(sender_error, TxSenderError::NonceTooLow));
+        assert_eq!(sender_error.classify(), RpcOutcomeClass::Neutral);
+    }
+
+    #[test]
+    fn unrecognized_rpc_error_falls_back_to_sender_unavailable() {
+        let error = FlashbotsError::Rpc {
+            code: -32099,
+            message: "some new relay-specific rejection".to_string(),
+        };
+        let sender_error: TxSenderError = error.into();
+        assert!(matches!(sender_error, TxSenderError::SenderUnavailable(_)));
+        assert_eq!(sender_error.classify(), RpcOutcomeClass::NonTerminal);
+    }
+
+    #[test]
+    fn transport_failure_is_sender_unavailable() {
+        let error = FlashbotsError::Transport(anyhow!("connection reset"));
+        let sender_error: TxSenderError = error.into();
+        assert!(matches!(sender_error, TxSenderError::SenderUnavailable(_)));
+        assert_eq!(sender_error.classify(), RpcOutcomeClass::NonTerminal);
+    }
+
+    #[test]
+    fn envelope_parses_rpc_error_alongside_missing_result() {
+        let body = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"nonce too low"}}"#;
+        let envelope: JsonRpcEnvelope<B256> = serde_json::from_str(body).unwrap();
+        assert!(envelope.result.is_none());
+        let error = envelope.error.expect("should parse error object");
+        assert_eq!(error.code, -32000);
+        assert_eq!(error.message, "nonce too low");
+    }
+
+    #[test]
+    fn envelope_parses_result_alongside_missing_error() {
+        let body = r#"{"jsonrpc":"2.0","id":1,"result":"0x0000000000000000000000000000000000000000000000000000000000000001"}"#;
+        let envelope: JsonRpcEnvelope<B256> = serde_json::from_str(body).unwrap();
+        assert!(envelope.error.is_none());
+        assert!(envelope.result.is_some());
+    }
 }

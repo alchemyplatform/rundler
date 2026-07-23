@@ -28,6 +28,8 @@ pub enum TransactionSubmissionError {
     Rejected,
     /// The sender account has insufficient funds.
     InsufficientFunds,
+    /// A transaction's gas limit is below its intrinsic gas cost.
+    IntrinsicGasTooLow,
 }
 
 /// Classifies a transaction submission RPC error that Rundler knows how to handle.
@@ -81,6 +83,10 @@ pub fn classify_submission_error(message: &str, code: i64) -> Option<Transaction
     // Geth, Erigon, and Reth.
     if lowercase_message.contains("insufficient funds") {
         return Some(TransactionSubmissionError::InsufficientFunds);
+    }
+    // Geth, Erigon, and Reth.
+    if lowercase_message.contains("intrinsic gas too low") {
+        return Some(TransactionSubmissionError::IntrinsicGasTooLow);
     }
     // Arbitrum sequencer.
     if lowercase_message.contains("condition not met") {
@@ -150,6 +156,11 @@ mod tests {
                 "insufficient funds for gas * price + value",
                 -32000,
                 TransactionSubmissionError::InsufficientFunds,
+            ),
+            (
+                "intrinsic gas too low: gas 20000, minimum needed 21000",
+                -32000,
+                TransactionSubmissionError::IntrinsicGasTooLow,
             ),
             (
                 "storage slot value condition not met",

@@ -34,7 +34,7 @@ use rundler_types::{
     EntityUpdate, EntryPointAbiVersion, UserOperation, UserOperationId, UserOperationPermissions,
     UserOperationVariant,
     pool::{
-        MempoolError, NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation,
+        BundleOutcome, MempoolError, NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation,
         PoolOperationStatus, PoolOperationSummary, PoolResult, Reputation, ReputationStatus,
         StakeStatus,
     },
@@ -202,11 +202,13 @@ impl Pool for LocalPoolHandle {
         &self,
         entry_point: Address,
         max_ops: u64,
+        max_suspects: u64,
         filter_id: Option<String>,
     ) -> PoolResult<Vec<PoolOperationSummary>> {
         let req = ServerRequestKind::GetOpsSummaries {
             entry_point,
             max_ops,
+            max_suspects,
             filter_id,
         };
         let resp = self.send(req).await?;
@@ -268,6 +270,26 @@ impl Pool for LocalPoolHandle {
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::RemoveOpById { hash } => Ok(hash),
+            _ => Err(PoolError::UnexpectedResponse),
+        }
+    }
+
+    async fn report_bundle_outcome(
+        &self,
+        entry_point: Address,
+        ops: Vec<B256>,
+        outcome: BundleOutcome,
+        provider_event_active: bool,
+    ) -> PoolResult<()> {
+        let req = ServerRequestKind::ReportBundleOutcome {
+            entry_point,
+            ops,
+            outcome,
+            provider_event_active,
+        };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::ReportBundleOutcome => Ok(()),
             _ => Err(PoolError::UnexpectedResponse),
         }
     }
@@ -522,14 +544,26 @@ impl LocalPoolServerRunner {
         &self,
         entry_point: Address,
         max_ops: u64,
+        max_suspects: u64,
         filter_id: Option<String>,
     ) -> PoolResult<Vec<PoolOperationSummary>> {
         let mempool = self.get_pool(entry_point)?;
-        Ok(mempool
-            .best_operations(max_ops as usize, filter_id)?
+        let mut summaries: Vec<PoolOperationSummary> = mempool
+            .best_operations(max_ops as usize, filter_id.clone())?
             .iter()
             .map(|op| op.as_ref().into())
-            .collect())
+            .collect();
+        summaries.extend(
+            mempool
+                .due_suspect_operations(max_suspects as usize, filter_id)?
+                .iter()
+                .map(|op| {
+                    let mut summary: PoolOperationSummary = op.as_ref().into();
+                    summary.suspect = true;
+                    summary
+                }),
+        );
+        Ok(summaries)
     }
 
     fn get_ops_by_hashes(
@@ -579,6 +613,18 @@ impl LocalPoolServerRunner {
     ) -> PoolResult<Option<B256>> {
         let mempool = self.get_pool(entry_point)?;
         mempool.remove_op_by_id(id).map_err(|e| e.into())
+    }
+
+    fn report_bundle_outcome(
+        &self,
+        entry_point: Address,
+        ops: &[B256],
+        outcome: BundleOutcome,
+        provider_event_active: bool,
+    ) -> PoolResult<()> {
+        let mempool = self.get_pool(entry_point)?;
+        mempool.report_bundle_outcome(ops, outcome, provider_event_active);
+        Ok(())
     }
 
     fn update_entities<'a>(
@@ -801,8 +847,8 @@ impl LocalPoolServerRunner {
                                 Err(e) => Err(e),
                             }
                         },
-                        ServerRequestKind::GetOpsSummaries { entry_point, max_ops, filter_id } => {
-                            match self.get_ops_summaries(entry_point, max_ops, filter_id) {
+                        ServerRequestKind::GetOpsSummaries { entry_point, max_ops, max_suspects, filter_id } => {
+                            match self.get_ops_summaries(entry_point, max_ops, max_suspects, filter_id) {
                                 Ok(summaries) => Ok(ServerResponse::GetOpsSummaries { summaries }),
                                 Err(e) => Err(e),
                             }
@@ -834,6 +880,12 @@ impl LocalPoolServerRunner {
                         ServerRequestKind::RemoveOpById { entry_point, id } => {
                             match self.remove_op_by_id(entry_point, &id) {
                                 Ok(hash) => Ok(ServerResponse::RemoveOpById{ hash }),
+                                Err(e) => Err(e),
+                            }
+                        },
+                        ServerRequestKind::ReportBundleOutcome { entry_point, ops, outcome, provider_event_active } => {
+                            match self.report_bundle_outcome(entry_point, &ops, outcome, provider_event_active) {
+                                Ok(_) => Ok(ServerResponse::ReportBundleOutcome),
                                 Err(e) => Err(e),
                             }
                         },
@@ -935,6 +987,7 @@ enum ServerRequestKind {
     GetOpsSummaries {
         entry_point: Address,
         max_ops: u64,
+        max_suspects: u64,
         filter_id: Option<String>,
     },
     GetOpsByHashes {
@@ -954,6 +1007,12 @@ enum ServerRequestKind {
     RemoveOpById {
         entry_point: Address,
         id: UserOperationId,
+    },
+    ReportBundleOutcome {
+        entry_point: Address,
+        ops: Vec<B256>,
+        outcome: BundleOutcome,
+        provider_event_active: bool,
     },
     UpdateEntities {
         entry_point: Address,
@@ -1033,6 +1092,7 @@ enum ServerResponse {
     RemoveOpById {
         hash: Option<B256>,
     },
+    ReportBundleOutcome,
     UpdateEntities,
     DebugClearState,
     AdminSetTracking,
@@ -1069,8 +1129,8 @@ mod tests {
     use parking_lot::RwLock;
     use reth_tasks::TaskManager;
     use rundler_types::{
-        EntryPointVersion, chain::ChainSpec, v0_6::UserOperation as UserOperationV0_6,
-        v0_7::UserOperation as UserOperationV0_7,
+        EntityInfos, EntryPointVersion, ValidTimeRange, chain::ChainSpec, da::DAGasData,
+        v0_6::UserOperation as UserOperationV0_6, v0_7::UserOperation as UserOperationV0_7,
     };
 
     use super::*;
@@ -1097,6 +1157,37 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(hash0, hash1);
+    }
+
+    #[tokio::test]
+    async fn test_get_ops_summaries_includes_due_suspects() {
+        let mut mock_pool = MockMempool::new();
+        let normal_op = Arc::new(mock_pool_operation());
+        let suspect_op = Arc::new(mock_pool_operation());
+        mock_pool
+            .expect_entry_point_version()
+            .returning(|| EntryPointVersion::V0_6);
+        mock_pool
+            .expect_best_operations()
+            .withf(|max, filter_id| *max == 10 && filter_id.is_none())
+            .returning(move |_, _| Ok(vec![normal_op.clone()]));
+        mock_pool
+            .expect_due_suspect_operations()
+            .withf(|max, filter_id| *max == 5 && filter_id.is_none())
+            .returning(move |_, _| Ok(vec![suspect_op.clone()]));
+
+        let ep = ChainSpec::default().entry_point_address_v0_6;
+        let pool: Arc<dyn Mempool> = Arc::new(mock_pool);
+        let state = setup(HashMap::from([(ep, pool)]));
+
+        let summaries = state
+            .handle
+            .get_ops_summaries(ep, 10, 5, None)
+            .await
+            .unwrap();
+        assert_eq!(summaries.len(), 2);
+        assert!(!summaries[0].suspect);
+        assert!(summaries[1].suspect);
     }
 
     #[tokio::test]
@@ -1225,6 +1316,24 @@ mod tests {
 
     fn mock_op() -> UserOperationVariant {
         UserOperationVariant::V0_6(UserOperationV0_6::default())
+    }
+
+    fn mock_pool_operation() -> PoolOperation {
+        PoolOperation {
+            uo: mock_op(),
+            entry_point: Address::random(),
+            aggregator: None,
+            valid_time_range: ValidTimeRange::default(),
+            expected_code_hash: B256::random(),
+            sim_block_hash: B256::random(),
+            sim_block_number: 0,
+            account_is_staked: false,
+            entity_infos: EntityInfos::default(),
+            da_gas_data: DAGasData::Empty,
+            filter_id: None,
+            perms: UserOperationPermissions::default(),
+            sender_is_7702: false,
+        }
     }
 
     fn mock_op_v0_7() -> UserOperationVariant {

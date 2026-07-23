@@ -23,19 +23,27 @@ use anyhow::Context;
 use metrics::{Counter, Gauge, Histogram};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
+use rand::Rng;
 use rundler_provider::DAGasOracleSync;
 use rundler_types::{
     Entity, EntityType, GasFees, Timestamp, UserOperation, UserOperationId, UserOperationVariant,
     chain::ChainSpec,
     da::DAGasBlockData,
-    pool::{MempoolError, PendingBundleInfo, PoolOperation, PoolOperationStatus, PreconfInfo},
+    pool::{
+        BundleOutcome, MempoolError, PendingBundleInfo, PoolOperation, PoolOperationStatus,
+        PreconfInfo,
+    },
 };
 use rundler_utils::{emit::WithEntryPoint, math};
 use tokio::sync::broadcast;
 use tracing::info;
 
 use super::{MempoolResult, PoolConfig, entity_tracker::EntityCounter, size::SizeTracker};
-use crate::{PoolEvent, chain::MinedOp, emit::OpRemovalReason};
+use crate::{
+    PoolEvent,
+    chain::MinedOp,
+    emit::{OpRemovalReason, SuspectTrigger},
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PoolInnerConfig {
@@ -48,6 +56,11 @@ pub(crate) struct PoolInnerConfig {
     da_gas_tracking_enabled: bool,
     max_time_in_pool: Option<Duration>,
     verification_gas_limit_efficiency_reject_threshold: f64,
+    suspect_tracking_enabled: bool,
+    rpc_failures_before_suspect: u32,
+    max_suspect_rpc_failures: u32,
+    suspect_rpc_backoff_initial: Duration,
+    suspect_rpc_backoff_max: Duration,
 }
 
 impl From<PoolConfig> for PoolInnerConfig {
@@ -63,6 +76,11 @@ impl From<PoolConfig> for PoolInnerConfig {
             max_time_in_pool: config.max_time_in_pool,
             verification_gas_limit_efficiency_reject_threshold: config
                 .verification_gas_limit_efficiency_reject_threshold,
+            suspect_tracking_enabled: config.suspect_tracking_enabled,
+            rpc_failures_before_suspect: config.rpc_failures_before_suspect,
+            max_suspect_rpc_failures: config.max_suspect_rpc_failures,
+            suspect_rpc_backoff_initial: config.suspect_rpc_backoff_initial,
+            suspect_rpc_backoff_max: config.suspect_rpc_backoff_max,
         }
     }
 }
@@ -123,6 +141,14 @@ where
         event_sender: broadcast::Sender<WithEntryPoint<PoolEvent>>,
     ) -> Self {
         let entry_point = config.entry_point.to_string();
+        let metrics = PoolMetrics::new_with_labels(&[("entry_point", entry_point)]);
+        metrics
+            .suspect_tracking_enabled
+            .set(if config.suspect_tracking_enabled {
+                1.0
+            } else {
+                0.0
+            });
         Self {
             config,
             da_gas_oracle,
@@ -141,7 +167,7 @@ where
             pool_size: SizeTracker::default(),
             cache_size: SizeTracker::default(),
             prev_block_number: 0,
-            metrics: PoolMetrics::new_with_labels(&[("entry_point", entry_point)]),
+            metrics,
             event_sender,
         }
     }
@@ -224,7 +250,174 @@ where
     }
 
     pub(crate) fn best_operations(&self) -> impl Iterator<Item = Arc<PoolOperation>> + '_ {
-        self.best.iter().map(|o| o.po.clone())
+        // Master switch: when disabled, no operation is ever treated as a
+        // suspect, regardless of `rpc_failures_before_suspect` (a threshold of
+        // 0 would otherwise mark every fresh operation suspect and empty this
+        // iterator).
+        let suspect_tracking_enabled = self.config.suspect_tracking_enabled;
+        let suspect_threshold = self.config.rpc_failures_before_suspect;
+        self.best
+            .iter()
+            .filter(move |o| !suspect_tracking_enabled || !o.is_suspect(suspect_threshold))
+            .map(|o| o.po.clone())
+    }
+
+    /// Returns suspect operations whose isolation retry delay has elapsed,
+    /// best first.
+    pub(crate) fn due_suspect_operations(
+        &self,
+        now: Instant,
+    ) -> impl Iterator<Item = Arc<PoolOperation>> + '_ {
+        let suspect_tracking_enabled = self.config.suspect_tracking_enabled;
+        let suspect_threshold = self.config.rpc_failures_before_suspect;
+        self.best
+            .iter()
+            .filter(move |o| {
+                suspect_tracking_enabled && o.is_suspect(suspect_threshold) && o.retry_due(now)
+            })
+            .map(|o| o.po.clone())
+    }
+
+    /// Applies the final outcome of a bundle submission attempt to the given
+    /// operations, per the failure flow in
+    /// `docs/designs/poison-user-operations.md`.
+    ///
+    /// Operations no longer in the pool are skipped. Returns the operations
+    /// that must be removed, with their removal reasons; removal itself is the
+    /// caller's responsibility.
+    pub(crate) fn apply_bundle_outcome(
+        &self,
+        ops: &[B256],
+        outcome: BundleOutcome,
+        provider_event_active: bool,
+        now: Instant,
+    ) -> Vec<(B256, OpRemovalReason)> {
+        // Master switch for poison UO handling: when disabled, no suspect
+        // state is tracked, so `MarkSuspect` has nothing to fall back on and
+        // reverts to the behavior it replaced — removing every op in an
+        // unattributed multi-op revert — so those ops are not left live with
+        // no path to eviction. Every other outcome is genuinely new
+        // functionality with no pre-existing behavior, so it stays a no-op.
+        if !self.config.suspect_tracking_enabled {
+            return match outcome {
+                BundleOutcome::MarkSuspect => ops
+                    .iter()
+                    .filter(|hash| self.by_hash.contains_key(*hash))
+                    .map(|hash| (*hash, OpRemovalReason::Requested))
+                    .collect(),
+                _ => Vec::new(),
+            };
+        }
+
+        let suspect_threshold = self.config.rpc_failures_before_suspect;
+        let mut to_remove = Vec::new();
+
+        match outcome {
+            BundleOutcome::Success => {
+                for hash in ops {
+                    if let Some(op) = self.by_hash.get(hash) {
+                        let was_suspect = op.is_suspect(suspect_threshold);
+                        op.reset_failures();
+                        if was_suspect {
+                            self.metrics.num_suspect_ops.decrement(1.0);
+                            self.metrics.num_suspects_cleared.increment(1);
+                            self.emit(PoolEvent::SuspectCleared { op_hash: *hash });
+                        }
+                    }
+                }
+            }
+            BundleOutcome::NonTerminalFailure => {
+                for hash in ops {
+                    let Some(op) = self.by_hash.get(hash) else {
+                        continue;
+                    };
+                    // Removal progress pauses during a provider event so that
+                    // provider issues cannot remove operations, but suspect
+                    // analysis continues: gating suspicion too would let a
+                    // poison herd large enough to trip the event keep riding
+                    // in normal bundles for as long as it sustains the event.
+                    if provider_event_active && op.is_suspect(suspect_threshold) {
+                        op.reschedule_retry(
+                            now,
+                            suspect_threshold,
+                            self.config.suspect_rpc_backoff_initial,
+                            self.config.suspect_rpc_backoff_max,
+                        );
+                        continue;
+                    }
+                    let was_suspect = op.is_suspect(suspect_threshold);
+                    let failures = op.record_failure(
+                        now,
+                        suspect_threshold,
+                        self.config.suspect_rpc_backoff_initial,
+                        self.config.suspect_rpc_backoff_max,
+                    );
+                    if !was_suspect && failures >= suspect_threshold {
+                        self.metrics.num_suspect_ops.increment(1.0);
+                        self.metrics.num_marked_suspect_threshold.increment(1);
+                        self.emit(PoolEvent::MarkedSuspect {
+                            op_hash: *hash,
+                            trigger: SuspectTrigger::Threshold,
+                        });
+                    }
+                    if self.config.max_suspect_rpc_failures > 0
+                        && failures
+                            >= suspect_threshold
+                                .saturating_add(self.config.max_suspect_rpc_failures)
+                    {
+                        to_remove.push((*hash, OpRemovalReason::RepeatedNonTerminalRpcFailure));
+                        self.metrics.num_suspects_removed.increment(1);
+                    }
+                }
+            }
+            BundleOutcome::TerminalFailure => {
+                if let [hash] = ops {
+                    if self.by_hash.contains_key(hash) {
+                        to_remove.push((*hash, OpRemovalReason::TerminalRpcError));
+                        self.metrics.num_suspects_removed.increment(1);
+                    }
+                } else {
+                    for hash in ops {
+                        if let Some(op) = self.by_hash.get(hash) {
+                            self.mark_suspect_and_record(*hash, op, suspect_threshold);
+                        }
+                    }
+                }
+            }
+            BundleOutcome::MarkSuspect => {
+                for hash in ops {
+                    if let Some(op) = self.by_hash.get(hash) {
+                        self.mark_suspect_and_record(*hash, op, suspect_threshold);
+                    }
+                }
+            }
+        }
+
+        to_remove
+    }
+
+    /// Marks an operation suspect and records the transition (suspect gauge,
+    /// multi-op-failure counter, `MarkedSuspect` event) unless it was already
+    /// a suspect, per the ambiguous multi-UO failure paths in the failure
+    /// flow table.
+    fn mark_suspect_and_record(
+        &self,
+        hash: B256,
+        op: &OrderedPoolOperation,
+        suspect_threshold: u32,
+    ) {
+        let was_suspect = op.is_suspect(suspect_threshold);
+        op.mark_suspect(suspect_threshold);
+        if !was_suspect {
+            self.metrics.num_suspect_ops.increment(1.0);
+            self.metrics
+                .num_marked_suspect_multi_op_failure
+                .increment(1);
+            self.emit(PoolEvent::MarkedSuspect {
+                op_hash: hash,
+                trigger: SuspectTrigger::MultiOpFailure,
+            });
+        }
     }
 
     pub(crate) fn all_operations(&self) -> impl Iterator<Item = Arc<PoolOperation>> + '_ {
@@ -603,6 +796,12 @@ where
         self.count_by_address.clear();
         self.pool_size = SizeTracker::default();
         self.cache_size = SizeTracker::default();
+        // Every op (suspect or not) is gone, so the suspect gauge is
+        // unconditionally 0 - unlike the removal path, which decrements by
+        // one because it knows exactly one op with a known suspect status
+        // left, a bulk clear doesn't track how many of the cleared ops were
+        // suspects, so set rather than decrement.
+        self.metrics.num_suspect_ops.set(0.0);
         self.update_metrics();
     }
 
@@ -765,6 +964,13 @@ where
         block_number: Option<u64>,
     ) -> Option<Arc<PoolOperation>> {
         let op = self.by_hash.remove(&hash)?;
+        // Recompute the current suspect population on every removal path
+        // (mined, expired, replaced, entity-removed, poison-ops removal,
+        // etc.) so the gauge never leaks regardless of why a suspect left
+        // the pool.
+        if op.is_suspect(self.config.rpc_failures_before_suspect) {
+            self.metrics.num_suspect_ops.decrement(1.0);
+        }
         let id = &op.po.uo.id();
         self.by_id.remove(id);
         self.best.remove(&op);
@@ -828,6 +1034,18 @@ where
     }
 }
 
+/// Submission failure tracking for poison user operation handling.
+///
+/// A single counter measured against two thresholds: an operation becomes a
+/// suspect at `rpc_failures_before_suspect` failures and is removed
+/// `max_suspect_rpc_failures` failures later. Any successful submission resets
+/// the counter. See `docs/designs/poison-user-operations.md`.
+#[derive(Debug, Default)]
+struct SuspectState {
+    failures: u32,
+    retry_after: Option<Instant>,
+}
+
 /// Wrapper around PoolOperation that adds a submission ID to implement
 /// a custom ordering for the best operations
 #[derive(Debug)]
@@ -840,6 +1058,7 @@ struct OrderedPoolOperation {
     time_to_mine: RwLock<Option<TimeToMineInfo>>,
     /// The block number at which the operation was added to the pool
     added_at_block: u64,
+    suspect_state: RwLock<SuspectState>,
 }
 
 impl OrderedPoolOperation {
@@ -858,6 +1077,7 @@ impl OrderedPoolOperation {
             insertion_time: Instant::now(),
             time_to_mine: RwLock::new(Some(TimeToMineInfo::new(current_block_number))),
             added_at_block: current_block_number,
+            suspect_state: RwLock::new(SuspectState::default()),
         }
     }
 
@@ -905,6 +1125,78 @@ impl OrderedPoolOperation {
 
     fn gas_price(&self) -> u128 {
         *self.gas_price.read()
+    }
+
+    fn is_suspect(&self, suspect_threshold: u32) -> bool {
+        self.suspect_state.read().failures >= suspect_threshold
+    }
+
+    /// Records a submission failure, scheduling the next isolation retry with
+    /// exponential backoff once the operation is past the suspect threshold.
+    /// Returns the new failure count.
+    fn record_failure(
+        &self,
+        now: Instant,
+        suspect_threshold: u32,
+        backoff_initial: Duration,
+        backoff_max: Duration,
+    ) -> u32 {
+        let mut state = self.suspect_state.write();
+        state.failures = state.failures.saturating_add(1);
+        if state.failures > suspect_threshold {
+            let exponent = state.failures - suspect_threshold - 1;
+            state.retry_after =
+                Some(now + Self::suspect_backoff(backoff_initial, backoff_max, exponent));
+        }
+        state.failures
+    }
+
+    /// Schedules the next isolation retry without recording a failure, for
+    /// suspect failures that are not evidence against the operation (during a
+    /// provider event). No-op unless the operation is a suspect.
+    fn reschedule_retry(
+        &self,
+        now: Instant,
+        suspect_threshold: u32,
+        backoff_initial: Duration,
+        backoff_max: Duration,
+    ) {
+        let mut state = self.suspect_state.write();
+        if state.failures >= suspect_threshold {
+            let exponent = state.failures - suspect_threshold;
+            state.retry_after =
+                Some(now + Self::suspect_backoff(backoff_initial, backoff_max, exponent));
+        }
+    }
+
+    /// Backoff delay doubling from `initial` with ±20% jitter, capped at `max`.
+    fn suspect_backoff(initial: Duration, max: Duration, exponent: u32) -> Duration {
+        let base = initial
+            .saturating_mul(2u32.saturating_pow(exponent))
+            .min(max);
+        base.mul_f64(rand::thread_rng().gen_range(0.8..=1.2))
+            .min(max)
+    }
+
+    fn reset_failures(&self) {
+        *self.suspect_state.write() = SuspectState::default();
+    }
+
+    fn mark_suspect(&self, suspect_threshold: u32) {
+        let mut state = self.suspect_state.write();
+        state.failures = state.failures.max(suspect_threshold);
+    }
+
+    #[cfg(test)]
+    fn failures(&self) -> u32 {
+        self.suspect_state.read().failures
+    }
+
+    fn retry_due(&self, now: Instant) -> bool {
+        self.suspect_state
+            .read()
+            .retry_after
+            .is_none_or(|retry_after| retry_after <= now)
     }
 }
 
@@ -979,6 +1271,24 @@ struct PoolMetrics {
     num_7702_ops_added: Counter,
     #[metric(describe = "the number of ops added")]
     num_ops_added: Counter,
+    #[metric(describe = "the number of suspect ops currently in the pool.")]
+    num_suspect_ops: Gauge,
+    #[metric(describe = "the number of ops marked suspect by an ambiguous multi-op failure.")]
+    num_marked_suspect_multi_op_failure: Counter,
+    #[metric(
+        describe = "the number of ops marked suspect by reaching the non-terminal RPC failure threshold."
+    )]
+    num_marked_suspect_threshold: Counter,
+    #[metric(describe = "the number of suspects cleared by a successful submission.")]
+    num_suspects_cleared: Counter,
+    #[metric(
+        describe = "the number of suspects removed after a terminal RPC error or repeated non-terminal RPC failures."
+    )]
+    num_suspects_removed: Counter,
+    #[metric(
+        describe = "whether poison user operation suspect tracking is enabled (1) or disabled (0)."
+    )]
+    suspect_tracking_enabled: Gauge,
 }
 
 #[cfg(test)]
@@ -1950,6 +2260,379 @@ mod tests {
         assert!(!pool.pending_bundles_by_uo.contains_key(&hash1));
     }
 
+    #[test]
+    fn success_resets_failures() {
+        let mut pool = pool();
+        let hash = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+
+        pool.apply_bundle_outcome(
+            &[hash],
+            BundleOutcome::NonTerminalFailure,
+            false,
+            Instant::now(),
+        );
+        pool.apply_bundle_outcome(
+            &[hash],
+            BundleOutcome::NonTerminalFailure,
+            false,
+            Instant::now(),
+        );
+        assert_eq!(pool.by_hash[&hash].failures(), 2);
+
+        pool.apply_bundle_outcome(&[hash], BundleOutcome::Success, false, Instant::now());
+        assert_eq!(pool.by_hash[&hash].failures(), 0);
+        assert_eq!(pool.best_operations().count(), 1);
+    }
+
+    #[test]
+    fn non_terminal_failures_promote_to_suspect() {
+        let mut pool = pool();
+        let hash = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+
+        for _ in 0..3 {
+            let to_remove = pool.apply_bundle_outcome(
+                &[hash],
+                BundleOutcome::NonTerminalFailure,
+                false,
+                Instant::now(),
+            );
+            assert!(to_remove.is_empty());
+        }
+
+        // suspect: hidden from best operations, due for isolation immediately
+        assert_eq!(pool.best_operations().count(), 0);
+        let due: Vec<_> = pool.due_suspect_operations(Instant::now()).collect();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].uo.hash(), hash);
+    }
+
+    #[test]
+    fn provider_event_pauses_removal_progress_only() {
+        let mut pool = pool_with_conf(PoolInnerConfig {
+            suspect_rpc_backoff_initial: Duration::from_secs(10),
+            ..conf()
+        });
+        let non_suspect = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+        let suspect = pool
+            .add_operation(create_op(Address::random(), 0, 2), 0, 0)
+            .unwrap();
+        pool.by_hash[&suspect].mark_suspect(3);
+
+        let now = Instant::now();
+        for _ in 0..10 {
+            let to_remove = pool.apply_bundle_outcome(
+                &[non_suspect, suspect],
+                BundleOutcome::NonTerminalFailure,
+                true,
+                now,
+            );
+            // no removal ever fires during a provider event
+            assert!(to_remove.is_empty());
+        }
+
+        // suspect analysis continues during the event: the non-suspect accrues
+        // failures, is promoted at the threshold, and then freezes
+        assert_eq!(pool.by_hash[&non_suspect].failures(), 3);
+        // an existing suspect makes no removal progress
+        assert_eq!(pool.by_hash[&suspect].failures(), 3);
+        // but its isolation retries stay spaced: 10s initial with ±20% jitter
+        let suspect_op = &pool.by_hash[&suspect];
+        assert!(!suspect_op.retry_due(now + Duration::from_millis(7_900)));
+        assert!(suspect_op.retry_due(now + Duration::from_millis(12_100)));
+    }
+
+    #[test]
+    fn provider_event_resumes_removal_progress_after_clearing() {
+        // threshold 3, max_suspect_rpc_failures 3: removal at 6 total failures
+        let mut pool = pool_with_conf(PoolInnerConfig {
+            suspect_rpc_backoff_initial: Duration::ZERO,
+            ..conf()
+        });
+        let suspect = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+        pool.by_hash[&suspect].mark_suspect(3);
+
+        let now = Instant::now();
+        for _ in 0..5 {
+            let to_remove =
+                pool.apply_bundle_outcome(&[suspect], BundleOutcome::NonTerminalFailure, true, now);
+            // failures during the event never contribute to a later removal
+            assert!(to_remove.is_empty());
+        }
+        assert_eq!(pool.by_hash[&suspect].failures(), 3);
+
+        // event clears: removal progress resumes from the frozen count, not from 0
+        pool.apply_bundle_outcome(&[suspect], BundleOutcome::NonTerminalFailure, false, now);
+        assert_eq!(pool.by_hash[&suspect].failures(), 4);
+        let to_remove =
+            pool.apply_bundle_outcome(&[suspect], BundleOutcome::NonTerminalFailure, false, now);
+        assert_eq!(pool.by_hash[&suspect].failures(), 5);
+        assert!(to_remove.is_empty());
+
+        let to_remove =
+            pool.apply_bundle_outcome(&[suspect], BundleOutcome::NonTerminalFailure, false, now);
+        assert_eq!(to_remove.len(), 1);
+        assert_eq!(to_remove[0].0, suspect);
+        assert!(matches!(
+            to_remove[0].1,
+            OpRemovalReason::RepeatedNonTerminalRpcFailure
+        ));
+    }
+
+    #[test]
+    fn suspect_failure_schedules_backoff() {
+        let mut pool = pool_with_conf(PoolInnerConfig {
+            suspect_rpc_backoff_initial: Duration::from_secs(10),
+            suspect_rpc_backoff_max: Duration::from_secs(600),
+            max_suspect_rpc_failures: 0,
+            ..conf()
+        });
+        let hash = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+        pool.by_hash[&hash].mark_suspect(3);
+
+        let now = Instant::now();
+        pool.apply_bundle_outcome(&[hash], BundleOutcome::NonTerminalFailure, false, now);
+
+        // first delay is 10s with ±20% jitter
+        let op = &pool.by_hash[&hash];
+        assert!(!op.retry_due(now + Duration::from_millis(7_900)));
+        assert!(op.retry_due(now + Duration::from_millis(12_100)));
+        assert_eq!(pool.due_suspect_operations(now).count(), 0);
+
+        // second delay doubles to 20s with ±20% jitter
+        pool.apply_bundle_outcome(&[hash], BundleOutcome::NonTerminalFailure, false, now);
+        let op = &pool.by_hash[&hash];
+        assert!(!op.retry_due(now + Duration::from_millis(15_900)));
+        assert!(op.retry_due(now + Duration::from_millis(24_100)));
+    }
+
+    #[test]
+    fn suspect_backoff_caps_at_max() {
+        let mut pool = pool_with_conf(PoolInnerConfig {
+            suspect_rpc_backoff_initial: Duration::from_secs(10),
+            suspect_rpc_backoff_max: Duration::from_secs(15),
+            max_suspect_rpc_failures: 0,
+            ..conf()
+        });
+        let hash = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+        pool.by_hash[&hash].mark_suspect(3);
+
+        let now = Instant::now();
+        for _ in 0..8 {
+            pool.apply_bundle_outcome(&[hash], BundleOutcome::NonTerminalFailure, false, now);
+        }
+        assert!(pool.by_hash[&hash].retry_due(now + Duration::from_secs(15)));
+    }
+
+    #[test]
+    fn repeated_suspect_failures_remove_at_threshold() {
+        let mut pool = pool_with_conf(PoolInnerConfig {
+            suspect_rpc_backoff_initial: Duration::ZERO,
+            ..conf()
+        });
+        let hash = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+
+        // suspect threshold 3 + removal allowance 3 = removal at the 6th failure
+        for _ in 0..5 {
+            let to_remove = pool.apply_bundle_outcome(
+                &[hash],
+                BundleOutcome::NonTerminalFailure,
+                false,
+                Instant::now(),
+            );
+            assert!(to_remove.is_empty());
+        }
+        let to_remove = pool.apply_bundle_outcome(
+            &[hash],
+            BundleOutcome::NonTerminalFailure,
+            false,
+            Instant::now(),
+        );
+        assert_eq!(to_remove.len(), 1);
+        assert_eq!(to_remove[0].0, hash);
+        assert!(matches!(
+            to_remove[0].1,
+            OpRemovalReason::RepeatedNonTerminalRpcFailure
+        ));
+    }
+
+    #[test]
+    fn zero_max_suspect_failures_disables_removal() {
+        let mut pool = pool_with_conf(PoolInnerConfig {
+            max_suspect_rpc_failures: 0,
+            suspect_rpc_backoff_initial: Duration::ZERO,
+            ..conf()
+        });
+        let hash = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+
+        for _ in 0..20 {
+            let to_remove = pool.apply_bundle_outcome(
+                &[hash],
+                BundleOutcome::NonTerminalFailure,
+                false,
+                Instant::now(),
+            );
+            assert!(to_remove.is_empty());
+        }
+    }
+
+    #[test]
+    fn terminal_failure_single_op_removes() {
+        let mut pool = pool();
+        let hash = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+
+        let to_remove = pool.apply_bundle_outcome(
+            &[hash],
+            BundleOutcome::TerminalFailure,
+            false,
+            Instant::now(),
+        );
+        assert_eq!(to_remove.len(), 1);
+        assert_eq!(to_remove[0].0, hash);
+        assert!(matches!(to_remove[0].1, OpRemovalReason::TerminalRpcError));
+    }
+
+    #[test]
+    fn terminal_failure_multi_op_marks_all_suspect() {
+        let mut pool = pool();
+        let hashes: Vec<B256> = (0..3)
+            .map(|i| {
+                pool.add_operation(create_op(Address::random(), 0, i + 1), 0, 0)
+                    .unwrap()
+            })
+            .collect();
+
+        let to_remove = pool.apply_bundle_outcome(
+            &hashes,
+            BundleOutcome::TerminalFailure,
+            false,
+            Instant::now(),
+        );
+        assert!(to_remove.is_empty());
+        assert_eq!(pool.best_operations().count(), 0);
+        assert_eq!(pool.due_suspect_operations(Instant::now()).count(), 3);
+    }
+
+    #[test]
+    fn mark_suspect_does_not_reset_progress() {
+        let mut pool = pool_with_conf(PoolInnerConfig {
+            suspect_rpc_backoff_initial: Duration::ZERO,
+            ..conf()
+        });
+        let fresh = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+        let seasoned = pool
+            .add_operation(create_op(Address::random(), 0, 2), 0, 0)
+            .unwrap();
+        for _ in 0..5 {
+            pool.apply_bundle_outcome(
+                &[seasoned],
+                BundleOutcome::NonTerminalFailure,
+                false,
+                Instant::now(),
+            );
+        }
+
+        pool.apply_bundle_outcome(
+            &[fresh, seasoned],
+            BundleOutcome::MarkSuspect,
+            false,
+            Instant::now(),
+        );
+
+        assert_eq!(pool.by_hash[&fresh].failures(), 3);
+        assert_eq!(pool.by_hash[&seasoned].failures(), 5);
+    }
+
+    #[test]
+    fn disabled_suspect_tracking_ignores_zero_threshold() {
+        // A threshold of 0 would make every fresh op appear suspect
+        // (`failures >= 0`); the master switch must still guarantee that
+        // disabling suspect tracking never removes operations from
+        // `best_operations`.
+        let mut pool = pool_with_conf(PoolInnerConfig {
+            suspect_tracking_enabled: false,
+            rpc_failures_before_suspect: 0,
+            ..conf()
+        });
+        pool.add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+
+        assert_eq!(pool.best_operations().count(), 1);
+        assert_eq!(pool.due_suspect_operations(Instant::now()).count(), 0);
+    }
+
+    #[test]
+    fn disabled_suspect_tracking_ignores_bundle_outcomes() {
+        let mut pool = pool_with_conf(PoolInnerConfig {
+            suspect_tracking_enabled: false,
+            suspect_rpc_backoff_initial: Duration::ZERO,
+            ..conf()
+        });
+        let hash = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+
+        for _ in 0..10 {
+            let to_remove = pool.apply_bundle_outcome(
+                &[hash],
+                BundleOutcome::NonTerminalFailure,
+                false,
+                Instant::now(),
+            );
+            assert!(to_remove.is_empty());
+        }
+        let terminal = pool.apply_bundle_outcome(
+            &[hash],
+            BundleOutcome::TerminalFailure,
+            false,
+            Instant::now(),
+        );
+        assert!(terminal.is_empty());
+
+        // MarkSuspect is the one exception: with tracking off there is no
+        // suspect state to fall back on, so it reverts to the pre-feature
+        // behavior it replaced and removes the op outright, rather than
+        // silently leaving an unattributed-revert op live forever.
+        let mark_suspect =
+            pool.apply_bundle_outcome(&[hash], BundleOutcome::MarkSuspect, false, Instant::now());
+        assert_eq!(mark_suspect, vec![(hash, OpRemovalReason::Requested)]);
+
+        assert_eq!(pool.by_hash[&hash].failures(), 0);
+        assert_eq!(pool.best_operations().count(), 1);
+        assert_eq!(pool.due_suspect_operations(Instant::now()).count(), 0);
+    }
+
+    #[test]
+    fn bundle_outcome_ignores_unknown_hashes() {
+        let pool = pool();
+        let to_remove = pool.apply_bundle_outcome(
+            &[B256::random()],
+            BundleOutcome::TerminalFailure,
+            false,
+            Instant::now(),
+        );
+        assert!(to_remove.is_empty());
+    }
+
     const MAX_POOL_SIZE_OPS: usize = 20;
 
     fn conf() -> PoolInnerConfig {
@@ -1963,6 +2646,11 @@ mod tests {
             da_gas_tracking_enabled: false,
             max_time_in_pool: None,
             verification_gas_limit_efficiency_reject_threshold: 0.5,
+            suspect_tracking_enabled: true,
+            rpc_failures_before_suspect: 3,
+            max_suspect_rpc_failures: 3,
+            suspect_rpc_backoff_initial: Duration::from_secs(1),
+            suspect_rpc_backoff_max: Duration::from_secs(600),
         }
     }
 

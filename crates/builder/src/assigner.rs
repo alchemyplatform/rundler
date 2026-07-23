@@ -16,7 +16,7 @@ use std::{
     sync::Mutex,
 };
 
-use alloy_primitives::{Address, U256};
+use alloy_primitives::{Address, B256, U256};
 use anyhow::bail;
 use metrics::{Counter, Gauge};
 use metrics_derive::Metrics;
@@ -52,6 +52,9 @@ pub(crate) struct WorkAssignment {
     pub filter_id: Option<String>,
     /// The assigned operations
     pub operations: Vec<PoolOperation>,
+    /// Whether this is an isolation bundle for a single suspect operation.
+    /// See `docs/designs/poison-user-operations.md`.
+    pub is_isolation: bool,
 }
 
 /// Detailed result of attempting to assign work.
@@ -96,6 +99,27 @@ struct State {
     entrypoint_last_selected: HashMap<ProposerKey, u64>,
     /// Tracks which entrypoint a builder is pinned to for replacement attempts
     builder_to_pinned_proposer: HashMap<Address, ProposerKey>,
+    /// Builders currently holding an isolation assignment for a suspect
+    /// operation. Bounds isolation capacity while normal work is eligible.
+    isolating_builders: HashSet<Address>,
+    /// The op hash a builder is isolating, if any. Tracked independently of
+    /// the pool's suspect flag: `Success` clears suspect status as soon as
+    /// the RPC accepts a transaction, well before it's mined, so a stuck
+    /// isolation transaction needing a fee-bump replacement would otherwise
+    /// look like ordinary work by the time it needs replacing. Cleared
+    /// wherever `builder_to_pinned_proposer`/`isolating_builders` are.
+    builder_to_isolation_hash: HashMap<Address, B256>,
+    /// Monotonic counter incremented each time an entrypoint is chosen for an
+    /// isolation assignment. Tracked independently of `global_cycle` so
+    /// isolation rotation doesn't affect normal-work starvation accounting.
+    isolation_cycle: u64,
+    /// Tracks when each entrypoint was last chosen for an isolation
+    /// assignment (by `isolation_cycle`). Mirrors `entrypoint_last_selected`'s
+    /// role for normal work: without it, suspect candidates are attempted in
+    /// fixed config order every call, so an entrypoint with due suspects that
+    /// happen to be unassignable this cycle can permanently block isolation
+    /// slots from reaching suspects on other entrypoints.
+    entrypoint_last_isolated: HashMap<ProposerKey, u64>,
 }
 
 /// A candidate entrypoint for assignment, used during priority-based selection.
@@ -157,9 +181,9 @@ impl Assigner {
     ) -> anyhow::Result<AssignmentResult> {
         // If builder has confirmed locks, stay pinned to the same entrypoint.
         // This skips the all-entrypoint pool queries and candidate sorting.
-        let pinned_target = {
+        let (pinned_target, isolation_hash) = {
             let state = self.state.lock().unwrap();
-            state
+            let pinned_target = state
                 .builder_to_pinned_proposer
                 .get(&builder_address)
                 .cloned()
@@ -175,9 +199,21 @@ impl Assigner {
                                     .is_some_and(|(_, ls)| *ls == LockState::Confirmed)
                             })
                         })
-                })
+                });
+            let isolation_hash = pinned_target.as_ref().and_then(|_| {
+                state
+                    .builder_to_isolation_hash
+                    .get(&builder_address)
+                    .copied()
+            });
+            (pinned_target, isolation_hash)
         };
         if let Some(pinned_proposer) = pinned_target {
+            if let Some(hash) = isolation_hash {
+                return self
+                    .assign_isolation_replacement(builder_address, hash, pinned_proposer)
+                    .await;
+            }
             return self
                 .assign_work_for_entrypoint(
                     builder_address,
@@ -201,8 +237,15 @@ impl Assigner {
             .entrypoints
             .iter()
             .map(|ep| {
+                // Request a full page of due suspects, not just `num_signers`:
+                // suspects are returned best-fee-first, and later filtering
+                // (locks/fees/block height) happens after this query. Capping
+                // here at a small number risked permanently hiding a lower-fee
+                // but eligible suspect behind a handful of stuck/unassignable
+                // ones ahead of it in the truncated page.
                 self.pool.get_ops_summaries(
                     ep.address,
+                    self.max_pool_ops_per_request,
                     self.max_pool_ops_per_request,
                     ep.filter_id.clone(),
                 )
@@ -211,6 +254,7 @@ impl Assigner {
         let query_results = futures_util::future::join_all(query_futures).await;
 
         let mut candidates = Vec::new();
+        let mut suspect_candidates = Vec::new();
         let mut fee_filtered_candidate_exists = false;
         for (entrypoint_idx, (ep, result)) in self
             .entrypoints
@@ -218,7 +262,10 @@ impl Assigner {
             .zip(query_results.into_iter())
             .enumerate()
         {
-            let ops = result?;
+            let (suspects, ops): (Vec<_>, Vec<_>) = result?.into_iter().partition(|op| op.suspect);
+            if !suspects.is_empty() {
+                suspect_candidates.push((ep.clone(), suspects));
+            }
             let (assignable_count, eligible_count) =
                 self.count_ops(&ops, builder_address, max_sim_block_number, &required_fees);
             let ep_metrics = ep_metrics_for(ep);
@@ -232,6 +279,83 @@ impl Assigner {
                 });
             } else if assignable_count > 0 {
                 fee_filtered_candidate_exists = true;
+            }
+        }
+
+        // Isolation is filled before normal work: while normal work is
+        // eligible, at most `max(1, num_signers / 2)` builders isolate so
+        // suspects cannot starve normal bundles; once normal work is
+        // exhausted, any idle builder may drain suspects. Recomputed on every
+        // assignment.
+        let isolation_limit = if candidates.is_empty() {
+            self.num_signers
+        } else {
+            (self.num_signers / 2).max(1)
+        };
+        self.metrics.isolation_limit.set(isolation_limit as f64);
+
+        if !suspect_candidates.is_empty() {
+            // Rotate entrypoint order by least-recently-isolated first (stable
+            // sort keeps never-isolated entrypoints in config order relative
+            // to each other). Without this, suspects are always tried in
+            // fixed config order, so an entrypoint that's always got enough
+            // due suspects to fill isolation capacity can starve every other
+            // entrypoint's suspects indefinitely - the same starvation
+            // problem entrypoint_last_selected already solves for normal work.
+            {
+                let state = self.state.lock().unwrap();
+                suspect_candidates.sort_by_key(|(ep, _)| {
+                    state
+                        .entrypoint_last_isolated
+                        .get(&ep.key())
+                        .copied()
+                        .unwrap_or(0)
+                });
+            }
+
+            // Reserve the isolation slot under the same lock as the capacity
+            // check: concurrent builders calling assign_work must not both
+            // read a count below the limit and then both insert, exceeding
+            // isolation_limit. Released below if no suspect ends up
+            // claimable, so a failed attempt doesn't waste the slot. The
+            // gauge is refreshed inside every critical section that touches
+            // `isolating_builders` so it can't go stale between mutations.
+            let reserved = {
+                let mut state = self.state.lock().unwrap();
+                let reserved = state.isolating_builders.len() < isolation_limit
+                    && state.isolating_builders.insert(builder_address);
+                self.metrics
+                    .isolating_builders
+                    .set(state.isolating_builders.len() as f64);
+                reserved
+            };
+            if reserved {
+                match self
+                    .assign_isolation_work(
+                        builder_address,
+                        suspect_candidates,
+                        max_sim_block_number,
+                        &required_fees,
+                    )
+                    .await
+                {
+                    Ok(Some(assignment)) => return Ok(AssignmentResult::Assigned(assignment)),
+                    Ok(None) => {
+                        let mut state = self.state.lock().unwrap();
+                        state.isolating_builders.remove(&builder_address);
+                        self.metrics
+                            .isolating_builders
+                            .set(state.isolating_builders.len() as f64);
+                    }
+                    Err(e) => {
+                        let mut state = self.state.lock().unwrap();
+                        state.isolating_builders.remove(&builder_address);
+                        self.metrics
+                            .isolating_builders
+                            .set(state.isolating_builders.len() as f64);
+                        return Err(e);
+                    }
+                }
             }
         }
 
@@ -360,10 +484,77 @@ impl Assigner {
                 entry_point: candidate.ep.address,
                 filter_id: candidate.ep.filter_id,
                 operations: assigned_ops,
+                is_isolation: false,
             }));
         }
 
         Ok(AssignmentResult::NoOperations)
+    }
+
+    /// Attempts to assign a single-operation isolation bundle for one due
+    /// suspect. Returns `None` if no suspect is claimable by this builder.
+    ///
+    /// The caller must have already reserved `builder_address`'s isolation
+    /// slot in `isolating_builders` before calling this, and releases it if
+    /// `None` or an error is returned.
+    async fn assign_isolation_work(
+        &self,
+        builder_address: Address,
+        suspect_candidates: Vec<(EntrypointInfo, Vec<PoolOperationSummary>)>,
+        max_sim_block_number: u64,
+        required_fees: &GasFees,
+    ) -> anyhow::Result<Option<WorkAssignment>> {
+        for (ep, suspects) in suspect_candidates {
+            for suspect in suspects {
+                let hash = suspect.hash;
+                let assigned_ops = self
+                    .assign_ops_internal(
+                        builder_address,
+                        &ep,
+                        vec![suspect],
+                        max_sim_block_number,
+                        required_fees,
+                    )
+                    .await?;
+                if assigned_ops.is_empty() {
+                    continue;
+                }
+
+                tracing::info!(
+                    "Builder Assigner: isolation assignment of suspect op {hash:?} to builder {builder_address:?}"
+                );
+                {
+                    let mut state = self.state.lock().unwrap();
+                    // isolating_builders was already reserved by the caller.
+                    // Pin so revert processing can find the proposer; suspects
+                    // do not refresh starvation tracking for normal work.
+                    state
+                        .builder_to_pinned_proposer
+                        .insert(builder_address, ep.key());
+                    state
+                        .builder_to_isolation_hash
+                        .insert(builder_address, hash);
+                    // Record this entrypoint as most-recently-isolated so the
+                    // rotation in assign_work's caller moves on to other
+                    // entrypoints with due suspects next time.
+                    state.isolation_cycle += 1;
+                    let isolation_cycle = state.isolation_cycle;
+                    state
+                        .entrypoint_last_isolated
+                        .insert(ep.key(), isolation_cycle);
+                }
+                ep_metrics_for(&ep).ep_isolation_assignments.increment(1);
+
+                return Ok(Some(WorkAssignment {
+                    entry_point: ep.address,
+                    filter_id: ep.filter_id,
+                    operations: assigned_ops,
+                    is_isolation: true,
+                }));
+            }
+        }
+
+        Ok(None)
     }
 
     /// Assigns work for a specific entrypoint configuration.
@@ -382,6 +573,10 @@ impl Assigner {
             .get_ops_summaries(
                 entry_point,
                 self.max_pool_ops_per_request,
+                // Replacement attempts never start new isolation work: an
+                // in-flight accepted bundle has already cleared its ops'
+                // suspect status, so suspects are not requested here.
+                0,
                 filter_id.clone(),
             )
             .await?;
@@ -444,8 +639,48 @@ impl Assigner {
             entry_point,
             filter_id,
             operations: assigned_ops,
+            is_isolation: false,
         };
         tracing::info!("Builder Assigner: assignment: {assignment:?}");
+
+        Ok(AssignmentResult::Assigned(assignment))
+    }
+
+    /// Re-supplies the same single suspect operation for a pinned builder
+    /// that needs to replace a pending isolation bundle (e.g. a fee bump).
+    ///
+    /// `Success` clears an op's suspect flag as soon as the RPC accepts the
+    /// transaction, well before it is mined, so by the time a stuck
+    /// isolation transaction needs replacing, the pool no longer reports the
+    /// op as suspect. Falling through to `assign_work_for_entrypoint` at
+    /// that point would query ordinary (non-suspect) work: `assign_ops_internal`
+    /// could then merge other senders into a multi-op replacement bundle -
+    /// reintroducing exactly the contamination risk isolation exists to
+    /// prevent - or drop the op entirely if it now fails the fee/block
+    /// filters, leaving its pending transaction untracked. Tracking the
+    /// isolation hash independently of pool suspect state avoids both: this
+    /// always returns the original op alone, or no work if it has left the
+    /// pool.
+    async fn assign_isolation_replacement(
+        &self,
+        builder_address: Address,
+        hash: B256,
+        proposer_key: ProposerKey,
+    ) -> anyhow::Result<AssignmentResult> {
+        let Some(op) = self.pool.get_op_by_hash(hash).await? else {
+            tracing::warn!(
+                "Builder Assigner: isolation op {hash:?} for builder {builder_address:?} no longer in pool, cannot replace"
+            );
+            return Ok(AssignmentResult::NoOperations);
+        };
+
+        let assignment = WorkAssignment {
+            entry_point: proposer_key.0,
+            filter_id: proposer_key.1,
+            operations: vec![op],
+            is_isolation: true,
+        };
+        tracing::info!("Builder Assigner: isolation replacement assignment: {assignment:?}");
 
         Ok(AssignmentResult::Assigned(assignment))
     }
@@ -695,6 +930,11 @@ impl Assigner {
                 self.metrics.active_builders.decrement(1);
                 state.builder_to_uo_senders.remove(&builder_address);
                 state.builder_to_pinned_proposer.remove(&builder_address);
+                state.isolating_builders.remove(&builder_address);
+                state.builder_to_isolation_hash.remove(&builder_address);
+                self.metrics
+                    .isolating_builders
+                    .set(state.isolating_builders.len() as f64);
             }
         }
 
@@ -720,6 +960,11 @@ impl Assigner {
             .get(&builder_address)
             .map(ep_metrics_for_key);
         state.builder_to_pinned_proposer.remove(&builder_address);
+        state.isolating_builders.remove(&builder_address);
+        state.builder_to_isolation_hash.remove(&builder_address);
+        self.metrics
+            .isolating_builders
+            .set(state.isolating_builders.len() as f64);
         let Some(builder_senders) = state.builder_to_uo_senders.remove(&builder_address) else {
             return;
         };
@@ -782,6 +1027,10 @@ impl Assigner {
 struct GlobalMetrics {
     #[metric(describe = "the number of active builders.")]
     active_builders: Gauge,
+    #[metric(describe = "the computed isolation capacity limit for the current assignment cycle.")]
+    isolation_limit: Gauge,
+    #[metric(describe = "the number of builders currently holding an isolation assignment.")]
+    isolating_builders: Gauge,
 }
 
 #[derive(Metrics)]
@@ -808,6 +1057,8 @@ struct PerEntrypointMetrics {
     ep_starvation_wakeups: Counter,
     #[metric(describe = "the last-seen eligible op count for this entrypoint.")]
     ep_eligible_ops: Gauge,
+    #[metric(describe = "the total number of suspect isolation assignments from this entrypoint.")]
+    ep_isolation_assignments: Counter,
 }
 
 fn ep_metrics_for(ep: &EntrypointInfo) -> PerEntrypointMetrics {
@@ -827,6 +1078,8 @@ fn ep_metrics_for_key(key: &ProposerKey) -> PerEntrypointMetrics {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use alloy_primitives::B256;
     use rundler_types::{
         EntityInfos, UserOperation, UserOperationPermissions, ValidTimeRange,
@@ -847,7 +1100,7 @@ mod tests {
         let ops_cloned = ops.clone();
         mock_pool
             .expect_get_ops_summaries()
-            .returning(move |_, _, _| {
+            .returning(move |_, _, _, _| {
                 Ok(ops_cloned.iter().map(|op| op.into()).collect::<Vec<_>>())
             });
         mock_pool
@@ -867,7 +1120,7 @@ mod tests {
         let ep2_ops_clone = ep2_ops.clone();
         mock_pool
             .expect_get_ops_summaries()
-            .returning(move |ep, _, _| {
+            .returning(move |ep, _, _, _| {
                 if ep == TEST_ENTRY_POINT {
                     Ok(ep1_ops_clone.iter().map(|op| op.into()).collect())
                 } else {
@@ -1075,6 +1328,290 @@ mod tests {
         );
     }
 
+    fn mock_pool_with_suspects(ops: Vec<PoolOperation>, suspect_senders: Vec<Address>) -> MockPool {
+        let mut mock_pool = MockPool::new();
+        let ops_cloned = ops.clone();
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(move |_, _, max_suspects, _| {
+                Ok(ops_cloned
+                    .iter()
+                    .map(|op| {
+                        let mut summary: PoolOperationSummary = op.into();
+                        summary.suspect = suspect_senders.contains(&op.uo.sender());
+                        summary
+                    })
+                    .filter(|summary| !summary.suspect || max_suspects > 0)
+                    .collect::<Vec<_>>())
+            });
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .returning(move |_, hashes| {
+                Ok(ops
+                    .iter()
+                    .filter(|op| hashes.contains(&op.uo.hash()))
+                    .cloned()
+                    .collect::<Vec<_>>())
+            });
+        mock_pool
+    }
+
+    #[tokio::test]
+    async fn test_suspect_isolated_alone() {
+        // 1 suspect + 2 normal ops with 4 signers: isolation limit is 2
+        let ops = create_test_ops(&[address(1), address(2), address(3)]);
+        let mock_pool = mock_pool_with_suspects(ops, vec![address(3)]);
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+
+        // the first builder isolates the suspect
+        let isolation = assign_expect_default(&assigner, address(10)).await;
+        assert!(isolation.is_isolation);
+        assert_eq!(isolation.operations.len(), 1);
+        assert_eq!(isolation.operations[0].uo.sender(), address(3));
+
+        // the suspect is locked, so the second builder receives the normal work
+        let normal = assign_expect_default(&assigner, address(11)).await;
+        assert!(!normal.is_isolation);
+        assert_eq!(normal.operations.len(), 2);
+        assert!(
+            normal
+                .operations
+                .iter()
+                .all(|op| op.uo.sender() != address(3))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_isolation_capped_while_normal_work_eligible() {
+        // 2 suspects + 1 normal op with 2 signers: isolation limit is 1
+        let ops = create_test_ops(&[address(1), address(2), address(3)]);
+        let mock_pool = mock_pool_with_suspects(ops, vec![address(2), address(3)]);
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 2, 10, 10, 0.50);
+
+        let first = assign_expect_default(&assigner, address(10)).await;
+        assert!(first.is_isolation);
+
+        // isolation capacity is used up: the second builder gets normal work
+        // even though a second suspect is due
+        let second = assign_expect_default(&assigner, address(11)).await;
+        assert!(!second.is_isolation);
+        assert_eq!(second.operations.len(), 1);
+        assert_eq!(second.operations[0].uo.sender(), address(1));
+    }
+
+    #[tokio::test]
+    async fn test_isolation_expands_when_no_normal_work() {
+        // only suspects with 2 signers: every builder may isolate
+        let ops = create_test_ops(&[address(1), address(2)]);
+        let mock_pool = mock_pool_with_suspects(ops, vec![address(1), address(2)]);
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 2, 10, 10, 0.50);
+
+        let first = assign_expect_default(&assigner, address(10)).await;
+        assert!(first.is_isolation);
+        assert_eq!(first.operations.len(), 1);
+
+        let second = assign_expect_default(&assigner, address(11)).await;
+        assert!(second.is_isolation);
+        assert_eq!(second.operations.len(), 1);
+        assert_ne!(
+            first.operations[0].uo.sender(),
+            second.operations[0].uo.sender()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_isolation_slot_freed_after_release() {
+        let ops = create_test_ops(&[address(1), address(2), address(3)]);
+        let mock_pool = mock_pool_with_suspects(ops, vec![address(2), address(3)]);
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 2, 10, 10, 0.50);
+
+        let first = assign_expect_default(&assigner, address(10)).await;
+        assert!(first.is_isolation);
+
+        // the isolation limit is recomputed per assignment: releasing the
+        // isolating builder frees its slot for the next assignment
+        assigner.release_all(address(10));
+
+        let second = assign_expect_default(&assigner, address(11)).await;
+        assert!(second.is_isolation);
+    }
+
+    #[tokio::test]
+    async fn test_isolation_replacement_stays_singleton_and_pinned() {
+        // 1 suspect + 2 normal ops. Once the isolation bundle is sent and its
+        // sender confirmed (simulating the RPC accepting it - which reports
+        // Success and clears the op's suspect flag in the real pool, well
+        // before it's mined), a replacement/fee-bump attempt for the same
+        // builder must keep re-supplying just the original suspect alone,
+        // not fall back to ordinary (now non-suspect-looking) multi-op work.
+        let ops = create_test_ops(&[address(1), address(2), address(3)]);
+        let suspect_op = ops
+            .iter()
+            .find(|op| op.uo.sender() == address(3))
+            .unwrap()
+            .clone();
+        let mut mock_pool = mock_pool_with_suspects(ops, vec![address(3)]);
+        mock_pool
+            .expect_get_op_by_hash()
+            .returning(move |hash| Ok((hash == suspect_op.uo.hash()).then(|| suspect_op.clone())));
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+
+        let isolation = assign_expect_default(&assigner, address(10)).await;
+        assert!(isolation.is_isolation);
+        assert_eq!(isolation.operations.len(), 1);
+        assert_eq!(isolation.operations[0].uo.sender(), address(3));
+
+        // Simulate the bundle sender confirming the isolation bundle was
+        // sent (this is what promotes the sender's lock to `Confirmed`,
+        // making the builder eligible for the pinned-replacement path).
+        assigner
+            .confirm_senders_drop_unused(address(10), &[address(3)])
+            .unwrap();
+
+        // Replacement attempt for the same builder: must stay singleton and
+        // keep targeting the original suspect, not the normal ops for
+        // address(1)/address(2) that a fresh query would otherwise offer.
+        let replacement = assign_expect_default(&assigner, address(10)).await;
+        assert!(replacement.is_isolation);
+        assert_eq!(replacement.operations.len(), 1);
+        assert_eq!(replacement.operations[0].uo.sender(), address(3));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_isolation_reservation_atomic_under_concurrency() {
+        // 2 suspects + 1 normal op with 2 signers: isolation limit is 1.
+        // Two builders race to isolate concurrently; the capacity check and
+        // the isolating_builders reservation must happen under the same lock
+        // so at most 1 can claim the single slot, even when both requests
+        // are genuinely running in parallel (not just interleaved awaits).
+        let ops = create_test_ops(&[address(1), address(2), address(3)]);
+        let suspect_senders = [address(2), address(3)];
+        let ops_for_summaries = ops.clone();
+        let mut mock_pool = MockPool::new();
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(move |_, _, max_suspects, _| {
+                Ok(ops_for_summaries
+                    .iter()
+                    .map(|op| {
+                        let mut summary: PoolOperationSummary = op.into();
+                        summary.suspect = suspect_senders.contains(&op.uo.sender());
+                        summary
+                    })
+                    .filter(|summary| !summary.suspect || max_suspects > 0)
+                    .collect::<Vec<_>>())
+            });
+        let ops_for_hashes = ops.clone();
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .returning(move |_, hashes| {
+                // Widen the race window so both concurrent callers are
+                // inside assign_isolation_work at the same time.
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                Ok(ops_for_hashes
+                    .iter()
+                    .filter(|op| hashes.contains(&op.uo.hash()))
+                    .cloned()
+                    .collect::<Vec<_>>())
+            });
+
+        let assigner = Arc::new(Assigner::new(
+            Box::new(mock_pool),
+            test_entrypoints(),
+            2,
+            10,
+            10,
+            0.50,
+        ));
+
+        let a1 = assigner.clone();
+        let a2 = assigner.clone();
+        let h1 = tokio::spawn(async move {
+            a1.assign_work(address(10), u64::MAX, GasFees::default())
+                .await
+        });
+        let h2 = tokio::spawn(async move {
+            a2.assign_work(address(11), u64::MAX, GasFees::default())
+                .await
+        });
+
+        let r1 = h1.await.unwrap().unwrap();
+        let r2 = h2.await.unwrap().unwrap();
+
+        let isolating_count = [&r1, &r2]
+            .into_iter()
+            .filter(|r| matches!(r, AssignmentResult::Assigned(a) if a.is_isolation))
+            .count();
+        assert_eq!(
+            isolating_count, 1,
+            "exactly one concurrent request should claim the single isolation slot"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_locked_suspect_not_reassigned() {
+        let ops = create_test_ops(&[address(1)]);
+        let mock_pool = mock_pool_with_suspects(ops, vec![address(1)]);
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+
+        let first = assign_expect_default(&assigner, address(10)).await;
+        assert!(first.is_isolation);
+
+        let second = assign_default(&assigner, address(11)).await;
+        assert!(matches!(second, AssignmentResult::NoOperations));
+    }
+
+    #[tokio::test]
+    async fn test_suspect_respects_fee_filter() {
+        // the suspect op has zero fees and doesn't meet the fee requirement
+        let ops = create_test_ops(&[address(1)]);
+        let mock_pool = mock_pool_with_suspects(ops, vec![address(1)]);
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+
+        let result = assigner
+            .assign_work(
+                address(10),
+                u64::MAX,
+                GasFees {
+                    max_fee_per_gas: 1,
+                    max_priority_fee_per_gas: 1,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(result, AssignmentResult::NoOperations));
+    }
+
+    #[tokio::test]
+    async fn test_suspect_query_requests_full_page_not_num_signers() {
+        // Suspects come back best-fee-first, and lock/fee/block-height
+        // filtering happens only after this query returns. Capping the
+        // query itself at `num_signers` could hide an eligible suspect
+        // behind a handful of unassignable ones ahead of it in the
+        // truncated page, so the query must request a full page (matching
+        // `max_ops`) instead.
+        let requested_max_suspects = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let requested_max_suspects_clone = requested_max_suspects.clone();
+        let mut mock_pool = MockPool::new();
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(move |_, _, max_suspects, _| {
+                requested_max_suspects_clone
+                    .store(max_suspects, std::sync::atomic::Ordering::SeqCst);
+                Ok(vec![])
+            });
+        // num_signers deliberately small and distinct from max_pool_ops_per_request
+        // so a regression back to `num_signers` would be caught.
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 2, 1024, 10, 0.50);
+        let _ = assign_default(&assigner, address(0)).await;
+
+        assert_eq!(
+            requested_max_suspects.load(std::sync::atomic::Ordering::SeqCst),
+            1024,
+            "suspect query should request a full page (max_pool_ops_per_request), not num_signers"
+        );
+    }
+
     fn address(i: u64) -> Address {
         Address::from([i as u8; 20])
     }
@@ -1184,6 +1721,96 @@ mod tests {
         );
     }
 
+    fn mock_pool_two_eps_with_suspects(
+        ep1_ops: Vec<PoolOperation>,
+        ep1_suspects: Vec<Address>,
+        ep2_ops: Vec<PoolOperation>,
+        ep2_suspects: Vec<Address>,
+    ) -> MockPool {
+        let mut mock_pool = MockPool::new();
+        let ep1_ops_clone = ep1_ops.clone();
+        let ep2_ops_clone = ep2_ops.clone();
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(move |ep, _, _, _| {
+                let (ops, suspects) = if ep == TEST_ENTRY_POINT {
+                    (&ep1_ops_clone, &ep1_suspects)
+                } else {
+                    (&ep2_ops_clone, &ep2_suspects)
+                };
+                Ok(ops
+                    .iter()
+                    .map(|op| {
+                        let mut summary: PoolOperationSummary = op.into();
+                        summary.suspect = suspects.contains(&op.uo.sender());
+                        summary
+                    })
+                    .collect::<Vec<_>>())
+            });
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .returning(move |ep, hashes| {
+                let ops = if ep == TEST_ENTRY_POINT {
+                    &ep1_ops
+                } else {
+                    &ep2_ops
+                };
+                Ok(ops
+                    .iter()
+                    .filter(|op| hashes.contains(&op.uo.hash()))
+                    .cloned()
+                    .collect::<Vec<_>>())
+            });
+        mock_pool
+    }
+
+    #[tokio::test]
+    async fn test_isolation_rotates_across_entrypoints() {
+        // EP1 has 2 due suspects (address(1), address(2)) plus a normal op
+        // (address(4)) so isolation stays capacity-limited to 1 slot
+        // (num_signers=2 -> isolation_limit = max(1, num_signers/2) = 1
+        // while normal work is eligible). EP2 has a single due suspect
+        // (address(3)) and no normal work.
+        //
+        // Before rotation tracking, suspect candidates were always tried in
+        // fixed config order [EP1, EP2]. Since EP1's suspects are always
+        // assignable once released, every single isolation slot would go to
+        // EP1 forever, and EP2's suspect would never be reached. With
+        // last-isolated rotation, isolation assignments should alternate
+        // between the two entrypoints instead.
+        let ep1_ops =
+            create_test_ops_for_entrypoint(&[address(1), address(2), address(4)], TEST_ENTRY_POINT);
+        let ep2_ops = create_test_ops_for_entrypoint(&[address(3)], TEST_ENTRY_POINT_2);
+        let mock_pool = mock_pool_two_eps_with_suspects(
+            ep1_ops,
+            vec![address(1), address(2)],
+            ep2_ops,
+            vec![address(3)],
+        );
+        let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 2, 1024, 1024, 0.50);
+
+        let mut entry_points = Vec::new();
+        for i in 0..4 {
+            let assignment = assign_cycle(&assigner, address(0)).await;
+            assert!(
+                assignment.is_isolation,
+                "round {i} should be an isolation assignment"
+            );
+            entry_points.push(assignment.entry_point);
+        }
+
+        assert_eq!(
+            entry_points,
+            vec![
+                TEST_ENTRY_POINT,
+                TEST_ENTRY_POINT_2,
+                TEST_ENTRY_POINT,
+                TEST_ENTRY_POINT_2,
+            ],
+            "isolation should alternate across entrypoints instead of starving EP2"
+        );
+    }
+
     #[tokio::test]
     async fn test_starvation_prevention() {
         // EP1 always has 10 ops, EP2 always has 2 ops
@@ -1252,7 +1879,7 @@ mod tests {
         let ep2_ops_clone = ep2_ops.clone();
         mock_pool
             .expect_get_ops_summaries()
-            .returning(move |ep, _, _| {
+            .returning(move |ep, _, _, _| {
                 if ep == TEST_ENTRY_POINT {
                     Ok(ep1_ops_clone.iter().map(|op| op.into()).collect())
                 } else {
@@ -1317,7 +1944,7 @@ mod tests {
         let all_ops_for_summaries = all_ops.clone();
         mock_pool
             .expect_get_ops_summaries()
-            .returning(move |_, _, _| {
+            .returning(move |_, _, _, _| {
                 Ok(all_ops_for_summaries
                     .iter()
                     .map(|op| op.into())
@@ -1416,7 +2043,7 @@ mod tests {
 
         mock_pool
             .expect_get_ops_summaries()
-            .returning(move |ep, _, _| {
+            .returning(move |ep, _, _, _| {
                 let count = call_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 if count < 2 {
                     // First call (assign_work queries both EPs): return ops
@@ -1504,7 +2131,7 @@ mod tests {
         let mut mock_pool = MockPool::new();
         mock_pool
             .expect_get_ops_summaries()
-            .returning(move |_, _, _| {
+            .returning(move |_, _, _, _| {
                 Ok(low_fee_ops.iter().map(|op| op.into()).collect::<Vec<_>>())
             });
 

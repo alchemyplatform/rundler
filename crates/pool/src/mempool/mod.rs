@@ -38,8 +38,8 @@ use rundler_types::{
     UserOperationVariant,
     chain::ChainSpec,
     pool::{
-        MempoolError, PaymasterMetadata, PoolOperation, PoolOperationStatus, Reputation,
-        ReputationStatus, StakeStatus,
+        BundleOutcome, MempoolError, PaymasterMetadata, PoolOperation, PoolOperationStatus,
+        Reputation, ReputationStatus, StakeStatus,
     },
 };
 use tonic::async_trait;
@@ -92,6 +92,32 @@ pub(crate) trait Mempool: Send + Sync {
         max: usize,
         filter_id: Option<String>,
     ) -> MempoolResult<Vec<Arc<PoolOperation>>>;
+
+    /// Returns suspect operations whose isolation retry delay has elapsed,
+    /// best first, up to `max` operations.
+    ///
+    /// Suspects are excluded from `best_operations` and must only be submitted
+    /// in single-operation bundles. See
+    /// `docs/designs/poison-user-operations.md`.
+    fn due_suspect_operations(
+        &self,
+        max: usize,
+        filter_id: Option<String>,
+    ) -> MempoolResult<Vec<Arc<PoolOperation>>>;
+
+    /// Reports the final outcome of a bundle submission attempt for the given
+    /// operations, for poison user operation tracking.
+    ///
+    /// While `provider_event_active` is true, suspect analysis continues but
+    /// removal progress pauses: non-terminal failures still count toward
+    /// suspicion, while suspects only refresh their isolation backoff and
+    /// never advance toward removal.
+    fn report_bundle_outcome(
+        &self,
+        ops: &[B256],
+        outcome: BundleOutcome,
+        provider_event_active: bool,
+    );
 
     /// Returns the all operations from the pool up to a max size
     fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation>>;
@@ -192,6 +218,19 @@ pub struct PoolConfig {
     pub max_time_in_pool: Option<Duration>,
     /// The maximum number of storage slots that can be expected to be used by a user operation during validation
     pub max_expected_storage_slots: usize,
+    /// Master switch for poison user operation handling. When disabled, bundle
+    /// outcomes change no operation state and no operation is ever suspected or
+    /// removed by that flow.
+    pub suspect_tracking_enabled: bool,
+    /// Number of non-terminal RPC submission failures before a user operation becomes a suspect
+    pub rpc_failures_before_suspect: u32,
+    /// Number of non-terminal RPC submission failures a suspect is allowed before removal.
+    /// 0 disables removal.
+    pub max_suspect_rpc_failures: u32,
+    /// Initial backoff delay between suspect isolation attempts
+    pub suspect_rpc_backoff_initial: Duration,
+    /// Maximum backoff delay between suspect isolation attempts
+    pub suspect_rpc_backoff_max: Duration,
 }
 
 /// Origin of an operation.

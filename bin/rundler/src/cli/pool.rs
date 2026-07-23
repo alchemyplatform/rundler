@@ -174,6 +174,67 @@ pub struct PoolArgs {
         env = "POOL_MAX_TIME_IN_POOL_SECS"
     )]
     pub max_time_in_pool_secs: Option<u64>,
+
+    /// Master switch for poison user operation handling (suspect tracking,
+    /// isolation, and removal). Disabled by default.
+    #[arg(
+        long = "pool.suspect_tracking_enabled",
+        name = "pool.suspect_tracking_enabled",
+        env = "POOL_SUSPECT_TRACKING_ENABLED",
+        default_value = "false"
+    )]
+    pub suspect_tracking_enabled: bool,
+
+    /// Number of non-terminal RPC submission failures before a user operation
+    /// becomes a suspect and is only submitted alone. Must be at least 1: at
+    /// 0, every fresh operation would satisfy `failures >= threshold`
+    /// immediately, and a successful submission resetting failures to 0
+    /// would make it look suspect again on its very next attempt.
+    ///
+    /// With a single builder signer, the scheduler cannot guarantee progress
+    /// for both suspect and normal work when both remain continuously
+    /// eligible.
+    #[arg(
+        long = "pool.rpc_failures_before_suspect",
+        name = "pool.rpc_failures_before_suspect",
+        env = "POOL_RPC_FAILURES_BEFORE_SUSPECT",
+        default_value = "3",
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    pub rpc_failures_before_suspect: u32,
+
+    /// Number of non-terminal RPC submission failures a suspect is allowed
+    /// before it is removed from the pool. 0 disables removal.
+    ///
+    /// The suspect backoff schedule spaces these failures; a provider incident
+    /// outlasting the cumulative backoff can remove healthy operations. Raise
+    /// this threshold to tolerate longer incidents.
+    #[arg(
+        long = "pool.max_suspect_rpc_failures",
+        name = "pool.max_suspect_rpc_failures",
+        env = "POOL_MAX_SUSPECT_RPC_FAILURES",
+        default_value = "8"
+    )]
+    pub max_suspect_rpc_failures: u32,
+
+    /// Initial delay in seconds between suspect isolation attempts, doubling
+    /// with each failure.
+    #[arg(
+        long = "pool.suspect_rpc_backoff_initial_secs",
+        name = "pool.suspect_rpc_backoff_initial_secs",
+        env = "POOL_SUSPECT_RPC_BACKOFF_INITIAL_SECS",
+        default_value = "1"
+    )]
+    pub suspect_rpc_backoff_initial_secs: u64,
+
+    /// Maximum delay in seconds between suspect isolation attempts.
+    #[arg(
+        long = "pool.suspect_rpc_backoff_max_secs",
+        name = "pool.suspect_rpc_backoff_max_secs",
+        env = "POOL_SUSPECT_RPC_BACKOFF_MAX_SECS",
+        default_value = "600"
+    )]
+    pub suspect_rpc_backoff_max_secs: u64,
 }
 
 impl PoolArgs {
@@ -229,6 +290,11 @@ impl PoolArgs {
                 .verification_gas_limit_efficiency_reject_threshold,
             max_time_in_pool: self.max_time_in_pool_secs.map(Duration::from_secs),
             max_expected_storage_slots: common.max_expected_storage_slots.unwrap_or(usize::MAX),
+            suspect_tracking_enabled: self.suspect_tracking_enabled,
+            rpc_failures_before_suspect: self.rpc_failures_before_suspect,
+            max_suspect_rpc_failures: self.max_suspect_rpc_failures,
+            suspect_rpc_backoff_initial: Duration::from_secs(self.suspect_rpc_backoff_initial_secs),
+            suspect_rpc_backoff_max: Duration::from_secs(self.suspect_rpc_backoff_max_secs),
         };
 
         let mut pool_configs = vec![];

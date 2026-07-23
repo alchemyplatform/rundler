@@ -14,18 +14,19 @@
 use alloy_primitives::B256;
 use anyhow::Context;
 use async_trait::async_trait;
-use rundler_provider::{EvmProvider, TransactionRequest};
+use rundler_provider::{EvmProvider, ProviderError, TransactionRequest};
 use rundler_signer::SignerLease;
-use rundler_types::{ExpectedStorage, GasFees};
+use rundler_types::{ExpectedStorage, GasFees, chain::ChainSpec};
 use serde_json::json;
 
 use super::{CancelTxInfo, Result};
-use crate::sender::{TransactionSender, create_hard_cancel_tx};
+use crate::sender::{TransactionSender, TxSenderError, create_hard_cancel_tx};
 
 #[derive(Debug)]
 pub(crate) struct RawTransactionSender<P> {
     submit_provider: P,
     use_conditional_rpc: bool,
+    chain_spec: ChainSpec,
 }
 
 #[async_trait]
@@ -44,18 +45,18 @@ where
             .await
             .context("failed to sign transaction")?;
 
-        let tx_hash = if self.use_conditional_rpc {
+        let result = if self.use_conditional_rpc {
             self.submit_provider
                 .request(
                     "eth_sendRawTransactionConditional",
                     (raw_tx, json!({ "knownAccounts": expected_storage })),
                 )
-                .await?
+                .await
         } else {
-            self.submit_provider.send_raw_transaction(raw_tx).await?
+            self.submit_provider.send_raw_transaction(raw_tx).await
         };
 
-        Ok(tx_hash)
+        result.map_err(|e| self.map_provider_error(e))
     }
 
     async fn cancel_transaction(
@@ -72,7 +73,11 @@ where
             .await
             .context("failed to sign transaction")?;
 
-        let tx_hash = self.submit_provider.send_raw_transaction(raw_tx).await?;
+        let tx_hash = self
+            .submit_provider
+            .send_raw_transaction(raw_tx)
+            .await
+            .map_err(|e| self.map_provider_error(e))?;
 
         Ok(CancelTxInfo {
             tx_hash,
@@ -82,10 +87,75 @@ where
 }
 
 impl<P> RawTransactionSender<P> {
-    pub(crate) fn new(submit_provider: P, use_conditional_rpc: bool) -> Self {
+    pub(crate) fn new(
+        submit_provider: P,
+        use_conditional_rpc: bool,
+        chain_spec: ChainSpec,
+    ) -> Self {
         Self {
             submit_provider,
             use_conditional_rpc,
+            chain_spec,
+        }
+    }
+
+    fn map_provider_error(&self, error: ProviderError) -> TxSenderError {
+        TxSenderError::from(error).promote_terminal_error(&self.chain_spec)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rundler_provider::MockEvmProvider;
+
+    use super::*;
+    use crate::sender::rpc_error_response;
+
+    fn chain_spec_with_internal_error_terminal(internal_rpc_error_is_terminal: bool) -> ChainSpec {
+        ChainSpec {
+            internal_rpc_error_is_terminal,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn promotes_internal_error_only_when_flagged() {
+        let flagged = RawTransactionSender::new(
+            MockEvmProvider::new(),
+            false,
+            chain_spec_with_internal_error_terminal(true),
+        );
+        assert!(matches!(
+            flagged.map_provider_error(rpc_error_response(-32000, "internal error")),
+            TxSenderError::TerminalRpcError { .. }
+        ));
+
+        let unflagged = RawTransactionSender::new(
+            MockEvmProvider::new(),
+            false,
+            chain_spec_with_internal_error_terminal(false),
+        );
+        assert!(matches!(
+            unflagged.map_provider_error(rpc_error_response(-32000, "internal error")),
+            TxSenderError::UnrecognizedRpc { .. }
+        ));
+    }
+
+    #[test]
+    fn promotes_chain_policy_rejection_regardless_of_flag() {
+        for internal_rpc_error_is_terminal in [false, true] {
+            let sender = RawTransactionSender::new(
+                MockEvmProvider::new(),
+                false,
+                chain_spec_with_internal_error_terminal(internal_rpc_error_is_terminal),
+            );
+            assert!(matches!(
+                sender.map_provider_error(rpc_error_response(
+                    -32000,
+                    "Transaction rejected by chain policy"
+                )),
+                TxSenderError::TerminalRpcError { .. }
+            ));
         }
     }
 }

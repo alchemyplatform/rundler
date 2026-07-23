@@ -29,9 +29,10 @@ use rundler_types::{
         NitroDAGasData as RundlerNitroDAGasData,
     },
     pool::{
-        AddressUpdate as PoolAddressUpdate, NewHead as PoolNewHead,
-        PaymasterMetadata as PoolPaymasterMetadata, PendingBundleInfo as RundlerPendingBundleInfo,
-        PoolOperation, PoolOperationStatus as RundlerPoolOperationStatus,
+        AddressUpdate as PoolAddressUpdate, BundleOutcome as RundlerBundleOutcome,
+        NewHead as PoolNewHead, PaymasterMetadata as PoolPaymasterMetadata,
+        PendingBundleInfo as RundlerPendingBundleInfo, PoolOperation,
+        PoolOperationStatus as RundlerPoolOperationStatus,
         PoolOperationSummary as RundlerPoolOperationSummary, PreconfInfo as RundlerPreconfInfo,
         Reputation as PoolReputation, ReputationStatus as PoolReputationStatus,
         StakeStatus as RundlerStakeStatus,
@@ -723,6 +724,7 @@ impl From<RundlerPoolOperationSummary> for PoolOperationSummary {
                 .bundler_sponsorship_max_cost
                 .map(|c| c.to_proto_bytes())
                 .unwrap_or_default(),
+            suspect: summary.suspect,
         }
     }
 }
@@ -745,7 +747,33 @@ impl TryFrom<PoolOperationSummary> for RundlerPoolOperationSummary {
             max_priority_fee_per_gas: from_bytes(&summary.max_priority_fee_per_gas)?,
             gas_limit: from_bytes(&summary.gas_limit)?,
             bundler_sponsorship_max_cost,
+            suspect: summary.suspect,
         })
+    }
+}
+
+impl From<RundlerBundleOutcome> for BundleOutcome {
+    fn from(outcome: RundlerBundleOutcome) -> Self {
+        match outcome {
+            RundlerBundleOutcome::Success => BundleOutcome::Success,
+            RundlerBundleOutcome::NonTerminalFailure => BundleOutcome::NonTerminalFailure,
+            RundlerBundleOutcome::TerminalFailure => BundleOutcome::TerminalFailure,
+            RundlerBundleOutcome::MarkSuspect => BundleOutcome::MarkSuspect,
+        }
+    }
+}
+
+impl TryFrom<BundleOutcome> for RundlerBundleOutcome {
+    type Error = ConversionError;
+
+    fn try_from(outcome: BundleOutcome) -> Result<Self, Self::Error> {
+        match outcome {
+            BundleOutcome::Success => Ok(RundlerBundleOutcome::Success),
+            BundleOutcome::NonTerminalFailure => Ok(RundlerBundleOutcome::NonTerminalFailure),
+            BundleOutcome::TerminalFailure => Ok(RundlerBundleOutcome::TerminalFailure),
+            BundleOutcome::MarkSuspect => Ok(RundlerBundleOutcome::MarkSuspect),
+            BundleOutcome::Unspecified => Err(ConversionError::InvalidEnumValue(outcome as i32)),
+        }
     }
 }
 
@@ -864,6 +892,7 @@ mod tests {
             max_priority_fee_per_gas: 56,
             gas_limit: 100_000,
             bundler_sponsorship_max_cost: Some(U256::from(500_000)),
+            suspect: true,
         };
 
         let proto = PoolOperationSummary::from(summary.clone());
@@ -883,6 +912,7 @@ mod tests {
             converted.bundler_sponsorship_max_cost,
             summary.bundler_sponsorship_max_cost
         );
+        assert_eq!(converted.suspect, summary.suspect);
     }
 
     #[test]
@@ -896,6 +926,7 @@ mod tests {
             max_priority_fee_per_gas: 56,
             gas_limit: 100_000,
             bundler_sponsorship_max_cost: None,
+            suspect: false,
         };
 
         let proto = PoolOperationSummary::from(summary.clone());

@@ -65,6 +65,7 @@ pub(crate) struct Bundle<UO: UserOperation> {
     pub(crate) gas_fees: GasFees,
     pub(crate) expected_storage: ExpectedStorage,
     pub(crate) rejected_ops: Vec<UO>,
+    pub(crate) suspect_ops: Vec<UO>,
     pub(crate) entity_updates: Vec<EntityUpdate>,
 }
 
@@ -76,6 +77,7 @@ impl<UO: UserOperation> Default for Bundle<UO> {
             gas_fees: GasFees::default(),
             expected_storage: ExpectedStorage::default(),
             rejected_ops: Vec::new(),
+            suspect_ops: Vec::new(),
             entity_updates: Vec::new(),
         }
     }
@@ -118,6 +120,9 @@ pub(crate) struct BundleData {
     pub(crate) ops: Vec<(Address, B256)>,
     /// Hashes of rejected operations to remove from pool
     pub(crate) rejected_op_hashes: Vec<B256>,
+    /// Hashes of operations to mark suspect in the pool (ambiguous multi-op
+    /// revert - avoids evicting ops that may be innocent)
+    pub(crate) suspect_op_hashes: Vec<B256>,
     /// Entity updates to apply to pool
     pub(crate) entity_updates: Vec<EntityUpdate>,
 }
@@ -126,6 +131,40 @@ impl BundleData {
     /// Returns true if the bundle has no operations
     pub(crate) fn is_empty(&self) -> bool {
         self.ops.is_empty()
+    }
+}
+
+/// Result of processing a reverted bundle transaction, per the failure flow in
+/// `docs/designs/poison-user-operations.md`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RevertOutcome {
+    /// Op hashes to remove from the pool.
+    pub(crate) to_remove: Vec<B256>,
+    /// Op hashes to mark suspect in the pool.
+    pub(crate) to_mark_suspect: Vec<B256>,
+}
+
+impl RevertOutcome {
+    /// Outcome that removes the given operations.
+    fn remove(to_remove: Vec<B256>) -> Self {
+        Self {
+            to_remove,
+            ..Self::default()
+        }
+    }
+
+    /// Outcome for a revert attributable to no single operation: a sole
+    /// operation is removed, while every operation of a larger bundle is
+    /// marked suspect.
+    fn unattributed(hashes: Vec<B256>) -> Self {
+        if hashes.len() > 1 {
+            Self {
+                to_mark_suspect: hashes,
+                ..Self::default()
+            }
+        } else {
+            Self::remove(hashes)
+        }
     }
 }
 
@@ -164,9 +203,10 @@ pub(crate) trait BundleProposerT: Send + Sync {
     async fn make_bundle(&self, request: BundleProposalRequest)
     -> BundleProposerResult<BundleData>;
 
-    /// Process a reverted bundle transaction and return op hashes to remove from pool.
+    /// Process a reverted bundle transaction and return op hashes to remove from
+    /// pool or mark suspect.
     /// Fetches the trace and transaction internally, then decodes and processes the revert.
-    async fn process_revert(&self, tx_hash: B256) -> anyhow::Result<Vec<B256>>;
+    async fn process_revert(&self, tx_hash: B256) -> anyhow::Result<RevertOutcome>;
 }
 
 pub(crate) struct BundleProposerImpl<EP, BP> {
@@ -337,6 +377,7 @@ where
                     gas_fees: bundle_fees,
                     expected_storage: context.bundle_expected_storage.inner,
                     rejected_ops: context.rejected_ops.iter().map(|po| po.0.clone()).collect(),
+                    suspect_ops: context.suspect_ops.iter().map(|po| po.0.clone()).collect(),
                     entity_updates: context.entity_updates.into_values().collect(),
                 });
             }
@@ -347,6 +388,7 @@ where
 
         Ok(Bundle {
             rejected_ops: context.rejected_ops.iter().map(|po| po.0.clone()).collect(),
+            suspect_ops: context.suspect_ops.iter().map(|po| po.0.clone()).collect(),
             entity_updates: context.entity_updates.into_values().collect(),
             gas_fees: bundle_fees,
             ..Default::default()
@@ -376,6 +418,7 @@ where
             .map(|op| (op.sender(), op.hash()))
             .collect();
         let rejected_op_hashes: Vec<_> = bundle.rejected_ops.iter().map(|op| op.hash()).collect();
+        let suspect_op_hashes: Vec<_> = bundle.suspect_ops.iter().map(|op| op.hash()).collect();
 
         // Build the transaction if bundle is not empty
         let tx = if bundle.is_empty() {
@@ -398,11 +441,12 @@ where
             gas_fees: bundle.gas_fees,
             ops,
             rejected_op_hashes,
+            suspect_op_hashes,
             entity_updates: bundle.entity_updates,
         })
     }
 
-    async fn process_revert(&self, tx_hash: B256) -> anyhow::Result<Vec<B256>> {
+    async fn process_revert(&self, tx_hash: B256) -> anyhow::Result<RevertOutcome> {
         let address = *self.ep_providers.entry_point().address();
         let chain_spec = &self.settings.chain_spec;
 
@@ -452,19 +496,22 @@ where
                 }
             };
 
+        let all_op_hashes: Vec<B256> = ops
+            .iter()
+            .flat_map(|ops| ops.user_ops.iter().map(|op| op.hash()))
+            .collect();
+
         let Some(revert_data) = revert_data else {
-            // No revert data - remove all ops
-            return Ok(ops
-                .iter()
-                .flat_map(|ops| ops.user_ops.iter().map(|op| op.hash()))
-                .collect());
+            // No revert data attributes the revert to no single op
+            warn!("no revert data for reverted bundle, treating as unattributed");
+            return Ok(RevertOutcome::unattributed(all_op_hashes));
         };
 
         // If we have a submission proxy, use it to process the revert first
         if let Some(proxy) = &self.settings.submission_proxy {
             let to_remove = proxy.process_revert(revert_data, &ops).await;
             if !to_remove.is_empty() {
-                return Ok(to_remove);
+                return Ok(RevertOutcome::remove(to_remove));
             }
         }
 
@@ -486,29 +533,31 @@ where
             }
             Some(HandleOpsOut::FailedOp(index, _)) => {
                 warn!("removing op from pool for reverted bundle op index {index:?}");
-                Ok(ops
-                    .iter()
-                    .flat_map(|ops| ops.user_ops.iter())
-                    .nth(index)
-                    .map(|op| vec![op.hash()])
-                    .unwrap_or_default())
+                Ok(RevertOutcome::remove(
+                    ops.iter()
+                        .flat_map(|ops| ops.user_ops.iter())
+                        .nth(index)
+                        .map(|op| vec![op.hash()])
+                        .unwrap_or_default(),
+                ))
             }
             Some(HandleOpsOut::SignatureValidationFailed(aggregator)) => {
                 warn!(
                     "removing all ops from pool for reverted bundle for aggregator {aggregator:?}"
                 );
-                Ok(ops
-                    .iter()
-                    .find(|op| op.aggregator == aggregator)
-                    .map(|ops| ops.user_ops.iter().map(|op| op.hash()).collect())
-                    .unwrap_or_default())
+                Ok(RevertOutcome::remove(
+                    ops.iter()
+                        .find(|op| op.aggregator == aggregator)
+                        .map(|ops| ops.user_ops.iter().map(|op| op.hash()).collect())
+                        .unwrap_or_default(),
+                ))
             }
             None | Some(HandleOpsOut::Revert(_)) | Some(HandleOpsOut::PostOpRevert) => {
-                warn!("removing all ops from pool for reverted bundle");
-                Ok(ops
-                    .iter()
-                    .flat_map(|ops| ops.user_ops.iter().map(|op| op.hash()))
-                    .collect())
+                warn!(
+                    "unattributed revert for bundle of {} ops",
+                    all_op_hashes.len()
+                );
+                Ok(RevertOutcome::unattributed(all_op_hashes))
             }
         }
     }
@@ -1095,8 +1144,18 @@ where
         None
     }
 
-    async fn reject_bundle(&self, context: &mut ProposalContext<EP::UO>) {
-        context.reject_all();
+    // If there's a single op in the bundle, an unattributed revert leaves no
+    // ambiguity about who's responsible - reject and remove it directly. With
+    // multiple ops, removing all of them would permanently evict innocent
+    // ops that happened to share the bundle; mark them all suspect instead,
+    // mirroring RevertOutcome::unattributed's split for the post-submission
+    // on-chain revert path.
+    async fn reject_or_mark_suspect_bundle(&self, context: &mut ProposalContext<EP::UO>) {
+        if context.iter_ops().count() > 1 {
+            context.mark_all_suspect();
+        } else {
+            context.reject_all();
+        }
     }
 
     async fn reject_hash(&self, context: &mut ProposalContext<EP::UO>, hash: B256) -> bool {
@@ -1254,15 +1313,15 @@ where
 
                     if !removed {
                         warn!(
-                            "HandleOps reverted during gas estimation, proxy {proxy:?} returned no hashes to remove. Rejecting full bundle. revert data: {revert_data:?}"
+                            "HandleOps reverted during gas estimation, proxy {proxy:?} returned no hashes to remove. Rejecting/marking suspect the full bundle. revert data: {revert_data:?}"
                         );
-                        self.reject_bundle(context).await;
+                        self.reject_or_mark_suspect_bundle(context).await;
                     }
                 } else {
                     warn!(
-                        "HandleOps reverted during gas estimation. Rejecting full bundle. revert data: {revert_data:?}"
+                        "HandleOps reverted during gas estimation. Rejecting/marking suspect the full bundle. revert data: {revert_data:?}"
                     );
-                    self.reject_bundle(context).await;
+                    self.reject_or_mark_suspect_bundle(context).await;
                 }
 
                 Ok(None)
@@ -1681,6 +1740,7 @@ struct ProposalContext<UO> {
     sender_eoa: Address,
     groups_by_aggregator: LinkedHashMap<Address, AggregatorGroup<UO>>,
     rejected_ops: Vec<(UO, EntityInfos)>,
+    suspect_ops: Vec<(UO, EntityInfos)>,
     // This is a BTreeMap so that the conversion to a Vec<EntityUpdate> is deterministic, mainly for tests
     entity_updates: BTreeMap<Address, EntityUpdate>,
     bundle_expected_storage: BundleExpectedStorage,
@@ -1707,6 +1767,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
             sender_eoa,
             groups_by_aggregator: LinkedHashMap::<Address, AggregatorGroup<UO>>::new(),
             rejected_ops: Vec::<(UO, EntityInfos)>::new(),
+            suspect_ops: Vec::<(UO, EntityInfos)>::new(),
             entity_updates: BTreeMap::new(),
             bundle_expected_storage: BundleExpectedStorage::default(),
         }
@@ -1754,6 +1815,12 @@ impl<UO: UserOperation> ProposalContext<UO> {
         }
     }
 
+    fn mark_all_suspect(&mut self) {
+        for _ in 0..self.iter_ops_with_simulations().count() {
+            let _ = self.mark_suspect_index(0);
+        }
+    }
+
     /// Returns the address of the op's aggregator if the aggregator's signature
     /// may need to be recomputed.
     #[must_use = "rejected op but did not update aggregator signatures"]
@@ -1778,6 +1845,39 @@ impl<UO: UserOperation> ProposalContext<UO> {
         };
         // If we just removed the last op from a group, delete that group.
         // Otherwise, the signature is invalidated and we need to recompute it.
+        if self.groups_by_aggregator[&found_aggregator]
+            .ops_with_simulations
+            .is_empty()
+        {
+            self.groups_by_aggregator.remove(&found_aggregator);
+            None
+        } else {
+            Some(found_aggregator)
+        }
+    }
+
+    /// Same as `reject_index`, but marks the op suspect instead of rejecting
+    /// it outright.
+    #[must_use = "marked op suspect but did not update aggregator signatures"]
+    fn mark_suspect_index(&mut self, i: usize) -> Option<Address> {
+        let mut remaining_i = i;
+        let mut found_aggregator: Option<Address> = None;
+        for (&aggregator, group) in &mut self.groups_by_aggregator {
+            if remaining_i < group.ops_with_simulations.len() {
+                let suspect = group.ops_with_simulations.remove(remaining_i);
+                self.mark_op_suspect(suspect);
+                found_aggregator = Some(aggregator);
+                break;
+            }
+            remaining_i -= group.ops_with_simulations.len();
+        }
+        let Some(found_aggregator) = found_aggregator else {
+            error!(
+                "The entry point indicated a failed op at index {i}, but the bundle size is only {}",
+                i - remaining_i
+            );
+            return None;
+        };
         if self.groups_by_aggregator[&found_aggregator]
             .ops_with_simulations
             .is_empty()
@@ -1887,6 +1987,15 @@ impl<UO: UserOperation> ProposalContext<UO> {
         // remove associated storage slots
         self.bundle_expected_storage
             .remove(&rejected.simulation.expected_storage);
+    }
+
+    fn mark_op_suspect(&mut self, suspect: OpWithSimulation<UO>) {
+        self.suspect_ops
+            .push((suspect.op, suspect.simulation.entity_infos));
+
+        // remove associated storage slots
+        self.bundle_expected_storage
+            .remove(&suspect.simulation.expected_storage);
     }
 
     fn to_ops_per_aggregator(&self) -> Vec<UserOpsPerAggregator<UO>> {
@@ -3279,6 +3388,7 @@ mod tests {
             sender_eoa: Address::ZERO,
             groups_by_aggregator,
             rejected_ops: vec![],
+            suspect_ops: vec![],
             entity_updates: BTreeMap::new(),
             bundle_expected_storage: BundleExpectedStorage::default(),
         };
@@ -3328,6 +3438,7 @@ mod tests {
             sender_eoa: Address::ZERO,
             groups_by_aggregator,
             rejected_ops: vec![],
+            suspect_ops: vec![],
             entity_updates: BTreeMap::new(),
             bundle_expected_storage: BundleExpectedStorage::default(),
         };
@@ -3389,6 +3500,7 @@ mod tests {
             sender_eoa: Address::ZERO,
             groups_by_aggregator,
             rejected_ops: vec![],
+            suspect_ops: vec![],
             entity_updates: BTreeMap::new(),
             bundle_expected_storage: BundleExpectedStorage::default(),
         };
@@ -3451,6 +3563,7 @@ mod tests {
             sender_eoa: Address::ZERO,
             groups_by_aggregator: groups_without_authorization,
             rejected_ops: vec![],
+            suspect_ops: vec![],
             entity_updates: BTreeMap::new(),
             bundle_expected_storage: BundleExpectedStorage::default(),
         };
@@ -3471,6 +3584,7 @@ mod tests {
             sender_eoa: Address::ZERO,
             groups_by_aggregator: groups_with_authorization,
             rejected_ops: vec![],
+            suspect_ops: vec![],
             entity_updates: BTreeMap::new(),
             bundle_expected_storage: BundleExpectedStorage::default(),
         };
@@ -3880,6 +3994,76 @@ mod tests {
         .await;
 
         assert_eq!(bundle.ops_per_aggregator, vec![]);
+    }
+
+    #[tokio::test]
+    async fn test_ambiguous_revert_single_op_removed() {
+        let op = op_with_sender(address(1));
+
+        let bundle = mock_make_bundle(
+            vec![MockOp {
+                op: op.clone(),
+                simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                perms: UserOperationPermissions::default(),
+            }],
+            vec![],
+            vec![HandleOpsOut::Revert(bytes(1))],
+            vec![],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![],
+            None,
+            U256::MAX,
+            None,
+        )
+        .await;
+
+        assert_eq!(bundle.ops_per_aggregator, vec![]);
+        assert_eq!(bundle.rejected_ops, vec![op]);
+        assert_eq!(bundle.suspect_ops, vec![]);
+    }
+
+    #[tokio::test]
+    async fn test_ambiguous_revert_multi_op_marks_suspect() {
+        let op0 = op_with_sender(address(1));
+        let op1 = op_with_sender(address(2));
+
+        let bundle = mock_make_bundle(
+            vec![
+                MockOp {
+                    op: op0.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    perms: UserOperationPermissions::default(),
+                },
+                MockOp {
+                    op: op1.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    perms: UserOperationPermissions::default(),
+                },
+            ],
+            vec![],
+            vec![HandleOpsOut::Revert(bytes(1))],
+            vec![],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![],
+            None,
+            U256::MAX,
+            None,
+        )
+        .await;
+
+        assert_eq!(bundle.ops_per_aggregator, vec![]);
+        assert_eq!(bundle.rejected_ops, vec![]);
+        assert_eq!(bundle.suspect_ops.len(), 2);
+        assert!(bundle.suspect_ops.contains(&op0));
+        assert!(bundle.suspect_ops.contains(&op1));
     }
 
     #[tokio::test]
@@ -4904,5 +5088,37 @@ mod tests {
         agg.expect_aggregate_signatures()
             .returning(move |_| Ok(signature.clone()));
         agg
+    }
+
+    #[test]
+    fn test_unattributed_revert_of_sole_op_removes() {
+        let hash = B256::repeat_byte(1);
+        assert_eq!(
+            RevertOutcome::unattributed(vec![hash]),
+            RevertOutcome {
+                to_remove: vec![hash],
+                to_mark_suspect: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn test_unattributed_revert_of_multiple_ops_marks_suspect() {
+        let hashes = vec![B256::repeat_byte(1), B256::repeat_byte(2)];
+        assert_eq!(
+            RevertOutcome::unattributed(hashes.clone()),
+            RevertOutcome {
+                to_remove: vec![],
+                to_mark_suspect: hashes,
+            }
+        );
+    }
+
+    #[test]
+    fn test_unattributed_revert_of_no_ops_is_empty() {
+        assert_eq!(
+            RevertOutcome::unattributed(vec![]),
+            RevertOutcome::default()
+        );
     }
 }

@@ -39,7 +39,7 @@ struct FallbackSenderMetrics {
     #[metric(describe = "total successful sends via the fallback")]
     fallback_sends: Counter,
     #[metric(
-        describe = "total SenderUnavailable errors from the primary, including those below the failover threshold"
+        describe = "total failover-eligible errors from the primary, including those below the failover threshold"
     )]
     primary_unavailable: Counter,
 }
@@ -51,7 +51,8 @@ enum ActiveSender {
 }
 
 /// A transaction sender that transparently fails over to a fallback sender when
-/// the primary returns [`TxSenderError::SenderUnavailable`].
+/// the primary returns [`TxSenderError::SenderUnavailable`] or
+/// [`TxSenderError::UnrecognizedRpc`].
 ///
 /// Recovery is passive: after `recovery_interval` has elapsed the next send
 /// attempt re-tries the primary. On success the primary is reinstated; on
@@ -168,7 +169,9 @@ impl TransactionSender for FallbackTransactionSender {
                 self.metrics.primary_sends.increment(1);
                 Ok(hash)
             }
-            Err(TxSenderError::SenderUnavailable(e)) => {
+            Err(
+                e @ (TxSenderError::SenderUnavailable(_) | TxSenderError::UnrecognizedRpc { .. }),
+            ) => {
                 self.metrics.primary_unavailable.increment(1);
                 let failures = self.consecutive_failures.fetch_add(1, Ordering::AcqRel) + 1;
                 if failures >= self.failure_threshold {
@@ -188,7 +191,7 @@ impl TransactionSender for FallbackTransactionSender {
                         error = %e,
                         "Primary sender unavailable, will activate fallback after threshold"
                     );
-                    Err(TxSenderError::SenderUnavailable(e))
+                    Err(e)
                 }
             }
             Err(e) => Err(e),
@@ -317,6 +320,32 @@ mod tests {
         }
     }
 
+    struct ErrSender {
+        make: fn() -> TxSenderError,
+    }
+
+    #[async_trait::async_trait]
+    impl TransactionSender for ErrSender {
+        async fn send_transaction(
+            &self,
+            _tx: TransactionRequest,
+            _expected_storage: &ExpectedStorage,
+            _signer: &SignerLease,
+        ) -> super::Result<B256> {
+            Err((self.make)())
+        }
+
+        async fn cancel_transaction(
+            &self,
+            _tx_hash: B256,
+            _nonce: u64,
+            _gas_fees: GasFees,
+            _signer: &SignerLease,
+        ) -> super::Result<CancelTxInfo> {
+            unimplemented!()
+        }
+    }
+
     fn make_sender(
         primary: impl TransactionSender + 'static,
         fallback: impl TransactionSender + 'static,
@@ -424,6 +453,64 @@ mod tests {
             .unwrap();
         assert_eq!(hash, fallback_hash);
         assert!(sender.last_tx_used_fallback.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn unrecognized_rpc_activates_fallback_at_threshold() {
+        let fallback_hash = B256::repeat_byte(0x02);
+        let sender = make_sender(
+            ErrSender {
+                make: || TxSenderError::UnrecognizedRpc {
+                    code: -32000,
+                    message: "internal error".to_string(),
+                },
+            },
+            AlwaysOkSender {
+                hash: fallback_hash,
+            },
+            60,
+            1,
+        );
+
+        let hash = sender
+            .send_transaction(
+                TransactionRequest::default(),
+                &ExpectedStorage::default(),
+                &test_signer(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(hash, fallback_hash);
+    }
+
+    #[tokio::test]
+    async fn terminal_error_does_not_activate_fallback() {
+        let sender = make_sender(
+            ErrSender {
+                make: || TxSenderError::TerminalRpcError {
+                    code: -32000,
+                    message: "internal error".to_string(),
+                },
+            },
+            AlwaysOkSender {
+                hash: B256::repeat_byte(0x02),
+            },
+            60,
+            1,
+        );
+
+        let result = sender
+            .send_transaction(
+                TransactionRequest::default(),
+                &ExpectedStorage::default(),
+                &test_signer(),
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(TxSenderError::TerminalRpcError { .. })
+        ));
+        assert!(matches!(sender.current_sender(), ActiveSender::Primary));
     }
 
     #[tokio::test]

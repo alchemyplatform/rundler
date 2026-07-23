@@ -46,11 +46,14 @@ tonic-reflection.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+alloy-json-rpc.workspace = true
 alloy-rpc-types-eth.workspace = true
+alloy-transport.workspace = true
 mockall.workspace = true
 rundler-provider = { workspace = true, features = ["test-utils"] }
 rundler-sim = { workspace = true, features = ["test-utils"] }
 rundler-types = { workspace = true, features = ["test-utils"] }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [build-dependencies]
 tonic-build.workspace = true

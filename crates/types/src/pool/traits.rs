@@ -49,6 +49,27 @@ pub struct PoolOperationSummary {
     pub gas_limit: u128,
     /// Maximum WEI the bundler will pay for this operation (None if not sponsored)
     pub bundler_sponsorship_max_cost: Option<U256>,
+    /// Whether the operation is suspected of poisoning bundles and must only be
+    /// submitted alone. See `docs/designs/poison-user-operations.md`.
+    pub suspect: bool,
+}
+
+/// Final outcome of a bundle submission attempt, reported to the pool for poison
+/// user operation tracking. See `docs/designs/poison-user-operations.md`.
+///
+/// Neutral outcomes (known operational errors with dedicated handling) are not
+/// reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BundleOutcome {
+    /// The bundle transaction was accepted by the provider.
+    Success,
+    /// Transport failure, timeout, or ambiguous rejection; acceptance unknown.
+    NonTerminalFailure,
+    /// Final rejection; retrying the identical transaction cannot succeed.
+    TerminalFailure,
+    /// Mark every operation in the bundle as suspect, e.g. after an
+    /// unattributed mined revert of a multi-operation bundle.
+    MarkSuspect,
 }
 
 /// Pool server trait
@@ -74,10 +95,21 @@ pub trait Pool: Send + Sync {
     ) -> PoolResult<Vec<PoolOperation>>;
 
     /// Get summaries of operations from the pool
+    ///
+    /// Returns up to `max_ops` non-suspect operations, followed by up to
+    /// `max_suspects` suspect operations whose isolation retry delay has
+    /// elapsed, marked with `suspect: true`. Suspects do not count against
+    /// `max_ops` and are always ordered after non-suspects in the returned
+    /// vec — but that ordering is an implementation detail, not something to
+    /// index into: callers that need to separate the two groups (e.g. the
+    /// builder's assigner) must partition on the `suspect` flag on each
+    /// summary rather than assume position, since the non-suspect share can
+    /// itself be shorter than `max_ops`.
     async fn get_ops_summaries(
         &self,
         entry_point: Address,
         max_ops: u64,
+        max_suspects: u64,
         filter_id: Option<String>,
     ) -> PoolResult<Vec<PoolOperationSummary>>;
 
@@ -105,6 +137,21 @@ pub trait Pool: Send + Sync {
         entry_point: Address,
         id: UserOperationId,
     ) -> PoolResult<Option<B256>>;
+
+    /// Report the final outcome of a bundle submission attempt for the given
+    /// operations, for poison user operation tracking.
+    ///
+    /// While `provider_event_active` is true, suspect analysis continues but
+    /// removal progress pauses: non-terminal failures still count toward
+    /// suspicion, while suspects only refresh their isolation backoff and
+    /// never advance toward removal.
+    async fn report_bundle_outcome(
+        &self,
+        entry_point: Address,
+        ops: Vec<B256>,
+        outcome: BundleOutcome,
+        provider_event_active: bool,
+    ) -> PoolResult<()>;
 
     /// Get extended status for a user operation
     async fn get_op_status(&self, hash: B256) -> PoolResult<Option<PoolOperationStatus>>;
@@ -197,6 +244,7 @@ impl From<&PoolOperation> for PoolOperationSummary {
             max_priority_fee_per_gas: op.uo.max_priority_fee_per_gas(),
             gas_limit: op.uo.total_gas_limit(),
             bundler_sponsorship_max_cost: op.perms.bundler_sponsorship.as_ref().map(|s| s.max_cost),
+            suspect: false,
         }
     }
 }
@@ -223,6 +271,7 @@ mockall::mock! {
             &self,
             entry_point: Address,
             max_ops: u64,
+            max_suspects: u64,
             filter_id: Option<String>,
         ) -> PoolResult<Vec<PoolOperationSummary>>;
         async fn get_ops_by_hashes(
@@ -238,6 +287,13 @@ mockall::mock! {
             entry_point: Address,
             id: UserOperationId,
         ) -> PoolResult<Option<B256>>;
+        async fn report_bundle_outcome(
+            &self,
+            entry_point: Address,
+            ops: Vec<B256>,
+            outcome: BundleOutcome,
+            provider_event_active: bool,
+        ) -> PoolResult<()>;
         async fn update_entities(
             &self,
             entry_point: Address,

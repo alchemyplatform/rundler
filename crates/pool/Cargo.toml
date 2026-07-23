@@ -24,6 +24,7 @@ metrics.workspace = true
 metrics-derive.workspace = true
 parking_lot.workspace = true
 prost.workspace = true
+rand.workspace = true
 rundler-contracts.workspace = true
 rundler-provider.workspace = true
 rundler-sim.workspace = true

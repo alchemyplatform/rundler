@@ -22,9 +22,10 @@ use rand::Rng;
 use rundler_provider::FeeEstimator;
 use rundler_task::TaskSpawner;
 use rundler_types::{
+    UserOperation,
     builder::BundlingMode,
     chain::ChainSpec,
-    pool::{AddressUpdate, NewHead, Pool},
+    pool::{AddressUpdate, BundleOutcome, NewHead, Pool},
 };
 use rundler_utils::{emit::WithEntryPoint, eth};
 use tokio::{
@@ -42,6 +43,7 @@ use crate::{
     assigner::{Assigner, AssignmentResult},
     bundle_proposer::{BundleData, BundleProposalRequest, BundleProposerError, BundleProposerT},
     emit::{BuilderEvent, BundleTxDetails},
+    sender::{ProviderEventSignal, RpcOutcomeClass, TxSenderError},
     transaction_tracker::{
         TrackerState, TrackerUpdate, TransactionTracker, TransactionTrackerError,
     },
@@ -79,6 +81,10 @@ pub(crate) struct BundleSenderImpl<T, C> {
     pool: C,
     settings: Settings,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
+    /// Provider-health signal for the submission route, shared with the other
+    /// builders on the route. Final submission outcomes are recorded here and
+    /// its state gates poison user operation evidence in the pool.
+    provider_event_signal: Arc<ProviderEventSignal>,
 }
 
 pub enum BundleSenderAction {
@@ -228,6 +234,7 @@ where
         pool: C,
         settings: Settings,
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
+        provider_event_signal: Arc<ProviderEventSignal>,
     ) -> Self {
         Self {
             builder_tag,
@@ -242,6 +249,7 @@ where
             pool,
             settings,
             event_sender,
+            provider_event_signal,
         }
     }
 
@@ -618,9 +626,11 @@ where
                 self.increment_counter("builder_soft_cancellations", &pinned, 1);
                 state.reset();
             }
-            Err(TransactionTrackerError::Rejected)
-            | Err(TransactionTrackerError::Underpriced)
-            | Err(TransactionTrackerError::ReplacementUnderpriced) => {
+            Err(TransactionTrackerError::Sender(
+                TxSenderError::Rejected
+                | TxSenderError::Underpriced
+                | TxSenderError::ReplacementUnderpriced,
+            )) => {
                 info!(
                     "Transaction underpriced/rejected during cancellation, trying again. {cancel_res:?}"
                 );
@@ -642,19 +652,19 @@ where
                     state.update(InnerState::Cancelling(inner.to_self()));
                 }
             }
-            Err(TransactionTrackerError::NonceTooLow) => {
+            Err(TransactionTrackerError::Sender(TxSenderError::NonceTooLow)) => {
                 // reset the transaction tracker and try again
                 info!("Nonce too low during cancellation, starting new bundle attempt");
                 self.assigner.release_all(self.sender_eoa);
                 state.reset();
             }
-            Err(TransactionTrackerError::InsufficientFunds) => {
+            Err(TransactionTrackerError::Sender(TxSenderError::InsufficientFunds)) => {
                 error!("Insufficient funds during cancellation, starting new bundle attempt");
                 self.increment_counter("builder_cancellation_txns_failed", &pinned, 1);
                 self.assigner.release_all(self.sender_eoa);
                 state.reset();
             }
-            Err(TransactionTrackerError::ConditionNotMet) => {
+            Err(TransactionTrackerError::Sender(TxSenderError::ConditionNotMet)) => {
                 error!(
                     "Unexpected condition not met during cancellation, starting new bundle attempt"
                 );
@@ -662,7 +672,7 @@ where
                 self.assigner.release_all(self.sender_eoa);
                 state.reset();
             }
-            Err(TransactionTrackerError::Other(e)) => {
+            Err(e) => {
                 error!("Failed to cancel transaction, moving back to building state: {e:#?}");
                 self.increment_counter("builder_cancellation_txns_failed", &pinned, 1);
                 self.assigner.release_all(self.sender_eoa);
@@ -774,6 +784,11 @@ where
                 let filter_id = assignment.filter_id;
                 let ops = assignment.operations;
 
+                if assignment.is_isolation {
+                    let hashes: Vec<B256> = ops.iter().map(|op| op.uo.hash()).collect();
+                    info!("Sending isolation bundle for suspect ops {hashes:?}");
+                }
+
                 // Build and send bundle. Keep this as a single result path so assigner
                 // cleanup runs for all outcomes, including hard errors.
                 let proposer_key = (entry_point, filter_id.clone());
@@ -878,15 +893,28 @@ where
             }
         };
 
-        join!(remove_ops_future, update_entities_future);
+        let mark_suspect_future = self.report_bundle_outcome(
+            entry_point,
+            bundle_data.suspect_op_hashes.clone(),
+            BundleOutcome::MarkSuspect,
+        );
+
+        join!(
+            remove_ops_future,
+            update_entities_future,
+            mark_suspect_future
+        );
 
         // Check if bundle is empty
         if bundle_data.is_empty() {
-            if !bundle_data.rejected_op_hashes.is_empty() || !bundle_data.entity_updates.is_empty()
+            if !bundle_data.rejected_op_hashes.is_empty()
+                || !bundle_data.suspect_op_hashes.is_empty()
+                || !bundle_data.entity_updates.is_empty()
             {
                 info!(
-                    "Empty bundle with {} rejected ops and {} rejected entities. Removed from pool.",
+                    "Empty bundle with {} rejected ops, {} suspect ops, and {} rejected entities.",
                     bundle_data.rejected_op_hashes.len(),
+                    bundle_data.suspect_op_hashes.len(),
                     bundle_data.entity_updates.len()
                 );
             }
@@ -908,9 +936,10 @@ where
         let ops = bundle_data.ops;
 
         let num_rejected = bundle_data.rejected_op_hashes.len();
+        let num_suspect = bundle_data.suspect_op_hashes.len();
         let num_updated_entities = bundle_data.entity_updates.len();
         info!(
-            "Selected bundle for {entry_point:?}: nonce: {nonce:?}. Ops: {ops:?}. Num rejected: {num_rejected}. Num updated entities: {num_updated_entities}"
+            "Selected bundle for {entry_point:?}: nonce: {nonce:?}. Ops: {ops:?}. Num rejected: {num_rejected}. Num suspect: {num_suspect}. Num updated entities: {num_updated_entities}"
         );
 
         // Send the transaction
@@ -931,9 +960,13 @@ where
         );
         self.record_histogram_ep("builder_bundle_txn_size_bytes", entry_point, tx_size as f64);
 
+        let uo_hashes: Vec<B256> = ops.iter().map(|(_, hash)| *hash).collect();
+
         match send_result {
             Ok(tx_hash) => {
                 let ops = Arc::new(ops);
+
+                self.provider_event_signal.record_success();
 
                 self.emit_for_entrypoint(
                     entry_point,
@@ -950,8 +983,10 @@ where
                     ),
                 );
 
+                self.report_bundle_outcome(entry_point, uo_hashes.clone(), BundleOutcome::Success)
+                    .await;
+
                 // Notify the pool about the pending bundle
-                let uo_hashes: Vec<B256> = ops.iter().map(|(_, hash)| *hash).collect();
                 if let Err(e) = self
                     .pool
                     .notify_pending_bundle(
@@ -968,56 +1003,104 @@ where
 
                 Ok(SendBundleAttemptResult::Success(ops))
             }
-            Err(TransactionTrackerError::NonceTooLow) => {
-                self.increment_counter_ep("builder_bundle_txn_nonce_too_low", entry_point, 1);
-                warn!("Bundle attempt nonce too low");
-                Ok(SendBundleAttemptResult::NonceTooLow)
-            }
-            Err(TransactionTrackerError::Underpriced) => {
-                self.increment_counter_ep("builder_bundle_txn_underpriced", entry_point, 1);
-                warn!("Bundle attempt underpriced");
-                Ok(SendBundleAttemptResult::Underpriced)
-            }
-            Err(TransactionTrackerError::ReplacementUnderpriced) => {
-                self.increment_counter_ep("builder_bundle_replacement_underpriced", entry_point, 1);
-                warn!("Bundle attempt replacement transaction underpriced");
-                Ok(SendBundleAttemptResult::ReplacementUnderpriced)
-            }
-            Err(TransactionTrackerError::ConditionNotMet) => {
-                self.increment_counter_ep("builder_bundle_txn_condition_not_met", entry_point, 1);
-                warn!("Bundle attempt condition not met");
-                Ok(SendBundleAttemptResult::ConditionNotMet)
-            }
-            Err(TransactionTrackerError::Rejected) => {
-                self.increment_counter_ep("builder_bundle_txn_rejected", entry_point, 1);
-                warn!("Bundle attempt rejected");
-                Ok(SendBundleAttemptResult::Rejected)
-            }
-            Err(TransactionTrackerError::InsufficientFunds) => {
-                self.increment_counter_ep("builder_bundle_txn_insufficient_funds", entry_point, 1);
-                error!("Bundle attempt insufficient funds");
-                Ok(SendBundleAttemptResult::InsufficientFunds)
+            Err(TransactionTrackerError::Sender(error)) => {
+                match error.classify() {
+                    // Terminal errors definitively reject the transaction and
+                    // are excluded from the provider-health window.
+                    RpcOutcomeClass::Terminal => {
+                        self.report_bundle_outcome(
+                            entry_point,
+                            uo_hashes,
+                            BundleOutcome::TerminalFailure,
+                        )
+                        .await;
+                    }
+                    RpcOutcomeClass::NonTerminal => {
+                        // Record before reporting so the report is gated by
+                        // the freshest signal state, including an event this
+                        // failure itself triggers.
+                        self.provider_event_signal.record_failure();
+                        self.report_bundle_outcome(
+                            entry_point,
+                            uo_hashes,
+                            BundleOutcome::NonTerminalFailure,
+                        )
+                        .await;
+                    }
+                    // Neutral errors have dedicated handling below and are
+                    // evidence of neither poison nor provider health.
+                    RpcOutcomeClass::Neutral => {}
+                }
+                match error {
+                    TxSenderError::NonceTooLow => {
+                        self.increment_counter_ep(
+                            "builder_bundle_txn_nonce_too_low",
+                            entry_point,
+                            1,
+                        );
+                        warn!("Bundle attempt nonce too low");
+                        Ok(SendBundleAttemptResult::NonceTooLow)
+                    }
+                    TxSenderError::Underpriced => {
+                        self.increment_counter_ep("builder_bundle_txn_underpriced", entry_point, 1);
+                        warn!("Bundle attempt underpriced");
+                        Ok(SendBundleAttemptResult::Underpriced)
+                    }
+                    TxSenderError::ReplacementUnderpriced => {
+                        self.increment_counter_ep(
+                            "builder_bundle_replacement_underpriced",
+                            entry_point,
+                            1,
+                        );
+                        warn!("Bundle attempt replacement transaction underpriced");
+                        Ok(SendBundleAttemptResult::ReplacementUnderpriced)
+                    }
+                    TxSenderError::ConditionNotMet => {
+                        self.increment_counter_ep(
+                            "builder_bundle_txn_condition_not_met",
+                            entry_point,
+                            1,
+                        );
+                        warn!("Bundle attempt condition not met");
+                        Ok(SendBundleAttemptResult::ConditionNotMet)
+                    }
+                    TxSenderError::Rejected => {
+                        self.increment_counter_ep("builder_bundle_txn_rejected", entry_point, 1);
+                        warn!("Bundle attempt rejected");
+                        Ok(SendBundleAttemptResult::Rejected)
+                    }
+                    TxSenderError::InsufficientFunds => {
+                        self.increment_counter_ep(
+                            "builder_bundle_txn_insufficient_funds",
+                            entry_point,
+                            1,
+                        );
+                        error!("Bundle attempt insufficient funds");
+                        Ok(SendBundleAttemptResult::InsufficientFunds)
+                    }
+                    TxSenderError::IntrinsicGasTooLow => {
+                        let tx_bytes = tx.input.input().map_or_else(
+                            || String::from("0x"),
+                            |data| format!("0x{}", hex::encode(data)),
+                        );
+                        error!("Bundle transaction intrinsic gas too low: tx_bytes={tx_bytes}");
+                        Err(anyhow::anyhow!("intrinsic gas too low"))
+                    }
+                    error @ (TxSenderError::TerminalRpcError { .. }
+                    | TxSenderError::UnrecognizedRpc { .. }
+                    | TxSenderError::SenderUnavailable(_)
+                    | TxSenderError::SoftCancelFailed
+                    | TxSenderError::Other(_)) => {
+                        error!("Failed to send bundle: {error}");
+                        Err(error.into())
+                    }
+                }
             }
             Err(TransactionTrackerError::Other(e)) => {
-                error!("Failed to send bundle with unexpected error: {e:?}");
-                if Self::is_intrinsic_gas_too_low_error(&e) {
-                    let tx_bytes = tx.input.input().map_or_else(
-                        || String::from("0x"),
-                        |data| format!("0x{}", hex::encode(data)),
-                    );
-                    error!(
-                        "Bundle transaction bytes for intrinsic gas too low: tx_bytes={tx_bytes}"
-                    );
-                }
+                error!("Failed to send bundle with unexpected tracker error: {e:?}");
                 Err(e)
             }
         }
-    }
-
-    fn is_intrinsic_gas_too_low_error(error: &anyhow::Error) -> bool {
-        format!("{error:#}")
-            .to_lowercase()
-            .contains("intrinsic gas too low")
     }
 
     /// Emits an event for a specific entrypoint (used for shared signer support)
@@ -1038,6 +1121,41 @@ where
             .context("builder should remove rejected ops from pool")
     }
 
+    /// Reports the final outcome of a bundle submission attempt to the pool for
+    /// poison user operation tracking. Best effort: failures are logged.
+    async fn report_bundle_outcome(
+        &self,
+        entry_point: Address,
+        ops: Vec<B256>,
+        outcome: BundleOutcome,
+    ) {
+        if ops.is_empty() {
+            return;
+        }
+
+        let outcome_metric = match outcome {
+            BundleOutcome::Success => "builder_bundle_outcome_success",
+            BundleOutcome::NonTerminalFailure => "builder_bundle_outcome_non_terminal_failure",
+            BundleOutcome::TerminalFailure => "builder_bundle_outcome_terminal_failure",
+            BundleOutcome::MarkSuspect => "builder_bundle_outcome_mark_suspect",
+        };
+        self.increment_counter_ep(outcome_metric, entry_point, 1);
+
+        if let Err(error) = self
+            .pool
+            .report_bundle_outcome(
+                entry_point,
+                ops,
+                outcome,
+                self.provider_event_signal.is_active(),
+            )
+            .await
+        {
+            self.increment_counter_ep("builder_bundle_outcome_report_failed", entry_point, 1);
+            warn!("Failed to report bundle outcome to pool: {error}");
+        }
+    }
+
     async fn process_revert(
         &self,
         tx_hash: B256,
@@ -1055,9 +1173,16 @@ where
             "Unknown entry point config: {ep_address:?}, filter_id: {filter_id:?}"
         ))?;
 
-        let to_remove = proposer.process_revert(tx_hash).await?;
+        let outcome = proposer.process_revert(tx_hash).await?;
 
-        self.remove_ops_from_pool_by_hash(ep_address, to_remove)
+        self.report_bundle_outcome(
+            ep_address,
+            outcome.to_mark_suspect,
+            BundleOutcome::MarkSuspect,
+        )
+        .await;
+
+        self.remove_ops_from_pool_by_hash(ep_address, outcome.to_remove)
             .await
     }
 
@@ -1605,7 +1730,7 @@ mod tests {
     use super::*;
     use crate::{
         assigner::{AssignmentResult, EntrypointInfo},
-        bundle_proposer::{BundleData, MockBundleProposerT},
+        bundle_proposer::{BundleData, MockBundleProposerT, RevertOutcome},
         bundle_sender::{BundleSenderImpl, MockTrigger},
         transaction_tracker::MockTransactionTracker,
     };
@@ -1665,7 +1790,7 @@ mod tests {
         mock_pool
             .expect_get_ops_summaries()
             .times(1)
-            .returning(|_, _, _| {
+            .returning(|_, _, _, _| {
                 Ok(vec![pool_op_summary(
                     ENTRY_POINT_ADDRESS_V0_6,
                     Address::ZERO,
@@ -1713,7 +1838,7 @@ mod tests {
         mock_pool
             .expect_get_ops_summaries()
             .times(1)
-            .returning(|_, _, _| {
+            .returning(|_, _, _, _| {
                 Ok(vec![pool_op_summary(
                     ENTRY_POINT_ADDRESS_V0_6,
                     Address::ZERO,
@@ -1727,6 +1852,13 @@ mod tests {
             .expect_notify_pending_bundle()
             .times(1)
             .returning(|_, _, _, _, _| Ok(()));
+        mock_pool
+            .expect_report_bundle_outcome()
+            .withf(|_, ops, outcome, provider_event_active| {
+                ops == &[B256::ZERO] && *outcome == BundleOutcome::Success && !provider_event_active
+            })
+            .times(1)
+            .returning(|_, _, _, _| Ok(()));
 
         mock_make_bundle(&mut mock_proposer_t, 1, vec![(Address::ZERO, B256::ZERO)]);
 
@@ -1751,6 +1883,9 @@ mod tests {
                 ..
             })
         ));
+
+        // the accepted submission was recorded in the provider-health window
+        assert_eq!(sender.provider_event_signal.observations(), 1);
     }
 
     #[tokio::test]
@@ -1786,15 +1921,17 @@ mod tests {
         // The other EP is never queried since the builder is pinned.
         mock_pool
             .expect_get_ops_summaries()
-            .withf(move |entry_point, _, filter| {
+            .withf(move |entry_point, _, _, filter| {
                 *entry_point == pinned_entry_point
                     && filter.as_deref() == expected_filter.as_deref()
             })
             .times(1)
-            .returning(move |_, _, _| Ok(vec![pool_op_summary(pinned_entry_point, Address::ZERO)]));
+            .returning(move |_, _, _, _| {
+                Ok(vec![pool_op_summary(pinned_entry_point, Address::ZERO)])
+            });
         mock_pool
             .expect_get_ops_summaries()
-            .withf(move |entry_point, _, _| *entry_point == other_entry_point)
+            .withf(move |entry_point, _, _, _| *entry_point == other_entry_point)
             .times(0);
 
         mock_pool
@@ -1865,19 +2002,21 @@ mod tests {
         // along with the other EP.
         mock_pool
             .expect_get_ops_summaries()
-            .withf(move |entry_point, _, filter| {
+            .withf(move |entry_point, _, _, filter| {
                 *entry_point == pinned_entry_point
                     && filter.as_deref() == expected_filter.as_deref()
             })
             .times(2)
-            .returning(move |_, _, _| Ok(vec![pool_op_summary(pinned_entry_point, Address::ZERO)]));
+            .returning(move |_, _, _, _| {
+                Ok(vec![pool_op_summary(pinned_entry_point, Address::ZERO)])
+            });
         mock_pool
             .expect_get_ops_summaries()
-            .withf(move |entry_point, _, filter| {
+            .withf(move |entry_point, _, _, filter| {
                 *entry_point == other_entry_point && filter.is_none()
             })
             .times(1)
-            .returning(move |_, _, _| {
+            .returning(move |_, _, _, _| {
                 Ok(vec![PoolOperationSummary {
                     hash: B256::from([1; 32]),
                     ..pool_op_summary(other_entry_point, Address::from([1; 20]))
@@ -2105,7 +2244,7 @@ mod tests {
         mock_pool
             .expect_get_ops_summaries()
             .times(1)
-            .returning(|_, _, _| {
+            .returning(|_, _, _, _| {
                 Ok(vec![PoolOperationSummary {
                     max_fee_per_gas: 10,
                     max_priority_fee_per_gas: 2,
@@ -2258,7 +2397,7 @@ mod tests {
         mock_pool
             .expect_get_ops_summaries()
             .times(2)
-            .returning(|_, _, _| {
+            .returning(|_, _, _, _| {
                 Ok(vec![pool_op_summary(
                     ENTRY_POINT_ADDRESS_V0_6,
                     Address::from([9; 20]),
@@ -2323,7 +2462,9 @@ mod tests {
         mock_pool
             .expect_get_ops_summaries()
             .times(3)
-            .returning(move |_, _, _| Ok(vec![pool_op_summary(ENTRY_POINT_ADDRESS_V0_6, sender)]));
+            .returning(move |_, _, _, _| {
+                Ok(vec![pool_op_summary(ENTRY_POINT_ADDRESS_V0_6, sender)])
+            });
         mock_pool
             .expect_get_ops_by_hashes()
             .times(1)
@@ -2402,7 +2543,9 @@ mod tests {
 
         mock_pool
             .expect_get_ops_summaries()
-            .returning(move |_, _, _| Ok(vec![pool_op_summary(ENTRY_POINT_ADDRESS_V0_6, sender)]));
+            .returning(move |_, _, _, _| {
+                Ok(vec![pool_op_summary(ENTRY_POINT_ADDRESS_V0_6, sender)])
+            });
         mock_pool
             .expect_get_ops_by_hashes()
             .returning(|_, _| Ok(vec![demo_pool_op()]));
@@ -2518,7 +2661,7 @@ mod tests {
         mock_pool
             .expect_get_ops_summaries()
             .times(1)
-            .returning(|_, _, _| {
+            .returning(|_, _, _, _| {
                 Ok(vec![pool_op_summary(
                     ENTRY_POINT_ADDRESS_V0_6,
                     Address::ZERO,
@@ -2532,9 +2675,16 @@ mod tests {
         mock_make_bundle(&mut mock_proposer_t, 1, vec![(Address::ZERO, B256::ZERO)]);
 
         // should send the bundle txn, returns condition not met
-        mock_tracker
-            .expect_send_transaction()
-            .returning(|_, _, _| Box::pin(async { Err(TransactionTrackerError::ConditionNotMet) }));
+        mock_tracker.expect_send_transaction().returning(|_, _, _| {
+            Box::pin(async {
+                Err(TransactionTrackerError::Sender(
+                    TxSenderError::ConditionNotMet,
+                ))
+            })
+        });
+
+        // neutral errors are not evidence: no outcome is reported
+        mock_pool.expect_report_bundle_outcome().times(0);
 
         // Sender will set condition_not_met flag and pass it to next make_bundle call
         // (tested implicitly via state transition to Building with retry)
@@ -2624,7 +2774,7 @@ mod tests {
         // Mock the proposer's process_revert to return empty (no ops to remove)
         mock_proposer_t
             .expect_process_revert()
-            .returning(|_| Box::pin(async { Ok(vec![]) }));
+            .returning(|_| Box::pin(async { Ok(RevertOutcome::default()) }));
 
         mock_pool.expect_remove_ops().returning(|_, _| Ok(()));
 
@@ -2665,6 +2815,232 @@ mod tests {
                 underpriced_info: None,
             })
         ));
+    }
+
+    async fn run_send_error_reports_outcome(
+        error: TxSenderError,
+        outcome: BundleOutcome,
+        provider_event_active: bool,
+    ) {
+        let Mocks {
+            mut mock_proposer_t,
+            mut mock_tracker,
+            mut mock_trigger,
+            mut mock_pool,
+        } = new_mocks();
+
+        let mut seq = Sequence::new();
+        add_trigger_no_update_last_block(&mut mock_trigger, &mut seq, 1);
+
+        setup_tracker_default(&mut mock_tracker);
+        mock_tracker.expect_reset().returning(|| Box::pin(async {}));
+
+        mock_pool
+            .expect_get_ops_summaries()
+            .times(1)
+            .returning(|_, _, _, _| {
+                Ok(vec![pool_op_summary(
+                    ENTRY_POINT_ADDRESS_V0_6,
+                    Address::ZERO,
+                )])
+            });
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .times(1)
+            .returning(|_, _| Ok(vec![demo_pool_op()]));
+        mock_pool
+            .expect_report_bundle_outcome()
+            .withf(move |_, ops, reported, event_active| {
+                ops == &[B256::ZERO]
+                    && *reported == outcome
+                    && *event_active == provider_event_active
+            })
+            .times(1)
+            .returning(|_, _, _, _| Ok(()));
+
+        mock_make_bundle(&mut mock_proposer_t, 1, vec![(Address::ZERO, B256::ZERO)]);
+
+        let error = std::sync::Mutex::new(Some(error));
+        mock_tracker
+            .expect_send_transaction()
+            .returning(move |_, _, _| {
+                let error = error.lock().unwrap().take().unwrap();
+                Box::pin(async move { Err(TransactionTrackerError::Sender(error)) })
+            });
+
+        let mut state = new_state_with(
+            mock_trigger,
+            mock_tracker,
+            InnerState::Building(BuildingState {
+                wait_for_trigger: true,
+                fee_increase_count: 0,
+                underpriced_info: None,
+            }),
+        );
+
+        let mut sender = new_sender(mock_proposer_t, mock_pool);
+
+        let observations_before = if provider_event_active {
+            // Saturate the signal's window with failures to activate an event.
+            for _ in 0..10 {
+                sender.provider_event_signal.record_failure();
+            }
+            assert!(sender.provider_event_signal.is_active());
+            10
+        } else {
+            0
+        };
+
+        let update = state.wait_for_trigger().await.unwrap();
+        sender.step_after_trigger(&mut state, update).await.unwrap();
+
+        // Only non-terminal failures are recorded in the provider-health
+        // window; terminal errors are excluded.
+        let expected_observations = if outcome == BundleOutcome::NonTerminalFailure {
+            observations_before + 1
+        } else {
+            observations_before
+        };
+        assert_eq!(
+            sender.provider_event_signal.observations(),
+            expected_observations
+        );
+    }
+
+    #[tokio::test]
+    async fn test_terminal_error_reports_terminal_failure() {
+        run_send_error_reports_outcome(
+            TxSenderError::TerminalRpcError {
+                code: -32000,
+                message: "internal error".to_string(),
+            },
+            BundleOutcome::TerminalFailure,
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_non_terminal_error_reports_non_terminal_failure() {
+        run_send_error_reports_outcome(
+            TxSenderError::SenderUnavailable(anyhow::anyhow!("provider outage")),
+            BundleOutcome::NonTerminalFailure,
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_non_terminal_error_during_provider_event() {
+        run_send_error_reports_outcome(
+            TxSenderError::SenderUnavailable(anyhow::anyhow!("provider outage")),
+            BundleOutcome::NonTerminalFailure,
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_revert_reports_suspects_and_removes() {
+        let Mocks {
+            mut mock_proposer_t,
+            mut mock_tracker,
+            mut mock_trigger,
+            mut mock_pool,
+        } = new_mocks();
+
+        let mut seq = Sequence::new();
+        add_trigger_wait_for_block_last_block(&mut mock_trigger, &mut seq, 1);
+
+        let mined = new_head_mined(2);
+        let mined_clone = mined.clone();
+
+        mock_trigger
+            .expect_wait_for_block()
+            .once()
+            .in_sequence(&mut seq)
+            .returning(move || {
+                Box::pin({
+                    let mined = mined_clone.clone();
+                    async move { Ok(mined) }
+                })
+            });
+        mock_trigger
+            .expect_last_block()
+            .once()
+            .in_sequence(&mut seq)
+            .return_const(mined);
+
+        mock_tracker.expect_address().return_const(Address::ZERO);
+
+        mock_tracker.expect_process_update().once().returning(|_| {
+            Box::pin(async {
+                Ok(Some(TrackerUpdate::Mined {
+                    block_number: 2,
+                    nonce: 0,
+                    gas_limit: None,
+                    gas_used: None,
+                    gas_price: None,
+                    tx_hash: B256::ZERO,
+                    attempt_number: 0,
+                    is_success: false, // revert
+                }))
+            })
+        });
+
+        let removed = B256::repeat_byte(1);
+        let suspect_a = B256::repeat_byte(2);
+        let suspect_b = B256::repeat_byte(3);
+
+        mock_proposer_t.expect_process_revert().returning(move |_| {
+            Box::pin(async move {
+                Ok(RevertOutcome {
+                    to_remove: vec![removed],
+                    to_mark_suspect: vec![suspect_a, suspect_b],
+                })
+            })
+        });
+
+        mock_pool
+            .expect_report_bundle_outcome()
+            .withf(move |_, ops, outcome, provider_event_active| {
+                ops == &[suspect_a, suspect_b]
+                    && *outcome == BundleOutcome::MarkSuspect
+                    && !provider_event_active
+            })
+            .times(1)
+            .returning(|_, _, _, _| Ok(()));
+        mock_pool
+            .expect_remove_ops()
+            .withf(move |_, ops| ops == &[removed])
+            .times(1)
+            .returning(|_, _| Ok(()));
+
+        let mut sender = new_sender(mock_proposer_t, mock_pool);
+
+        // Establish pin so process_revert can find the proposer
+        sender.assigner.test_establish_pin(
+            Address::default(),
+            &[Address::ZERO],
+            (ENTRY_POINT_ADDRESS_V0_6, None),
+        );
+
+        let mut state = new_state_with(
+            mock_trigger,
+            mock_tracker,
+            InnerState::Pending(PendingState {
+                until: 3,
+                fee_increase_count: 0,
+            }),
+        );
+
+        // first step has no update
+        let update = state.wait_for_trigger().await.unwrap();
+        sender.step_after_trigger(&mut state, update).await.unwrap();
+
+        // second step is mined as a revert: suspects reported, removals removed
+        let update = state.wait_for_trigger().await.unwrap();
+        sender.step_after_trigger(&mut state, update).await.unwrap();
     }
 
     struct Mocks {
@@ -2724,6 +3100,7 @@ mod tests {
                 max_replacement_underpriced_blocks: 3,
             },
             broadcast::channel(1000).0,
+            Arc::new(ProviderEventSignal::default()),
         )
     }
 
@@ -2757,6 +3134,7 @@ mod tests {
                 max_replacement_underpriced_blocks: 3,
             },
             broadcast::channel(1000).0,
+            Arc::new(ProviderEventSignal::default()),
         )
     }
 
@@ -2828,6 +3206,7 @@ mod tests {
             gas_fees: GasFees::default(),
             ops,
             rejected_op_hashes: vec![],
+            suspect_op_hashes: vec![],
             entity_updates: vec![],
         }
     }
@@ -2842,6 +3221,7 @@ mod tests {
             max_priority_fee_per_gas: 0,
             gas_limit: 0,
             bundler_sponsorship_max_cost: None,
+            suspect: false,
         }
     }
 

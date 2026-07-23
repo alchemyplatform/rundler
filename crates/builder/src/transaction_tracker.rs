@@ -105,19 +105,10 @@ pub(crate) trait TransactionTracker: Send + Sync {
 /// Errors that can occur while using a `TransactionTracker`.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum TransactionTrackerError {
-    #[error("nonce too low")]
-    NonceTooLow,
-    #[error("transaction underpriced")]
-    Underpriced,
-    #[error("replacement transaction underpriced")]
-    ReplacementUnderpriced,
-    #[error("storage slot value condition not met")]
-    ConditionNotMet,
-    #[error("rejected")]
-    Rejected,
-    #[error("insufficient funds")]
-    InsufficientFunds,
-    /// All other errors
+    /// The sender failed to submit or rejected the transaction.
+    #[error(transparent)]
+    Sender(#[from] TxSenderError),
+    /// Tracker-local failures (validation, signer acquisition, chain reads).
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -519,7 +510,9 @@ where
                     });
                 };
 
-                Err(TransactionTrackerError::ReplacementUnderpriced)
+                Err(TransactionTrackerError::Sender(
+                    TxSenderError::ReplacementUnderpriced,
+                ))
             }
             Err(e) => Err(e.into()),
         }
@@ -676,28 +669,6 @@ where
             return true;
         }
         false
-    }
-}
-
-impl From<TxSenderError> for TransactionTrackerError {
-    fn from(value: TxSenderError) -> Self {
-        match value {
-            TxSenderError::NonceTooLow => TransactionTrackerError::NonceTooLow,
-            TxSenderError::Underpriced => TransactionTrackerError::Underpriced,
-            TxSenderError::ReplacementUnderpriced => {
-                TransactionTrackerError::ReplacementUnderpriced
-            }
-            TxSenderError::ConditionNotMet => TransactionTrackerError::ConditionNotMet,
-            TxSenderError::Rejected => TransactionTrackerError::Rejected,
-            TxSenderError::InsufficientFunds => TransactionTrackerError::InsufficientFunds,
-            TxSenderError::SoftCancelFailed => {
-                TransactionTrackerError::Other(anyhow::anyhow!("soft cancel failed"))
-            }
-            // SenderUnavailable reaching here means no fallback is configured; treat
-            // it as a transient error so the bundle sender retries next cycle.
-            TxSenderError::SenderUnavailable(e) => TransactionTrackerError::Other(e),
-            TxSenderError::Other(e) => TransactionTrackerError::Other(e),
-        }
     }
 }
 
@@ -1063,7 +1034,7 @@ mod tests {
 
         assert!(matches!(
             sent_transaction,
-            Err(TransactionTrackerError::Underpriced)
+            Err(TransactionTrackerError::Sender(TxSenderError::Underpriced))
         ));
         assert_eq!(tracker.num_pending_transactions(), 0);
         assert_eq!(
@@ -1094,7 +1065,9 @@ mod tests {
 
         assert!(matches!(
             sent_transaction,
-            Err(TransactionTrackerError::ReplacementUnderpriced)
+            Err(TransactionTrackerError::Sender(
+                TxSenderError::ReplacementUnderpriced
+            ))
         ));
         assert_eq!(tracker.num_pending_transactions(), 0);
         assert_eq!(
