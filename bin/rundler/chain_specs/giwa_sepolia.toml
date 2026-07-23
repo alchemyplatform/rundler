@@ -1,0 +1,12 @@
+name = "GIWA Sepolia"
+id = 91342
+
+da_pre_verification_gas = true
+da_gas_oracle_type = "OPTIMISM_BEDROCK"
+da_gas_oracle_contract_address = "0x420000000000000000000000000000000000000F"
+
+priority_fee_oracle_type = "USAGE_BASED"
+min_max_priority_fee_per_gas = 100000
+block_gas_limit = 60000000
+eip7702_enabled = true
+eip7623_enabled = true
