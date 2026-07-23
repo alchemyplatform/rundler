@@ -16,7 +16,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use rundler_provider::{EvmProvider, ProviderError, TransactionRequest};
 use rundler_signer::SignerLease;
-use rundler_types::{ExpectedStorage, GasFees};
+use rundler_types::{ExpectedStorage, GasFees, chain::ChainSpec};
 use serde_json::json;
 
 use super::{CancelTxInfo, Result};
@@ -26,7 +26,7 @@ use crate::sender::{TransactionSender, TxSenderError, create_hard_cancel_tx};
 pub(crate) struct RawTransactionSender<P> {
     submit_provider: P,
     use_conditional_rpc: bool,
-    internal_rpc_error_is_terminal: bool,
+    chain_spec: ChainSpec,
 }
 
 #[async_trait]
@@ -90,22 +90,17 @@ impl<P> RawTransactionSender<P> {
     pub(crate) fn new(
         submit_provider: P,
         use_conditional_rpc: bool,
-        internal_rpc_error_is_terminal: bool,
+        chain_spec: ChainSpec,
     ) -> Self {
         Self {
             submit_provider,
             use_conditional_rpc,
-            internal_rpc_error_is_terminal,
+            chain_spec,
         }
     }
 
     fn map_provider_error(&self, error: ProviderError) -> TxSenderError {
-        let error = TxSenderError::from(error).promote_terminal_chain_policy_rejection();
-        if self.internal_rpc_error_is_terminal {
-            error.promote_terminal_internal_error()
-        } else {
-            error
-        }
+        TxSenderError::from(error).promote_terminal_error(&self.chain_spec)
     }
 }
 
@@ -116,15 +111,30 @@ mod tests {
     use super::*;
     use crate::sender::rpc_error_response;
 
+    fn chain_spec_with_internal_error_terminal(internal_rpc_error_is_terminal: bool) -> ChainSpec {
+        ChainSpec {
+            internal_rpc_error_is_terminal,
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn promotes_internal_error_only_when_flagged() {
-        let flagged = RawTransactionSender::new(MockEvmProvider::new(), false, true);
+        let flagged = RawTransactionSender::new(
+            MockEvmProvider::new(),
+            false,
+            chain_spec_with_internal_error_terminal(true),
+        );
         assert!(matches!(
             flagged.map_provider_error(rpc_error_response(-32000, "internal error")),
             TxSenderError::TerminalRpcError { .. }
         ));
 
-        let unflagged = RawTransactionSender::new(MockEvmProvider::new(), false, false);
+        let unflagged = RawTransactionSender::new(
+            MockEvmProvider::new(),
+            false,
+            chain_spec_with_internal_error_terminal(false),
+        );
         assert!(matches!(
             unflagged.map_provider_error(rpc_error_response(-32000, "internal error")),
             TxSenderError::UnrecognizedRpc { .. }
@@ -137,7 +147,7 @@ mod tests {
             let sender = RawTransactionSender::new(
                 MockEvmProvider::new(),
                 false,
-                internal_rpc_error_is_terminal,
+                chain_spec_with_internal_error_terminal(internal_rpc_error_is_terminal),
             );
             assert!(matches!(
                 sender.map_provider_error(rpc_error_response(
