@@ -770,6 +770,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_user_op_by_hash_both_bounds_within_max_accepted() {
+        // Both bounds supplied and the width is within the enforced max: the range is used
+        // exactly as given, with no head lookup.
+        let res = LookupTest::new()
+            .logs_empty(range(100, 150))
+            .run(EventBlockOptions {
+                block_option: Some(range(100, 150)),
+                max_block_range: Some(100),
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, None);
+    }
+
+    #[tokio::test]
+    async fn test_get_user_op_by_hash_one_sided_range_no_max_left_to_node() {
+        // A one-sided range with no max enforced: the missing bound is left unset for the
+        // node's getLogs default, and there is no head lookup or expansion.
+        let res = LookupTest::new()
+            .logs_empty(FilterBlockOption::Range {
+                from_block: Some(100u64.into()),
+                to_block: None,
+            })
+            .run(EventBlockOptions {
+                block_option: Some(FilterBlockOption::Range {
+                    from_block: Some(100u64.into()),
+                    to_block: None,
+                }),
+                max_block_range: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, None);
+    }
+
+    #[tokio::test]
     async fn test_get_user_op_by_hash_from_block_past_head_is_invalid_params() {
         // A one-sided fromBlock beyond the chain head cannot yield a valid window.
         let err = LookupTest::new()
