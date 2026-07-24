@@ -198,8 +198,7 @@ where
         } else {
             let error = if let Ok(revert) = Revert::abi_decode(&result.revertData) {
                 GasEstimationError::RevertInCallWithMessage(revert.reason)
-            } else if result.revertData.is_empty() && result.gasUsed >= U256::from(call_gas_limit)
-            {
+            } else if result.revertData.is_empty() && result.gasUsed >= U256::from(call_gas_limit) {
                 // No revert reason and the call consumed at least the entire gas limit we
                 // gave it: an EVM out-of-gas exceptional halt clears returndata the same
                 // way a `revert(0, 0)` does, so this is the only signal available to tell
