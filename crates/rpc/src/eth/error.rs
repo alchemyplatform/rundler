@@ -553,6 +553,9 @@ impl From<GasEstimationError> for EthRpcError {
             GasEstimationError::RevertInCallWithBytes(b) => {
                 Self::ExecutionRevertedWithBytes(ExecutionRevertedWithBytesData { revert_data: b })
             }
+            error @ GasEstimationError::CallGasLimitTooLow(_) => {
+                Self::ExecutionReverted(error.to_string())
+            }
             error @ GasEstimationError::GasUsedTooLarge => {
                 Self::EntryPointValidationRejected(error.to_string())
             }
