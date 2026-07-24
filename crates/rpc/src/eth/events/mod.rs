@@ -52,6 +52,22 @@ pub(crate) struct ResolvedEventBlockOptions {
     pub(crate) max_block_range: Option<u64>,
 }
 
+impl ResolvedEventBlockOptions {
+    /// Placeholder window for receipt lookups that resolve from a known bundle transaction
+    /// (e.g. the preconfirmed path) and never scan a log range. The event query layer
+    /// ignores the window on those paths, so it is built without a head lookup.
+    pub(crate) fn unused() -> Self {
+        Self {
+            block_option: FilterBlockOption::Range {
+                from_block: None,
+                to_block: None,
+            },
+            caller_supplied: false,
+            max_block_range: None,
+        }
+    }
+}
+
 impl EventBlockOptions {
     /// Resolve into a concrete search window ready for the event query layer.
     ///
@@ -191,9 +207,10 @@ pub(crate) type EventProviderResult<T> = Result<T, EventProviderError>;
 /// Resolve a filter block option into a concrete range: resolve any block tags to block
 /// numbers and, when a maximum block distance is enforced, validate and bound the window.
 ///
-/// RPC handlers call this once with `max_distance = None` so tags are resolved a single
-/// time before fanning out; each entry point route then re-invokes it with its effective
-/// max to validate the window and expand a one-sided range.
+/// `EventBlockOptions::resolve` calls this once per request with the effective maximum
+/// (the per-request override or the configured event block distance) and hands the
+/// resulting `ResolvedEventBlockOptions` to every entry point route as-is; routes do not
+/// re-resolve.
 ///
 /// A one-sided range is expanded to a `max_distance`-wide window anchored at the supplied
 /// bound. For `{ fromBlock }` the synthesized `toBlock` is capped at the chain head so we

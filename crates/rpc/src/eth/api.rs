@@ -28,7 +28,7 @@ use super::{
     router::EntryPointRouter,
 };
 use crate::{
-    eth::events::{EventBlockOptions, EventProviderError},
+    eth::events::{EventBlockOptions, EventProviderError, ResolvedEventBlockOptions},
     types::{RpcGasEstimate, RpcUserOperationByHash, RpcUserOperationReceipt},
 };
 
@@ -182,10 +182,6 @@ where
             ));
         }
 
-        let block_options = block_options
-            .resolve(&self.provider, self.router.event_block_distance())
-            .await
-            .map_err(EthRpcError::from)?;
         let tag = tag.unwrap_or(BlockTag::Latest);
 
         if tag == BlockTag::Pending {
@@ -213,7 +209,7 @@ where
                         Some(preconf_info.tx_hash),
                         // The preconfirmed path resolves the receipt from the known bundle
                         // transaction, so the block window is unused here.
-                        block_options,
+                        ResolvedEventBlockOptions::unused(),
                     )
                     .await;
                 match ret {
@@ -236,6 +232,14 @@ where
                 };
             }
         };
+
+        // Only the log-query fan-out needs a resolved window; resolve it here so a
+        // transient head-lookup failure cannot pre-empt the pending-tag rejection or the
+        // preconfirmed lookup above.
+        let block_options = block_options
+            .resolve(&self.provider, self.router.event_block_distance())
+            .await
+            .map_err(EthRpcError::from)?;
 
         let futs = self
             .router
@@ -639,6 +643,43 @@ mod tests {
                 .unwrap();
             assert_eq!(res, None);
         }
+    }
+
+    #[tokio::test]
+    async fn test_get_user_op_receipt_pending_unsupported_skips_head_lookup() {
+        // With flashblocks disabled, a pending-tag receipt request is rejected as invalid
+        // params. Block-window resolution (which would call get_block_number) must not run
+        // first: the provider mock sets no get_block_number expectation, so an eager head
+        // lookup would panic instead of returning the expected invalid params.
+        let cs = ChainSpec {
+            id: 1,
+            ..Default::default()
+        };
+        let hash = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default())
+            .build()
+            .hash();
+
+        let mut entry_point = MockEntryPointV0_6::default();
+        entry_point
+            .expect_address()
+            .return_const(cs.entry_point_address_v0_6);
+
+        let api = create_api(
+            MockEvmProvider::default(),
+            entry_point,
+            MockPool::default(),
+            MockGasEstimator::default(),
+            false,
+        );
+
+        let err = api
+            .get_user_operation_receipt(hash, Some(BlockTag::Pending), EventBlockOptions::default())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, EthRpcError::InvalidParams(_)),
+            "expected invalid params, got {err:?}"
+        );
     }
 
     #[tokio::test]
