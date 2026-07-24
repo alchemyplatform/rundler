@@ -43,8 +43,10 @@ impl EventBlockOptions {
     /// to multiple entry point routes without each route re-resolving the tags via RPC.
     pub(crate) async fn resolve<P: EvmProvider>(self, provider: &P) -> EventProviderResult<Self> {
         Ok(Self {
+            // Resolve tags only here (no max): the effective max distance is known per
+            // entry point route, which applies validation and one-sided expansion.
             block_option: match self.block_option {
-                Some(bo) => Some(resolve_block_option(provider, bo).await?),
+                Some(bo) => Some(resolve_block_option(provider, bo, None).await?),
                 None => None,
             },
             ..self
@@ -133,44 +135,93 @@ pub enum EventProviderError {
 /// Type alias for results from event provider operations
 pub(crate) type EventProviderResult<T> = Result<T, EventProviderError>;
 
-/// Resolve any block tags in a filter block option to concrete block numbers.
+/// Resolve a filter block option into a concrete range: resolve any block tags to block
+/// numbers and, when a maximum block distance is enforced, validate and bound the window.
 ///
-/// RPC handlers call this once per request so the resolved option can be fanned out to
-/// multiple entry point routes without each route re-resolving the tags via RPC.
+/// RPC handlers call this once with `max_distance = None` so tags are resolved a single
+/// time before fanning out; each entry point route then re-invokes it with its effective
+/// max to validate the window and expand a one-sided range.
+///
+/// A one-sided range is expanded to a `max_distance`-wide window anchored at the supplied
+/// bound. For `{ fromBlock }` the synthesized `toBlock` is capped at the chain head so we
+/// never emit a `toBlock` past the tip (`eth_getLogs` clamping of an out-of-range
+/// `toBlock` is not guaranteed by the JSON-RPC spec).
 pub(crate) async fn resolve_block_option<P: EvmProvider>(
     provider: &P,
     block_option: FilterBlockOption,
+    max_distance: Option<u64>,
 ) -> EventProviderResult<FilterBlockOption> {
-    match block_option {
-        FilterBlockOption::Range {
-            from_block,
-            to_block,
-        } => {
-            let (from_block, to_block) = match (from_block, to_block) {
-                // both bounds are the same tag: resolve once
-                (Some(from), Some(to)) if from == to => {
-                    let number = resolve_block_number(provider, from).await?;
-                    (Some(number.into()), Some(number.into()))
-                }
-                (from, to) => {
-                    let from = match from {
-                        Some(block) => Some(resolve_block_number(provider, block).await?.into()),
-                        None => None,
-                    };
-                    let to = match to {
-                        Some(block) => Some(resolve_block_number(provider, block).await?.into()),
-                        None => None,
-                    };
-                    (from, to)
-                }
-            };
-            Ok(FilterBlockOption::Range {
-                from_block,
-                to_block,
-            })
+    let FilterBlockOption::Range {
+        from_block,
+        to_block,
+    } = block_option
+    else {
+        // AtBlockHash: nothing to resolve or bound.
+        return Ok(block_option);
+    };
+
+    // Resolve any tags to concrete block numbers.
+    let (from_block, to_block) = match (from_block, to_block) {
+        // both bounds are the same tag: resolve once
+        (Some(from), Some(to)) if from == to => {
+            let number = resolve_block_number(provider, from).await?;
+            (Some(number), Some(number))
         }
-        FilterBlockOption::AtBlockHash(_) => Ok(block_option),
+        (from, to) => {
+            let from = match from {
+                Some(block) => Some(resolve_block_number(provider, block).await?),
+                None => None,
+            };
+            let to = match to {
+                Some(block) => Some(resolve_block_number(provider, block).await?),
+                None => None,
+            };
+            (from, to)
+        }
+    };
+
+    if let (Some(from), Some(to)) = (from_block, to_block)
+        && from > to
+    {
+        return Err(EventProviderError::InvalidRequest(format!(
+            "fromBlock: {from} is greater than toBlock: {to}"
+        )));
     }
+
+    let (from_block, to_block) = match (max_distance, from_block, to_block) {
+        // No max enforced: leave a missing bound to the node's getLogs default.
+        (None, from, to) => (from, to),
+        // Both bounds supplied: enforce the max width.
+        (Some(max_distance), Some(from), Some(to)) => {
+            if to - from > max_distance {
+                return Err(EventProviderError::InvalidRequest(format!(
+                    "fromBlock: {from}, toBlock: {to} larger than max block distance {max_distance}, reduce block range"
+                )));
+            }
+            (Some(from), Some(to))
+        }
+        // One-sided fromBlock: expand toBlock to a max-wide window, capped at the head.
+        (Some(max_distance), Some(from), None) => {
+            let head = provider.get_block_number().await?;
+            let to = from.saturating_add(max_distance).min(head);
+            if from > to {
+                return Err(EventProviderError::InvalidRequest(format!(
+                    "fromBlock: {from} is greater than the current head block: {head}"
+                )));
+            }
+            (Some(from), Some(to))
+        }
+        // One-sided toBlock: expand fromBlock to a max-wide window. toBlock is caller-
+        // supplied, so it is left as-is.
+        (Some(max_distance), None, Some(to)) => (Some(to.saturating_sub(max_distance)), Some(to)),
+        // Both omitted: nothing to bound; leave to the node default.
+        (Some(_), None, None) => (None, None),
+    };
+
+    Ok(FilterBlockOption::Range {
+        from_block: from_block.map(Into::into),
+        to_block: to_block.map(Into::into),
+    })
 }
 
 /// Resolve a block number or tag to a concrete block number.

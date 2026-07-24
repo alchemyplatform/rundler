@@ -720,11 +720,11 @@ mod tests {
     #[tokio::test]
     async fn test_get_user_op_by_hash_one_sided_range_expands_to_max() {
         // With a max enforced, a one-sided range must not be rejected: the missing bound
-        // is filled to a max-wide window anchored at the supplied bound, with no extra
-        // head lookup (getLogs clamps an over-the-tip toBlock to the head).
+        // is filled to a max-wide window anchored at the supplied bound.
 
         // fromBlock only: toBlock expands to fromBlock + max.
         let res = LookupTest::new()
+            .latest_block(1000)
             .logs_empty(range(100, 200))
             .run(EventBlockOptions {
                 block_option: Some(FilterBlockOption::Range {
@@ -737,7 +737,24 @@ mod tests {
             .unwrap();
         assert_eq!(res, None);
 
-        // toBlock only: fromBlock expands to toBlock - max.
+        // fromBlock only, near the head: the synthesized toBlock is capped at the head so
+        // we never query past the chain tip.
+        let res = LookupTest::new()
+            .latest_block(150)
+            .logs_empty(range(100, 150))
+            .run(EventBlockOptions {
+                block_option: Some(FilterBlockOption::Range {
+                    from_block: Some(100u64.into()),
+                    to_block: None,
+                }),
+                max_block_range: Some(100),
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, None);
+
+        // toBlock only: fromBlock expands to toBlock - max (toBlock is caller-supplied, so
+        // no head lookup is needed).
         let res = LookupTest::new()
             .logs_empty(range(100, 200))
             .run(EventBlockOptions {
@@ -750,6 +767,26 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res, None);
+    }
+
+    #[tokio::test]
+    async fn test_get_user_op_by_hash_from_block_past_head_is_invalid_params() {
+        // A one-sided fromBlock beyond the chain head cannot yield a valid window.
+        let err = LookupTest::new()
+            .latest_block(50)
+            .run(EventBlockOptions {
+                block_option: Some(FilterBlockOption::Range {
+                    from_block: Some(100u64.into()),
+                    to_block: None,
+                }),
+                max_block_range: Some(100),
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, EthRpcError::InvalidParams(_)),
+            "expected invalid params, got {err:?}"
+        );
     }
 
     #[tokio::test]

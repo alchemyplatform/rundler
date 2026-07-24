@@ -342,64 +342,10 @@ where
         });
         let has_block_option = supplied_block_option.is_some();
         let block_option = if let Some(bo) = supplied_block_option {
-            // No-op when the RPC handler already resolved the tags before fanning out.
-            let bo = super::resolve_block_option(&self.provider, bo).await?;
-
-            if let FilterBlockOption::Range {
-                from_block,
-                to_block,
-            } = bo
-            {
-                if let (Some(BlockNumberOrTag::Number(from)), Some(BlockNumberOrTag::Number(to))) =
-                    (from_block, to_block)
-                    && from > to
-                {
-                    return Err(EventProviderError::InvalidRequest(format!(
-                        "fromBlock: {from} is greater than toBlock: {to}"
-                    )));
-                }
-
-                match (event_block_distance, from_block, to_block) {
-                    // No max enforced: use the range as-is (a missing bound is left to the
-                    // node's getLogs default).
-                    (None, _, _) => bo,
-                    // Both bounds supplied: enforce the max width. Resolution guarantees
-                    // populated bounds are numbers.
-                    (
-                        Some(max_distance),
-                        Some(BlockNumberOrTag::Number(from)),
-                        Some(BlockNumberOrTag::Number(to)),
-                    ) => {
-                        if to - from > max_distance {
-                            return Err(EventProviderError::InvalidRequest(format!(
-                                "fromBlock: {from}, toBlock: {to} larger than max block distance {max_distance}, reduce block range"
-                            )));
-                        }
-                        bo
-                    }
-                    // One-sided range with a max enforced: expand the missing bound to a
-                    // max_distance-wide window anchored at the supplied bound instead of
-                    // rejecting the request. The window is exactly max_distance wide; if
-                    // toBlock runs past the chain tip, getLogs clamps it to the head.
-                    (Some(max_distance), Some(BlockNumberOrTag::Number(from)), None) => {
-                        FilterBlockOption::Range {
-                            from_block: Some(from.into()),
-                            to_block: Some(from.saturating_add(max_distance).into()),
-                        }
-                    }
-                    (Some(max_distance), None, Some(BlockNumberOrTag::Number(to))) => {
-                        FilterBlockOption::Range {
-                            from_block: Some(to.saturating_sub(max_distance).into()),
-                            to_block: Some(to.into()),
-                        }
-                    }
-                    // Both bounds omitted is filtered out above; anything else (e.g. an
-                    // unresolved tag) is used as-is.
-                    (Some(_), _, _) => bo,
-                }
-            } else {
-                bo
-            }
+            // Resolve tags (a no-op when the RPC handler already did so before fanning
+            // out), validate the window against the effective max, and expand a one-sided
+            // range to a bounded window.
+            super::resolve_block_option(&self.provider, bo, event_block_distance).await?
         } else {
             let to_block = self.provider.get_block_number().await?;
             let from_block = match event_block_distance {
