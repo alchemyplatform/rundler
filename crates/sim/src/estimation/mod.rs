@@ -56,6 +56,12 @@ pub enum GasEstimationError {
     /// Call reverted with bytes
     #[error("user operation's call reverted: {0:#x}")]
     RevertInCallWithBytes(Bytes),
+    /// Call reverted with no data while consuming the entire supplied call gas limit,
+    /// indicating it likely ran out of gas rather than hitting a genuine revert
+    #[error(
+        "call likely ran out of gas: consumed the entire callGasLimit ({0}) and reverted with no data"
+    )]
+    CallGasLimitTooLow(u128),
     /// Call used too much gas
     #[error("gas_used cannot be larger than a u64 integer")]
     GasUsedTooLarge,
