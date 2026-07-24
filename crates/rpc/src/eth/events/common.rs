@@ -379,19 +379,12 @@ where
                     }
                     // One-sided range with a max enforced: expand the missing bound to a
                     // max_distance-wide window anchored at the supplied bound instead of
-                    // rejecting the request. Cap toBlock at the head so the resulting
-                    // window never runs past the chain tip.
+                    // rejecting the request. The window is exactly max_distance wide; if
+                    // toBlock runs past the chain tip, getLogs clamps it to the head.
                     (Some(max_distance), Some(BlockNumberOrTag::Number(from)), None) => {
-                        let head = self.provider.get_block_number().await?;
-                        let to = from.saturating_add(max_distance).min(head);
-                        if from > to {
-                            return Err(EventProviderError::InvalidRequest(format!(
-                                "fromBlock: {from} is greater than the current head block: {head}"
-                            )));
-                        }
                         FilterBlockOption::Range {
                             from_block: Some(from.into()),
-                            to_block: Some(to.into()),
+                            to_block: Some(from.saturating_add(max_distance).into()),
                         }
                     }
                     (Some(max_distance), None, Some(BlockNumberOrTag::Number(to))) => {
