@@ -138,9 +138,6 @@ where
                             self.providers.evm().clone(),
                             self.args
                                 .eth_api_settings
-                                .user_operation_event_block_distance,
-                            self.args
-                                .eth_api_settings
                                 .user_operation_event_block_distance_fallback,
                         ),
                     ));
@@ -170,9 +167,6 @@ where
                             self.providers.evm().clone(),
                             self.args
                                 .eth_api_settings
-                                .user_operation_event_block_distance,
-                            self.args
-                                .eth_api_settings
                                 .user_operation_event_block_distance_fallback,
                         ),
                     ));
@@ -181,7 +175,13 @@ where
         }
 
         // create the entry point router
-        let router = router_builder.build();
+        let router = router_builder
+            .event_block_distance(
+                self.args
+                    .eth_api_settings
+                    .user_operation_event_block_distance,
+            )
+            .build();
 
         let mut module = RpcModule::new(());
         self.attach_namespaces(

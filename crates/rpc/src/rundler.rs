@@ -391,7 +391,10 @@ where
         block_options: EventBlockOptions,
     ) -> EthResult<RpcUserOperationStatus> {
         let block_options = block_options
-            .resolve(&self.evm_provider)
+            .resolve(
+                &self.evm_provider,
+                self.entry_point_router.event_block_distance(),
+            )
             .await
             .map_err(EthRpcError::from)?;
 
@@ -415,10 +418,9 @@ where
                     &pool_status.entry_point,
                     uo_hash,
                     Some(preconf_info.tx_hash),
-                    EventBlockOptions {
-                        block_option: None,
-                        ..block_options
-                    },
+                    // The preconfirmed path resolves from the known bundle transaction, so
+                    // the block window is unused here.
+                    block_options,
                 )
                 .await;
             match ret {

@@ -145,7 +145,7 @@ where
         }
 
         let block_options = block_options
-            .resolve(&self.provider)
+            .resolve(&self.provider, self.router.event_block_distance())
             .await
             .map_err(EthRpcError::from)?;
 
@@ -183,7 +183,7 @@ where
         }
 
         let block_options = block_options
-            .resolve(&self.provider)
+            .resolve(&self.provider, self.router.event_block_distance())
             .await
             .map_err(EthRpcError::from)?;
         let tag = tag.unwrap_or(BlockTag::Latest);
@@ -211,10 +211,9 @@ where
                         &op_status.entry_point,
                         hash,
                         Some(preconf_info.tx_hash),
-                        EventBlockOptions {
-                            block_option: None,
-                            ..block_options
-                        },
+                        // The preconfirmed path resolves the receipt from the known bundle
+                        // transaction, so the block window is unused here.
+                        block_options,
                     )
                     .await;
                 match ret {
@@ -932,13 +931,7 @@ mod tests {
             .add_route(EntryPointRouteImpl::new(
                 Arc::new(entry_point),
                 MockGasEstimator::default(),
-                UserOperationEventProviderV0_6::new(
-                    chain_spec.clone(),
-                    ep,
-                    provider.clone(),
-                    None,
-                    None,
-                ),
+                UserOperationEventProviderV0_6::new(chain_spec.clone(), ep, provider.clone(), None),
             ))
             .build();
 
@@ -1012,10 +1005,10 @@ mod tests {
                     chain_spec.clone(),
                     chain_spec.entry_point_address_v0_6,
                     provider.clone(),
-                    event_block_distance,
                     event_block_distance_fallback,
                 ),
             ))
+            .event_block_distance(event_block_distance)
             .build();
 
         EthApi {

@@ -29,7 +29,7 @@ use rundler_types::{
 };
 
 use super::events::{
-    EventBlockOptions, EventProviderError, EventProviderResult, UserOperationEventProvider,
+    EventProviderError, EventProviderResult, ResolvedEventBlockOptions, UserOperationEventProvider,
 };
 use crate::{
     eth::{EthRpcError, error::EthResult},
@@ -42,6 +42,7 @@ use crate::{
 #[derive(Default)]
 pub(crate) struct EntryPointRouterBuilder {
     entry_points: HashMap<Address, Arc<dyn EntryPointRoute>>,
+    event_block_distance: Option<u64>,
 }
 
 impl EntryPointRouterBuilder {
@@ -53,9 +54,16 @@ impl EntryPointRouterBuilder {
         self
     }
 
+    /// Set the statically configured maximum event block distance shared by every route.
+    pub(crate) fn event_block_distance(mut self, event_block_distance: Option<u64>) -> Self {
+        self.event_block_distance = event_block_distance;
+        self
+    }
+
     pub(crate) fn build(self) -> EntryPointRouter {
         EntryPointRouter {
             entry_points: self.entry_points,
+            event_block_distance: self.event_block_distance,
         }
     }
 }
@@ -63,6 +71,7 @@ impl EntryPointRouterBuilder {
 #[derive(Clone)]
 pub(crate) struct EntryPointRouter {
     entry_points: HashMap<Address, Arc<dyn EntryPointRoute>>,
+    event_block_distance: Option<u64>,
 }
 
 impl fmt::Debug for EntryPointRouter {
@@ -79,6 +88,12 @@ impl fmt::Debug for EntryPointRouter {
 impl EntryPointRouter {
     pub(crate) fn entry_points(&self) -> impl Iterator<Item = &Address> {
         self.entry_points.keys()
+    }
+
+    /// The statically configured maximum event block distance shared by every route. RPC
+    /// handlers pass this to `EventBlockOptions::resolve` before fanning out.
+    pub(crate) fn event_block_distance(&self) -> Option<u64> {
+        self.event_block_distance
     }
 
     pub(crate) fn check_and_get_route(
@@ -114,7 +129,7 @@ impl EntryPointRouter {
         &self,
         entry_point: &Address,
         hash: B256,
-        block_options: EventBlockOptions,
+        block_options: ResolvedEventBlockOptions,
     ) -> Result<Option<RpcUserOperationByHash>, EventProviderError> {
         self.get_event_route(entry_point)?
             .get_mined_by_hash(hash, block_options)
@@ -137,7 +152,7 @@ impl EntryPointRouter {
         entry_point: &Address,
         hash: B256,
         bundle_transaction: Option<B256>,
-        block_options: EventBlockOptions,
+        block_options: ResolvedEventBlockOptions,
     ) -> Result<Option<RpcUserOperationReceipt>, EventProviderError> {
         self.get_event_route(entry_point)?
             .get_receipt(hash, bundle_transaction, block_options)
@@ -162,7 +177,7 @@ impl EntryPointRouter {
         entry_point: &Address,
         hash: B256,
         bundle_transaction: Option<B256>,
-        block_options: EventBlockOptions,
+        block_options: ResolvedEventBlockOptions,
     ) -> Result<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>, EventProviderError> {
         self.get_event_route(entry_point)?
             .get_mined_and_receipt(hash, bundle_transaction, block_options)
@@ -240,7 +255,7 @@ pub(crate) trait EntryPointRoute: Send + Sync {
     async fn get_mined_by_hash(
         &self,
         hash: B256,
-        block_options: EventBlockOptions,
+        block_options: ResolvedEventBlockOptions,
     ) -> EventProviderResult<Option<RpcUserOperationByHash>>;
 
     async fn get_mined_from_tx_receipt(
@@ -253,7 +268,7 @@ pub(crate) trait EntryPointRoute: Send + Sync {
         &self,
         hash: B256,
         bundle_transaction: Option<B256>,
-        block_options: EventBlockOptions,
+        block_options: ResolvedEventBlockOptions,
     ) -> EventProviderResult<Option<RpcUserOperationReceipt>>;
 
     async fn get_receipt_from_tx_receipt(
@@ -268,7 +283,7 @@ pub(crate) trait EntryPointRoute: Send + Sync {
         &self,
         hash: B256,
         bundle_transaction: Option<B256>,
-        block_options: EventBlockOptions,
+        block_options: ResolvedEventBlockOptions,
     ) -> EventProviderResult<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>>;
 
     async fn estimate_gas(
@@ -308,7 +323,7 @@ where
     async fn get_mined_by_hash(
         &self,
         hash: B256,
-        block_options: EventBlockOptions,
+        block_options: ResolvedEventBlockOptions,
     ) -> EventProviderResult<Option<RpcUserOperationByHash>> {
         self.event_provider
             .get_mined_by_hash(hash, block_options)
@@ -329,7 +344,7 @@ where
         &self,
         hash: B256,
         bundle_transaction: Option<B256>,
-        block_options: EventBlockOptions,
+        block_options: ResolvedEventBlockOptions,
     ) -> EventProviderResult<Option<RpcUserOperationReceipt>> {
         if let Some(bundle_transaction) = bundle_transaction {
             self.event_provider
@@ -354,7 +369,7 @@ where
         &self,
         hash: B256,
         bundle_transaction: Option<B256>,
-        block_options: EventBlockOptions,
+        block_options: ResolvedEventBlockOptions,
     ) -> EventProviderResult<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>> {
         self.event_provider
             .get_mined_and_receipt(hash, bundle_transaction, block_options)

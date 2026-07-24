@@ -26,7 +26,9 @@ pub(crate) use v0_6::UserOperationEventProviderV0_6;
 mod v0_7;
 pub(crate) use v0_7::UserOperationEventProviderV0_7;
 
-/// Options scoping the block window searched for user operation events.
+/// Unresolved block scoping options as received from the JSON-RPC API. The block option
+/// may contain tags; `max_block_range` is a per-request override of the configured maximum
+/// event block distance.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct EventBlockOptions {
     /// Caller-supplied block range or hash to search. When set, the fallback retry is
@@ -36,20 +38,71 @@ pub(crate) struct EventBlockOptions {
     pub(crate) max_block_range: Option<u64>,
 }
 
+/// Block scoping options after resolution: the search window is a concrete block-number
+/// range (tags resolved, one-sided ranges expanded, width validated), ready to hand to the
+/// event query layer as-is.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ResolvedEventBlockOptions {
+    /// Concrete range (or block hash) to search.
+    pub(crate) block_option: FilterBlockOption,
+    /// Whether the caller supplied an explicit block option. When false, the fallback
+    /// retry is enabled.
+    pub(crate) caller_supplied: bool,
+    /// Per-request max override, retained so the fallback retry can be capped by it.
+    pub(crate) max_block_range: Option<u64>,
+}
+
 impl EventBlockOptions {
-    /// Resolve any block tags in the block option to concrete block numbers.
+    /// Resolve into a concrete search window ready for the event query layer.
     ///
-    /// RPC handlers call this once per request so the resolved options can be fanned out
-    /// to multiple entry point routes without each route re-resolving the tags via RPC.
-    pub(crate) async fn resolve<P: EvmProvider>(self, provider: &P) -> EventProviderResult<Self> {
-        Ok(Self {
-            // Resolve tags only here (no max): the effective max distance is known per
-            // entry point route, which applies validation and one-sided expansion.
-            block_option: match self.block_option {
-                Some(bo) => Some(resolve_block_option(provider, bo, None).await?),
-                None => None,
-            },
-            ..self
+    /// The per-request `max_block_range` override takes precedence over the statically
+    /// configured `event_block_distance`; the resulting effective max bounds the window,
+    /// expands a one-sided range, and defines the default window when no option is supplied.
+    ///
+    /// RPC handlers call this once per request, before fanning out to entry point routes,
+    /// so tags are resolved a single time and every route receives concrete block numbers.
+    pub(crate) async fn resolve<P: EvmProvider>(
+        self,
+        provider: &P,
+        event_block_distance: Option<u64>,
+    ) -> EventProviderResult<ResolvedEventBlockOptions> {
+        let max_distance = self.max_block_range.or(event_block_distance);
+
+        // An empty range `{}` carries no information: treat it exactly like an omitted
+        // parameter (default window + fallback retry) instead of delegating both bounds to
+        // the node's getLogs defaults (typically latest..latest).
+        let supplied = self.block_option.filter(|bo| {
+            !matches!(
+                bo,
+                FilterBlockOption::Range {
+                    from_block: None,
+                    to_block: None,
+                }
+            )
+        });
+
+        let block_option = match supplied {
+            // Resolve tags, validate the window against the effective max, and expand a
+            // one-sided range to a bounded window.
+            Some(bo) => resolve_block_option(provider, bo, max_distance).await?,
+            // No option supplied: search the default trailing window ending at the head.
+            None => {
+                let to_block = provider.get_block_number().await?;
+                let from_block = match max_distance {
+                    Some(distance) => to_block.saturating_sub(distance),
+                    None => 0,
+                };
+                FilterBlockOption::Range {
+                    from_block: Some(from_block.into()),
+                    to_block: Some(to_block.into()),
+                }
+            }
+        };
+
+        Ok(ResolvedEventBlockOptions {
+            block_option,
+            caller_supplied: supplied.is_some(),
+            max_block_range: self.max_block_range,
         })
     }
 }
@@ -59,7 +112,7 @@ pub(crate) trait UserOperationEventProvider: Send + Sync {
     async fn get_mined_by_hash(
         &self,
         hash: B256,
-        block_options: EventBlockOptions,
+        block_options: ResolvedEventBlockOptions,
     ) -> EventProviderResult<Option<RpcUserOperationByHash>>;
 
     async fn get_mined_from_tx_receipt(
@@ -71,7 +124,7 @@ pub(crate) trait UserOperationEventProvider: Send + Sync {
     async fn get_receipt(
         &self,
         hash: B256,
-        block_options: EventBlockOptions,
+        block_options: ResolvedEventBlockOptions,
     ) -> EventProviderResult<Option<RpcUserOperationReceipt>>;
 
     async fn get_receipt_from_tx_hash(
@@ -92,7 +145,7 @@ pub(crate) trait UserOperationEventProvider: Send + Sync {
         &self,
         hash: B256,
         bundle_transaction: Option<B256>,
-        block_options: EventBlockOptions,
+        block_options: ResolvedEventBlockOptions,
     ) -> EventProviderResult<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>>;
 }
 
