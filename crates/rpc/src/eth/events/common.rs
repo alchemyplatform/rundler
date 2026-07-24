@@ -359,27 +359,54 @@ where
                     )));
                 }
 
-                if let Some(max_distance) = event_block_distance {
-                    // Resolution guarantees populated bounds are numbers, so this only
-                    // rejects missing bounds.
-                    let (Some(BlockNumberOrTag::Number(from)), Some(BlockNumberOrTag::Number(to))) =
-                        (from_block, to_block)
-                    else {
-                        return Err(EventProviderError::InvalidRequest(
-                            "fromBlock and toBlock must both be populated in event request"
-                                .to_string(),
-                        ));
-                    };
-
-                    if to - from > max_distance {
-                        return Err(EventProviderError::InvalidRequest(format!(
-                            "fromBlock: {from}, toBlock: {to} larger than max block distance {max_distance}, reduce block range"
-                        )));
+                match (event_block_distance, from_block, to_block) {
+                    // No max enforced: use the range as-is (a missing bound is left to the
+                    // node's getLogs default).
+                    (None, _, _) => bo,
+                    // Both bounds supplied: enforce the max width. Resolution guarantees
+                    // populated bounds are numbers.
+                    (
+                        Some(max_distance),
+                        Some(BlockNumberOrTag::Number(from)),
+                        Some(BlockNumberOrTag::Number(to)),
+                    ) => {
+                        if to - from > max_distance {
+                            return Err(EventProviderError::InvalidRequest(format!(
+                                "fromBlock: {from}, toBlock: {to} larger than max block distance {max_distance}, reduce block range"
+                            )));
+                        }
+                        bo
                     }
+                    // One-sided range with a max enforced: expand the missing bound to a
+                    // max_distance-wide window anchored at the supplied bound instead of
+                    // rejecting the request. Cap toBlock at the head so the resulting
+                    // window never runs past the chain tip.
+                    (Some(max_distance), Some(BlockNumberOrTag::Number(from)), None) => {
+                        let head = self.provider.get_block_number().await?;
+                        let to = from.saturating_add(max_distance).min(head);
+                        if from > to {
+                            return Err(EventProviderError::InvalidRequest(format!(
+                                "fromBlock: {from} is greater than the current head block: {head}"
+                            )));
+                        }
+                        FilterBlockOption::Range {
+                            from_block: Some(from.into()),
+                            to_block: Some(to.into()),
+                        }
+                    }
+                    (Some(max_distance), None, Some(BlockNumberOrTag::Number(to))) => {
+                        FilterBlockOption::Range {
+                            from_block: Some(to.saturating_sub(max_distance).into()),
+                            to_block: Some(to.into()),
+                        }
+                    }
+                    // Both bounds omitted is filtered out above; anything else (e.g. an
+                    // unresolved tag) is used as-is.
+                    (Some(_), _, _) => bo,
                 }
+            } else {
+                bo
             }
-
-            bo
         } else {
             let to_block = self.provider.get_block_number().await?;
             let from_block = match event_block_distance {
