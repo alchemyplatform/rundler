@@ -51,8 +51,8 @@ enum ActiveSender {
 }
 
 /// A transaction sender that transparently fails over to a fallback sender when
-/// the primary returns [`TxSenderError::SenderUnavailable`] or
-/// [`TxSenderError::UnrecognizedRpc`].
+/// the primary returns [`TxSenderError::SenderUnavailable`],
+/// [`TxSenderError::UnrecognizedRpc`], or [`TxSenderError::RateLimited`].
 ///
 /// Recovery is passive: after `recovery_interval` has elapsed the next send
 /// attempt re-tries the primary. On success the primary is reinstated; on
@@ -170,7 +170,13 @@ impl TransactionSender for FallbackTransactionSender {
                 Ok(hash)
             }
             Err(
-                e @ (TxSenderError::SenderUnavailable(_) | TxSenderError::UnrecognizedRpc { .. }),
+                e @ (TxSenderError::SenderUnavailable(_)
+                | TxSenderError::UnrecognizedRpc { .. }
+                // A rate limit is capacity we cannot use on this route, so the
+                // fallback is exactly the right place to send the bundle. The
+                // caller still backs off the primary if the fallback is not
+                // configured or is itself rate limited.
+                | TxSenderError::RateLimited(_)),
             ) => {
                 self.metrics.primary_unavailable.increment(1);
                 let failures = self.consecutive_failures.fetch_add(1, Ordering::AcqRel) + 1;

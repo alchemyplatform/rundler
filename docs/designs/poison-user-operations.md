@@ -101,12 +101,21 @@ Each configured submission route, including its primary and fallbacks, maintains
 rolling window shared by its builders. Only final submission outcomes are recorded:
 
 - `Success`: the transaction was accepted.
-- `ProviderFailure`: non-terminal transport failure, timeout, sender unavailable, or
-  exhausted rate limit.
-- `Neutral`: known operational errors such as underpriced or nonce-too-low. Neutral
-  outcomes are excluded from the window.
+- `ProviderFailure`: non-terminal transport failure, timeout, or sender unavailable.
+- `Neutral`: known operational errors such as underpriced, nonce-too-low, or a rate
+  limit. Neutral outcomes are excluded from the window.
 
 Terminal RPC errors are handled before this signal and are excluded from its window.
+
+Rate limits are deliberately Neutral rather than `ProviderFailure`. A rate limit is a
+statement about our request volume, not about the endpoint's health or the bundle's
+contents — the transaction is never judged. Counting one as evidence would make
+suspects of every operation in the bundle, so a rate-limited endpoint would push the
+whole pool into isolation, one operation per bundle, while it is asking us to send
+fewer requests. The dedicated handling is
+`--builder.rate_limit_backoff_initial_millis`: the builder backs off the endpoint with
+an escalating, jittered delay on top of the chain's bundle send interval, and resets on
+the first attempt that is not rate limited.
 
 Initial parameters:
 
@@ -115,7 +124,10 @@ Initial parameters:
 - Exit the event when fewer than 10% are failures.
 
 Different enter and exit thresholds prevent flapping. The signal does not change bundle
-construction or submission rate; existing provider rate limiting handles request pacing.
+construction or submission rate. Pacing requests against a submission endpoint is a
+separate concern, handled by the rate-limit backoff above: it is driven by the
+endpoint's own rate-limit responses, not by this signal, and it is the only mechanism
+here that changes how often a builder submits.
 
 The signal has exactly one effect: while a provider event is active, suspects make no
 progress toward removal. Suspect creation and isolation backoff are unaffected. No
@@ -297,9 +309,9 @@ sees it.
 
 - Add a classification to `TxSenderError` (`crates/builder/src/sender/mod.rs`):
   terminal (final rejection, don't retry unchanged), non-terminal (transport failure,
-  timeout, `SenderUnavailable`, rate-limit exhaustion), neutral (underpriced,
-  nonce-too-low, other known operational errors). A small `enum RpcOutcomeClass` plus a
-  `classify()` method is enough.
+  timeout, `SenderUnavailable`), neutral (underpriced, nonce-too-low, rate limited,
+  other known operational errors). A small `enum RpcOutcomeClass` plus a `classify()`
+  method is enough.
 - Fix the collapse in `From<TxSenderError> for TransactionTrackerError`
   (`crates/builder/src/transaction_tracker.rs`), where `SenderUnavailable` and `Other`
   both become `TransactionTrackerError::Other`. The tracker error must carry the class
