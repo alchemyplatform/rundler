@@ -262,6 +262,10 @@ List of command line options for configuring the Builder.
   - env: _BUILDER_ASSIGNER_MAX_OPS_PER_REQUEST_
 - `--builder.assigner_starvation_ratio`: Starvation ratio for the assigner. This value acts as a multiplier on signer count (`num_signers * starvation_ratio`) before force-selecting a starved entrypoint. For example, with 4 signers and the default ratio of 0.50, an entrypoint is force-selected after 2 idle cycles. (default: `0.50`)
   - env: _BUILDER_ASSIGNER_STARVATION_RATIO_
+- `--builder.rate_limit_backoff_initial_millis`: Initial delay a builder waits before its next submission after the submission endpoint rate limited it. Doubles (with jitter) on each consecutive rate-limited attempt and is applied on top of the chain's bundle send interval. Any attempt that is not rate limited resets it. (default: `1000`)
+  - env: _BUILDER_RATE_LIMIT_BACKOFF_INITIAL_MILLIS_
+- `--builder.rate_limit_backoff_max_millis`: Maximum delay a builder waits between submissions while the submission endpoint is rate limiting it. (default: `30000`)
+  - env: _BUILDER_RATE_LIMIT_BACKOFF_MAX_MILLIS_
 
 ## Signer Options
 

@@ -35,6 +35,7 @@ use tokio::{
         mpsc::{UnboundedReceiver, UnboundedSender},
         oneshot,
     },
+    time::Instant,
 };
 use tracing::{debug, error, info, warn};
 
@@ -61,6 +62,8 @@ pub(crate) struct Settings {
     pub(crate) max_replacement_underpriced_blocks: u64,
     pub(crate) max_cancellation_fee_increases: u64,
     pub(crate) max_blocks_to_wait_for_mine: u64,
+    pub(crate) rate_limit_backoff_initial: Duration,
+    pub(crate) rate_limit_backoff_max: Duration,
 }
 
 pub(crate) struct BundleSenderImpl<T, C> {
@@ -85,6 +88,10 @@ pub(crate) struct BundleSenderImpl<T, C> {
     /// builders on the route. Final submission outcomes are recorded here and
     /// its state gates poison user operation evidence in the pool.
     provider_event_signal: Arc<ProviderEventSignal>,
+    /// Backoff against a submission endpoint that is rate limiting this builder.
+    /// Outlives the bundle state machine: it is a property of the endpoint, not
+    /// of any one bundle attempt, so state resets must not clear it.
+    rate_limit_backoff: RateLimitBackoff,
 }
 
 pub enum BundleSenderAction {
@@ -133,6 +140,75 @@ enum SendBundleAttemptResult {
     InsufficientFunds,
     // Nonce too low
     NonceTooLow,
+    // The submission endpoint is rate limiting us
+    RateLimited,
+}
+
+impl SendBundleAttemptResult {
+    /// True when the submission endpoint judged the transaction, meaning it took
+    /// the request rather than refusing or never receiving it. Ends a rate-limit
+    /// backoff.
+    fn endpoint_judged_transaction(&self) -> bool {
+        match self {
+            Self::Success(_)
+            | Self::Underpriced
+            | Self::ReplacementUnderpriced
+            | Self::ConditionNotMet
+            | Self::Rejected
+            | Self::InsufficientFunds
+            | Self::NonceTooLow => true,
+            Self::RateLimited
+            | Self::NoOperationsInitially
+            | Self::NoOperationsAfterFeeFilter
+            | Self::NoOperationsAfterSimulation => false,
+        }
+    }
+}
+
+/// Per-builder backoff against a submission endpoint that is rate limiting us.
+///
+/// A rate limit is the endpoint asking for fewer requests. Retrying at the normal
+/// trigger cadence answers that by asking for exactly as many, which is enough to
+/// keep a whole fleet of builders pinned against the limit for as long as they
+/// have work: nothing lands, so nothing leaves the pool, so every builder has
+/// work on every trigger. Consecutive rate-limited attempts double the wait;
+/// any attempt that is not rate limited clears it.
+#[derive(Debug, Default)]
+struct RateLimitBackoff {
+    /// Consecutive rate-limited submission attempts, which sets the delay.
+    consecutive: u32,
+    /// When the next submission attempt may be made, if a wait is outstanding.
+    retry_after: Option<Instant>,
+}
+
+impl RateLimitBackoff {
+    /// Records a rate-limited attempt and schedules the next one. Returns the
+    /// delay, for logging.
+    fn record(&mut self, initial: Duration, max: Duration) -> Duration {
+        let delay = initial
+            .saturating_mul(2u32.saturating_pow(self.consecutive))
+            .min(max)
+            // Builders on a route hit the limit together, so an unjittered
+            // schedule would have them all retry in the same instant.
+            .mul_f64(rand::thread_rng().gen_range(0.8..=1.2))
+            .min(max);
+        self.consecutive = self.consecutive.saturating_add(1);
+        self.retry_after = Some(Instant::now() + delay);
+        delay
+    }
+
+    /// Clears the backoff after an attempt that was not rate limited.
+    fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Waits out an outstanding backoff, if any. Called with the signer released
+    /// so a backing-off builder does not hold a signing key other work could use.
+    async fn wait(&mut self) {
+        if let Some(retry_after) = self.retry_after.take() {
+            tokio::time::sleep_until(retry_after).await;
+        }
+    }
 }
 
 #[async_trait]
@@ -167,6 +243,13 @@ where
             if state.is_signer_releasable() {
                 state.transaction_tracker.end_cycle();
             }
+
+            // Wait out any backoff owed to the submission endpoint. Held here,
+            // outside the state machine, so it applies on top of the trigger
+            // cadence no matter which state the last attempt left behind -
+            // including the states that skip the trigger wait entirely - and so
+            // the signer stays released for the duration.
+            self.rate_limit_backoff.wait().await;
 
             // Block until the next trigger or block event arrives.
             // The signer may be free (released above) during this entire wait.
@@ -250,6 +333,7 @@ where
             settings,
             event_sender,
             provider_event_signal,
+            rate_limit_backoff: RateLimitBackoff::default(),
         }
     }
 
@@ -345,6 +429,18 @@ where
         let block_number = state.block_number();
         debug!("Building bundle on block {block_number}");
         let result = self.send_bundle(state, inner.fee_increase_count).await;
+
+        // The escalating wait starts over once the endpoint takes a request from
+        // us again. Triggers that never reached the endpoint - no operations to
+        // bundle, a proposal error - are not that evidence and leave the backoff
+        // alone, so an idle pool between rate-limited attempts cannot silently
+        // hold the wait at its initial value.
+        if result
+            .as_ref()
+            .is_ok_and(SendBundleAttemptResult::endpoint_judged_transaction)
+        {
+            self.rate_limit_backoff.clear();
+        }
 
         // Snapshot pinned proposer after send_bundle (pin is set during assignment)
         let pinned = self.assigner.pinned_proposer(self.sender_eoa);
@@ -453,6 +549,25 @@ where
                 // Set flag to pass to proposer on next make_bundle call
                 state.condition_not_met = true;
                 state.update(InnerState::Building(inner.retry()));
+            }
+            Ok(SendBundleAttemptResult::RateLimited) => {
+                // Release locks only when nothing is pending (continuing)
+                if state.transaction_tracker.num_pending_transactions() == 0 {
+                    self.assigner.release_all(self.sender_eoa);
+                }
+                let delay = self.rate_limit_backoff.record(
+                    self.settings.rate_limit_backoff_initial,
+                    self.settings.rate_limit_backoff_max,
+                );
+                // Warn rather than error: a rate limit is the endpoint pacing us,
+                // not a fault in the bundle, and at fleet scale erroring on every
+                // attempt buries the logs that matter.
+                warn!(
+                    "Submission endpoint rate limited, backing off {}ms before the next attempt",
+                    delay.as_millis()
+                );
+                self.increment_counter("builder_bundle_txns_rate_limited", &pinned, 1);
+                state.update(InnerState::Building(inner.retry_on_next_trigger()));
             }
             Ok(SendBundleAttemptResult::InsufficientFunds) => {
                 // Release all locks — cycle ending
@@ -1064,6 +1179,16 @@ where
                         warn!("Bundle attempt condition not met");
                         Ok(SendBundleAttemptResult::ConditionNotMet)
                     }
+                    // Not an error result: erroring here would reset the
+                    // transaction tracker and log twice per attempt per builder,
+                    // when the bundle is fine and the only thing to do is send
+                    // less often. The caller warns once, with the backoff it
+                    // picked; the endpoint's own wording is only needed when
+                    // diagnosing which limit was hit.
+                    TxSenderError::RateLimited(error) => {
+                        debug!("Bundle attempt rate limited by submission endpoint: {error}");
+                        Ok(SendBundleAttemptResult::RateLimited)
+                    }
                     TxSenderError::Rejected => {
                         self.increment_counter_ep("builder_bundle_txn_rejected", entry_point, 1);
                         warn!("Bundle attempt rejected");
@@ -1434,6 +1559,15 @@ impl BuildingState {
     // Retry the build
     fn retry(mut self) -> Self {
         self.wait_for_trigger = false;
+        self
+    }
+
+    // Retry the build on the next trigger, leaving fee state untouched.
+    //
+    // Unlike `retry`, the next attempt waits: this is for retries that must not
+    // re-submit immediately, such as backing off a rate-limited endpoint.
+    fn retry_on_next_trigger(mut self) -> Self {
+        self.wait_for_trigger = true;
         self
     }
 
@@ -2941,6 +3075,165 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_rate_limit_is_not_poison_evidence() {
+        let Mocks {
+            mut mock_proposer_t,
+            mut mock_tracker,
+            mut mock_trigger,
+            mut mock_pool,
+        } = new_mocks();
+
+        let mut seq = Sequence::new();
+        add_trigger_no_update_last_block(&mut mock_trigger, &mut seq, 1);
+
+        setup_tracker_default(&mut mock_tracker);
+        mock_tracker.expect_reset().returning(|| Box::pin(async {}));
+
+        mock_pool
+            .expect_get_ops_summaries()
+            .times(1)
+            .returning(|_, _, _, _| {
+                Ok(vec![pool_op_summary(
+                    ENTRY_POINT_ADDRESS_V0_6,
+                    Address::ZERO,
+                )])
+            });
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .times(1)
+            .returning(|_, _| Ok(vec![demo_pool_op()]));
+        // The bundle was never judged, so nothing about it is reported to the
+        // pool: no failure counted, no suspect created, no isolation.
+        mock_pool.expect_report_bundle_outcome().never();
+
+        mock_make_bundle(&mut mock_proposer_t, 1, vec![(Address::ZERO, B256::ZERO)]);
+
+        mock_tracker
+            .expect_send_transaction()
+            .returning(move |_, _, _| {
+                Box::pin(async move {
+                    Err(TransactionTrackerError::Sender(TxSenderError::RateLimited(
+                        anyhow::anyhow!("HTTP error 429 with body: Too Many Requests"),
+                    )))
+                })
+            });
+
+        let mut state = new_state_with(
+            mock_trigger,
+            mock_tracker,
+            InnerState::Building(BuildingState {
+                wait_for_trigger: true,
+                fee_increase_count: 0,
+                underpriced_info: None,
+            }),
+        );
+
+        let mut sender = new_sender(mock_proposer_t, mock_pool);
+
+        let update = state.wait_for_trigger().await.unwrap();
+        sender.step_after_trigger(&mut state, update).await.unwrap();
+
+        // Nor is it evidence about the provider's health.
+        assert_eq!(sender.provider_event_signal.observations(), 0);
+        assert!(!sender.provider_event_signal.is_active());
+
+        // The next attempt waits for a trigger and owes a backoff on top of it.
+        assert!(matches!(
+            state.inner,
+            InnerState::Building(BuildingState {
+                wait_for_trigger: true,
+                fee_increase_count: 0,
+                underpriced_info: None,
+            })
+        ));
+        assert_eq!(sender.rate_limit_backoff.consecutive, 1);
+        assert!(sender.rate_limit_backoff.retry_after.is_some());
+    }
+
+    #[test]
+    fn test_rate_limit_backoff_escalates_and_caps() {
+        let initial = Duration::from_secs(1);
+        let max = Duration::from_secs(30);
+        let mut backoff = RateLimitBackoff::default();
+
+        // Doubling from `initial`, with +/-20% jitter so that builders sharing a
+        // route do not retry in lockstep.
+        for expected_base in [1, 2, 4, 8, 16] {
+            let delay = backoff.record(initial, max);
+            let base = Duration::from_secs(expected_base);
+            assert!(
+                delay >= base.mul_f64(0.8) && delay <= base.mul_f64(1.2),
+                "delay {delay:?} outside jitter range of {base:?}"
+            );
+        }
+
+        // 32s would exceed the cap, and jitter must not push it back over.
+        for _ in 0..4 {
+            let delay = backoff.record(initial, max);
+            assert!(delay >= max.mul_f64(0.8) && delay <= max, "delay {delay:?}");
+        }
+    }
+
+    #[test]
+    fn test_only_judged_attempts_end_the_backoff() {
+        // Outcomes the node produced: the endpoint is taking our requests.
+        for result in [
+            SendBundleAttemptResult::Success(Arc::new(vec![])),
+            SendBundleAttemptResult::Underpriced,
+            SendBundleAttemptResult::ConditionNotMet,
+            SendBundleAttemptResult::NonceTooLow,
+        ] {
+            assert!(result.endpoint_judged_transaction());
+        }
+
+        // Nothing was submitted, so nothing was learned about the endpoint.
+        for result in [
+            SendBundleAttemptResult::RateLimited,
+            SendBundleAttemptResult::NoOperationsInitially,
+            SendBundleAttemptResult::NoOperationsAfterFeeFilter,
+            SendBundleAttemptResult::NoOperationsAfterSimulation,
+        ] {
+            assert!(!result.endpoint_judged_transaction());
+        }
+    }
+
+    #[test]
+    fn test_rate_limit_backoff_cleared_after_accepted_attempt() {
+        let initial = Duration::from_secs(1);
+        let max = Duration::from_secs(30);
+        let mut backoff = RateLimitBackoff::default();
+
+        backoff.record(initial, max);
+        backoff.record(initial, max);
+        assert_eq!(backoff.consecutive, 2);
+
+        backoff.clear();
+
+        assert_eq!(backoff.consecutive, 0);
+        assert!(backoff.retry_after.is_none());
+        // Escalation restarts from `initial` rather than resuming mid-ladder.
+        let delay = backoff.record(initial, max);
+        assert!(delay <= initial.mul_f64(1.2), "delay {delay:?}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_rate_limit_backoff_waits_before_next_attempt() {
+        let mut backoff = RateLimitBackoff::default();
+        let delay = backoff.record(Duration::from_secs(5), Duration::from_secs(30));
+
+        let start = Instant::now();
+        backoff.wait().await;
+
+        assert!(start.elapsed() >= delay);
+        // The wait is consumed: a builder does not re-serve the same delay on
+        // every loop iteration, only after another rate-limited attempt.
+        assert!(backoff.retry_after.is_none());
+        let start = Instant::now();
+        backoff.wait().await;
+        assert!(start.elapsed() < Duration::from_millis(1));
+    }
+
+    #[tokio::test]
     async fn test_revert_reports_suspects_and_removes() {
         let Mocks {
             mut mock_proposer_t,
@@ -3098,6 +3391,8 @@ mod tests {
                 max_cancellation_fee_increases: 3,
                 max_blocks_to_wait_for_mine: 3,
                 max_replacement_underpriced_blocks: 3,
+                rate_limit_backoff_initial: Duration::from_secs(1),
+                rate_limit_backoff_max: Duration::from_secs(30),
             },
             broadcast::channel(1000).0,
             Arc::new(ProviderEventSignal::default()),
@@ -3132,6 +3427,8 @@ mod tests {
                 max_cancellation_fee_increases: 3,
                 max_blocks_to_wait_for_mine: 3,
                 max_replacement_underpriced_blocks: 3,
+                rate_limit_backoff_initial: Duration::from_secs(1),
+                rate_limit_backoff_max: Duration::from_secs(30),
             },
             broadcast::channel(1000).0,
             Arc::new(ProviderEventSignal::default()),

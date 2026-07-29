@@ -12,9 +12,10 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_contract::Error as ContractError;
+use alloy_json_rpc::RpcError;
 use alloy_primitives::Bytes;
 use alloy_sol_types::SolError;
-use alloy_transport::TransportError;
+use alloy_transport::{TransportError, TransportErrorKind};
 
 /// Error enumeration for the Provider trait
 #[derive(Debug, thiserror::Error)]
@@ -62,6 +63,31 @@ impl ProviderError {
                 TransportError::ErrorResp(e),
             )) => e.as_decoded_error(),
             _ => None,
+        }
+    }
+
+    /// Returns true when the endpoint reported that it is rate limiting us.
+    ///
+    /// Rate limits arrive in several shapes - HTTP 429, a `429`/`-32005`-style
+    /// JSON-RPC error response, or a stringified 429 from a transport that lost
+    /// the status code - so detection is delegated to alloy rather than
+    /// re-listing every provider's wording here.
+    ///
+    /// HTTP 503 is deliberately excluded even though alloy groups it with rate
+    /// limits as "retryable": a temporarily unavailable endpoint is evidence
+    /// about the endpoint's health, which callers classify differently from
+    /// being asked to send fewer requests.
+    pub fn is_rate_limited(&self) -> bool {
+        let ProviderError::RPC(error) = self else {
+            return false;
+        };
+        match error {
+            RpcError::Transport(TransportErrorKind::HttpError(http)) => http.is_rate_limit_err(),
+            RpcError::Transport(TransportErrorKind::Custom(err)) => {
+                err.to_string().contains("429 Too Many Requests")
+            }
+            RpcError::ErrorResp(resp) => resp.is_retry_err(),
+            _ => false,
         }
     }
 }
