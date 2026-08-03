@@ -28,7 +28,7 @@ use super::{
     router::EntryPointRouter,
 };
 use crate::{
-    eth::events::{EventBlockOptions, EventProviderError},
+    eth::events::{EventBlockOptions, EventProviderError, ResolvedEventBlockOptions},
     types::{RpcGasEstimate, RpcUserOperationByHash, RpcUserOperationReceipt},
 };
 
@@ -145,7 +145,7 @@ where
         }
 
         let block_options = block_options
-            .resolve(&self.provider)
+            .resolve(&self.provider, self.router.event_block_distance())
             .await
             .map_err(EthRpcError::from)?;
 
@@ -182,10 +182,6 @@ where
             ));
         }
 
-        let block_options = block_options
-            .resolve(&self.provider)
-            .await
-            .map_err(EthRpcError::from)?;
         let tag = tag.unwrap_or(BlockTag::Latest);
 
         if tag == BlockTag::Pending {
@@ -211,10 +207,9 @@ where
                         &op_status.entry_point,
                         hash,
                         Some(preconf_info.tx_hash),
-                        EventBlockOptions {
-                            block_option: None,
-                            ..block_options
-                        },
+                        // The preconfirmed path resolves the receipt from the known bundle
+                        // transaction, so the block window is unused here.
+                        ResolvedEventBlockOptions::unused(),
                     )
                     .await;
                 match ret {
@@ -237,6 +232,14 @@ where
                 };
             }
         };
+
+        // Only the log-query fan-out needs a resolved window; resolve it here so a
+        // transient head-lookup failure cannot pre-empt the pending-tag rejection or the
+        // preconfirmed lookup above.
+        let block_options = block_options
+            .resolve(&self.provider, self.router.event_block_distance())
+            .await
+            .map_err(EthRpcError::from)?;
 
         let futs = self
             .router
@@ -643,6 +646,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_user_op_receipt_pending_unsupported_skips_head_lookup() {
+        // With flashblocks disabled, a pending-tag receipt request is rejected as invalid
+        // params. Block-window resolution (which would call get_block_number) must not run
+        // first: the provider mock sets no get_block_number expectation, so an eager head
+        // lookup would panic instead of returning the expected invalid params.
+        let cs = ChainSpec {
+            id: 1,
+            ..Default::default()
+        };
+        let hash = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default())
+            .build()
+            .hash();
+
+        let mut entry_point = MockEntryPointV0_6::default();
+        entry_point
+            .expect_address()
+            .return_const(cs.entry_point_address_v0_6);
+
+        let api = create_api(
+            MockEvmProvider::default(),
+            entry_point,
+            MockPool::default(),
+            MockGasEstimator::default(),
+            false,
+        );
+
+        let err = api
+            .get_user_operation_receipt(hash, Some(BlockTag::Pending), EventBlockOptions::default())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, EthRpcError::InvalidParams(_)),
+            "expected invalid params, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_get_user_op_by_hash_max_block_range_override() {
         // No static block distance is configured, so a non-default search window proves
         // the per-request override is applied.
@@ -700,16 +740,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_user_op_by_hash_block_option_invalid_ranges() {
-        // Wider than the max block range, missing a bound while a max is enforced, and
-        // reversed: all must surface as invalid params, not an internal error.
-        for block_option in [
-            range(100, 300),
-            FilterBlockOption::Range {
-                from_block: Some(100u64.into()),
-                to_block: None,
-            },
-            range(300, 100),
-        ] {
+        // Wider than the max block range and reversed: both must surface as invalid
+        // params, not an internal error.
+        for block_option in [range(100, 300), range(300, 100)] {
             let err = LookupTest::new()
                 .run(EventBlockOptions {
                     block_option: Some(block_option),
@@ -722,6 +755,114 @@ mod tests {
                 "expected invalid params, got {err:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_get_user_op_by_hash_one_sided_range_expands_to_max() {
+        // With a max enforced, a one-sided range must not be rejected: the missing bound
+        // is filled to a max-wide window anchored at the supplied bound.
+
+        // fromBlock only: toBlock expands to fromBlock + max.
+        let res = LookupTest::new()
+            .latest_block(1000)
+            .logs_empty(range(100, 200))
+            .run(EventBlockOptions {
+                block_option: Some(FilterBlockOption::Range {
+                    from_block: Some(100u64.into()),
+                    to_block: None,
+                }),
+                max_block_range: Some(100),
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, None);
+
+        // fromBlock only, near the head: the synthesized toBlock is capped at the head so
+        // we never query past the chain tip.
+        let res = LookupTest::new()
+            .latest_block(150)
+            .logs_empty(range(100, 150))
+            .run(EventBlockOptions {
+                block_option: Some(FilterBlockOption::Range {
+                    from_block: Some(100u64.into()),
+                    to_block: None,
+                }),
+                max_block_range: Some(100),
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, None);
+
+        // toBlock only: fromBlock expands to toBlock - max (toBlock is caller-supplied, so
+        // no head lookup is needed).
+        let res = LookupTest::new()
+            .logs_empty(range(100, 200))
+            .run(EventBlockOptions {
+                block_option: Some(FilterBlockOption::Range {
+                    from_block: None,
+                    to_block: Some(200u64.into()),
+                }),
+                max_block_range: Some(100),
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, None);
+    }
+
+    #[tokio::test]
+    async fn test_get_user_op_by_hash_both_bounds_within_max_accepted() {
+        // Both bounds supplied and the width is within the enforced max: the range is used
+        // exactly as given, with no head lookup.
+        let res = LookupTest::new()
+            .logs_empty(range(100, 150))
+            .run(EventBlockOptions {
+                block_option: Some(range(100, 150)),
+                max_block_range: Some(100),
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, None);
+    }
+
+    #[tokio::test]
+    async fn test_get_user_op_by_hash_one_sided_range_no_max_left_to_node() {
+        // A one-sided range with no max enforced: the missing bound is left unset for the
+        // node's getLogs default, and there is no head lookup or expansion.
+        let res = LookupTest::new()
+            .logs_empty(FilterBlockOption::Range {
+                from_block: Some(100u64.into()),
+                to_block: None,
+            })
+            .run(EventBlockOptions {
+                block_option: Some(FilterBlockOption::Range {
+                    from_block: Some(100u64.into()),
+                    to_block: None,
+                }),
+                max_block_range: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(res, None);
+    }
+
+    #[tokio::test]
+    async fn test_get_user_op_by_hash_from_block_past_head_is_invalid_params() {
+        // A one-sided fromBlock beyond the chain head cannot yield a valid window.
+        let err = LookupTest::new()
+            .latest_block(50)
+            .run(EventBlockOptions {
+                block_option: Some(FilterBlockOption::Range {
+                    from_block: Some(100u64.into()),
+                    to_block: None,
+                }),
+                max_block_range: Some(100),
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, EthRpcError::InvalidParams(_)),
+            "expected invalid params, got {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -831,13 +972,7 @@ mod tests {
             .add_route(EntryPointRouteImpl::new(
                 Arc::new(entry_point),
                 MockGasEstimator::default(),
-                UserOperationEventProviderV0_6::new(
-                    chain_spec.clone(),
-                    ep,
-                    provider.clone(),
-                    None,
-                    None,
-                ),
+                UserOperationEventProviderV0_6::new(chain_spec.clone(), ep, provider.clone(), None),
             ))
             .build();
 
@@ -911,10 +1046,10 @@ mod tests {
                     chain_spec.clone(),
                     chain_spec.entry_point_address_v0_6,
                     provider.clone(),
-                    event_block_distance,
                     event_block_distance_fallback,
                 ),
             ))
+            .event_block_distance(event_block_distance)
             .build();
 
         EthApi {

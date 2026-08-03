@@ -29,7 +29,7 @@ use rundler_utils::log::LogOnError;
 use tracing::instrument;
 
 use super::{
-    EventBlockOptions, EventProviderError, EventProviderResult, UserOperationEventProvider,
+    EventProviderError, EventProviderResult, ResolvedEventBlockOptions, UserOperationEventProvider,
 };
 use crate::types::{RpcUserOperationByHash, RpcUserOperationReceipt, UOStatusEnum};
 
@@ -38,7 +38,6 @@ pub(crate) struct UserOperationEventProviderImpl<P, F> {
     chain_spec: ChainSpec,
     entry_point_address: Address,
     provider: P,
-    event_block_distance: Option<u64>,
     event_block_distance_fallback: Option<u64>,
     _f_type: PhantomData<F>,
 }
@@ -75,7 +74,7 @@ where
     async fn get_mined_by_hash(
         &self,
         hash: B256,
-        block_options: EventBlockOptions,
+        block_options: ResolvedEventBlockOptions,
     ) -> EventProviderResult<Option<RpcUserOperationByHash>> {
         // Get event associated with hash (need to check all entry point addresses associated with this API)
         let event = self
@@ -116,7 +115,7 @@ where
     async fn get_receipt(
         &self,
         hash: B256,
-        block_options: EventBlockOptions,
+        block_options: ResolvedEventBlockOptions,
     ) -> EventProviderResult<Option<RpcUserOperationReceipt>> {
         let event = self
             .get_event_by_hash(hash, block_options)
@@ -186,7 +185,7 @@ where
         &self,
         hash: B256,
         preconfirmed_bundle_transaction: Option<B256>,
-        block_options: EventBlockOptions,
+        block_options: ResolvedEventBlockOptions,
     ) -> EventProviderResult<Option<(RpcUserOperationByHash, RpcUserOperationReceipt)>> {
         // Step 1: Get tx_hash (preconfirmed: passed in, pending: find event first)
         let (tx_hash, event_from_logs) = if let Some(bundle_tx) = preconfirmed_bundle_transaction {
@@ -306,14 +305,12 @@ where
         chain_spec: ChainSpec,
         entry_point_address: Address,
         provider: P,
-        event_block_distance: Option<u64>,
         event_block_distance_fallback: Option<u64>,
     ) -> Self {
         Self {
             chain_spec,
             entry_point_address,
             provider,
-            event_block_distance,
             event_block_distance_fallback,
             _f_type: PhantomData,
         }
@@ -323,74 +320,11 @@ where
     async fn get_event_by_hash(
         &self,
         hash: B256,
-        block_options: EventBlockOptions,
+        block_options: ResolvedEventBlockOptions,
     ) -> EventProviderResult<Option<Log>> {
-        // A per-request override (e.g. from a trusted gateway) takes precedence over the
-        // statically configured event block distance.
-        let event_block_distance = block_options.max_block_range.or(self.event_block_distance);
-        // An empty range `{}` carries no information: treat it exactly like an omitted
-        // parameter (default window + fallback retry) instead of delegating both bounds
-        // to the node's getLogs defaults (typically latest..latest).
-        let supplied_block_option = block_options.block_option.filter(|bo| {
-            !matches!(
-                bo,
-                FilterBlockOption::Range {
-                    from_block: None,
-                    to_block: None,
-                }
-            )
-        });
-        let has_block_option = supplied_block_option.is_some();
-        let block_option = if let Some(bo) = supplied_block_option {
-            // No-op when the RPC handler already resolved the tags before fanning out.
-            let bo = super::resolve_block_option(&self.provider, bo).await?;
-
-            if let FilterBlockOption::Range {
-                from_block,
-                to_block,
-            } = bo
-            {
-                if let (Some(BlockNumberOrTag::Number(from)), Some(BlockNumberOrTag::Number(to))) =
-                    (from_block, to_block)
-                    && from > to
-                {
-                    return Err(EventProviderError::InvalidRequest(format!(
-                        "fromBlock: {from} is greater than toBlock: {to}"
-                    )));
-                }
-
-                if let Some(max_distance) = event_block_distance {
-                    // Resolution guarantees populated bounds are numbers, so this only
-                    // rejects missing bounds.
-                    let (Some(BlockNumberOrTag::Number(from)), Some(BlockNumberOrTag::Number(to))) =
-                        (from_block, to_block)
-                    else {
-                        return Err(EventProviderError::InvalidRequest(
-                            "fromBlock and toBlock must both be populated in event request"
-                                .to_string(),
-                        ));
-                    };
-
-                    if to - from > max_distance {
-                        return Err(EventProviderError::InvalidRequest(format!(
-                            "fromBlock: {from}, toBlock: {to} larger than max block distance {max_distance}, reduce block range"
-                        )));
-                    }
-                }
-            }
-
-            bo
-        } else {
-            let to_block = self.provider.get_block_number().await?;
-            let from_block = match event_block_distance {
-                Some(distance) => to_block.saturating_sub(distance),
-                None => 0,
-            };
-            FilterBlockOption::Range {
-                from_block: Some(from_block.into()),
-                to_block: Some(to_block.into()),
-            }
-        };
+        // The window was already resolved to concrete block numbers by the RPC handler
+        // before fanning out to entry point routes.
+        let block_option = block_options.block_option;
 
         match self.get_event_by_hash_at(hash, block_option).await {
             Ok(logs) => Ok(logs),
@@ -399,7 +333,7 @@ where
                     from_block: Some(BlockNumberOrTag::Number(from_block)),
                     to_block: Some(BlockNumberOrTag::Number(to_block)),
                 } = block_option
-                    && !has_block_option
+                    && !block_options.caller_supplied
                     && let Some(fallback_distance) = self.event_block_distance_fallback
                 {
                     // The per-request override is a hard cap on the search window; the

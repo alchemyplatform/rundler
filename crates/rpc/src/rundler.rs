@@ -30,7 +30,7 @@ use rundler_types::{
 use tracing::instrument;
 
 use crate::{
-    eth::{EntryPointRouter, EthResult, EthRpcError, EventBlockOptions},
+    eth::{EntryPointRouter, EthResult, EthRpcError, EventBlockOptions, ResolvedEventBlockOptions},
     types::{
         MaxBlockRange, RpcBlockOption, RpcDelegationStatus, RpcMinedUserOperation,
         RpcSuggestedGasFees, RpcUserOperation, RpcUserOperationGasPrice, RpcUserOperationStatus,
@@ -390,11 +390,6 @@ where
         uo_hash: B256,
         block_options: EventBlockOptions,
     ) -> EthResult<RpcUserOperationStatus> {
-        let block_options = block_options
-            .resolve(&self.evm_provider)
-            .await
-            .map_err(EthRpcError::from)?;
-
         // Fetch pool status first to get preconf info for the mined query
         let op_status = self
             .pool_server
@@ -415,10 +410,9 @@ where
                     &pool_status.entry_point,
                     uo_hash,
                     Some(preconf_info.tx_hash),
-                    EventBlockOptions {
-                        block_option: None,
-                        ..block_options
-                    },
+                    // The preconfirmed path resolves from the known bundle transaction, so
+                    // the block window is unused here.
+                    ResolvedEventBlockOptions::unused(),
                 )
                 .await;
             match ret {
@@ -431,6 +425,16 @@ where
                 }
             }
         } else {
+            // Only the log-query fan-out needs a resolved window; resolve it here so a
+            // transient head-lookup failure cannot pre-empt the preconfirmed lookup above.
+            let block_options = block_options
+                .resolve(
+                    &self.evm_provider,
+                    self.entry_point_router.event_block_distance(),
+                )
+                .await
+                .map_err(EthRpcError::from)?;
+
             let mined_futs = self.entry_point_router.entry_points().map(|ep| {
                 self.entry_point_router
                     .get_mined_and_receipt(ep, uo_hash, None, block_options)
