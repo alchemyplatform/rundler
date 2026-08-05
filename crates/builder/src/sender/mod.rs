@@ -161,44 +161,56 @@ impl TxSenderError {
     }
 
     /// Promotes an ambiguous `UnrecognizedRpc` response to `TerminalRpcError`
-    /// when its message is known to be a terminal, per-transaction rejection
-    /// rather than a transient or provider-health condition.
+    /// when its message is a known terminal, per-transaction rejection rather
+    /// than a transient or provider-health condition.
     ///
-    /// Three message shapes are recognized. The first two require code
-    /// `-32000`:
-    /// - `"internal error"` — only promoted on chains with
-    ///   `ChainSpec::internal_rpc_error_is_terminal`, since some providers also use
-    ///   this generic wording for transient outages.
-    /// - `"Transaction rejected by chain policy"` — Robinhood's unambiguous wording
-    ///   for the same rejection; promoted unconditionally, since no chain
-    ///   legitimately emits this phrase for a transient condition.
-    /// - `"transaction type not supported"` — the node cannot decode the
-    ///   transaction envelope, so it never evaluated the transaction and never
-    ///   will until it is upgraded. Matched as a substring under any error code,
-    ///   because clients wrap it differently (op-geth reports
-    ///   `"failed to unmarshal tx: transaction type not supported"`) and report
-    ///   it under codes that vary by client. Retrying is futile and the
-    ///   rejection is unambiguous, so no chain gate applies.
+    /// The recognized messages and their conditions are in
+    /// [`is_terminal_rejection`].
     pub(crate) fn promote_terminal_error(self, chain_spec: &ChainSpec) -> Self {
         match self {
-            TxSenderError::UnrecognizedRpc { code, message } => {
-                let trimmed = message.trim();
-                let is_terminal = trimmed
-                    .to_ascii_lowercase()
-                    .contains("transaction type not supported")
-                    || (code == -32000
-                        && (trimmed.eq_ignore_ascii_case("Transaction rejected by chain policy")
-                            || (chain_spec.internal_rpc_error_is_terminal
-                                && trimmed.eq_ignore_ascii_case("internal error"))));
-                if is_terminal {
-                    TxSenderError::TerminalRpcError { code, message }
-                } else {
-                    TxSenderError::UnrecognizedRpc { code, message }
-                }
+            TxSenderError::UnrecognizedRpc { code, message }
+                if is_terminal_rejection(&message, code, chain_spec) =>
+            {
+                TxSenderError::TerminalRpcError { code, message }
             }
             other => other,
         }
     }
+}
+
+/// Whether an RPC error response is a known terminal rejection: the
+/// transaction was refused and retrying it unchanged cannot succeed.
+///
+/// DEVELOPER NOTE: each rule states its own matching strategy and why it is
+/// safe. Prefer adding a rule here over widening an existing one.
+fn is_terminal_rejection(message: &str, code: i64, chain_spec: &ChainSpec) -> bool {
+    let trimmed = message.trim();
+
+    // The node cannot decode the transaction envelope, so it never evaluated
+    // the transaction and never will until it is upgraded. Substring-matched
+    // under any code: clients wrap it (op-geth reports "failed to unmarshal
+    // tx: transaction type not supported") and number it differently.
+    if trimmed
+        .to_ascii_lowercase()
+        .contains("transaction type not supported")
+    {
+        return true;
+    }
+
+    // The remaining rules are specific to this code.
+    if code != -32000 {
+        return false;
+    }
+
+    // Robinhood's unambiguous wording for a policy rejection. No chain
+    // legitimately emits this phrase for a transient condition.
+    if trimmed.eq_ignore_ascii_case("Transaction rejected by chain policy") {
+        return true;
+    }
+
+    // Some providers reuse this generic wording for transient outages, so it is
+    // terminal only where the chain spec says so.
+    chain_spec.internal_rpc_error_is_terminal && trimmed.eq_ignore_ascii_case("internal error")
 }
 
 pub(crate) type Result<T> = std::result::Result<T, TxSenderError>;
