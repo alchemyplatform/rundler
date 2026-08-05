@@ -188,8 +188,10 @@ fn is_terminal_rejection(message: &str, code: i64, chain_spec: &ChainSpec) -> bo
 
     // The node cannot decode the transaction envelope, so it never evaluated
     // the transaction and never will until it is upgraded. Substring-matched
-    // under any code: clients wrap it (op-geth reports "failed to unmarshal
-    // tx: transaction type not supported") and number it differently.
+    // because op-geth wraps it ("failed to unmarshal tx: ..."); un-gated by
+    // code because the phrase names its own condition, unlike the generic
+    // messages below. Matching distinctive messages alone is the convention in
+    // `classify_submission_error`.
     if trimmed
         .to_ascii_lowercase()
         .contains("transaction type not supported")
