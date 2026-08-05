@@ -82,10 +82,12 @@ pub(crate) enum TxSenderError {
     /// terminal for this chain: retrying the identical transaction cannot succeed.
     ///
     /// Produced by [`TxSenderError::promote_terminal_error`] for `-32000: internal
-    /// error` on chains with `ChainSpec::internal_rpc_error_is_terminal`, and
+    /// error` on chains with `ChainSpec::internal_rpc_error_is_terminal`,
     /// unconditionally for `-32000: Transaction rejected by chain policy`
     /// (Robinhood's unambiguous wording for the same rejection, unlike the
-    /// generic "internal error").
+    /// generic "internal error"), and unconditionally for any message containing
+    /// `transaction type not supported` (the node cannot decode the transaction
+    /// envelope at all).
     #[error("terminal RPC error {code}: {message}")]
     TerminalRpcError {
         /// RPC error code.
@@ -158,26 +160,36 @@ impl TxSenderError {
         }
     }
 
-    /// Promotes an ambiguous `-32000: UnrecognizedRpc` response to
-    /// `TerminalRpcError` when its message is known to be a terminal,
-    /// per-transaction rejection rather than a transient or provider-health
-    /// condition.
+    /// Promotes an ambiguous `UnrecognizedRpc` response to `TerminalRpcError`
+    /// when its message is known to be a terminal, per-transaction rejection
+    /// rather than a transient or provider-health condition.
     ///
-    /// Two message shapes are recognized:
+    /// Three message shapes are recognized. The first two require code
+    /// `-32000`:
     /// - `"internal error"` — only promoted on chains with
     ///   `ChainSpec::internal_rpc_error_is_terminal`, since some providers also use
     ///   this generic wording for transient outages.
     /// - `"Transaction rejected by chain policy"` — Robinhood's unambiguous wording
     ///   for the same rejection; promoted unconditionally, since no chain
     ///   legitimately emits this phrase for a transient condition.
+    /// - `"transaction type not supported"` — the node cannot decode the
+    ///   transaction envelope, so it never evaluated the transaction and never
+    ///   will until it is upgraded. Matched as a substring under any error code,
+    ///   because clients wrap it differently (op-geth reports
+    ///   `"failed to unmarshal tx: transaction type not supported"`) and report
+    ///   it under codes that vary by client. Retrying is futile and the
+    ///   rejection is unambiguous, so no chain gate applies.
     pub(crate) fn promote_terminal_error(self, chain_spec: &ChainSpec) -> Self {
         match self {
-            TxSenderError::UnrecognizedRpc { code, message } if code == -32000 => {
+            TxSenderError::UnrecognizedRpc { code, message } => {
                 let trimmed = message.trim();
                 let is_terminal = trimmed
-                    .eq_ignore_ascii_case("Transaction rejected by chain policy")
-                    || (chain_spec.internal_rpc_error_is_terminal
-                        && trimmed.eq_ignore_ascii_case("internal error"));
+                    .to_ascii_lowercase()
+                    .contains("transaction type not supported")
+                    || (code == -32000
+                        && (trimmed.eq_ignore_ascii_case("Transaction rejected by chain policy")
+                            || (chain_spec.internal_rpc_error_is_terminal
+                                && trimmed.eq_ignore_ascii_case("internal error"))));
                 if is_terminal {
                     TxSenderError::TerminalRpcError { code, message }
                 } else {
@@ -567,6 +579,59 @@ mod tests {
             error,
             TxSenderError::TerminalRpcError { code: -32000, .. }
         ));
+    }
+
+    #[test]
+    fn promotes_unsupported_transaction_type_to_terminal() {
+        // Matched as a substring under any code: clients wrap and number this
+        // rejection differently. op-geth's wording is the first case.
+        let cases = [
+            (
+                -32000,
+                "failed to unmarshal tx: transaction type not supported",
+            ),
+            (-32000, "transaction type not supported"),
+            (-32603, "Transaction Type Not Supported"),
+            (
+                -32000,
+                " failed to unmarshal tx: transaction type not supported ",
+            ),
+        ];
+
+        for (code, message) in cases {
+            let error = TxSenderError::UnrecognizedRpc {
+                code,
+                message: message.to_string(),
+            }
+            .promote_terminal_error(&ChainSpec::default());
+
+            assert!(
+                matches!(error, TxSenderError::TerminalRpcError { .. }),
+                "message: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn does_not_promote_unrelated_unsupported_messages() {
+        let cases = [
+            (-32000, "transaction type not supporte"),
+            (-32000, "access list not supported"),
+            (-32000, "eth_sendRawTransaction not supported"),
+        ];
+
+        for (code, message) in cases {
+            let error = TxSenderError::UnrecognizedRpc {
+                code,
+                message: message.to_string(),
+            }
+            .promote_terminal_error(&ChainSpec::default());
+
+            assert!(
+                matches!(error, TxSenderError::UnrecognizedRpc { .. }),
+                "message: {message}"
+            );
+        }
     }
 
     #[test]
