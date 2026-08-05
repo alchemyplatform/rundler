@@ -82,10 +82,12 @@ pub(crate) enum TxSenderError {
     /// terminal for this chain: retrying the identical transaction cannot succeed.
     ///
     /// Produced by [`TxSenderError::promote_terminal_error`] for `-32000: internal
-    /// error` on chains with `ChainSpec::internal_rpc_error_is_terminal`, and
+    /// error` on chains with `ChainSpec::internal_rpc_error_is_terminal`,
     /// unconditionally for `-32000: Transaction rejected by chain policy`
     /// (Robinhood's unambiguous wording for the same rejection, unlike the
-    /// generic "internal error").
+    /// generic "internal error"), and unconditionally for any message containing
+    /// `transaction type not supported` (the node cannot decode the transaction
+    /// envelope at all).
     #[error("terminal RPC error {code}: {message}")]
     TerminalRpcError {
         /// RPC error code.
@@ -158,35 +160,59 @@ impl TxSenderError {
         }
     }
 
-    /// Promotes an ambiguous `-32000: UnrecognizedRpc` response to
-    /// `TerminalRpcError` when its message is known to be a terminal,
-    /// per-transaction rejection rather than a transient or provider-health
-    /// condition.
+    /// Promotes an ambiguous `UnrecognizedRpc` response to `TerminalRpcError`
+    /// when its message is a known terminal, per-transaction rejection rather
+    /// than a transient or provider-health condition.
     ///
-    /// Two message shapes are recognized:
-    /// - `"internal error"` — only promoted on chains with
-    ///   `ChainSpec::internal_rpc_error_is_terminal`, since some providers also use
-    ///   this generic wording for transient outages.
-    /// - `"Transaction rejected by chain policy"` — Robinhood's unambiguous wording
-    ///   for the same rejection; promoted unconditionally, since no chain
-    ///   legitimately emits this phrase for a transient condition.
+    /// The recognized messages and their conditions are in
+    /// [`is_terminal_rejection`].
     pub(crate) fn promote_terminal_error(self, chain_spec: &ChainSpec) -> Self {
         match self {
-            TxSenderError::UnrecognizedRpc { code, message } if code == -32000 => {
-                let trimmed = message.trim();
-                let is_terminal = trimmed
-                    .eq_ignore_ascii_case("Transaction rejected by chain policy")
-                    || (chain_spec.internal_rpc_error_is_terminal
-                        && trimmed.eq_ignore_ascii_case("internal error"));
-                if is_terminal {
-                    TxSenderError::TerminalRpcError { code, message }
-                } else {
-                    TxSenderError::UnrecognizedRpc { code, message }
-                }
+            TxSenderError::UnrecognizedRpc { code, message }
+                if is_terminal_rejection(&message, code, chain_spec) =>
+            {
+                TxSenderError::TerminalRpcError { code, message }
             }
             other => other,
         }
     }
+}
+
+/// Whether an RPC error response is a known terminal rejection: the
+/// transaction was refused and retrying it unchanged cannot succeed.
+///
+/// DEVELOPER NOTE: each rule states its own matching strategy and why it is
+/// safe. Prefer adding a rule here over widening an existing one.
+fn is_terminal_rejection(message: &str, code: i64, chain_spec: &ChainSpec) -> bool {
+    let trimmed = message.trim();
+
+    // The node cannot decode the transaction envelope, so it never evaluated
+    // the transaction and never will until it is upgraded. Substring-matched
+    // because op-geth wraps it ("failed to unmarshal tx: ..."); un-gated by
+    // code because the phrase names its own condition, unlike the generic
+    // messages below. Matching distinctive messages alone is the convention in
+    // `classify_submission_error`.
+    if trimmed
+        .to_ascii_lowercase()
+        .contains("transaction type not supported")
+    {
+        return true;
+    }
+
+    // The remaining rules are specific to this code.
+    if code != -32000 {
+        return false;
+    }
+
+    // Robinhood's unambiguous wording for a policy rejection. No chain
+    // legitimately emits this phrase for a transient condition.
+    if trimmed.eq_ignore_ascii_case("Transaction rejected by chain policy") {
+        return true;
+    }
+
+    // Some providers reuse this generic wording for transient outages, so it is
+    // terminal only where the chain spec says so.
+    chain_spec.internal_rpc_error_is_terminal && trimmed.eq_ignore_ascii_case("internal error")
 }
 
 pub(crate) type Result<T> = std::result::Result<T, TxSenderError>;
@@ -567,6 +593,59 @@ mod tests {
             error,
             TxSenderError::TerminalRpcError { code: -32000, .. }
         ));
+    }
+
+    #[test]
+    fn promotes_unsupported_transaction_type_to_terminal() {
+        // Matched as a substring under any code: clients wrap and number this
+        // rejection differently. op-geth's wording is the first case.
+        let cases = [
+            (
+                -32000,
+                "failed to unmarshal tx: transaction type not supported",
+            ),
+            (-32000, "transaction type not supported"),
+            (-32603, "Transaction Type Not Supported"),
+            (
+                -32000,
+                " failed to unmarshal tx: transaction type not supported ",
+            ),
+        ];
+
+        for (code, message) in cases {
+            let error = TxSenderError::UnrecognizedRpc {
+                code,
+                message: message.to_string(),
+            }
+            .promote_terminal_error(&ChainSpec::default());
+
+            assert!(
+                matches!(error, TxSenderError::TerminalRpcError { .. }),
+                "message: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn does_not_promote_unrelated_unsupported_messages() {
+        let cases = [
+            (-32000, "transaction type not supporte"),
+            (-32000, "access list not supported"),
+            (-32000, "eth_sendRawTransaction not supported"),
+        ];
+
+        for (code, message) in cases {
+            let error = TxSenderError::UnrecognizedRpc {
+                code,
+                message: message.to_string(),
+            }
+            .promote_terminal_error(&ChainSpec::default());
+
+            assert!(
+                matches!(error, TxSenderError::UnrecognizedRpc { .. }),
+                "message: {message}"
+            );
+        }
     }
 
     #[test]
