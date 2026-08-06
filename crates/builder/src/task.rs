@@ -85,6 +85,11 @@ pub struct Args {
     pub max_cancellation_fee_increases: u64,
     /// Maximum amount of blocks to spend in a replacement underpriced state before moving to cancel
     pub max_replacement_underpriced_blocks: u64,
+    /// Initial delay a builder waits after a rate-limited submission, doubling with
+    /// each consecutive rate-limited attempt
+    pub rate_limit_backoff_initial: Duration,
+    /// Maximum delay a builder waits between rate-limited submissions
+    pub rate_limit_backoff_max: Duration,
     /// Address to bind the remote builder server to, if any. If none, no server is starter.
     pub remote_address: Option<SocketAddr>,
     /// Entry points to start builders for
@@ -550,6 +555,8 @@ where
             max_replacement_underpriced_blocks: self.args.max_replacement_underpriced_blocks,
             max_cancellation_fee_increases: self.args.max_cancellation_fee_increases,
             max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
+            rate_limit_backoff_initial: self.args.rate_limit_backoff_initial,
+            rate_limit_backoff_max: self.args.rate_limit_backoff_max,
         };
 
         let fee_estimator: Box<dyn FeeEstimator> = Box::new(self.providers.fee_estimator().clone());

@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{net::SocketAddr, str::FromStr, sync::Arc};
+use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 
 use alloy_primitives::Address;
 use anyhow::Context;
@@ -227,6 +227,28 @@ pub struct BuilderArgs {
         default_value = "0.50"
     )]
     assigner_starvation_ratio: f64,
+
+    /// Initial delay a builder waits before its next submission after the
+    /// submission endpoint rate limited it, doubling with each consecutive
+    /// rate-limited attempt and applied on top of the normal bundle trigger
+    /// interval. Any attempt that is not rate limited resets it.
+    #[arg(
+        long = "builder.rate_limit_backoff_initial_millis",
+        name = "builder.rate_limit_backoff_initial_millis",
+        env = "BUILDER_RATE_LIMIT_BACKOFF_INITIAL_MILLIS",
+        default_value = "1000"
+    )]
+    rate_limit_backoff_initial_millis: u64,
+
+    /// Maximum delay a builder waits between submissions while the submission
+    /// endpoint is rate limiting it.
+    #[arg(
+        long = "builder.rate_limit_backoff_max_millis",
+        name = "builder.rate_limit_backoff_max_millis",
+        env = "BUILDER_RATE_LIMIT_BACKOFF_MAX_MILLIS",
+        default_value = "30000"
+    )]
+    rate_limit_backoff_max_millis: u64,
 }
 
 impl BuilderArgs {
@@ -322,6 +344,10 @@ impl BuilderArgs {
             chain_spec,
             assigner_max_ops_per_request: self.assigner_max_ops_per_request,
             assigner_starvation_ratio: self.assigner_starvation_ratio,
+            rate_limit_backoff_initial: Duration::from_millis(
+                self.rate_limit_backoff_initial_millis,
+            ),
+            rate_limit_backoff_max: Duration::from_millis(self.rate_limit_backoff_max_millis),
         })
     }
 
