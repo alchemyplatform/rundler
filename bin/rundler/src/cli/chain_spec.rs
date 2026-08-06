@@ -117,6 +117,7 @@ define_hardcoded_chain_specs!(
     optimism_sepolia,
     base,
     base_sepolia,
+    giwa_sepolia,
     arbitrum,
     arbitrum_sepolia,
     polygon,
