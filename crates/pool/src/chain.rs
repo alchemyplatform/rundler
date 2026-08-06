@@ -361,6 +361,7 @@ impl<P: EvmProvider> Chain<P> {
         );
         self.metrics.sync_abandoned.increment(1);
         self.blocks.clear();
+        self.pending_block_id = None;
         None
     }
 
@@ -522,6 +523,7 @@ impl<P: EvmProvider> Chain<P> {
             .load_blocks_back_to_number(head, min_block_number)
             .await
             .context("should load full history when resetting chain")?;
+        self.pending_block_id = None;
         self.blocks = self.load_block_summaries(&blocks).await?;
         self.sync_error_count = 0;
         let mined_ops: Vec<_> = self
