@@ -65,8 +65,12 @@ pub(crate) struct Chain<P: EvmProvider> {
     /// front of this deque and the newest at the back.
     blocks: VecDeque<BlockSummary>,
 
-    /// Pending block summary, for preconfirmation blocks.
-    pending_block: Option<BlockSummary>,
+    /// Identifies the last processed pending block, for preconfirmation blocks.
+    ///
+    /// A pending block is unsealed, so nodes report a zero `hash` for it. The
+    /// transactions root is the header field that advances as flashblocks are
+    /// appended to the block under construction.
+    pending_block_id: Option<(u64, B256)>,
     /// Semaphore to limit the number of concurrent `eth_getLogs` calls.
     load_ops_semaphore: Semaphore,
     sync_error_count: usize,
@@ -222,7 +226,7 @@ impl<P: EvmProvider> Chain<P> {
             provider,
             settings,
             blocks: VecDeque::new(),
-            pending_block: None,
+            pending_block_id: None,
             sync_error_count: 0,
             load_ops_semaphore: Semaphore::new(MAX_LOAD_OPS_CONCURRENCY),
             filter_template,
@@ -314,8 +318,13 @@ impl<P: EvmProvider> Chain<P> {
         }
         let mut chain_update = latest_update.unwrap();
         let pending_update = pending_update.unwrap();
-        chain_update.preconfirmed_txns = pending_update.preconfirmed_txns;
-        chain_update.preconfirmed_block_number = pending_update.preconfirmed_block_number;
+        // The two blocks are fetched concurrently, so the pending read can be at or
+        // behind the latest sealed block. Carrying those preconfirmations over would
+        // have `remove_out_of_date_preconfirmed_uos` drop them in the same update.
+        if pending_update.preconfirmed_block_number > Some(chain_update.latest_block_number) {
+            chain_update.preconfirmed_txns = pending_update.preconfirmed_txns;
+            chain_update.preconfirmed_block_number = pending_update.preconfirmed_block_number;
+        }
         Some(chain_update)
     }
 
@@ -352,10 +361,17 @@ impl<P: EvmProvider> Chain<P> {
         );
         self.metrics.sync_abandoned.increment(1);
         self.blocks.clear();
+        self.pending_block_id = None;
         None
     }
 
     async fn handle_pending_block(&mut self, pending_block: Block) -> Option<ChainUpdate> {
+        let header = &pending_block.inner.header;
+        let block_id = (header.number, header.transactions_root);
+        if self.pending_block_id == Some(block_id) {
+            return None;
+        }
+
         let summary = match self.load_flash_block_summary(&pending_block).await {
             Ok(summary) => summary,
             Err(err) => {
@@ -371,17 +387,12 @@ impl<P: EvmProvider> Chain<P> {
         let chain_update = self
             .process_pending_block(&summary, pending_block.header.number)
             .await;
-        let header = &pending_block.inner.header;
-        if let Some(pending_block) = &self.pending_block
-            && pending_block.hash == header.hash
-        {
-            return None;
-        }
+
         self.metrics
             .flashblock_discovery_delay_ms
             .record(now_ms.saturating_sub(block_timestamp_ms) as f64);
 
-        self.pending_block = Some(summary);
+        self.pending_block_id = Some(block_id);
         Some(chain_update)
     }
 
@@ -512,6 +523,7 @@ impl<P: EvmProvider> Chain<P> {
             .load_blocks_back_to_number(head, min_block_number)
             .await
             .context("should load full history when resetting chain")?;
+        self.pending_block_id = None;
         self.blocks = self.load_block_summaries(&blocks).await?;
         self.sync_error_count = 0;
         let mined_ops: Vec<_> = self
@@ -1159,13 +1171,17 @@ mod tests {
     use alloy_consensus::{SignableTransaction, TypedTransaction, transaction::Recovered};
     use alloy_eips::BlockNumberOrTag;
     use alloy_network_primitives::BlockTransactions;
-    use alloy_primitives::{Log as PrimitiveLog, LogData, Signature, address};
-    use alloy_rpc_types_eth::{Block as AlloyBlock, Transaction as AlloyTransaction};
+    use alloy_primitives::{Log as PrimitiveLog, LogData, Signature, address, keccak256};
+    use alloy_rpc_types_eth::{
+        Block as AlloyBlock, Transaction as AlloyTransaction,
+        TransactionReceipt as AlloyTransactionReceipt,
+    };
     use alloy_serde::WithOtherFields;
     use parking_lot::RwLock;
     use rundler_provider::{
-        AnyHeader, AnyTxEnvelope, BlockHeader, BlockId, FilterBlockOption, MockEvmProvider,
-        RpcBlockHash, Transaction, TransactionRequest,
+        AnyHeader, AnyReceiptEnvelope, AnyTxEnvelope, BlockHeader, BlockId, FilterBlockOption,
+        MockEvmProvider, ReceiptWithBloom, RpcBlockHash, Transaction, TransactionReceipt,
+        TransactionRequest,
     };
 
     use super::*;
@@ -1225,11 +1241,50 @@ mod tests {
         blocks: Arc<RwLock<Vec<MockBlock>>>,
         pending_block: Arc<RwLock<Option<MockBlock>>>,
         balances: Arc<RwLock<HashMap<Address, U256>>>,
+        /// Maps a bundle transaction hash to the user operation hashes its
+        /// receipt reports, for `eth_getTransactionReceipt`.
+        receipts: Arc<RwLock<HashMap<B256, Vec<B256>>>>,
     }
 
     impl ProviderController {
         fn set_blocks(&self, blocks: Vec<MockBlock>) {
             *self.blocks.write() = blocks;
+        }
+
+        fn set_pending_block(&self, block: MockBlock) {
+            *self.pending_block.write() = Some(block);
+        }
+
+        fn set_receipt(&self, txn: B256, op_hashes: Vec<B256>) {
+            self.receipts.write().insert(txn, op_hashes);
+        }
+
+        fn get_receipt(&self, txn: B256) -> Option<TransactionReceipt> {
+            let op_hashes = self.receipts.read().get(&txn).cloned()?;
+            let receipt = alloy_consensus::Receipt {
+                logs: op_hashes.into_iter().map(fake_mined_log_v0_6).collect(),
+                ..Default::default()
+            };
+            Some(WithOtherFields::new(AlloyTransactionReceipt {
+                inner: AnyReceiptEnvelope {
+                    inner: ReceiptWithBloom {
+                        receipt,
+                        ..Default::default()
+                    },
+                    r#type: 0,
+                },
+                transaction_hash: txn,
+                transaction_index: None,
+                block_hash: None,
+                block_number: None,
+                gas_used: 0,
+                effective_gas_price: 0,
+                blob_gas_used: None,
+                blob_gas_price: None,
+                from: Address::ZERO,
+                to: Some(ENTRY_POINT_ADDRESS_V0_6),
+                contract_address: None,
+            }))
         }
 
         fn set_balances(&self, balances: HashMap<Address, U256>) {
@@ -1277,12 +1332,14 @@ mod tests {
                     } else {
                         B256::ZERO
                     };
+                    let transactions_root = txns_root(&pending_block_inner.transactions);
                     Some(Block::new(WithOtherFields::new(AlloyBlock {
                         header: BlockHeader {
                             hash: pending_block_inner.hash,
                             inner: AnyHeader {
                                 parent_hash,
                                 number: number as u64,
+                                transactions_root,
                                 ..Default::default()
                             },
                             ..Default::default()
@@ -2081,6 +2138,90 @@ mod tests {
         )
     }
 
+    /// Nodes report a zero hash for the unsealed pending block, so every
+    /// flashblock in a block looks identical by hash. Each one that adds a
+    /// bundle transaction must still produce a preconfirmed update.
+    #[tokio::test]
+    async fn test_successive_flashblocks_share_a_zero_hash() {
+        let (mut chain, controller) = _new_chain(true);
+        controller.set_blocks(vec![MockBlock::new(hash(0))]);
+
+        let bundle_0 = make_transaction_to(addr(0), 0, ENTRY_POINT_ADDRESS_V0_6);
+        let bundle_1 = make_transaction_to(addr(0), 1, ENTRY_POINT_ADDRESS_V0_6);
+        controller.set_receipt(bundle_0.tx_hash(), vec![hash(101)]);
+        controller.set_receipt(bundle_1.tx_hash(), vec![hash(102)]);
+
+        // First flashblock: one bundle.
+        controller.set_pending_block(MockBlock::new(B256::ZERO).add_txns(vec![bundle_0.clone()]));
+        let update = chain.handle_pending_block(pending_block(&controller)).await;
+        assert_eq!(
+            update.map(|u| u.preconfirmed_txns),
+            Some(vec![(bundle_0.tx_hash(), vec![hash(101)])])
+        );
+
+        // Same flashblock again: nothing new to report.
+        assert!(
+            chain
+                .handle_pending_block(pending_block(&controller))
+                .await
+                .is_none()
+        );
+
+        // Second flashblock of the same block, same zero hash, one more bundle.
+        controller.set_pending_block(
+            MockBlock::new(B256::ZERO).add_txns(vec![bundle_0.clone(), bundle_1.clone()]),
+        );
+        let update = chain.handle_pending_block(pending_block(&controller)).await;
+        assert_eq!(
+            update.map(|u| u.preconfirmed_txns),
+            Some(vec![
+                (bundle_0.tx_hash(), vec![hash(101)]),
+                (bundle_1.tx_hash(), vec![hash(102)]),
+            ])
+        );
+    }
+
+    /// Pending and latest are fetched concurrently, so the pending read can
+    /// land at or behind the sealed head. Those preconfirmations would be
+    /// dropped by `remove_out_of_date_preconfirmed_uos` in the same update.
+    #[tokio::test]
+    async fn test_merge_updates_drops_preconfirmations_at_or_behind_latest() {
+        let (mut chain, _controller) = _new_chain(true);
+
+        let preconfirmed_txns = vec![(hash(1), vec![hash(101)])];
+        let pending_at = |number: u64| {
+            Some(ChainUpdate {
+                preconfirmed_txns: preconfirmed_txns.clone(),
+                preconfirmed_block_number: Some(number),
+                update_type: UpdateType::Preconfirmed,
+                ..Default::default()
+            })
+        };
+        let latest = || {
+            Some(ChainUpdate {
+                latest_block_number: 10,
+                ..Default::default()
+            })
+        };
+
+        let merged = chain.merge_updates(pending_at(11), latest()).await.unwrap();
+        assert_eq!(merged.preconfirmed_txns, preconfirmed_txns);
+        assert_eq!(merged.preconfirmed_block_number, Some(11));
+
+        for stale in [10, 9] {
+            let merged = chain
+                .merge_updates(pending_at(stale), latest())
+                .await
+                .unwrap();
+            assert_eq!(merged.preconfirmed_txns, vec![]);
+            assert_eq!(merged.preconfirmed_block_number, None);
+        }
+    }
+
+    fn pending_block(controller: &ProviderController) -> Block {
+        controller.get_block(BlockId::pending()).unwrap()
+    }
+
     fn new_chain() -> (Chain<impl EvmProvider>, ProviderController) {
         _new_chain(false)
     }
@@ -2109,12 +2250,18 @@ mod tests {
             blocks: Arc::new(RwLock::new(vec![])),
             balances: Arc::new(RwLock::new(HashMap::new())),
             pending_block: Arc::new(RwLock::new(None)),
+            receipts: Arc::new(RwLock::new(HashMap::new())),
         };
         let mut provider = MockEvmProvider::new();
 
         provider.expect_get_full_block().returning({
             let controller = controller.clone();
             move |id| Ok(controller.get_block(id))
+        });
+
+        provider.expect_get_transaction_receipt().returning({
+            let controller = controller.clone();
+            move |txn| Ok(controller.get_receipt(txn))
         });
 
         provider.expect_get_logs().returning({
@@ -2322,11 +2469,21 @@ mod tests {
         address
     }
 
+    // Stands in for a real transactions trie root: it just has to advance
+    // whenever a flashblock appends transactions to the pending block.
+    fn txns_root(txns: &[Transaction]) -> B256 {
+        keccak256(txns.iter().flat_map(|t| t.tx_hash().0).collect::<Vec<u8>>())
+    }
+
     fn make_transaction(from: Address, nonce: u64) -> Transaction {
+        make_transaction_to(from, nonce, Address::ZERO)
+    }
+
+    fn make_transaction_to(from: Address, nonce: u64, to: Address) -> Transaction {
         let typed = TransactionRequest::default()
             .from(from)
             .nonce(nonce)
-            .to(Address::ZERO)
+            .to(to)
             .gas_limit(0)
             .max_fee_per_gas(0)
             .max_priority_fee_per_gas(0)
