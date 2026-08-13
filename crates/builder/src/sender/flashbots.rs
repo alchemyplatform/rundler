@@ -252,7 +252,15 @@ struct FlashbotsClient {
 impl FlashbotsClient {
     fn new(auth_key: SecretString, builders: Vec<String>, relay_url: String) -> Self {
         Self {
-            http_client: Client::new(),
+            // Compression is only negotiated with Alchemy's internal RPC
+            // backend (see rundler_provider::alloy); explicitly opt out here
+            // so enabling gzip/brotli support in the binary doesn't change
+            // negotiated behavior with the Flashbots relay.
+            http_client: Client::builder()
+                .no_gzip()
+                .no_brotli()
+                .build()
+                .expect("failed to build reqwest client"),
             signer: auth_key
                 .expose_secret()
                 .parse()
