@@ -86,12 +86,16 @@ pub fn new_alloy_evm_provider(
 /// behavior for other hosts (e.g. third-party RPC providers, the Flashbots
 /// relay) just because this binary is compiled with gzip/brotli support.
 const ALCHEMY_INTERNAL_RPC_DOMAIN: &str = "d.alchemy.com";
+const ALCHEMY_INTERNAL_RPC_SUBDOMAIN_SUFFIX: &str = ".d.alchemy.com";
 
 fn host_supports_response_compression(url: &Url) -> bool {
-    url.host_str().is_some_and(|host| {
-        host == ALCHEMY_INTERNAL_RPC_DOMAIN
-            || host.ends_with(&format!(".{ALCHEMY_INTERNAL_RPC_DOMAIN}"))
-    })
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    // Trim a trailing DNS root-label dot (`d.alchemy.com.` is the same host
+    // as `d.alchemy.com`) before matching.
+    let host = host.strip_suffix('.').unwrap_or(host);
+    host == ALCHEMY_INTERNAL_RPC_DOMAIN || host.ends_with(ALCHEMY_INTERNAL_RPC_SUBDOMAIN_SUFFIX)
 }
 
 /// Builds the `reqwest::Client` used for RPC requests to `rpc_url`, requesting
@@ -207,6 +211,9 @@ mod tests {
             "https://d.alchemy.com/v2/key",
             "https://eth-mainnet.d.alchemy.com/v2/key",
             "https://arb-mainnet.d.alchemy.com/v2/key",
+            // a trailing DNS root-label dot is the same host as without one
+            "https://d.alchemy.com./v2/key",
+            "https://eth-mainnet.d.alchemy.com./v2/key",
         ];
         for url in compressible {
             assert!(
