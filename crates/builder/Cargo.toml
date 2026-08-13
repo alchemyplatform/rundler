@@ -49,7 +49,7 @@ tracing.workspace = true
 alloy-json-rpc.workspace = true
 alloy-rpc-types-eth.workspace = true
 alloy-transport.workspace = true
-flate2 = "1"
+flate2.workspace = true
 mockall.workspace = true
 rundler-provider = { workspace = true, features = ["test-utils"] }
 rundler-sim = { workspace = true, features = ["test-utils"] }

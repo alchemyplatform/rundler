@@ -50,7 +50,7 @@ url.workspace = true
 
 [dev-dependencies]
 alloy-provider = { workspace = true, features = ["debug-api", "anvil-node"] }
-flate2 = "1"
+flate2.workspace = true
 tiny_http.workspace = true
 tokio = { workspace = true, features = ["macros", "test-util"] }
 
