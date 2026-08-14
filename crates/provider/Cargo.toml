@@ -35,7 +35,6 @@ mockall = { workspace = true, optional = true }
 moka = { version = "0.12.11", features = ["future"] }
 rand.workspace = true
 regex.workspace = true
-reqwest.workspace = true
 reth-tasks = { workspace = true, features = ["rayon"] }
 rundler-bindings-fastlz.workspace = true
 rundler-contracts.workspace = true
@@ -50,7 +49,6 @@ url.workspace = true
 
 [dev-dependencies]
 alloy-provider = { workspace = true, features = ["debug-api", "anvil-node"] }
-flate2.workspace = true
 tiny_http.workspace = true
 tokio = { workspace = true, features = ["macros", "test-util"] }
 

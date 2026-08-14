@@ -252,15 +252,7 @@ struct FlashbotsClient {
 impl FlashbotsClient {
     fn new(auth_key: SecretString, builders: Vec<String>, relay_url: String) -> Self {
         Self {
-            // Compression is only negotiated with Alchemy's internal RPC
-            // backend (see rundler_provider::alloy); explicitly opt out here
-            // so enabling gzip/brotli support in the binary doesn't change
-            // negotiated behavior with the Flashbots relay.
-            http_client: Client::builder()
-                .no_gzip()
-                .no_brotli()
-                .build()
-                .expect("failed to build reqwest client"),
+            http_client: Client::new(),
             signer: auth_key
                 .expose_secret()
                 .parse()
@@ -454,69 +446,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{io::Write, thread};
-
-    use flate2::{Compression, write::GzEncoder};
-    use tiny_http::{Header, Response, Server};
-
     use super::*;
     use crate::sender::RpcOutcomeClass;
-
-    /// The Flashbots relay client must not negotiate response compression:
-    /// enabling gzip/brotli on rundler's shared reqwest dependency (for
-    /// archv2, see rundler_provider::alloy) should not change behavior with
-    /// this unrelated third-party relay. Proven the same way as the
-    /// provider-side test: a local server unconditionally sends a
-    /// gzip-encoded response, and we assert it comes back raw and undecoded.
-    #[tokio::test]
-    async fn compression_is_disabled_for_flashbots_client() {
-        const PLAINTEXT: &[u8] = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"pad pad pad pad\"}";
-
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(PLAINTEXT).unwrap();
-        let compressed = encoder.finish().unwrap();
-
-        let server = Server::http("127.0.0.1:0").unwrap();
-        let local_url = format!("http://{}", server.server_addr());
-        let compressed_for_server = compressed.clone();
-        thread::spawn(move || {
-            for request in server.incoming_requests() {
-                let response = Response::from_data(compressed_for_server.clone()).with_header(
-                    Header::from_bytes(&b"Content-Encoding"[..], &b"gzip"[..]).unwrap(),
-                );
-                let _ = request.respond(response);
-            }
-        });
-
-        let client = FlashbotsClient::new(
-            SecretString::from(
-                "0x0000000000000000000000000000000000000000000000000000000000000001",
-            ),
-            vec![],
-            "https://relay.flashbots.net".to_string(),
-        );
-
-        let resp = client
-            .http_client
-            .post(local_url)
-            .body("{}")
-            .send()
-            .await
-            .expect("request to local hermetic server failed");
-        assert_eq!(
-            resp.headers()
-                .get("content-encoding")
-                .map(|v| v.to_str().unwrap()),
-            Some("gzip"),
-            "content-encoding should be left untouched: compression must not be negotiated"
-        );
-        let body = resp.bytes().await.unwrap();
-        assert_eq!(
-            body.as_ref(),
-            compressed.as_slice(),
-            "expected raw undecoded bytes since the Flashbots client disables gzip/brotli"
-        );
-    }
 
     #[test]
     fn recognized_rpc_error_is_classified_not_sender_unavailable() {
