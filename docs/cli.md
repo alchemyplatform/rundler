@@ -243,9 +243,9 @@ List of command line options for configuring the Builder.
   - env: _BUILDER_MAX_CANCELLATION_FEE_INCREASES_
 - `--builder.max_replacement_underpriced_blocks`: The maximum number of blocks to wait in a replacement underpriced state before issuing a cancellation transaction (default: `20`)
   - env: _BUILDER_MAX_REPLACEMENT_UNDERPRICED_BLOCKS_
-- `--builder.sender`: Choice of what sender type to use for transaction submission. (default: `raw`, options: `raw`, `flashbots`, `polygon_bloxroute`)
+- `--builder.sender`: Choice of what sender type to use for transaction submission. (default: `raw`, options: `raw`, `flashbots`, `bloxroute`, `polygonprivate`)
   - env: _BUILDER_SENDER_
-- `--builder.submit_url`: Only used if builder.sender == "raw." If present, the URL of the ETH provider that will be used to send transactions. Defaults to the value of `node_http`.
+- `--builder.submit_url`: Only used if builder.sender == "raw" or "polygonprivate." If present, the URL of the ETH provider that will be used to send transactions. Defaults to the value of `node_http`. Not used by the fallback sender configured with `builder.sender_recovery_interval_secs`, which always submits to `node_http`.
   - env: _BUILDER_SUBMIT_URL_
 - `--builder.use_conditional_rpc`: Only used if builder.sender == "raw." Use `eth_sendRawTransactionConditional` when submitting. (default: `false`)
   - env: _BUILDER_USE_CONDITIONAL_RPC_
@@ -253,8 +253,12 @@ List of command line options for configuring the Builder.
   - env: _BUILDER_FLASHBOTS_RELAY_BUILDERS_
 - `--builder.flashbots_relay_auth_key`: Only used/required if builder.sender == "flashbots." Authorization key to use with the flashbots relay. See [here](https://docs.flashbots.net/flashbots-auction/advanced/rpc-endpoint#authentication) for more info. (default: None)
   - env: _BUILDER_FLASHBOTS_RELAY_AUTH_KEY_
-- `--builder.bloxroute_auth_header`: Only used/required if builder.sender == "polygon_bloxroute." If using the bloxroute transaction sender on Polygon, this is the auth header to supply with the requests. (default: None)
+- `--builder.bloxroute_auth_header`: Only used/required if builder.sender == "bloxroute." If using the bloxroute transaction sender on Polygon, this is the auth header to supply with the requests. (default: None)
   - env: _BUILDER_BLOXROUTE_AUTH_HEADER_
+- `--builder.sender_recovery_interval_secs`: Enable automatic failover to a raw sender when a non-raw `builder.sender` is unavailable, set to the number of seconds to remain on the fallback before re-attempting the primary. The fallback always submits to `node_http`, never to `builder.submit_url`. Has no effect when builder.sender == "raw." (default: None, no fallback configured)
+  - env: _BUILDER_SENDER_RECOVERY_INTERVAL_SECS_
+- `--builder.sender_failure_threshold`: Number of consecutive unavailable responses from the primary sender before activating the fallback. Only applies when `builder.sender_recovery_interval_secs` is set. (default: `3`)
+  - env: _BUILDER_SENDER_FAILURE_THRESHOLD_
 - `--builder.pool_url`: If running in distributed mode, the URL of the pool server to use. (default: `http://localhost:50051`)
   - env: _BUILDER_POOL_URL_
   - _Only required when running in distributed mode_

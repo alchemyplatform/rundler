@@ -96,7 +96,9 @@ pub struct BuilderArgs {
     /// If present, the url of the ETH provider that will be used to send
     /// transactions. Defaults to the value of `node_http`.
     ///
-    /// Only used when BUILDER_SENDER is "raw"
+    /// Only used when BUILDER_SENDER is "raw" or "polygonprivate". Never used
+    /// for the raw sender that BUILDER_SENDER_RECOVERY_INTERVAL_SECS falls back
+    /// to, which always submits to `node_http`.
     #[arg(
         long = "builder.submit_url",
         name = "builder.submit_url",
@@ -330,8 +332,14 @@ impl BuilderArgs {
         chain_spec: &ChainSpec,
         rpc_url: &str,
     ) -> anyhow::Result<TransactionSenderArgs> {
-        let raw_args = || RawSenderArgs {
-            submit_url: self.submit_url.clone().unwrap_or_else(|| rpc_url.into()),
+        // The raw sender used to stand in for an unavailable primary. It always
+        // submits to `rpc_url` (`NODE_HTTP`) and never to `submit_url`:
+        // `submit_url` is the primary's own endpoint for the senders that read it
+        // (e.g. Polygon's private gateway for `polygonprivate`), so honoring it
+        // here would point the fallback straight back at the outage it exists to
+        // route around.
+        let fallback_args = || RawSenderArgs {
+            submit_url: rpc_url.into(),
             use_conditional_rpc: false,
             chain_spec: chain_spec.clone(),
         };
@@ -341,7 +349,7 @@ impl BuilderArgs {
             if let Some(secs) = self.sender_recovery_interval_secs {
                 TransactionSenderArgs::Fallback(FallbackSenderArgs {
                     primary: Box::new(primary),
-                    fallback: Box::new(TransactionSenderArgs::Raw(raw_args())),
+                    fallback: Box::new(TransactionSenderArgs::Raw(fallback_args())),
                     recovery_interval: std::time::Duration::from_secs(secs),
                     failure_threshold: self.sender_failure_threshold,
                 })
@@ -551,4 +559,106 @@ pub fn is_nonspammy_event(event: &WithEntryPoint<BuilderEvent>) -> bool {
         return false;
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    const RPC_URL: &str = "https://node.example.com/v2/key";
+    const SUBMIT_URL: &str = "https://priv-rpc-gateway.example.com/?key=key";
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        builder: BuilderArgs,
+    }
+
+    fn builder_args(args: &[&str]) -> BuilderArgs {
+        TestCli::parse_from(std::iter::once("test").chain(args.iter().copied())).builder
+    }
+
+    fn unwrap_fallback(sender: TransactionSenderArgs) -> FallbackSenderArgs {
+        match sender {
+            TransactionSenderArgs::Fallback(fallback) => fallback,
+            other => panic!("expected a fallback sender, got {other:?}"),
+        }
+    }
+
+    fn unwrap_raw(sender: TransactionSenderArgs) -> RawSenderArgs {
+        match sender {
+            TransactionSenderArgs::Raw(raw) => raw,
+            other => panic!("expected a raw sender, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn polygon_private_fallback_submits_to_node_http() {
+        let args = builder_args(&[
+            "--builder.sender",
+            "polygonprivate",
+            "--builder.submit_url",
+            SUBMIT_URL,
+            "--builder.sender_recovery_interval_secs",
+            "60",
+        ]);
+
+        let fallback = unwrap_fallback(args.sender_args(&ChainSpec::default(), RPC_URL).unwrap());
+
+        // The primary keeps submitting to the private gateway...
+        match *fallback.primary {
+            TransactionSenderArgs::PolygonPrivate(primary) => {
+                assert_eq!(primary.submit_url, SUBMIT_URL)
+            }
+            other => panic!("expected a polygon private primary, got {other:?}"),
+        }
+        // ...while the fallback goes to the public mempool. Reusing submit_url
+        // here would send the fallback back into the primary's outage.
+        assert_eq!(unwrap_raw(*fallback.fallback).submit_url, RPC_URL);
+    }
+
+    #[test]
+    fn flashbots_fallback_submits_to_node_http() {
+        let args = builder_args(&[
+            "--builder.sender",
+            "flashbots",
+            "--builder.submit_url",
+            SUBMIT_URL,
+            "--builder.sender_recovery_interval_secs",
+            "60",
+            "--builder.flashbots_relay_auth_key",
+            "0x01",
+        ]);
+        let chain_spec = ChainSpec {
+            flashbots_enabled: true,
+            flashbots_relay_url: Some("https://relay.flashbots.net".to_owned()),
+            ..Default::default()
+        };
+
+        let fallback = unwrap_fallback(args.sender_args(&chain_spec, RPC_URL).unwrap());
+
+        assert_eq!(unwrap_raw(*fallback.fallback).submit_url, RPC_URL);
+    }
+
+    #[test]
+    fn raw_sender_submits_to_submit_url() {
+        let args = builder_args(&["--builder.submit_url", SUBMIT_URL]);
+
+        let raw = unwrap_raw(args.sender_args(&ChainSpec::default(), RPC_URL).unwrap());
+
+        assert_eq!(raw.submit_url, SUBMIT_URL);
+    }
+
+    #[test]
+    fn raw_sender_defaults_to_node_http() {
+        let raw = unwrap_raw(
+            builder_args(&[])
+                .sender_args(&ChainSpec::default(), RPC_URL)
+                .unwrap(),
+        );
+
+        assert_eq!(raw.submit_url, RPC_URL);
+    }
 }
