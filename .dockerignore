@@ -2,6 +2,10 @@
 /.github
 /.githooks
 /.vscode
+# Agent worktrees are full repo checkouts. Left in the build context they bloat the
+# planner COPY, confuse `cargo chef prepare` with nested workspaces, and get walked
+# by the recipe-original rsync.
+/.claude
 /test
 *.iml
 *.rs.bk
