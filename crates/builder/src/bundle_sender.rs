@@ -130,6 +130,9 @@ enum SendBundleAttemptResult {
     NoOperationsAfterSimulation,
     // Underpriced
     Underpriced,
+    // The node rejected the bundle validation call because its fee caps were below
+    // the base fee. Nothing was submitted.
+    SimulationUnderpriced,
     // Replacement Underpriced
     ReplacementUnderpriced,
     // Condition not met
@@ -157,7 +160,9 @@ impl SendBundleAttemptResult {
             | Self::Rejected
             | Self::InsufficientFunds
             | Self::NonceTooLow => true,
-            Self::RateLimited
+            // Rejected while building, so the submission endpoint never saw a request.
+            Self::SimulationUnderpriced
+            | Self::RateLimited
             | Self::NoOperationsInitially
             | Self::NoOperationsAfterFeeFilter
             | Self::NoOperationsAfterSimulation => false,
@@ -518,6 +523,16 @@ where
                     "Bundle underpriced, marking as underpriced. Num fee increases {fee_increases}"
                 );
                 state.update(InnerState::Building(inner.underpriced(block_number)));
+            }
+            Ok(SendBundleAttemptResult::SimulationUnderpriced) => {
+                // Release locks only when nothing is pending (continuing)
+                if state.transaction_tracker.num_pending_transactions() == 0 {
+                    self.assigner.release_all(self.sender_eoa);
+                }
+                warn!(
+                    "Bundle validation call rejected as underpriced, rebuilding at re-read fees on the next trigger"
+                );
+                state.simulation_underpriced();
             }
             Ok(SendBundleAttemptResult::ReplacementUnderpriced) => {
                 // Release locks only when nothing is pending (continuing)
@@ -931,9 +946,10 @@ where
                             state.condition_not_met = false;
                             Ok(SendBundleAttemptResult::NoOperationsAfterFeeFilter)
                         }
+                        // Bailed out before `check_conditions_met` ran, so leave
+                        // `condition_not_met` set for the next attempt.
                         Err(BundleProposerError::SimulationUnderpriced) => {
-                            state.condition_not_met = false;
-                            Ok(SendBundleAttemptResult::Underpriced)
+                            Ok(SendBundleAttemptResult::SimulationUnderpriced)
                         }
                         Err(e) => Err(anyhow::anyhow!("Failed to make bundle: {e:?}")),
                     }
@@ -1404,6 +1420,32 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
             fee_increase_count: 0,
             underpriced_info: None,
         }));
+    }
+
+    // The bundle validation call was rejected on fees before it executed.
+    //
+    // Nothing was submitted and no pool state changed, so wait for the next trigger
+    // and rebuild. Fees are re-read from the chain on the next attempt, which is what
+    // recovers from a genuine base fee move; there is no submitted transaction to
+    // replace, so `fee_increase_count` is left alone. `condition_not_met` is preserved
+    // because the rebuild still needs to re-check conditions.
+    fn simulation_underpriced(&mut self) {
+        self.send_result(SendBundleResult::Error(anyhow::anyhow!(
+            "bundle validation call rejected as underpriced"
+        )));
+
+        self.inner = match &self.inner {
+            InnerState::Building(s) => InnerState::Building(BuildingState {
+                wait_for_trigger: true,
+                fee_increase_count: s.fee_increase_count,
+                underpriced_info: s.underpriced_info,
+            }),
+            _ => {
+                panic!(
+                    "invalid state transition, simulation_underpriced called when not in building state"
+                )
+            }
+        }
     }
 
     // No operations are available, send result, move to initial state
@@ -2836,6 +2878,31 @@ mod tests {
         assert!(!state.condition_not_met);
     }
 
+    #[test]
+    fn test_simulation_underpriced_keeps_condition_not_met() {
+        let mut state = SenderMachineState::new(MockTrigger::new(), MockTransactionTracker::new());
+        state.condition_not_met = true;
+        state.update(InnerState::Building(BuildingState {
+            wait_for_trigger: false,
+            fee_increase_count: 2,
+            underpriced_info: None,
+        }));
+
+        state.simulation_underpriced();
+
+        // The validation call bails out before conditions are re-checked, so the flag
+        // must survive for the next attempt.
+        assert!(state.condition_not_met);
+        match state.inner {
+            InnerState::Building(s) => {
+                assert!(s.wait_for_trigger);
+                // Nothing was submitted, so there is no replacement to bump.
+                assert_eq!(s.fee_increase_count, 2);
+            }
+            _ => panic!("expected building state"),
+        }
+    }
+
     #[tokio::test]
     async fn test_revert_remove() {
         let Mocks {
@@ -3249,9 +3316,12 @@ mod tests {
             assert!(result.endpoint_judged_transaction());
         }
 
-        // Nothing was submitted, so nothing was learned about the endpoint.
+        // Nothing was submitted, so nothing was learned about the endpoint. The
+        // validation call can go to a different provider than the submission
+        // endpoint, so its rejection must not clear a submission backoff.
         for result in [
             SendBundleAttemptResult::RateLimited,
+            SendBundleAttemptResult::SimulationUnderpriced,
             SendBundleAttemptResult::NoOperationsInitially,
             SendBundleAttemptResult::NoOperationsAfterFeeFilter,
             SendBundleAttemptResult::NoOperationsAfterSimulation,

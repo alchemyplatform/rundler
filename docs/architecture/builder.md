@@ -143,10 +143,12 @@ and big blocks and validates `eth_call` against the big block base fee, while
 
 A correctly priced bundle can therefore be rejected with `-32003: max fee per gas less
 than block base fee`. Because that rejection happens before execution it says nothing
-about the operations in the bundle, so the sender treats it as an underpriced bundle and
-escalates fees, rather than as a bundle failure. Treating it as a failure would leave
-pool state untouched and rebuild an identical bundle on the next trigger, making no
-progress.
+about the operations in the bundle and nothing was submitted, so the sender rejects no
+operations, leaves the submission endpoint's rate-limit backoff alone, and waits for the
+next trigger to rebuild. Fees are re-read from the chain on that rebuild, which is what
+recovers from a genuine base fee move; there is no submitted transaction to replace, so
+the replacement fee bump does not apply. Treating the rejection as a bundle failure
+instead would reset the transaction tracker and count a failed bundle on every attempt.
 
 Chains where the check cannot be satisfied can set the `bundle_simulation_omit_gas_fees`
 chain spec option, which sends the validation call without fee caps and skips the node's
