@@ -1020,6 +1020,20 @@ impl Assigner {
             .builder_to_pinned_proposer
             .insert(builder_address, proposer_key);
     }
+
+    /// Test helper: true when `sender` is still confirmed to `builder_address`.
+    pub(crate) fn test_holds_confirmed_lock(
+        &self,
+        builder_address: Address,
+        sender: Address,
+    ) -> bool {
+        self.state
+            .lock()
+            .unwrap()
+            .uo_sender_to_builder_state
+            .get(&sender)
+            == Some(&(builder_address, LockState::Confirmed))
+    }
 }
 
 #[derive(Metrics, Clone)]

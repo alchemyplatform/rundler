@@ -3126,6 +3126,88 @@ mod tests {
         assert!(sender.rate_limit_backoff.retry_after.is_some());
     }
 
+    #[tokio::test]
+    async fn test_rate_limit_keeps_locks_while_txn_pending() {
+        let Mocks {
+            mut mock_proposer_t,
+            mut mock_tracker,
+            mut mock_trigger,
+            mut mock_pool,
+        } = new_mocks();
+
+        let mut seq = Sequence::new();
+        add_trigger_no_update_last_block(&mut mock_trigger, &mut seq, 1);
+
+        mock_tracker.expect_get_state().returning(|| {
+            Ok(TrackerState {
+                nonce: 0,
+                balance: U256::ZERO,
+                required_fees: None,
+            })
+        });
+        mock_tracker.expect_address().return_const(Address::ZERO);
+        // A replacement attempt: an earlier bundle is still in flight.
+        mock_tracker
+            .expect_num_pending_transactions()
+            .return_const(1_usize);
+        mock_tracker.expect_reset().returning(|| Box::pin(async {}));
+
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(|_, _, _, _| {
+                Ok(vec![pool_op_summary(
+                    ENTRY_POINT_ADDRESS_V0_6,
+                    Address::ZERO,
+                )])
+            });
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .returning(|_, _| Ok(vec![demo_pool_op()]));
+
+        mock_make_bundle(&mut mock_proposer_t, 1, vec![(Address::ZERO, B256::ZERO)]);
+
+        mock_tracker
+            .expect_send_transaction()
+            .returning(move |_, _, _| {
+                Box::pin(async move {
+                    Err(TransactionTrackerError::Sender(TxSenderError::RateLimited(
+                        anyhow::anyhow!("HTTP error 429 with body: Too Many Requests"),
+                    )))
+                })
+            });
+
+        let mut sender = new_sender(mock_proposer_t, mock_pool);
+
+        // Simulate the prior successful send that put the in-flight transaction
+        // on chain: its sender is confirmed to this builder.
+        sender.assigner.test_establish_pin(
+            Address::ZERO,
+            &[Address::ZERO],
+            (ENTRY_POINT_ADDRESS_V0_6, None),
+        );
+
+        let mut state = new_state_with(
+            mock_trigger,
+            mock_tracker,
+            InnerState::Building(BuildingState {
+                wait_for_trigger: true,
+                fee_increase_count: 1,
+                underpriced_info: None,
+            }),
+        );
+
+        let update = state.wait_for_trigger().await.unwrap();
+        sender.step_after_trigger(&mut state, update).await.unwrap();
+
+        // Survives both drop paths: `confirm_senders_drop_unused` skips confirmed
+        // locks, and `release_all` is gated on no pending transaction.
+        assert!(
+            sender
+                .assigner
+                .test_holds_confirmed_lock(Address::ZERO, Address::ZERO)
+        );
+    }
+
     #[test]
     fn test_rate_limit_backoff_escalates_and_caps() {
         // The shipped defaults.
