@@ -96,9 +96,8 @@ pub struct BuilderArgs {
     /// If present, the url of the ETH provider that will be used to send
     /// transactions. Defaults to the value of `node_http`.
     ///
-    /// Only used when BUILDER_SENDER is "raw" or "polygonprivate". Never used
-    /// for the raw sender that BUILDER_SENDER_RECOVERY_INTERVAL_SECS falls back
-    /// to, which always submits to `node_http`.
+    /// Only used when BUILDER_SENDER is "raw" or "polygonprivate". Never used by
+    /// the fallback sender, which always submits to `node_http`.
     #[arg(
         long = "builder.submit_url",
         name = "builder.submit_url",
@@ -332,12 +331,10 @@ impl BuilderArgs {
         chain_spec: &ChainSpec,
         rpc_url: &str,
     ) -> anyhow::Result<TransactionSenderArgs> {
-        // The raw sender used to stand in for an unavailable primary. It always
-        // submits to `rpc_url` (`NODE_HTTP`) and never to `submit_url`:
-        // `submit_url` is the primary's own endpoint for the senders that read it
-        // (e.g. Polygon's private gateway for `polygonprivate`), so honoring it
-        // here would point the fallback straight back at the outage it exists to
-        // route around.
+        // The raw sender that stands in for an unavailable primary. It submits
+        // to `rpc_url` rather than `submit_url` because `submit_url` is the
+        // primary's own endpoint (`polygonprivate` submits there), and a
+        // fallback is only useful on an endpoint independent of the primary.
         let fallback_args = || RawSenderArgs {
             submit_url: rpc_url.into(),
             use_conditional_rpc: false,
@@ -614,8 +611,7 @@ mod tests {
             }
             other => panic!("expected a polygon private primary, got {other:?}"),
         }
-        // ...while the fallback goes to the public mempool. Reusing submit_url
-        // here would send the fallback back into the primary's outage.
+        // ...while the fallback reaches the public mempool through node_http.
         assert_eq!(unwrap_raw(*fallback.fallback).submit_url, RPC_URL);
     }
 

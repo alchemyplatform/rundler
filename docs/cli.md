@@ -245,7 +245,7 @@ List of command line options for configuring the Builder.
   - env: _BUILDER_MAX_REPLACEMENT_UNDERPRICED_BLOCKS_
 - `--builder.sender`: Choice of what sender type to use for transaction submission. (default: `raw`, options: `raw`, `flashbots`, `bloxroute`, `polygonprivate`)
   - env: _BUILDER_SENDER_
-- `--builder.submit_url`: Only used if builder.sender == "raw" or "polygonprivate." If present, the URL of the ETH provider that will be used to send transactions. Defaults to the value of `node_http`. Not used by the fallback sender configured with `builder.sender_recovery_interval_secs`, which always submits to `node_http`.
+- `--builder.submit_url`: Only used if builder.sender == "raw" or "polygonprivate." If present, the URL of the ETH provider that will be used to send transactions. Defaults to the value of `node_http`. Not used by the fallback sender, which always submits to `node_http`.
   - env: _BUILDER_SUBMIT_URL_
 - `--builder.use_conditional_rpc`: Only used if builder.sender == "raw." Use `eth_sendRawTransactionConditional` when submitting. (default: `false`)
   - env: _BUILDER_USE_CONDITIONAL_RPC_
