@@ -49,6 +49,7 @@ use rundler_types::{
 use rundler_utils::authorization_utils;
 use tracing::instrument;
 
+use super::is_base_fee_too_low;
 use crate::{
     AggregatorOut, AggregatorSimOut, AlloyProvider, BlockHashOrNumber, BundleHandler, DAGasOracle,
     DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait,
@@ -316,12 +317,21 @@ where
             );
         }
 
+        // Some chains validate the fee caps on an `eth_call` against a base fee that
+        // doesn't correspond to the block being executed against, rejecting correctly
+        // priced bundles. Omitting the caps skips that validation.
+        let simulation_gas_fees = if self.chain_spec.bundle_simulation_omit_gas_fees {
+            None
+        } else {
+            Some(gas_fees)
+        };
+
         let tx = get_handle_ops_call(
             &self.i_entry_point,
             ops_per_aggregator,
             sender_eoa,
             gas_limit,
-            gas_fees,
+            simulation_gas_fees,
             proxy,
             self.chain_spec.id,
         );
@@ -330,6 +340,11 @@ where
         match res {
             Ok(_) => return Ok(HandleOpsOut::Success),
             Err(TransportError::ErrorResp(resp)) => {
+                // Rejected before execution, so there is nothing to attribute to an op.
+                if is_base_fee_too_low(&resp.message) {
+                    return Ok(HandleOpsOut::Underpriced);
+                }
+
                 let ret = Self::decode_handle_ops_revert(&resp.message, &resp.as_revert_data())
                     .ok_or_else(|| TransportError::ErrorResp(resp))?;
 
@@ -374,7 +389,7 @@ where
             ops_per_aggregator,
             sender_eoa,
             gas_limit,
-            gas_fees,
+            Some(gas_fees),
             proxy,
             self.chain_spec.id,
         )
@@ -614,12 +629,17 @@ fn add_simulations_override(
         });
 }
 
+/// Build the `handleOps`/`handleAggregatedOps` transaction request.
+///
+/// `gas_fees` of `None` leaves the fee caps unset, which skips the node's fee
+/// validation on an `eth_call`. Only pass `None` for validation calls, never for a
+/// request that will be submitted onchain.
 fn get_handle_ops_call<AP: AlloyProvider>(
     entry_point: &IEntryPointInstance<AP, AnyNetwork>,
     ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
     sender_eoa: Address,
     gas_limit: u64,
-    gas_fees: GasFees,
+    gas_fees: Option<GasFees>,
     proxy: Option<Address>,
     chain_id: u64,
 ) -> TransactionRequest {
@@ -659,11 +679,13 @@ fn get_handle_ops_call<AP: AlloyProvider>(
                 .inner
         };
 
-    txn_request = txn_request
-        .from(sender_eoa)
-        .gas_limit(gas_limit)
-        .max_fee_per_gas(gas_fees.max_fee_per_gas)
-        .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas);
+    txn_request = txn_request.from(sender_eoa).gas_limit(gas_limit);
+
+    if let Some(gas_fees) = gas_fees {
+        txn_request = txn_request
+            .max_fee_per_gas(gas_fees.max_fee_per_gas)
+            .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas);
+    }
 
     if !authorization_list.is_empty() {
         txn_request = txn_request.with_authorization_list(authorization_list);
@@ -909,7 +931,52 @@ fn add_authorization_tuple(
 
 #[cfg(test)]
 mod tests {
+    use alloy_provider::RootProvider;
+
     use super::*;
+
+    /// The bundle validation call must be able to omit its fee caps, while the
+    /// transaction that is actually submitted always carries them. Some chains
+    /// validate `eth_call` fee caps against a base fee that doesn't match the block
+    /// being executed against, rejecting correctly priced bundles.
+    #[test]
+    fn test_get_handle_ops_call_gas_fees_are_optional() {
+        let provider =
+            RootProvider::<AnyNetwork>::new_http("http://localhost:8545".parse().unwrap());
+        let entry_point = IEntryPointInstance::new(Address::ZERO, provider);
+        let gas_fees = GasFees {
+            max_fee_per_gas: 1_000,
+            max_priority_fee_per_gas: 100,
+        };
+
+        let with_fees = get_handle_ops_call(
+            &entry_point,
+            vec![],
+            Address::ZERO,
+            1_000_000,
+            Some(gas_fees),
+            None,
+            1,
+        );
+        assert_eq!(with_fees.max_fee_per_gas, Some(1_000));
+        assert_eq!(with_fees.max_priority_fee_per_gas, Some(100));
+
+        let without_fees = get_handle_ops_call(
+            &entry_point,
+            vec![],
+            Address::ZERO,
+            1_000_000,
+            None,
+            None,
+            1,
+        );
+        assert_eq!(without_fees.max_fee_per_gas, None);
+        assert_eq!(without_fees.max_priority_fee_per_gas, None);
+        // Everything else about the request is unchanged.
+        assert_eq!(without_fees.gas, with_fees.gas);
+        assert_eq!(without_fees.from, with_fees.from);
+        assert_eq!(without_fees.input, with_fees.input);
+    }
 
     #[test]
     fn test_decode_handle_ops_revert_failed_op() {

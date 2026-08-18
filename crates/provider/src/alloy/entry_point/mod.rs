@@ -21,6 +21,19 @@ use rundler_types::authorization::Eip7702Auth;
 pub(crate) mod v0_6;
 pub(crate) mod v0_7;
 
+/// Returns true if an `eth_call` error means the node rejected the call before
+/// execution because its fee caps were below the base fee.
+///
+/// This is a pre-execution check, so it carries no information about the operations
+/// in the bundle and must not be treated as a revert.
+fn is_base_fee_too_low(message: &str) -> bool {
+    // Geth: https://github.com/ethereum/go-ethereum/blob/master/core/error.go `ErrFeeCapTooLow`
+    // Reth: https://github.com/paradigmxyz/reth/blob/main/crates/rpc/rpc-eth-types/src/error/mod.rs
+    let lowercase_message = message.to_lowercase();
+    lowercase_message.contains("max fee per gas less than block base fee")
+        || lowercase_message.contains("fee cap less than block base fee")
+}
+
 fn max_bundle_transaction_data(
     to_address: Address,
     data: Bytes,
@@ -73,5 +86,31 @@ fn max_bundle_transaction_data(
         _ => {
             panic!("transaction is neither EIP-1559 nor EIP-7702");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_base_fee_too_low;
+
+    #[test]
+    fn classifies_base_fee_too_low() {
+        // Geth/Reth, as returned by HyperEVM for a bundle validation call.
+        assert!(is_base_fee_too_low(
+            "max fee per gas less than block base fee"
+        ));
+        assert!(is_base_fee_too_low(
+            "err: max fee per gas less than block base fee: address 0x1, maxFeePerGas: 1 baseFee: 2"
+        ));
+        assert!(is_base_fee_too_low("Fee cap less than block base fee"));
+    }
+
+    #[test]
+    fn ignores_unrelated_errors() {
+        assert!(!is_base_fee_too_low("execution reverted"));
+        assert!(!is_base_fee_too_low("nonce too low"));
+        assert!(!is_base_fee_too_low("insufficient funds for gas * price"));
+        // A submission-time underpriced error is a different condition.
+        assert!(!is_base_fee_too_low("transaction underpriced"));
     }
 }

@@ -132,6 +132,27 @@ While in the building state the sender is waiting for a trigger. There are 3 typ
 * Time (building mode: auto): Trigger bundle building after `bundle_max_send_interval_millis` (chain spec) has elapsed without a bundle attempt.
 * Manual call (building mode: manual): Trigger bundle building on a call to `debug_bundler_sendBundleNow`.
 
+### Underpriced bundle validation
+
+Before submitting, the proposer validates the candidate bundle with an `eth_call` to
+`handleOps`. Nodes check the call's fee caps against a base fee before executing it, and
+some chains validate against a base fee that does not correspond to the block being
+executed against — HyperEVM, for example, runs separate base fee markets for its small
+and big blocks and validates `eth_call` against the big block base fee, while
+`eth_feeHistory` and the block header report the small block base fee.
+
+A correctly priced bundle can therefore be rejected with `-32003: max fee per gas less
+than block base fee`. Because that rejection happens before execution it says nothing
+about the operations in the bundle, so the sender treats it as an underpriced bundle and
+escalates fees, rather than as a bundle failure. Treating it as a failure would leave
+pool state untouched and rebuild an identical bundle on the next trigger, making no
+progress.
+
+Chains where the check cannot be satisfied can set the `bundle_simulation_omit_gas_fees`
+chain spec option, which sends the validation call without fee caps and skips the node's
+fee validation. This only affects the validation call; the submitted bundle transaction
+always carries its real fee caps.
+
 ### Cancellations
 
 Cancellations occur in a specific scenario: there are user operations available that pay more than the estimated gas price, but when the sender submits the bundle transaction it receives a "replacement underpriced" error. If after increasing the fee the user operations are priced out, we are in an "underpriced" meta-state.

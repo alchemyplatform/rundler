@@ -99,12 +99,24 @@ pub(crate) type BundleProposerResult<T> = std::result::Result<T, BundleProposerE
 pub(crate) enum BundleProposerError {
     #[error("No operations after fee filtering")]
     NoOperationsAfterFeeFilter,
+    /// The node rejected the bundle validation call because the bundle's fee caps
+    /// were below the base fee it validates against.
+    ///
+    /// Carries no information about individual operations, so no pool state is
+    /// mutated. The caller should retry at a higher fee rather than treat this as a
+    /// bundle failure.
+    #[error("Bundle validation call underpriced")]
+    SimulationUnderpriced,
     #[error(transparent)]
     ProviderError(#[from] rundler_provider::ProviderError),
     /// All other errors
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
+
+/// A boxed future resolving to the bundle indices a post-op-revert check wants removed.
+type PostOpRevertCheck<'a> =
+    Pin<Box<dyn Future<Output = BundleProposerResult<Vec<usize>>> + Send + 'a>>;
 
 /// Version-agnostic bundle data for transaction submission.
 /// This is the type-erased result of bundle proposal.
@@ -552,7 +564,13 @@ where
                         .unwrap_or_default(),
                 ))
             }
-            None | Some(HandleOpsOut::Revert(_)) | Some(HandleOpsOut::PostOpRevert) => {
+            // `Underpriced` is a pre-execution rejection from an `eth_call` and is
+            // never produced by decoding an onchain revert, but it is unattributable
+            // if it ever shows up here.
+            None
+            | Some(HandleOpsOut::Revert(_))
+            | Some(HandleOpsOut::PostOpRevert)
+            | Some(HandleOpsOut::Underpriced) => {
                 warn!(
                     "unattributed revert for bundle of {} ops",
                     all_op_hashes.len()
@@ -1268,6 +1286,15 @@ where
 
         match handle_ops_out {
             HandleOpsOut::Success => Ok(Some(gas_limit)),
+            HandleOpsOut::Underpriced => {
+                // The node rejected the call before executing it, so there is nothing
+                // to attribute to an op. Bail out without touching the bundle so the
+                // sender can escalate fees instead of retrying an identical bundle.
+                warn!(
+                    "Bundle validation call rejected as underpriced by the node, will retry with higher fees."
+                );
+                Err(BundleProposerError::SimulationUnderpriced)
+            }
             HandleOpsOut::FailedOp(index, message) => {
                 self.emit(BuilderEvent::rejected_op(
                     self.builder_tag.clone(),
@@ -1476,10 +1503,10 @@ where
         context: &mut ProposalContext<EP::UO>,
         gas_limit: u64,
         bundle_fees: GasFees,
-    ) -> anyhow::Result<()> {
+    ) -> BundleProposerResult<()> {
         let agg_groups = context.to_ops_per_aggregator();
         let mut op_index = 0;
-        let mut futures: Vec<Pin<Box<dyn Future<Output = Vec<usize>> + Send>>> = vec![];
+        let mut futures: Vec<PostOpRevertCheck<'_>> = vec![];
 
         for agg_group in agg_groups {
             // For non-aggregated ops, re-simulate each op individually
@@ -1509,7 +1536,14 @@ where
         }
 
         let results = future::join_all(futures).await;
-        let mut to_remove = results.into_iter().flatten().collect::<Vec<_>>();
+        // A re-simulation rejected on fees alone is inconclusive: it tells us nothing
+        // about which op reverted. Bail out before rejecting anything so the sender can
+        // retry at a higher fee, rather than falling through to the catch-all below and
+        // evicting the whole bundle.
+        let mut to_remove = Vec::new();
+        for result in results {
+            to_remove.extend(result?);
+        }
         if to_remove.is_empty() {
             // if we can't identify the offending user ops, remove all user ops from the bundle and from the pool
             error!(
@@ -1540,7 +1574,7 @@ where
         op_index: usize,
         gas_limit: u64,
         bundle_fees: GasFees,
-    ) -> Vec<usize> {
+    ) -> BundleProposerResult<Vec<usize>> {
         let op_hash = op.hash();
         let bundle = vec![UserOpsPerAggregator {
             aggregator: Address::ZERO,
@@ -1560,21 +1594,24 @@ where
             )
             .await;
         match ret {
+            // Rejected on fees alone, so this tells us nothing about whether the op
+            // reverted. Abort rather than blame an op we haven't actually tested.
+            Ok(HandleOpsOut::Underpriced) => Err(BundleProposerError::SimulationUnderpriced),
             Ok(out) => {
                 if let HandleOpsOut::PostOpRevert = out {
                     warn!(
                         "PostOpRevert error found, removing {:?} from bundle",
                         op_hash
                     );
-                    vec![op_index]
+                    Ok(vec![op_index])
                 } else {
-                    vec![]
+                    Ok(vec![])
                 }
             }
             Err(e) => {
                 // If we get an error here, we can't be sure if the op is the offending op or not, so we remove it to be safe
                 error!("Failed to call handle ops: {e} during postOpRevert handling, removing op");
-                vec![op_index]
+                Ok(vec![op_index])
             }
         }
     }
@@ -1586,7 +1623,7 @@ where
         start_index: usize,
         gas_limit: u64,
         bundle_fees: GasFees,
-    ) -> Vec<usize> {
+    ) -> BundleProposerResult<Vec<usize>> {
         let len = group.user_ops.len();
         let agg = group.aggregator;
         let bundle = vec![group];
@@ -1603,15 +1640,18 @@ where
             )
             .await;
         match ret {
+            // Rejected on fees alone, so this tells us nothing about whether the group
+            // reverted. Abort rather than blame ops we haven't actually tested.
+            Ok(HandleOpsOut::Underpriced) => Err(BundleProposerError::SimulationUnderpriced),
             Ok(out) => {
                 if let HandleOpsOut::PostOpRevert = out {
                     warn!(
                         "PostOpRevert error found, removing all ops with aggregator {:?}",
                         agg
                     );
-                    (start_index..start_index + len).collect()
+                    Ok((start_index..start_index + len).collect())
                 } else {
-                    vec![]
+                    Ok(vec![])
                 }
             }
             Err(e) => {
@@ -1620,7 +1660,7 @@ where
                     "Failed to call handle ops: {e} during postOpRevert handling, removing all ops from aggregator {:?}",
                     agg
                 );
-                (start_index..start_index + len).collect()
+                Ok((start_index..start_index + len).collect())
             }
         }
     }
@@ -3628,6 +3668,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_post_op_revert_underpriced_recheck_rejects_no_ops() {
+        let op1 = op_with_sender(address(1));
+
+        // The bundle call reports a postOp revert, but the per-op recheck is rejected on
+        // fees before executing. That recheck proved nothing, so the op must not be
+        // evicted -- and we must not fall through to "couldn't identify the offender,
+        // remove everything" either.
+        let res = mock_make_bundle_allow_error(
+            vec![MockOp {
+                op: op1.clone(),
+                simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                perms: UserOperationPermissions::default(),
+            }],
+            vec![],
+            vec![HandleOpsOut::PostOpRevert, HandleOpsOut::Underpriced],
+            vec![],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![],
+            None,
+            U256::MAX,
+            None,
+            vec![],
+        )
+        .await;
+
+        assert!(
+            matches!(res, Err(BundleProposerError::SimulationUnderpriced)),
+            "expected SimulationUnderpriced, got {res:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_post_op_revert_two() {
         let op1 = op_with_sender(address(1));
         let op2 = op_with_sender(address(2));
@@ -3994,6 +4070,41 @@ mod tests {
         .await;
 
         assert_eq!(bundle.ops_per_aggregator, vec![]);
+    }
+
+    #[tokio::test]
+    async fn test_underpriced_validation_call_rejects_no_ops() {
+        let op = default_op();
+
+        // The node rejects the validation call on fees alone, before executing it.
+        // The bundle must fail with `SimulationUnderpriced` so the sender escalates
+        // fees, and no op may be blamed for it.
+        let res = mock_make_bundle_allow_error(
+            vec![MockOp {
+                op: op.clone(),
+                simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                perms: UserOperationPermissions::default(),
+            }],
+            vec![],
+            vec![HandleOpsOut::Underpriced],
+            vec![],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![],
+            None,
+            U256::MAX,
+            None,
+            vec![],
+        )
+        .await;
+
+        assert!(
+            matches!(res, Err(BundleProposerError::SimulationUnderpriced)),
+            "expected SimulationUnderpriced, got {res:?}"
+        );
     }
 
     #[tokio::test]

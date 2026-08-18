@@ -43,6 +43,7 @@ use rundler_types::{
 use rundler_utils::authorization_utils;
 use tracing::instrument;
 
+use super::is_base_fee_too_low;
 use crate::{
     AggregatorOut, AggregatorSimOut, AlloyProvider, BlockHashOrNumber, BundleHandler, DAGasOracle,
     DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait,
@@ -260,12 +261,21 @@ where
         proxy: Option<Address>,
         _validation_only: bool,
     ) -> ProviderResult<HandleOpsOut> {
+        // Some chains validate the fee caps on an `eth_call` against a base fee that
+        // doesn't correspond to the block being executed against, rejecting correctly
+        // priced bundles. Omitting the caps skips that validation.
+        let simulation_gas_fees = if self.chain_spec.bundle_simulation_omit_gas_fees {
+            None
+        } else {
+            Some(gas_fees)
+        };
+
         let tx = get_handle_ops_call(
             &self.i_entry_point,
             ops_per_aggregator,
             sender_eoa,
             gas_limit,
-            gas_fees,
+            simulation_gas_fees,
             proxy,
             self.chain_spec.id,
         );
@@ -274,6 +284,11 @@ where
         match res {
             Ok(_) => return Ok(HandleOpsOut::Success),
             Err(TransportError::ErrorResp(resp)) => {
+                // Rejected before execution, so there is nothing to attribute to an op.
+                if is_base_fee_too_low(&resp.message) {
+                    return Ok(HandleOpsOut::Underpriced);
+                }
+
                 Self::decode_handle_ops_revert(&resp.message, &resp.as_revert_data())
                     .ok_or_else(|| TransportError::ErrorResp(resp).into())
             }
@@ -294,7 +309,7 @@ where
             ops_per_aggregator,
             sender_eoa,
             gas_limit,
-            gas_fees,
+            Some(gas_fees),
             proxy,
             self.chain_spec.id,
         )
@@ -534,12 +549,17 @@ where
 {
 }
 
+/// Build the `handleOps`/`handleAggregatedOps` transaction request.
+///
+/// `gas_fees` of `None` leaves the fee caps unset, which skips the node's fee
+/// validation on an `eth_call`. Only pass `None` for validation calls, never for a
+/// request that will be submitted onchain.
 fn get_handle_ops_call<AP: AlloyProvider>(
     entry_point: &IEntryPointInstance<AP, AnyNetwork>,
     ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
     sender_eoa: Address,
     gas_limit: u64,
-    gas_fees: GasFees,
+    gas_fees: Option<GasFees>,
     proxy: Option<Address>,
     chain_id: u64,
 ) -> TransactionRequest {
@@ -579,11 +599,13 @@ fn get_handle_ops_call<AP: AlloyProvider>(
                 .inner
         };
 
-    txn_request = txn_request
-        .from(sender_eoa)
-        .gas_limit(gas_limit)
-        .max_fee_per_gas(gas_fees.max_fee_per_gas)
-        .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas);
+    txn_request = txn_request.from(sender_eoa).gas_limit(gas_limit);
+
+    if let Some(gas_fees) = gas_fees {
+        txn_request = txn_request
+            .max_fee_per_gas(gas_fees.max_fee_per_gas)
+            .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas);
+    }
 
     if !eip7702_auth_list.is_empty() {
         txn_request = txn_request.with_authorization_list(eip7702_auth_list);
