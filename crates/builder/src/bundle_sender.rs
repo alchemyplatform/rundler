@@ -242,8 +242,11 @@ where
             // during the wait, so it is returned to the pool where it can be borrowed
             // for other work such as sponsored undelegation.
             // A rate-limited builder waits out its backoff instead of the trigger,
-            // so an outstanding backoff is idle time too. `end_cycle` is a no-op
-            // while transactions are pending.
+            // so an outstanding backoff is idle time too. `end_cycle` hands the key
+            // back only when no transactions are tracked at all - stricter than the
+            // `num_pending_transactions() == 0` guard the `RateLimited` arm already
+            // released the assigner locks under - so the key is never returned while
+            // operations are still assigned to it.
             if state.is_signer_releasable() || self.rate_limit_backoff.is_waiting() {
                 state.transaction_tracker.end_cycle();
             }
