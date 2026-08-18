@@ -54,11 +54,7 @@ pub enum HandleOpsOut {
     PostOpRevert,
     /// Call reverted
     Revert(Bytes),
-    /// The node rejected the call before execution because the bundle's fee caps
-    /// were below the base fee it validates against.
-    ///
-    /// This says nothing about the operations in the bundle, so no operation should
-    /// be rejected on its account. The bundle is retryable at a higher fee.
+    /// Call rejected before execution because the fee caps were below the base fee
     Underpriced,
 }
 

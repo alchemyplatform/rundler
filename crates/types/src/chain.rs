@@ -134,18 +134,6 @@ pub struct ChainSpec {
     pub bundle_max_send_interval_millis: u64,
     /// True if the bundle validation `eth_call` should be sent without
     /// `maxFeePerGas`/`maxPriorityFeePerGas` fee caps.
-    ///
-    /// Some chains validate the fee caps on an `eth_call` against a base fee that
-    /// does not correspond to the block being executed against, so a correctly
-    /// priced bundle is rejected with `-32003: max fee per gas less than block base
-    /// fee`. HyperEVM is one such chain: it runs separate base fee markets for its
-    /// small (3M gas) and big (30M gas) blocks, and `eth_call` validates against the
-    /// big block base fee while `eth_feeHistory` and the block header report the
-    /// small block base fee, which can be an order of magnitude lower.
-    ///
-    /// Omitting the caps skips the node's fee validation while leaving simulation
-    /// otherwise unchanged. Only the validation call is affected; the bundle
-    /// transaction that is actually submitted always carries its real fee caps.
     pub bundle_simulation_omit_gas_fees: bool,
 
     /*

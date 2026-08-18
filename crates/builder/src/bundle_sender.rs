@@ -931,9 +931,6 @@ where
                             state.condition_not_met = false;
                             Ok(SendBundleAttemptResult::NoOperationsAfterFeeFilter)
                         }
-                        // The node rejected the validation call on fees alone. Treat it
-                        // like any other underpriced bundle so fees escalate, rather
-                        // than as a bundle failure that retries an identical bundle.
                         Err(BundleProposerError::SimulationUnderpriced) => {
                             state.condition_not_met = false;
                             Ok(SendBundleAttemptResult::Underpriced)

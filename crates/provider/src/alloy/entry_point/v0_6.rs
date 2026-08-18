@@ -261,9 +261,6 @@ where
         proxy: Option<Address>,
         _validation_only: bool,
     ) -> ProviderResult<HandleOpsOut> {
-        // Some chains validate the fee caps on an `eth_call` against a base fee that
-        // doesn't correspond to the block being executed against, rejecting correctly
-        // priced bundles. Omitting the caps skips that validation.
         let simulation_gas_fees = if self.chain_spec.bundle_simulation_omit_gas_fees {
             None
         } else {

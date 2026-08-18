@@ -101,10 +101,6 @@ pub(crate) enum BundleProposerError {
     NoOperationsAfterFeeFilter,
     /// The node rejected the bundle validation call because the bundle's fee caps
     /// were below the base fee it validates against.
-    ///
-    /// Carries no information about individual operations, so no pool state is
-    /// mutated. The caller should retry at a higher fee rather than treat this as a
-    /// bundle failure.
     #[error("Bundle validation call underpriced")]
     SimulationUnderpriced,
     #[error(transparent)]

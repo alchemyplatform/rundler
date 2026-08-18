@@ -23,9 +23,6 @@ pub(crate) mod v0_7;
 
 /// Returns true if an `eth_call` error means the node rejected the call before
 /// execution because its fee caps were below the base fee.
-///
-/// This is a pre-execution check, so it carries no information about the operations
-/// in the bundle and must not be treated as a revert.
 fn is_base_fee_too_low(message: &str) -> bool {
     // Geth: https://github.com/ethereum/go-ethereum/blob/master/core/error.go `ErrFeeCapTooLow`
     // Reth: https://github.com/paradigmxyz/reth/blob/main/crates/rpc/rpc-eth-types/src/error/mod.rs
