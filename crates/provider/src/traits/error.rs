@@ -68,25 +68,26 @@ impl ProviderError {
 
     /// Returns true when the endpoint reported that it is rate limiting us.
     ///
-    /// Every arm delegates to alloy so the provider-specific codes and wordings
-    /// live in one place: `HttpError::is_rate_limit_err` (HTTP 429),
+    /// Every check is alloy's, so the provider-specific codes and wordings live in
+    /// one place: `HttpError::is_rate_limit_err` (HTTP 429),
     /// `ErrorPayload::is_retry_err` (JSON-RPC responses - `429`, Infura's
-    /// `-32005`, QuickNode's credit limits, and similar), and the `Custom` check
-    /// from `TransportErrorKind::is_retry_err` for transports that stringify the
-    /// status instead of surfacing it.
+    /// `-32005`, QuickNode's credit limits, and similar), and
+    /// `TransportErrorKind::is_retry_err` for the `Custom` variant, where it is
+    /// exactly a 429 string match, covering transports that stringify the status
+    /// instead of surfacing it.
     ///
-    /// HTTP 503 is excluded: alloy groups it with rate limits as retryable, but a
-    /// temporarily unavailable endpoint is provider-health evidence, which callers
-    /// classify differently from being asked to send fewer requests.
+    /// That last helper is delegated to per variant rather than for the enum as a
+    /// whole because elsewhere it is broader than a rate limit: it also retries
+    /// `MissingBatchResponse` and HTTP 503. 503 in particular is provider-health
+    /// evidence, which callers classify differently from being asked to send fewer
+    /// requests.
     pub fn is_rate_limited(&self) -> bool {
         let ProviderError::RPC(error) = self else {
             return false;
         };
         match error {
             RpcError::Transport(TransportErrorKind::HttpError(http)) => http.is_rate_limit_err(),
-            RpcError::Transport(TransportErrorKind::Custom(err)) => {
-                err.to_string().contains("429 Too Many Requests")
-            }
+            RpcError::Transport(kind @ TransportErrorKind::Custom(_)) => kind.is_retry_err(),
             RpcError::ErrorResp(resp) => resp.is_retry_err(),
             _ => false,
         }

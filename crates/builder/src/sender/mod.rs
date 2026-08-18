@@ -477,6 +477,7 @@ impl From<TransactionSubmissionError> for TxSenderError {
 
 #[cfg(test)]
 mod tests {
+    use alloy_json_rpc::Id;
     use alloy_transport::TransportErrorKind;
     use rundler_provider::ProviderError;
     use rundler_types::chain::ChainSpec;
@@ -576,6 +577,19 @@ mod tests {
             503,
             "Service Unavailable".to_string(),
         )));
+
+        assert!(matches!(error, TxSenderError::SenderUnavailable(_)));
+        assert_eq!(error.classify(), RpcOutcomeClass::NonTerminal);
+    }
+
+    #[test]
+    fn does_not_treat_missing_batch_response_as_rate_limited() {
+        // The other reason `is_rate_limited` delegates to
+        // `TransportErrorKind::is_retry_err` per variant instead of for the whole
+        // enum: alloy retries this too, but it is not a rate limit.
+        let error = TxSenderError::from(ProviderError::RPC(
+            TransportErrorKind::missing_batch_response(Id::Number(1)),
+        ));
 
         assert!(matches!(error, TxSenderError::SenderUnavailable(_)));
         assert_eq!(error.classify(), RpcOutcomeClass::NonTerminal);
