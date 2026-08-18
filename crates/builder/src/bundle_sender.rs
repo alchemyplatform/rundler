@@ -198,13 +198,7 @@ impl RateLimitBackoff {
         *self = Self::default();
     }
 
-    /// True while a wait is outstanding.
-    fn is_waiting(&self) -> bool {
-        self.retry_after.is_some()
-    }
-
-    /// Waits out an outstanding backoff, if any. Called with the signer released
-    /// so a backing-off builder does not hold a signing key other work could use.
+    /// Waits out an outstanding backoff, if any.
     async fn wait(&mut self) {
         if let Some(retry_after) = self.retry_after.take() {
             tokio::time::sleep_until(retry_after).await;
@@ -241,19 +235,12 @@ where
             // and waiting for the next block trigger. The signing key is not needed
             // during the wait, so it is returned to the pool where it can be borrowed
             // for other work such as sponsored undelegation.
-            // A rate-limited builder waits out its backoff instead of the trigger,
-            // so an outstanding backoff is idle time too. `end_cycle` hands the key
-            // back only when no transactions are tracked at all - stricter than the
-            // `num_pending_transactions() == 0` guard the `RateLimited` arm already
-            // released the assigner locks under - so the key is never returned while
-            // operations are still assigned to it.
-            if state.is_signer_releasable() || self.rate_limit_backoff.is_waiting() {
+            if state.is_signer_releasable() {
                 state.transaction_tracker.end_cycle();
             }
 
-            // Wait out any backoff owed to the submission endpoint. Held here,
-            // outside the state machine, so it survives state resets and applies
-            // whichever state the last attempt left behind.
+            // Wait out any backoff owed to the submission endpoint. Held outside the
+            // state machine so it survives state resets.
             self.rate_limit_backoff.wait().await;
 
             // Block until the next trigger or block event arrives.
@@ -3136,7 +3123,7 @@ mod tests {
             })
         ));
         assert_eq!(sender.rate_limit_backoff.consecutive, 1);
-        assert!(sender.rate_limit_backoff.is_waiting());
+        assert!(sender.rate_limit_backoff.retry_after.is_some());
     }
 
     #[test]
@@ -3200,7 +3187,7 @@ mod tests {
         backoff.clear();
 
         assert_eq!(backoff.consecutive, 0);
-        assert!(!backoff.is_waiting());
+        assert!(backoff.retry_after.is_none());
         // Escalation restarts from `initial` rather than resuming mid-ladder.
         let delay = backoff.record(initial, max);
         assert!(delay <= initial.mul_f64(1.2), "delay {delay:?}");
@@ -3217,7 +3204,7 @@ mod tests {
         assert!(start.elapsed() >= delay);
         // The wait is consumed: a builder does not re-serve the same delay on
         // every loop iteration, only after another rate-limited attempt.
-        assert!(!backoff.is_waiting());
+        assert!(backoff.retry_after.is_none());
         let start = Instant::now();
         backoff.wait().await;
         assert!(start.elapsed() < Duration::from_millis(1));

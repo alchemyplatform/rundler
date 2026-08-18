@@ -68,19 +68,10 @@ impl ProviderError {
 
     /// Returns true when the endpoint reported that it is rate limiting us.
     ///
-    /// Every check is alloy's, so the provider-specific codes and wordings live in
-    /// one place: `HttpError::is_rate_limit_err` (HTTP 429),
-    /// `ErrorPayload::is_retry_err` (JSON-RPC responses - `429`, Infura's
-    /// `-32005`, QuickNode's credit limits, and similar), and
-    /// `TransportErrorKind::is_retry_err` for the `Custom` variant, where it is
-    /// exactly a 429 string match, covering transports that stringify the status
-    /// instead of surfacing it.
-    ///
-    /// That last helper is delegated to per variant rather than for the enum as a
-    /// whole because elsewhere it is broader than a rate limit: it also retries
-    /// `MissingBatchResponse` and HTTP 503. 503 in particular is provider-health
-    /// evidence, which callers classify differently from being asked to send fewer
-    /// requests.
+    /// Every check is alloy's, so the provider-specific codes stay in one place.
+    /// Delegated per variant rather than via `TransportErrorKind::is_retry_err`
+    /// for the whole enum, which is broader than a rate limit: it also retries
+    /// `MissingBatchResponse` and HTTP 503, and 503 is provider-health evidence.
     pub fn is_rate_limited(&self) -> bool {
         let ProviderError::RPC(error) = self else {
             return false;
