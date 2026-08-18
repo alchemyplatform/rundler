@@ -68,15 +68,16 @@ impl ProviderError {
 
     /// Returns true when the endpoint reported that it is rate limiting us.
     ///
-    /// Rate limits arrive in several shapes - HTTP 429, a `429`/`-32005`-style
-    /// JSON-RPC error response, or a stringified 429 from a transport that lost
-    /// the status code - so detection is delegated to alloy rather than
-    /// re-listing every provider's wording here.
+    /// Every arm delegates to alloy so the provider-specific codes and wordings
+    /// live in one place: `HttpError::is_rate_limit_err` (HTTP 429),
+    /// `ErrorPayload::is_retry_err` (JSON-RPC responses - `429`, Infura's
+    /// `-32005`, QuickNode's credit limits, and similar), and the `Custom` check
+    /// from `TransportErrorKind::is_retry_err` for transports that stringify the
+    /// status instead of surfacing it.
     ///
-    /// HTTP 503 is deliberately excluded even though alloy groups it with rate
-    /// limits as "retryable": a temporarily unavailable endpoint is evidence
-    /// about the endpoint's health, which callers classify differently from
-    /// being asked to send fewer requests.
+    /// HTTP 503 is excluded: alloy groups it with rate limits as retryable, but a
+    /// temporarily unavailable endpoint is provider-health evidence, which callers
+    /// classify differently from being asked to send fewer requests.
     pub fn is_rate_limited(&self) -> bool {
         let ProviderError::RPC(error) = self else {
             return false;

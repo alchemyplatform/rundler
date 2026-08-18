@@ -97,11 +97,8 @@ pub(crate) enum TxSenderError {
     },
     /// The submission endpoint is rate limiting us.
     ///
-    /// The transaction was never judged, so this says nothing about the bundle's
-    /// contents - only that we are asking for more capacity than the endpoint
-    /// will give us. Handled by backing the builder off the endpoint rather than
-    /// by retrying at the normal trigger cadence. When a fallback sender is
-    /// configured this triggers failover.
+    /// The transaction was never judged, so this says nothing about the bundle.
+    /// Handled by backing the builder off the endpoint.
     #[error("submission endpoint rate limited: {0}")]
     RateLimited(anyhow::Error),
     /// Sender is unavailable due to an outage or transport error.
@@ -158,13 +155,8 @@ impl TxSenderError {
             TxSenderError::SenderUnavailable(_) | TxSenderError::UnrecognizedRpc { .. } => {
                 RpcOutcomeClass::NonTerminal
             }
-            // A rate limit is a statement about our request volume, not about
-            // the bundle: the endpoint never judged the transaction. Counting it
-            // as provider-health evidence would also make suspects of every op
-            // in the bundle, so a rate-limited endpoint would push the whole
-            // pool into isolation - one submission per bundle - while we are
-            // already being told to send fewer requests. Backing off the
-            // endpoint is the dedicated handling instead.
+            // A rate limit is evidence about our request volume, not about the
+            // bundle: the endpoint never judged the transaction.
             TxSenderError::RateLimited(_)
             | TxSenderError::Underpriced
             | TxSenderError::ReplacementUnderpriced
@@ -433,10 +425,6 @@ fn create_hard_cancel_tx(to: Address, nonce: u64, gas_fees: GasFees) -> Transact
 
 impl From<ProviderError> for TxSenderError {
     fn from(value: ProviderError) -> Self {
-        // Checked before the error-response paths below: providers signal a rate
-        // limit both as HTTP 429 and as a JSON-RPC error response, and the latter
-        // would otherwise land in `UnrecognizedRpc` and be treated as an ambiguous
-        // judgement of the transaction.
         if value.is_rate_limited() {
             return TxSenderError::RateLimited(anyhow::anyhow!("{value}"));
         }

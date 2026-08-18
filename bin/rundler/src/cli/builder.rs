@@ -231,13 +231,12 @@ pub struct BuilderArgs {
 
     /// Initial delay a builder waits before its next submission after the
     /// submission endpoint rate limited it, doubling with each consecutive
-    /// rate-limited attempt and applied on top of the normal bundle trigger
-    /// interval. Any attempt that is not rate limited resets it.
+    /// rate-limited attempt. Any attempt that is not rate limited resets it.
     #[arg(
         long = "builder.rate_limit_backoff_initial_millis",
         name = "builder.rate_limit_backoff_initial_millis",
         env = "BUILDER_RATE_LIMIT_BACKOFF_INITIAL_MILLIS",
-        default_value = "1000"
+        default_value = "100"
     )]
     rate_limit_backoff_initial_millis: u64,
 
@@ -247,7 +246,7 @@ pub struct BuilderArgs {
         long = "builder.rate_limit_backoff_max_millis",
         name = "builder.rate_limit_backoff_max_millis",
         env = "BUILDER_RATE_LIMIT_BACKOFF_MAX_MILLIS",
-        default_value = "30000"
+        default_value = "2000"
     )]
     rate_limit_backoff_max_millis: u64,
 }

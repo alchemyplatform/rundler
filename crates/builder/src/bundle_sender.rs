@@ -167,12 +167,8 @@ impl SendBundleAttemptResult {
 
 /// Per-builder backoff against a submission endpoint that is rate limiting us.
 ///
-/// A rate limit is the endpoint asking for fewer requests. Retrying at the normal
-/// trigger cadence answers that by asking for exactly as many, which is enough to
-/// keep a whole fleet of builders pinned against the limit for as long as they
-/// have work: nothing lands, so nothing leaves the pool, so every builder has
-/// work on every trigger. Consecutive rate-limited attempts double the wait;
-/// any attempt that is not rate limited clears it.
+/// Consecutive rate-limited attempts double the wait; any attempt that is not
+/// rate limited clears it.
 #[derive(Debug, Default)]
 struct RateLimitBackoff {
     /// Consecutive rate-limited submission attempts, which sets the delay.
@@ -200,6 +196,11 @@ impl RateLimitBackoff {
     /// Clears the backoff after an attempt that was not rate limited.
     fn clear(&mut self) {
         *self = Self::default();
+    }
+
+    /// True while a wait is outstanding.
+    fn is_waiting(&self) -> bool {
+        self.retry_after.is_some()
     }
 
     /// Waits out an outstanding backoff, if any. Called with the signer released
@@ -240,15 +241,16 @@ where
             // and waiting for the next block trigger. The signing key is not needed
             // during the wait, so it is returned to the pool where it can be borrowed
             // for other work such as sponsored undelegation.
-            if state.is_signer_releasable() {
+            // A rate-limited builder waits out its backoff instead of the trigger,
+            // so an outstanding backoff is idle time too. `end_cycle` is a no-op
+            // while transactions are pending.
+            if state.is_signer_releasable() || self.rate_limit_backoff.is_waiting() {
                 state.transaction_tracker.end_cycle();
             }
 
             // Wait out any backoff owed to the submission endpoint. Held here,
-            // outside the state machine, so it applies on top of the trigger
-            // cadence no matter which state the last attempt left behind -
-            // including the states that skip the trigger wait entirely - and so
-            // the signer stays released for the duration.
+            // outside the state machine, so it survives state resets and applies
+            // whichever state the last attempt left behind.
             self.rate_limit_backoff.wait().await;
 
             // Block until the next trigger or block event arrives.
@@ -559,15 +561,13 @@ where
                     self.settings.rate_limit_backoff_initial,
                     self.settings.rate_limit_backoff_max,
                 );
-                // Warn rather than error: a rate limit is the endpoint pacing us,
-                // not a fault in the bundle, and at fleet scale erroring on every
-                // attempt buries the logs that matter.
                 warn!(
                     "Submission endpoint rate limited, backing off {}ms before the next attempt",
                     delay.as_millis()
                 );
                 self.increment_counter("builder_bundle_txns_rate_limited", &pinned, 1);
-                state.update(InnerState::Building(inner.retry_on_next_trigger()));
+                // The backoff is the wait, so don't also wait for the next trigger.
+                state.update(InnerState::Building(inner.retry()));
             }
             Ok(SendBundleAttemptResult::InsufficientFunds) => {
                 // Release all locks — cycle ending
@@ -1179,12 +1179,6 @@ where
                         warn!("Bundle attempt condition not met");
                         Ok(SendBundleAttemptResult::ConditionNotMet)
                     }
-                    // Not an error result: erroring here would reset the
-                    // transaction tracker and log twice per attempt per builder,
-                    // when the bundle is fine and the only thing to do is send
-                    // less often. The caller warns once, with the backoff it
-                    // picked; the endpoint's own wording is only needed when
-                    // diagnosing which limit was hit.
                     TxSenderError::RateLimited(error) => {
                         debug!("Bundle attempt rate limited by submission endpoint: {error}");
                         Ok(SendBundleAttemptResult::RateLimited)
@@ -1559,15 +1553,6 @@ impl BuildingState {
     // Retry the build
     fn retry(mut self) -> Self {
         self.wait_for_trigger = false;
-        self
-    }
-
-    // Retry the build on the next trigger, leaving fee state untouched.
-    //
-    // Unlike `retry`, the next attempt waits: this is for retries that must not
-    // re-submit immediately, such as backing off a rate-limited endpoint.
-    fn retry_on_next_trigger(mut self) -> Self {
-        self.wait_for_trigger = true;
         self
     }
 
@@ -3137,37 +3122,39 @@ mod tests {
         assert_eq!(sender.provider_event_signal.observations(), 0);
         assert!(!sender.provider_event_signal.is_active());
 
-        // The next attempt waits for a trigger and owes a backoff on top of it.
+        // The backoff is the only thing the next attempt waits on: fee state is
+        // untouched and the trigger wait is not re-armed.
         assert!(matches!(
             state.inner,
             InnerState::Building(BuildingState {
-                wait_for_trigger: true,
+                wait_for_trigger: false,
                 fee_increase_count: 0,
                 underpriced_info: None,
             })
         ));
         assert_eq!(sender.rate_limit_backoff.consecutive, 1);
-        assert!(sender.rate_limit_backoff.retry_after.is_some());
+        assert!(sender.rate_limit_backoff.is_waiting());
     }
 
     #[test]
     fn test_rate_limit_backoff_escalates_and_caps() {
-        let initial = Duration::from_secs(1);
-        let max = Duration::from_secs(30);
+        // The shipped defaults.
+        let initial = Duration::from_millis(100);
+        let max = Duration::from_millis(2000);
         let mut backoff = RateLimitBackoff::default();
 
         // Doubling from `initial`, with +/-20% jitter so that builders sharing a
         // route do not retry in lockstep.
-        for expected_base in [1, 2, 4, 8, 16] {
+        for expected_base in [100, 200, 400, 800, 1600] {
             let delay = backoff.record(initial, max);
-            let base = Duration::from_secs(expected_base);
+            let base = Duration::from_millis(expected_base);
             assert!(
                 delay >= base.mul_f64(0.8) && delay <= base.mul_f64(1.2),
                 "delay {delay:?} outside jitter range of {base:?}"
             );
         }
 
-        // 32s would exceed the cap, and jitter must not push it back over.
+        // 3200ms would exceed the cap, and jitter must not push it back over.
         for _ in 0..4 {
             let delay = backoff.record(initial, max);
             assert!(delay >= max.mul_f64(0.8) && delay <= max, "delay {delay:?}");
@@ -3199,8 +3186,8 @@ mod tests {
 
     #[test]
     fn test_rate_limit_backoff_cleared_after_accepted_attempt() {
-        let initial = Duration::from_secs(1);
-        let max = Duration::from_secs(30);
+        let initial = Duration::from_millis(100);
+        let max = Duration::from_millis(2000);
         let mut backoff = RateLimitBackoff::default();
 
         backoff.record(initial, max);
@@ -3210,7 +3197,7 @@ mod tests {
         backoff.clear();
 
         assert_eq!(backoff.consecutive, 0);
-        assert!(backoff.retry_after.is_none());
+        assert!(!backoff.is_waiting());
         // Escalation restarts from `initial` rather than resuming mid-ladder.
         let delay = backoff.record(initial, max);
         assert!(delay <= initial.mul_f64(1.2), "delay {delay:?}");
@@ -3227,7 +3214,7 @@ mod tests {
         assert!(start.elapsed() >= delay);
         // The wait is consumed: a builder does not re-serve the same delay on
         // every loop iteration, only after another rate-limited attempt.
-        assert!(backoff.retry_after.is_none());
+        assert!(!backoff.is_waiting());
         let start = Instant::now();
         backoff.wait().await;
         assert!(start.elapsed() < Duration::from_millis(1));

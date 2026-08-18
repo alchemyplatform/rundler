@@ -113,9 +113,9 @@ contents — the transaction is never judged. Counting one as evidence would mak
 suspects of every operation in the bundle, so a rate-limited endpoint would push the
 whole pool into isolation, one operation per bundle, while it is asking us to send
 fewer requests. The dedicated handling is
-`--builder.rate_limit_backoff_initial_millis`: the builder backs off the endpoint with
-an escalating, jittered delay on top of the chain's bundle send interval, and resets on
-the first attempt that is not rate limited.
+`--builder.rate_limit_backoff_initial_millis`: the builder waits out an escalating,
+jittered delay before its next submission instead of waiting for the next bundle
+trigger, and resets on the first attempt that is not rate limited.
 
 Initial parameters:
 
