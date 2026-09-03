@@ -30,6 +30,8 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
 
 - `--node_http`: EVM Node HTTP URL to use. (**REQUIRED**)
   - env: _NODE_HTTP_
+- `--node_http_fallback`: Ordered fallback EVM Node HTTP URL. May be repeated. Fallbacks must serve the same chain and required RPC capabilities as the primary. They are used only after transport, timeout, or exhausted rate-limit retry failures; JSON-RPC error responses are returned without failover. (default: none)
+  - env: _NODE_HTTP_FALLBACKS_ (comma-separated)
 - `--max_verification_gas`: Maximum verification gas. (default: `5000000`).
   - env: _MAX_VERIFICATION_GAS_
 - `--max_uo_cost`: Maximum cost of a UO that the mempool will accept. Optional, defaults to MAX (default: `None`).
@@ -107,6 +109,8 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - Options: see [aggregator.rs](../bin/rundler/src/cli/aggregator.rs)
 - `--provider_client_timeout_seconds`: Timeout in seconds of external provider RPC requests (default: `10`)
   - env: _PROVIDER_CLIENT_TIMEOUT_SECONDS_
+- `--provider_fallback_recovery_interval_seconds`: Seconds to remain on a fallback endpoint before probing the primary again (default: `30`)
+  - env: _PROVIDER_FALLBACK_RECOVERY_INTERVAL_SECONDS_
 - `--provider_rate_limit_retry_enabled`: Enable retries on rate limit errors - with default backoff settings (default: `false`)
   - env: _PROVIDER_RATE_LIMIT_RETRY_ENABLED_
 - `--provider_consistency_retry_enabled`: Enable retries on block consistency errors - with default backoff settings (default: `false`)
@@ -247,6 +251,8 @@ List of command line options for configuring the Builder.
   - env: _BUILDER_SENDER_
 - `--builder.submit_url`: Only used if builder.sender == "raw" or "polygonprivate." If present, the URL of the ETH provider that will be used to send transactions. Defaults to the value of `node_http`. Not used by the fallback sender, which always submits to `node_http`.
   - env: _BUILDER_SUBMIT_URL_
+- `--builder.submit_fallback_url`: Ordered fallback transaction-submission URL used when builder.sender == "raw." May be repeated. (default: none)
+  - env: _BUILDER_SUBMIT_FALLBACK_URLS_ (comma-separated)
 - `--builder.use_conditional_rpc`: Only used if builder.sender == "raw." Use `eth_sendRawTransactionConditional` when submitting. (default: `false`)
   - env: _BUILDER_USE_CONDITIONAL_RPC_
 - `--builder.flashbots_relay_builders`: Only used if builder.sender == "flashbots." Additional builders to send bundles to through the Flashbots relay RPC (comma-separated). List of builders that the Flashbots RPC supports can be found [here](https://docs.flashbots.net/flashbots-auction/advanced/rpc-endpoint#eth_sendprivatetransaction). (default: `flashbots`)

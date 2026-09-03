@@ -5617,6 +5617,7 @@ dependencies = [
  "alloy-serde",
  "alloy-sol-types",
  "alloy-transport",
+ "alloy-transport-http",
  "anyhow",
  "async-trait",
  "auto_impl",

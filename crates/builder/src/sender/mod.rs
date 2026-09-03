@@ -291,6 +291,8 @@ pub enum TransactionSenderArgs {
 pub struct RawSenderArgs {
     /// Submit URL
     pub submit_url: String,
+    /// Ordered fallback submit URLs
+    pub submit_fallback_urls: Vec<String>,
     /// If the sender should use the conditional endpoint
     pub use_conditional_rpc: bool,
     /// Chain spec, used to classify terminal RPC errors
@@ -345,11 +347,17 @@ impl TransactionSenderArgs {
         let provider = rundler_provider::new_alloy_evm_provider(config)?;
         let sender = match self {
             Self::Raw(args) => {
+                let rpc_fallback_urls = args
+                    .submit_fallback_urls
+                    .iter()
+                    .map(|url| url.parse().context("invalid builder submit fallback URL"))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
                 let config = AlloyNetworkConfig {
                     rpc_url: args
                         .submit_url
                         .parse()
                         .context("invalid builder submit URL")?,
+                    rpc_fallback_urls,
                     ..config.clone()
                 };
                 let submitter = rundler_provider::new_alloy_evm_provider(&config)?;

@@ -83,6 +83,17 @@ impl ProviderError {
             _ => false,
         }
     }
+
+    /// Returns true when the provider reports that an identical transaction is already present.
+    pub fn is_already_known(&self) -> bool {
+        let ProviderError::RPC(RpcError::ErrorResp(response)) = self else {
+            return false;
+        };
+        response
+            .message
+            .to_ascii_lowercase()
+            .contains("already known")
+    }
 }
 
 /// Result of a provider method call

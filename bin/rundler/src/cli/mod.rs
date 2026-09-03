@@ -243,6 +243,16 @@ pub struct CommonArgs {
     )]
     node_http: Option<String>,
 
+    /// Ordered fallback ETH node HTTP URLs
+    #[arg(
+        long = "node_http_fallback",
+        name = "node_http_fallback",
+        env = "NODE_HTTP_FALLBACKS",
+        value_delimiter = ',',
+        global = true
+    )]
+    node_http_fallbacks: Vec<String>,
+
     /// Flag for turning unsafe bundling mode on
     #[arg(long = "unsafe", env = "UNSAFE", global = true)]
     unsafe_mode: bool,
@@ -516,6 +526,15 @@ pub struct CommonArgs {
     pub provider_client_timeout_seconds: u64,
 
     #[arg(
+        long = "provider_fallback_recovery_interval_seconds",
+        name = "provider_fallback_recovery_interval_seconds",
+        env = "PROVIDER_FALLBACK_RECOVERY_INTERVAL_SECONDS",
+        default_value = "30",
+        global = true
+    )]
+    pub provider_fallback_recovery_interval_seconds: u64,
+
+    #[arg(
         long = "provider_rate_limit_retry_enabled",
         name = "provider_rate_limit_retry_enabled",
         env = "PROVIDER_RATE_LIMIT_RETRY_ENABLED",
@@ -700,8 +719,15 @@ impl TryFrom<&CommonArgs> for AlloyNetworkConfig {
     type Error = anyhow::Error;
 
     fn try_from(value: &CommonArgs) -> Result<Self, Self::Error> {
+        let rpc_fallback_urls = value
+            .node_http_fallbacks
+            .iter()
+            .map(|url| Url::parse(url).context("invalid node HTTP fallback URL"))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             rpc_url: Url::parse(value.node_http.as_ref().context("must provide node_http")?)?,
+            rpc_fallback_urls,
+            fallback_recovery_interval_seconds: value.provider_fallback_recovery_interval_seconds,
             client_timeout_seconds: value.provider_client_timeout_seconds,
             rate_limit_retry_enabled: value.provider_rate_limit_retry_enabled,
             consistency_retry_enabled: value.provider_consistency_retry_enabled,
@@ -831,6 +857,57 @@ pub struct Cli {
 
     #[clap(flatten)]
     logs: LogsArgs,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn common_args_preserve_ordered_node_fallback_urls() {
+        let cli = Cli::parse_from([
+            "rundler",
+            "node",
+            "--node_http",
+            "https://primary.example",
+            "--node_http_fallback",
+            "https://secondary.example",
+            "--node_http_fallback",
+            "https://tertiary.example",
+        ]);
+
+        let config = AlloyNetworkConfig::try_from(&cli.common).unwrap();
+
+        assert_eq!(config.rpc_url.as_str(), "https://primary.example/");
+        assert_eq!(
+            config
+                .rpc_fallback_urls
+                .iter()
+                .map(Url::as_str)
+                .collect::<Vec<_>>(),
+            vec!["https://secondary.example/", "https://tertiary.example/"]
+        );
+    }
+
+    #[test]
+    fn common_args_accept_comma_separated_node_fallback_urls() {
+        let cli = Cli::parse_from([
+            "rundler",
+            "node",
+            "--node_http",
+            "https://primary.example",
+            "--node_http_fallback",
+            "https://secondary.example,https://tertiary.example",
+        ]);
+
+        let config = AlloyNetworkConfig::try_from(&cli.common).unwrap();
+
+        assert_eq!(config.rpc_fallback_urls.len(), 2);
+        assert_eq!(
+            config.rpc_fallback_urls[1].as_str(),
+            "https://tertiary.example/"
+        );
+    }
 }
 
 #[derive(Clone)]
