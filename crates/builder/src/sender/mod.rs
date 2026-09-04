@@ -560,7 +560,7 @@ mod tests {
 
         let wrapped_rpc_429 = TxSenderError::from(super::rpc_error_response(
             -32000,
-            "sequencer returned 429 Too Many Requests",
+            "upstream returned HTTP 429: Too Many Requests",
         ));
         assert!(matches!(wrapped_rpc_429, TxSenderError::RateLimited(_)));
 
