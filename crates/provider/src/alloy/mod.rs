@@ -92,7 +92,6 @@ pub fn new_alloy_evm_provider(
 pub fn new_alloy_provider(
     config: &AlloyNetworkConfig,
 ) -> anyhow::Result<impl AlloyProvider<AnyNetwork> + Clone + use<>> {
-    let is_local = Http::new(config.rpc_url.clone()).guess_local();
     let mut rpc_urls = Vec::with_capacity(1 + config.rpc_fallback_urls.len());
     rpc_urls.push(config.rpc_url.clone());
     rpc_urls.extend(config.rpc_fallback_urls.iter().cloned());
@@ -108,7 +107,7 @@ pub fn new_alloy_provider(
         .with_sequential_method("eth_sendRawTransaction")
         .with_sequential_method("eth_sendRawTransactionConditional")
         .layer(transports);
-    let client = ClientBuilder::default().transport(transport, is_local);
+    let client = ClientBuilder::default().transport(transport, false);
 
     Ok(ProviderBuilder::new()
         .network::<AnyNetwork>()
