@@ -11,11 +11,13 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::time::Duration;
+use std::{num::NonZeroUsize, time::Duration};
 
 use alloy_provider::{Provider as AlloyProvider, ProviderBuilder, network::AnyNetwork};
 use alloy_rpc_client::ClientBuilder;
-use alloy_transport::{BoxTransport, IntoBoxTransport, TransportError, TransportErrorKind};
+use alloy_transport::{
+    BoxTransport, IntoBoxTransport, TransportError, TransportErrorKind, layers::FallbackLayer,
+};
 use alloy_transport_http::Http;
 use evm::AlloyEvmProvider;
 use metrics::AlloyMetricLayer;
@@ -30,9 +32,6 @@ mod consistency_retry;
 pub(crate) mod entry_point;
 pub(crate) mod evm;
 pub(crate) mod metrics;
-mod priority_fallback;
-
-use priority_fallback::PriorityFallbackLayer;
 
 const CLIENT_TIMEOUT_ERROR: &str = "provider request timeout from client side";
 
@@ -41,10 +40,8 @@ const CLIENT_TIMEOUT_ERROR: &str = "provider request timeout from client side";
 pub struct AlloyNetworkConfig {
     /// RPC URL
     pub rpc_url: Url,
-    /// Ordered fallback RPC URLs
+    /// Additional RPC URLs used by Alloy's fallback transport
     pub rpc_fallback_urls: Vec<Url>,
-    /// How long to keep using a fallback before probing the primary again
-    pub fallback_recovery_interval_seconds: u64,
     /// Client timeout in seconds
     pub client_timeout_seconds: u64,
     /// Whether to enable consistency retry
@@ -70,7 +67,6 @@ impl Default for AlloyNetworkConfig {
         Self {
             rpc_url: Url::parse("http://localhost:9009").unwrap(),
             rpc_fallback_urls: Vec::new(),
-            fallback_recovery_interval_seconds: 30,
             client_timeout_seconds: 15,
             consistency_retry_enabled: false,
             consistency_retry_max_retries: 5,
@@ -105,10 +101,13 @@ pub fn new_alloy_provider(
         .into_iter()
         .map(|rpc_url| new_http_transport(config, rpc_url))
         .collect::<Vec<_>>();
-    let transport = PriorityFallbackLayer::new(Duration::from_secs(
-        config.fallback_recovery_interval_seconds,
-    ))
-    .layer(transports);
+    let active_transport_count =
+        NonZeroUsize::new(transports.len()).expect("primary RPC transport is always present");
+    let transport = FallbackLayer::default()
+        .with_active_transport_count(active_transport_count)
+        .with_sequential_method("eth_sendRawTransaction")
+        .with_sequential_method("eth_sendRawTransactionConditional")
+        .layer(transports);
     let client = ClientBuilder::default().transport(transport, is_local);
 
     Ok(ProviderBuilder::new()

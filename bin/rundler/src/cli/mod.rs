@@ -243,7 +243,7 @@ pub struct CommonArgs {
     )]
     node_http: Option<String>,
 
-    /// Ordered fallback ETH node HTTP URLs
+    /// Additional ETH node HTTP URLs used by Alloy's fallback transport
     #[arg(
         long = "node_http_fallback",
         name = "node_http_fallback",
@@ -526,15 +526,6 @@ pub struct CommonArgs {
     pub provider_client_timeout_seconds: u64,
 
     #[arg(
-        long = "provider_fallback_recovery_interval_seconds",
-        name = "provider_fallback_recovery_interval_seconds",
-        env = "PROVIDER_FALLBACK_RECOVERY_INTERVAL_SECONDS",
-        default_value = "30",
-        global = true
-    )]
-    pub provider_fallback_recovery_interval_seconds: u64,
-
-    #[arg(
         long = "provider_rate_limit_retry_enabled",
         name = "provider_rate_limit_retry_enabled",
         env = "PROVIDER_RATE_LIMIT_RETRY_ENABLED",
@@ -727,7 +718,6 @@ impl TryFrom<&CommonArgs> for AlloyNetworkConfig {
         Ok(Self {
             rpc_url: Url::parse(value.node_http.as_ref().context("must provide node_http")?)?,
             rpc_fallback_urls,
-            fallback_recovery_interval_seconds: value.provider_fallback_recovery_interval_seconds,
             client_timeout_seconds: value.provider_client_timeout_seconds,
             rate_limit_retry_enabled: value.provider_rate_limit_retry_enabled,
             consistency_retry_enabled: value.provider_consistency_retry_enabled,
@@ -864,7 +854,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn common_args_preserve_ordered_node_fallback_urls() {
+    fn common_args_accept_repeated_node_fallback_urls() {
         let cli = Cli::parse_from([
             "rundler",
             "node",

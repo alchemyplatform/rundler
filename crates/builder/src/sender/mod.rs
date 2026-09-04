@@ -291,7 +291,7 @@ pub enum TransactionSenderArgs {
 pub struct RawSenderArgs {
     /// Submit URL
     pub submit_url: String,
-    /// Ordered fallback submit URLs
+    /// Additional fallback submit URLs
     pub submit_fallback_urls: Vec<String>,
     /// If the sender should use the conditional endpoint
     pub use_conditional_rpc: bool,

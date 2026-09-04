@@ -105,7 +105,7 @@ pub struct BuilderArgs {
     )]
     pub submit_url: Option<String>,
 
-    /// Ordered fallback URLs used by the raw sender after the primary submit URL fails.
+    /// Additional fallback URLs used by the raw sender.
     #[arg(
         long = "builder.submit_fallback_url",
         name = "builder.submit_fallback_url",
@@ -685,7 +685,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_sender_preserves_ordered_submit_fallback_urls() {
+    fn raw_sender_accepts_repeated_submit_fallback_urls() {
         let args = builder_args(&[
             "--builder.submit_fallback_url",
             SUBMIT_FALLBACK_URL,
