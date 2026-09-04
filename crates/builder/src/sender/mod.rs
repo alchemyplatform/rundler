@@ -560,7 +560,7 @@ mod tests {
 
         let wrapped_rpc_429 = TxSenderError::from(super::rpc_error_response(
             -32000,
-            r#"429 Too Many Requests: {"jsonrpc":"2.0","error":{"code":429,"message":"Too Many Requests"}}"#,
+            "sequencer returned 429 Too Many Requests",
         ));
         assert!(matches!(wrapped_rpc_429, TxSenderError::RateLimited(_)));
 

@@ -69,11 +69,11 @@ impl ProviderError {
     /// Returns true when the endpoint reported that it is rate limiting us.
     ///
     /// Alloy handles standard transport and JSON-RPC rate-limit responses. The
-    /// additional message check covers providers that wrap a sequencer 429 in
-    /// a generic JSON-RPC -32000 response. Checks are delegated per variant
-    /// rather than via `TransportErrorKind::is_retry_err` for the whole enum,
-    /// which is broader than a rate limit: it also retries `MissingBatchResponse`
-    /// and HTTP 503, and 503 is provider-health evidence.
+    /// additional message check handles mixed-case variants of a retry message
+    /// that Alloy currently matches case-sensitively. Checks are delegated per
+    /// variant rather than via `TransportErrorKind::is_retry_err` for the whole
+    /// enum, which is broader than a rate limit: it also retries
+    /// `MissingBatchResponse` and HTTP 503, and 503 is provider-health evidence.
     pub fn is_rate_limited(&self) -> bool {
         let ProviderError::RPC(error) = self else {
             return false;
@@ -83,13 +83,10 @@ impl ProviderError {
             RpcError::Transport(kind @ TransportErrorKind::Custom(_)) => kind.is_retry_err(),
             RpcError::ErrorResp(resp) => {
                 resp.is_retry_err()
-                    // Robinhood's Nitro submission path wraps the sequencer's
-                    // JSON-RPC 429 response in a generic -32000 error.
-                    || (resp.code == -32000
-                        && resp
-                            .message
-                            .to_ascii_lowercase()
-                            .contains("429 too many requests"))
+                    || resp
+                        .message
+                        .to_ascii_lowercase()
+                        .contains("too many requests")
             }
             _ => false,
         }
