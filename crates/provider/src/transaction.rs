@@ -68,6 +68,10 @@ pub fn classify_submission_error(message: &str, code: i64) -> Option<Transaction
     if lowercase_message.contains("invalid nonce; got") {
         return Some(TransactionSubmissionError::NonceTooLow);
     }
+    // Arbitrum Nitro sequencer.
+    if lowercase_message.contains("max fee per gas less than block base fee") {
+        return Some(TransactionSubmissionError::Underpriced);
+    }
     // Geth.
     if lowercase_message.contains("transaction underpriced") {
         return Some(TransactionSubmissionError::Underpriced);
@@ -139,6 +143,11 @@ mod tests {
             ),
             (
                 "transaction underpriced",
+                -32000,
+                TransactionSubmissionError::Underpriced,
+            ),
+            (
+                "max fee per gas less than block base fee: address 0x1234, maxFeePerGas: 480288600 baseFee: 481060000",
                 -32000,
                 TransactionSubmissionError::Underpriced,
             ),
