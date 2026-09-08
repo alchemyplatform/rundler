@@ -566,6 +566,12 @@ mod tests {
         let rpc_429 = TxSenderError::from(super::rpc_error_response(429, "rate limit exceeded"));
         assert!(matches!(rpc_429, TxSenderError::RateLimited(_)));
 
+        let wrapped_rpc_429 = TxSenderError::from(super::rpc_error_response(
+            -32000,
+            "upstream returned HTTP 429: Too Many Requests",
+        ));
+        assert!(matches!(wrapped_rpc_429, TxSenderError::RateLimited(_)));
+
         let rpc_limit_exceeded =
             TxSenderError::from(super::rpc_error_response(-32005, "limit exceeded"));
         assert!(matches!(rpc_limit_exceeded, TxSenderError::RateLimited(_)));
