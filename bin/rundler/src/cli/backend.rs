@@ -16,7 +16,7 @@
 //! This is useful for running a single-chain backend that the gateway can connect to.
 
 use clap::Args;
-use rundler_builder::{BuilderEvent, BuilderEventKind, BuilderTask, LocalBuilderBuilder};
+use rundler_builder::{BuilderEvent, BuilderTask, LocalBuilderBuilder};
 use rundler_pool::{LocalPoolBuilder, PoolEvent, PoolTask};
 use rundler_provider::Providers;
 use rundler_sim::MempoolConfigs;
@@ -25,7 +25,11 @@ use rundler_types::chain::ChainSpec;
 use rundler_utils::emit::{self, EVENT_CHANNEL_CAPACITY, WithEntryPoint};
 use tokio::sync::broadcast;
 
-use super::{CommonArgs, EntryPointBuilderConfigs, builder::BuilderArgs, pool::PoolArgs};
+use super::{
+    CommonArgs, EntryPointBuilderConfigs,
+    builder::{BuilderArgs, is_nonspammy_event},
+    pool::PoolArgs,
+};
 
 const REQUEST_CHANNEL_CAPACITY: usize = 1024;
 const BLOCK_CHANNEL_CAPACITY: usize = 1024;
@@ -164,18 +168,4 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     tracing::info!("Backend started with pool and builder gRPC endpoints exposed");
 
     Ok(())
-}
-
-fn is_nonspammy_event(event: &WithEntryPoint<BuilderEvent>) -> bool {
-    if let BuilderEventKind::FormedBundle {
-        tx_details,
-        fee_increase_count,
-        ..
-    } = &event.event.kind
-        && tx_details.is_none()
-        && *fee_increase_count == 0
-    {
-        return false;
-    }
-    true
 }

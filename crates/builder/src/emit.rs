@@ -154,21 +154,35 @@ pub struct BundleTxDetails {
 #[derive(Clone, Debug)]
 pub enum SkipReason {
     /// Operation accessed another sender account included earlier in the bundle
-    AccessedOtherSender { other_sender: Address },
+    AccessedOtherSender {
+        /// The other sender whose account was accessed
+        other_sender: Address,
+    },
     /// Operation did not bid high enough gas fees for inclusion in the bundle
     InsufficientFees {
+        /// Fees required for inclusion in the bundle
         required_fees: GasFees,
+        /// Fees the operation bid
         actual_fees: GasFees,
     },
     /// Insufficient pre-verification gas for the operation at the given base fee
     InsufficientPreVerificationGas {
+        /// Base fee used for the pre-verification gas calculation
         base_fee: u128,
+        /// Fees the operation bid
         op_fees: GasFees,
+        /// Pre-verification gas required at this base fee
         required_pvg: u128,
+        /// Pre-verification gas the operation provided
         actual_pvg: u128,
     },
     /// Cost of this operation is greater than the max cost of the bundler sponsorship
-    OverSponsorshipMaxCost { max_cost: U256, actual_cost: U256 },
+    OverSponsorshipMaxCost {
+        /// Maximum cost the bundler sponsorship covers
+        max_cost: U256,
+        /// Cost of the operation at the current gas price
+        actual_cost: U256,
+    },
     /// Bundle ran out of space by simulation gas limit to include the operation
     SimulationGasLimit,
     /// Bundle ran out of space by target gas limit to include the operation
@@ -186,7 +200,10 @@ pub enum SkipReason {
     /// UO uses an unsupported aggregator
     UnsupportedAggregator(Address),
     /// Other reason, typically internal errors
-    Other { reason: Arc<String> },
+    Other {
+        /// Description of the reason
+        reason: Arc<String>,
+    },
 }
 
 /// Reason for rejecting an operation from a bundle
