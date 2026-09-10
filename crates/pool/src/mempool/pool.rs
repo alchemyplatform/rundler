@@ -319,7 +319,6 @@ where
                         let was_suspect = op.is_suspect(suspect_threshold);
                         op.reset_failures();
                         if was_suspect {
-                            self.metrics.num_suspect_ops.decrement(1.0);
                             self.metrics.num_suspects_cleared.increment(1);
                             self.emit(PoolEvent::SuspectCleared { op_hash: *hash });
                         }
@@ -353,7 +352,6 @@ where
                         self.config.suspect_rpc_backoff_max,
                     );
                     if !was_suspect && failures >= suspect_threshold {
-                        self.metrics.num_suspect_ops.increment(1.0);
                         self.metrics.num_marked_suspect_threshold.increment(1);
                         self.emit(PoolEvent::MarkedSuspect {
                             op_hash: *hash,
@@ -396,8 +394,8 @@ where
         to_remove
     }
 
-    /// Marks an operation suspect and records the transition (suspect gauge,
-    /// multi-op-failure counter, `MarkedSuspect` event) unless it was already
+    /// Marks an operation suspect and records the transition (multi-op-failure
+    /// counter, `MarkedSuspect` event) unless it was already
     /// a suspect, per the ambiguous multi-UO failure paths in the failure
     /// flow table.
     fn mark_suspect_and_record(
@@ -409,7 +407,6 @@ where
         let was_suspect = op.is_suspect(suspect_threshold);
         op.mark_suspect(suspect_threshold);
         if !was_suspect {
-            self.metrics.num_suspect_ops.increment(1.0);
             self.metrics
                 .num_marked_suspect_multi_op_failure
                 .increment(1);
@@ -473,10 +470,10 @@ where
     /// NOTE: This method is O(n) where n is the number of operations in the pool.
     /// It should be called sparingly (e.g. when a block is mined).
     /// Per-block maintenance: expires ops, refreshes eligibility and ordering,
-    /// and recomputes the `num_candidates` gauge.
+    /// and recomputes the `num_candidates` and `num_suspect_ops` gauges.
     ///
-    /// Returns the number of candidate ops, i.e. ops the assigner would
-    /// currently hand to a builder given `uo_fees`.
+    /// Both gauges are recomputed from scratch on every pass rather than
+    /// tracked as deltas, so they cannot drift from the pool's actual state.
     pub(crate) fn do_maintenance(
         &mut self,
         block_number: u64,
@@ -484,10 +481,12 @@ where
         block_da_data: Option<&DAGasBlockData>,
         uo_fees: GasFees,
         base_fee: u128,
-    ) -> usize {
+    ) -> MaintenanceCounts {
         let mut expired = Vec::new();
-        let mut num_candidates = 0;
+        let mut counts = MaintenanceCounts::default();
         let mut events = vec![];
+        let suspect_tracking_enabled = self.config.suspect_tracking_enabled;
+        let suspect_threshold = self.config.rpc_failures_before_suspect;
 
         // clear best operations to update price and resort
         self.best.clear();
@@ -540,6 +539,14 @@ where
                 });
                 expired.push(*hash);
                 continue;
+            }
+
+            // Count suspects here, after expiry but before the eligibility
+            // check below: an ineligible suspect is still a suspect in the
+            // pool. With tracking disabled no op is ever a suspect, whatever
+            // its failure count says.
+            if suspect_tracking_enabled && op.is_suspect(suspect_threshold) {
+                counts.suspects += 1;
             }
 
             // check for eligibility
@@ -619,7 +626,7 @@ where
                 continue;
             }
 
-            num_candidates += 1;
+            counts.candidates += 1;
         }
 
         for hash in expired {
@@ -629,11 +636,12 @@ where
             self.emit(event);
         }
 
-        self.metrics.num_candidates.set(num_candidates as f64);
+        self.metrics.num_candidates.set(counts.candidates as f64);
+        self.metrics.num_suspect_ops.set(counts.suspects as f64);
         self.prev_block_number = block_number;
         self.update_metrics();
 
-        num_candidates
+        counts
     }
 
     pub(crate) fn address_count(&self, address: &Address) -> usize {
@@ -814,12 +822,6 @@ where
         self.count_by_address.clear();
         self.pool_size = SizeTracker::default();
         self.cache_size = SizeTracker::default();
-        // Every op (suspect or not) is gone, so the suspect gauge is
-        // unconditionally 0 - unlike the removal path, which decrements by
-        // one because it knows exactly one op with a known suspect status
-        // left, a bulk clear doesn't track how many of the cleared ops were
-        // suspects, so set rather than decrement.
-        self.metrics.num_suspect_ops.set(0.0);
         self.update_metrics();
     }
 
@@ -982,13 +984,6 @@ where
         block_number: Option<u64>,
     ) -> Option<Arc<PoolOperation>> {
         let op = self.by_hash.remove(&hash)?;
-        // Recompute the current suspect population on every removal path
-        // (mined, expired, replaced, entity-removed, poison-ops removal,
-        // etc.) so the gauge never leaks regardless of why a suspect left
-        // the pool.
-        if op.is_suspect(self.config.rpc_failures_before_suspect) {
-            self.metrics.num_suspect_ops.decrement(1.0);
-        }
         let id = &op.po.uo.id();
         self.by_id.remove(id);
         self.best.remove(&op);
@@ -1055,6 +1050,15 @@ where
 /// Submission failure tracking for poison user operation handling.
 ///
 /// A single counter measured against two thresholds: an operation becomes a
+/// Gauge values recomputed by `PoolInner::do_maintenance` on every pass.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MaintenanceCounts {
+    /// Ops the assigner would currently hand to a builder given the required fees.
+    pub(crate) candidates: usize,
+    /// Ops at or above the suspect failure threshold (0 when tracking is disabled).
+    pub(crate) suspects: usize,
+}
+
 /// suspect at `rpc_failures_before_suspect` failures and is removed
 /// `max_suspect_rpc_failures` failures later. Any successful submission resets
 /// the counter. See `docs/designs/poison-user-operations.md`.
@@ -1289,7 +1293,7 @@ struct PoolMetrics {
     num_7702_ops_added: Counter,
     #[metric(describe = "the number of ops added")]
     num_ops_added: Counter,
-    #[metric(describe = "the number of suspect ops currently in the pool.")]
+    #[metric(describe = "the number of suspect ops currently in the pool, recomputed each block.")]
     num_suspect_ops: Gauge,
     #[metric(describe = "the number of ops marked suspect by an ambiguous multi-op failure.")]
     num_marked_suspect_multi_op_failure: Counter,
@@ -2147,9 +2151,9 @@ mod tests {
         let po = create_sponsored_op(Address::random(), 0, cost);
         let hash = pool.add_operation(po, 0, 0).unwrap();
 
-        let candidates = pool.do_maintenance(1, Timestamp::from(1), None, CANDIDATE_TEST_FEES, 0);
+        let counts = pool.do_maintenance(1, Timestamp::from(1), None, CANDIDATE_TEST_FEES, 0);
 
-        assert_eq!(candidates, 1);
+        assert_eq!(counts.candidates, 1);
         assert!(pool.by_hash.get(&hash).unwrap().ttm(1).is_some());
     }
 
@@ -2164,9 +2168,9 @@ mod tests {
         let hash = pool.add_operation(po.clone(), 0, 0).unwrap();
         assert!(pool.by_hash.get(&hash).unwrap().ttm(0).is_some());
 
-        let candidates = pool.do_maintenance(1, Timestamp::from(1), None, CANDIDATE_TEST_FEES, 0);
+        let counts = pool.do_maintenance(1, Timestamp::from(1), None, CANDIDATE_TEST_FEES, 0);
 
-        assert_eq!(candidates, 0);
+        assert_eq!(counts.candidates, 0);
         // Metric-only: the op stays in the pool, stays eligible, and is still
         // returned as a best operation for the assigner to consider.
         assert!(pool.get_operation_by_hash(hash).is_some());
@@ -2189,7 +2193,7 @@ mod tests {
         pool.add_operation(po, 0, 0).unwrap();
 
         let blocked = pool.do_maintenance(1, Timestamp::from(1), None, CANDIDATE_TEST_FEES, 0);
-        assert_eq!(blocked, 0);
+        assert_eq!(blocked.candidates, 0);
 
         // The check is re-evaluated each pass, not latched: once the required
         // fee falls under the budget the op is a candidate again.
@@ -2198,7 +2202,7 @@ mod tests {
             max_priority_fee_per_gas: CANDIDATE_TEST_FEES.max_priority_fee_per_gas / 2,
         };
         let recovered = pool.do_maintenance(2, Timestamp::from(2), None, lower_fees, 0);
-        assert_eq!(recovered, 1);
+        assert_eq!(recovered.candidates, 1);
     }
 
     #[test]
@@ -2213,9 +2217,9 @@ mod tests {
         pool.add_operation(priced.clone(), 0, 0).unwrap();
         let underpriced_hash = pool.add_operation(underpriced.clone(), 0, 0).unwrap();
 
-        let candidates = pool.do_maintenance(1, Timestamp::from(1), None, CANDIDATE_TEST_FEES, 0);
+        let counts = pool.do_maintenance(1, Timestamp::from(1), None, CANDIDATE_TEST_FEES, 0);
 
-        assert_eq!(candidates, 1);
+        assert_eq!(counts.candidates, 1);
         // Underpriced op remains eligible and in the pool, just not a candidate.
         assert_eq!(
             pool.best_operations().collect::<Vec<_>>(),
@@ -2228,6 +2232,168 @@ mod tests {
                 .ttm(1)
                 .is_none()
         );
+    }
+
+    /// Number of suspects a delta-free observer would count: every op in the
+    /// pool at or above the threshold, or 0 with tracking disabled.
+    fn expected_suspects(pool: &PoolInner<Box<dyn DAGasOracleSync>>) -> usize {
+        if !pool.config.suspect_tracking_enabled {
+            return 0;
+        }
+        pool.by_hash
+            .values()
+            .filter(|op| op.is_suspect(pool.config.rpc_failures_before_suspect))
+            .count()
+    }
+
+    fn maintenance_suspects(pool: &mut PoolInner<Box<dyn DAGasOracleSync>>, block: u64) -> usize {
+        pool.do_maintenance(block, Timestamp::from(block), None, GasFees::default(), 0)
+            .suspects
+    }
+
+    fn drive_to_suspect(pool: &mut PoolInner<Box<dyn DAGasOracleSync>>, hash: B256) {
+        for _ in 0..pool.config.rpc_failures_before_suspect {
+            pool.apply_bundle_outcome(
+                &[hash],
+                BundleOutcome::NonTerminalFailure,
+                false,
+                Instant::now(),
+            );
+        }
+        assert!(pool.by_hash[&hash].is_suspect(pool.config.rpc_failures_before_suspect));
+    }
+
+    #[test]
+    fn test_suspect_gauge_zero_when_tracking_disabled() {
+        // Threshold 0 makes every op look suspect by failure count alone; the
+        // master switch must still report 0.
+        let mut pool = pool_with_conf(PoolInnerConfig {
+            suspect_tracking_enabled: false,
+            rpc_failures_before_suspect: 0,
+            ..conf()
+        });
+        pool.add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+        pool.add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+
+        assert_eq!(maintenance_suspects(&mut pool, 1), 0);
+    }
+
+    #[test]
+    fn test_suspect_gauge_tracks_mark_clear_remove_and_expire() {
+        let mut pool = pool_with_conf(PoolInnerConfig {
+            suspect_rpc_backoff_initial: Duration::ZERO,
+            ..conf()
+        });
+        let threshold_marked = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+        let multi_op_marked_a = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+        let multi_op_marked_b = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+        let mut expiring = create_op(Address::random(), 0, 1);
+        expiring.valid_time_range.valid_until = Timestamp::from(5);
+        let expiring = pool.add_operation(expiring, 0, 0).unwrap();
+        let never_suspect = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+
+        assert_eq!(maintenance_suspects(&mut pool, 1), 0);
+
+        // Mark via both trigger paths.
+        drive_to_suspect(&mut pool, threshold_marked);
+        pool.apply_bundle_outcome(
+            &[multi_op_marked_a, multi_op_marked_b, expiring],
+            BundleOutcome::MarkSuspect,
+            false,
+            Instant::now(),
+        );
+        assert_eq!(expected_suspects(&pool), 4);
+        assert_eq!(maintenance_suspects(&mut pool, 2), 4);
+
+        // Marking an existing suspect again must not double count.
+        pool.apply_bundle_outcome(
+            &[threshold_marked, multi_op_marked_a],
+            BundleOutcome::MarkSuspect,
+            false,
+            Instant::now(),
+        );
+        assert_eq!(maintenance_suspects(&mut pool, 3), 4);
+
+        // Clear one via a successful submission.
+        pool.apply_bundle_outcome(
+            &[multi_op_marked_a],
+            BundleOutcome::Success,
+            false,
+            Instant::now(),
+        );
+        assert_eq!(expected_suspects(&pool), 3);
+        assert_eq!(maintenance_suspects(&mut pool, 4), 3);
+
+        // Remove one directly.
+        pool.remove_operation_by_hash(multi_op_marked_b);
+        assert_eq!(expected_suspects(&pool), 2);
+        assert_eq!(maintenance_suspects(&mut pool, 5), 2);
+
+        // Expire one during maintenance: expired ops are not counted.
+        let counts = pool.do_maintenance(6, Timestamp::from(6), None, GasFees::default(), 0);
+        assert!(pool.get_operation_by_hash(expiring).is_none());
+        assert_eq!(counts.suspects, 1);
+        assert_eq!(expected_suspects(&pool), 1);
+
+        // The never-suspect op contributed nothing throughout.
+        assert!(!pool.by_hash[&never_suspect].is_suspect(pool.config.rpc_failures_before_suspect));
+    }
+
+    #[test]
+    fn test_suspect_gauge_returns_to_zero_when_all_suspects_leave() {
+        let mut pool = pool_with_conf(PoolInnerConfig {
+            suspect_rpc_backoff_initial: Duration::ZERO,
+            ..conf()
+        });
+        let a = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+        let b = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+        drive_to_suspect(&mut pool, a);
+        drive_to_suspect(&mut pool, b);
+        assert_eq!(maintenance_suspects(&mut pool, 1), 2);
+
+        pool.apply_bundle_outcome(&[a], BundleOutcome::Success, false, Instant::now());
+        pool.remove_operation_by_hash(b);
+
+        assert_eq!(maintenance_suspects(&mut pool, 2), 0);
+        assert_eq!(expected_suspects(&pool), 0);
+    }
+
+    #[test]
+    fn test_suspect_gauge_recovers_after_clear() {
+        let mut pool = pool_with_conf(PoolInnerConfig {
+            suspect_rpc_backoff_initial: Duration::ZERO,
+            ..conf()
+        });
+        let a = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+        drive_to_suspect(&mut pool, a);
+        assert_eq!(maintenance_suspects(&mut pool, 1), 1);
+
+        pool.clear();
+        assert_eq!(maintenance_suspects(&mut pool, 2), 0);
+
+        // A fresh suspect after the clear is counted from zero, not from a
+        // stale delta.
+        let c = pool
+            .add_operation(create_op(Address::random(), 0, 1), 0, 0)
+            .unwrap();
+        drive_to_suspect(&mut pool, c);
+        assert_eq!(maintenance_suspects(&mut pool, 3), 1);
     }
 
     #[test]
