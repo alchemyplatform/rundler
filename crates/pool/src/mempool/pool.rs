@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{Address, B256, U256};
 use anyhow::Context;
 use metrics::{Counter, Gauge, Histogram};
 use metrics_derive::Metrics;
@@ -472,6 +472,11 @@ where
     ///
     /// NOTE: This method is O(n) where n is the number of operations in the pool.
     /// It should be called sparingly (e.g. when a block is mined).
+    /// Per-block maintenance: expires ops, refreshes eligibility and ordering,
+    /// and recomputes the `num_candidates` gauge.
+    ///
+    /// Returns the number of candidate ops, i.e. ops the assigner would
+    /// currently hand to a builder given `uo_fees`.
     pub(crate) fn do_maintenance(
         &mut self,
         block_number: u64,
@@ -479,7 +484,7 @@ where
         block_da_data: Option<&DAGasBlockData>,
         uo_fees: GasFees,
         base_fee: u128,
-    ) {
+    ) -> usize {
         let mut expired = Vec::new();
         let mut num_candidates = 0;
         let mut events = vec![];
@@ -593,11 +598,22 @@ where
             self.best.insert(op.clone());
 
             // Check candidate status
-            if (op.uo().max_fee_per_gas() < uo_fees.max_fee_per_gas
-                || op.uo().max_priority_fee_per_gas() < uo_fees.max_priority_fee_per_gas)
-                && op.po.perms.bundler_sponsorship.is_none()
-            // skip if bundler sponsored
-            {
+            let is_candidate = match op.po.perms.bundler_sponsorship.as_ref() {
+                // Mirror the assigner's sponsorship budget gate
+                // (assigner.rs `op_meets_fee_requirements`): a sponsored op is
+                // only bundleable while its budget still covers the required
+                // fee. The op's own fees are irrelevant, the bundler pays.
+                Some(sponsorship) => {
+                    U256::from(op.uo().total_gas_limit()) * U256::from(uo_fees.max_fee_per_gas)
+                        <= sponsorship.max_cost
+                }
+                None => {
+                    op.uo().max_fee_per_gas() >= uo_fees.max_fee_per_gas
+                        && op.uo().max_priority_fee_per_gas() >= uo_fees.max_priority_fee_per_gas
+                }
+            };
+
+            if !is_candidate {
                 // don't mark as ineligible, but also not a candidate
                 op.set_underpriced();
                 continue;
@@ -616,6 +632,8 @@ where
         self.metrics.num_candidates.set(num_candidates as f64);
         self.prev_block_number = block_number;
         self.update_metrics();
+
+        num_candidates
     }
 
     pub(crate) fn address_count(&self, address: &Address) -> usize {
@@ -2086,6 +2104,129 @@ mod tests {
         assert_eq!(
             pool.best_operations().collect::<Vec<_>>(),
             vec![Arc::new(po2), Arc::new(po1)]
+        );
+    }
+
+    /// A bundler-sponsored op with zero fees of its own, a non-zero gas limit,
+    /// and a sponsorship budget of `max_cost` wei.
+    fn create_sponsored_op(sender: Address, nonce: usize, max_cost: U256) -> PoolOperation {
+        let mut op = create_op_from_required(UserOperationRequiredFields {
+            sender,
+            nonce: U256::from(nonce),
+            max_fee_per_gas: 0,
+            max_priority_fee_per_gas: 0,
+            call_gas_limit: 100_000,
+            ..base_required_fields()
+        });
+        op.perms.bundler_sponsorship = Some(BundlerSponsorship {
+            max_cost,
+            valid_until: u64::MAX,
+        });
+        op
+    }
+
+    /// Sponsorship cost the pool computes for `op` at `max_fee_per_gas`,
+    /// mirroring the assigner: `total_gas_limit * max_fee_per_gas`.
+    fn sponsorship_cost(op: &PoolOperation, max_fee_per_gas: u128) -> U256 {
+        U256::from(op.uo.total_gas_limit()) * U256::from(max_fee_per_gas)
+    }
+
+    const CANDIDATE_TEST_FEES: GasFees = GasFees {
+        max_fee_per_gas: 100,
+        max_priority_fee_per_gas: 10,
+    };
+
+    #[test]
+    fn test_sponsored_op_within_budget_is_candidate() {
+        let mut pool = pool();
+        let probe = create_sponsored_op(Address::random(), 0, U256::ZERO);
+        let cost = sponsorship_cost(&probe, CANDIDATE_TEST_FEES.max_fee_per_gas);
+        assert!(cost > U256::ZERO);
+
+        // Budget covers the cost exactly: still a candidate.
+        let po = create_sponsored_op(Address::random(), 0, cost);
+        let hash = pool.add_operation(po, 0, 0).unwrap();
+
+        let candidates = pool.do_maintenance(1, Timestamp::from(1), None, CANDIDATE_TEST_FEES, 0);
+
+        assert_eq!(candidates, 1);
+        assert!(pool.by_hash.get(&hash).unwrap().ttm(1).is_some());
+    }
+
+    #[test]
+    fn test_sponsored_op_over_budget_not_candidate() {
+        let mut pool = pool();
+        let probe = create_sponsored_op(Address::random(), 0, U256::ZERO);
+        let cost = sponsorship_cost(&probe, CANDIDATE_TEST_FEES.max_fee_per_gas);
+
+        // Budget one wei short of the cost.
+        let po = create_sponsored_op(Address::random(), 0, cost - U256::from(1));
+        let hash = pool.add_operation(po.clone(), 0, 0).unwrap();
+        assert!(pool.by_hash.get(&hash).unwrap().ttm(0).is_some());
+
+        let candidates = pool.do_maintenance(1, Timestamp::from(1), None, CANDIDATE_TEST_FEES, 0);
+
+        assert_eq!(candidates, 0);
+        // Metric-only: the op stays in the pool, stays eligible, and is still
+        // returned as a best operation for the assigner to consider.
+        assert!(pool.get_operation_by_hash(hash).is_some());
+        assert_eq!(
+            pool.best_operations().collect::<Vec<_>>(),
+            vec![Arc::new(po)]
+        );
+        // Stranded ops must not accrue time-to-mine, matching non-sponsored
+        // underpriced ops.
+        assert!(pool.by_hash.get(&hash).unwrap().ttm(1).is_none());
+    }
+
+    #[test]
+    fn test_sponsored_op_recovers_when_fees_drop() {
+        let mut pool = pool();
+        let probe = create_sponsored_op(Address::random(), 0, U256::ZERO);
+        // Budget covers half the required fee.
+        let budget = sponsorship_cost(&probe, CANDIDATE_TEST_FEES.max_fee_per_gas / 2);
+        let po = create_sponsored_op(Address::random(), 0, budget);
+        pool.add_operation(po, 0, 0).unwrap();
+
+        let blocked = pool.do_maintenance(1, Timestamp::from(1), None, CANDIDATE_TEST_FEES, 0);
+        assert_eq!(blocked, 0);
+
+        // The check is re-evaluated each pass, not latched: once the required
+        // fee falls under the budget the op is a candidate again.
+        let lower_fees = GasFees {
+            max_fee_per_gas: CANDIDATE_TEST_FEES.max_fee_per_gas / 2,
+            max_priority_fee_per_gas: CANDIDATE_TEST_FEES.max_priority_fee_per_gas / 2,
+        };
+        let recovered = pool.do_maintenance(2, Timestamp::from(2), None, lower_fees, 0);
+        assert_eq!(recovered, 1);
+    }
+
+    #[test]
+    fn test_non_sponsored_candidate_check_unchanged() {
+        let mut pool = pool();
+        let priced = create_op(Address::random(), 0, CANDIDATE_TEST_FEES.max_fee_per_gas);
+        let underpriced = create_op(
+            Address::random(),
+            0,
+            CANDIDATE_TEST_FEES.max_fee_per_gas - 1,
+        );
+        pool.add_operation(priced.clone(), 0, 0).unwrap();
+        let underpriced_hash = pool.add_operation(underpriced.clone(), 0, 0).unwrap();
+
+        let candidates = pool.do_maintenance(1, Timestamp::from(1), None, CANDIDATE_TEST_FEES, 0);
+
+        assert_eq!(candidates, 1);
+        // Underpriced op remains eligible and in the pool, just not a candidate.
+        assert_eq!(
+            pool.best_operations().collect::<Vec<_>>(),
+            vec![Arc::new(priced), Arc::new(underpriced)]
+        );
+        assert!(
+            pool.by_hash
+                .get(&underpriced_hash)
+                .unwrap()
+                .ttm(1)
+                .is_none()
         );
     }
 
