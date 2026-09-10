@@ -711,7 +711,9 @@ impl Assigner {
                 continue;
             }
             assignable += 1;
-            if self.op_meets_fee_requirements(op, required_fees, true) {
+            // Counting path: never log per-op rejections here. The assignment
+            // path (`assign_ops_internal`) logs them.
+            if self.op_meets_fee_requirements(op, required_fees, false) {
                 eligible += 1;
             }
         }
@@ -1092,15 +1094,19 @@ fn ep_metrics_for_key(key: &ProposerKey) -> PerEntrypointMetrics {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     use alloy_primitives::B256;
     use rundler_types::{
-        EntityInfos, UserOperation, UserOperationPermissions, ValidTimeRange,
+        BundlerSponsorship, EntityInfos, UserOperation, UserOperationPermissions, ValidTimeRange,
         chain::ChainSpec,
         pool::MockPool,
         v0_6::{UserOperationBuilder, UserOperationRequiredFields},
     };
+    use tracing::{Event, Metadata, Subscriber, span};
 
     use super::*;
 
@@ -1689,6 +1695,91 @@ mod tests {
         entry_point: Address,
     ) -> Vec<PoolOperation> {
         create_test_ops_inner(senders, entry_point, 0, 0)
+    }
+
+    /// Counts every tracing event emitted while installed as the default subscriber.
+    struct EventCounter(Arc<AtomicUsize>);
+
+    impl Subscriber for EventCounter {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &span::Attributes<'_>) -> span::Id {
+            span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &span::Id, _values: &span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &span::Id, _follows: &span::Id) {}
+
+        fn event(&self, _event: &Event<'_>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn enter(&self, _span: &span::Id) {}
+
+        fn exit(&self, _span: &span::Id) {}
+    }
+
+    #[test]
+    fn test_count_ops_does_not_log_rejections() {
+        // A bundler-sponsored op whose budget cannot cover the required fee
+        // (gas_limit * required.max_fee_per_gas > max_cost), and a non-sponsored
+        // op whose own fees are below the required fees. Both are rejected by
+        // the fee check, and `count_ops` must count them silently: it runs on
+        // every assignment pass for every entrypoint, so a per-op log line here
+        // is emitted thousands of times per second for stranded ops.
+        let mut sponsored = create_test_ops_inner(&[address(1)], TEST_ENTRY_POINT, 0, 0);
+        sponsored[0].uo = UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                sender: address(1),
+                call_gas_limit: 100_000,
+                ..Default::default()
+            },
+        )
+        .build()
+        .into();
+        sponsored[0].perms.bundler_sponsorship = Some(BundlerSponsorship {
+            max_cost: U256::from(1),
+            valid_until: u64::MAX,
+        });
+        let underpriced = create_test_ops_with_fees(&[address(2)], 1, 1);
+
+        let summaries: Vec<PoolOperationSummary> = sponsored
+            .iter()
+            .chain(underpriced.iter())
+            .map(|op| op.into())
+            .collect();
+        assert!(summaries[0].bundler_sponsorship_max_cost.is_some());
+        assert!(summaries[1].bundler_sponsorship_max_cost.is_none());
+
+        let assigner = Assigner::new(
+            Box::new(MockPool::new()),
+            test_entrypoints(),
+            4,
+            10,
+            10,
+            0.50,
+        );
+        let required_fees = GasFees {
+            max_fee_per_gas: 100,
+            max_priority_fee_per_gas: 10,
+        };
+
+        let events = Arc::new(AtomicUsize::new(0));
+        let (assignable, eligible) =
+            tracing::subscriber::with_default(EventCounter(events.clone()), || {
+                assigner.count_ops(&summaries, address(0), u64::MAX, &required_fees)
+            });
+
+        assert_eq!((assignable, eligible), (2, 0));
+        assert_eq!(
+            events.load(Ordering::SeqCst),
+            0,
+            "count_ops must not log per-op fee rejections"
+        );
     }
 
     #[tokio::test]
