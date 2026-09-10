@@ -19,7 +19,7 @@ use clap::Args;
 use rundler_builder::{
     self, BloxrouteSenderArgs, BuilderEvent, BuilderEventKind, BuilderSettings, BuilderTask,
     BuilderTaskArgs, EntryPointBuilderSettings, FallbackSenderArgs, FlashbotsSenderArgs,
-    LocalBuilderBuilder, PolygonPrivateArgs, RawSenderArgs, TransactionSenderArgs,
+    LocalBuilderBuilder, PolygonPrivateArgs, RawSenderArgs, SkipReason, TransactionSenderArgs,
     TransactionSenderKind,
 };
 use rundler_pbh::PbhSubmissionProxy;
@@ -569,7 +569,11 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     Ok(())
 }
 
+/// Filters builder events that report a steady-state condition on every
+/// bundle attempt out of the log stream. Such conditions are tracked as
+/// gauges instead.
 pub fn is_nonspammy_event(event: &WithEntryPoint<BuilderEvent>) -> bool {
+    // An idle builder forms an empty bundle every cycle.
     if let BuilderEventKind::FormedBundle {
         tx_details,
         fee_increase_count,
@@ -580,12 +584,24 @@ pub fn is_nonspammy_event(event: &WithEntryPoint<BuilderEvent>) -> bool {
     {
         return false;
     }
+    // A bundler-sponsored op whose budget no longer covers the gas price is
+    // skipped on every bundle attempt until fees drop or it expires. The
+    // assigner's `ep_sponsorship_budget_blocked_ops` gauge tracks the count.
+    if let BuilderEventKind::SkippedOp {
+        reason: SkipReason::OverSponsorshipMaxCost { .. },
+        ..
+    } = &event.event.kind
+    {
+        return false;
+    }
     true
 }
 
 #[cfg(test)]
 mod tests {
+    use alloy_primitives::{B256, U256};
     use clap::Parser;
+    use rundler_types::GasFees;
 
     use super::*;
 
@@ -681,5 +697,74 @@ mod tests {
         );
 
         assert_eq!(raw.submit_url, RPC_URL);
+    }
+
+    fn builder_event(kind: BuilderEventKind) -> WithEntryPoint<BuilderEvent> {
+        WithEntryPoint {
+            entry_point: Address::ZERO,
+            event: BuilderEvent {
+                tag: "test".to_string(),
+                kind,
+            },
+        }
+    }
+
+    fn skipped_op(reason: SkipReason) -> WithEntryPoint<BuilderEvent> {
+        builder_event(BuilderEventKind::SkippedOp {
+            op_hash: B256::ZERO,
+            reason,
+        })
+    }
+
+    #[test]
+    fn nonspammy_filters_over_sponsorship_max_cost_skips() {
+        let event = skipped_op(SkipReason::OverSponsorshipMaxCost {
+            max_cost: U256::from(1),
+            actual_cost: U256::from(2),
+        });
+        assert!(!is_nonspammy_event(&event));
+    }
+
+    #[test]
+    fn nonspammy_keeps_other_skip_reasons() {
+        let reasons = [
+            SkipReason::TargetGasLimit,
+            SkipReason::MaxGasLimit,
+            SkipReason::InsufficientFees {
+                required_fees: GasFees {
+                    max_fee_per_gas: 2,
+                    max_priority_fee_per_gas: 1,
+                },
+                actual_fees: GasFees::default(),
+            },
+            SkipReason::AccessedOtherSender {
+                other_sender: Address::ZERO,
+            },
+        ];
+        for reason in reasons {
+            assert!(
+                is_nonspammy_event(&skipped_op(reason.clone())),
+                "{reason:?} should be logged"
+            );
+        }
+    }
+
+    #[test]
+    fn nonspammy_filters_empty_formed_bundle_but_keeps_fee_bumps() {
+        let empty = builder_event(BuilderEventKind::FormedBundle {
+            tx_details: None,
+            nonce: 0,
+            fee_increase_count: 0,
+            required_fees: None,
+        });
+        assert!(!is_nonspammy_event(&empty));
+
+        let fee_bump = builder_event(BuilderEventKind::FormedBundle {
+            tx_details: None,
+            nonce: 0,
+            fee_increase_count: 1,
+            required_fees: None,
+        });
+        assert!(is_nonspammy_event(&fee_bump));
     }
 }

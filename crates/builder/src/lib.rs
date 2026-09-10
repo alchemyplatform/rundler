@@ -30,7 +30,7 @@ mod delegation_sender;
 pub(crate) type ProposerKey = (Address, Option<String>);
 
 mod emit;
-pub use emit::{BuilderEvent, BuilderEventKind};
+pub use emit::{BuilderEvent, BuilderEventKind, SkipReason};
 
 mod sender;
 pub use sender::{

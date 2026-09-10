@@ -266,10 +266,16 @@ impl Assigner {
             if !suspects.is_empty() {
                 suspect_candidates.push((ep.clone(), suspects));
             }
-            let (assignable_count, eligible_count) =
-                self.count_ops(&ops, builder_address, max_sim_block_number, &required_fees);
+            let OpCounts {
+                assignable: assignable_count,
+                eligible: eligible_count,
+                sponsorship_budget_blocked,
+            } = self.count_ops(&ops, builder_address, max_sim_block_number, &required_fees);
             let ep_metrics = ep_metrics_for(ep);
             ep_metrics.ep_eligible_ops.set(eligible_count as f64);
+            ep_metrics
+                .ep_sponsorship_budget_blocked_ops
+                .set(sponsorship_budget_blocked as f64);
             if eligible_count > 0 {
                 candidates.push(Candidate {
                     config_index: entrypoint_idx,
@@ -581,8 +587,11 @@ impl Assigner {
             )
             .await?;
 
-        let (assignable_count, eligible_count) =
-            self.count_ops(&ops, builder_address, max_sim_block_number, &required_fees);
+        let OpCounts {
+            assignable: assignable_count,
+            eligible: eligible_count,
+            sponsorship_budget_blocked,
+        } = self.count_ops(&ops, builder_address, max_sim_block_number, &required_fees);
 
         let ep_info = EntrypointInfo {
             address: entry_point,
@@ -590,6 +599,9 @@ impl Assigner {
         };
         let ep_metrics = ep_metrics_for(&ep_info);
         ep_metrics.ep_eligible_ops.set(eligible_count as f64);
+        ep_metrics
+            .ep_sponsorship_budget_blocked_ops
+            .set(sponsorship_budget_blocked as f64);
 
         // Always update starvation tracking, even with no eligible ops.
         // This intentionally inflates the starvation counter for this entrypoint during
@@ -686,19 +698,15 @@ impl Assigner {
     }
 
     /// Count ops in a single pass under one lock acquisition.
-    /// Returns (assignable_count, eligible_count) where:
-    /// - assignable: not assigned to another builder, simulated before max_sim_block_number
-    /// - eligible: assignable AND meets fee requirements
     fn count_ops(
         &self,
         ops: &[PoolOperationSummary],
         builder_address: Address,
         max_sim_block_number: u64,
         required_fees: &GasFees,
-    ) -> (usize, usize) {
+    ) -> OpCounts {
         let state = self.state.lock().unwrap();
-        let mut assignable = 0;
-        let mut eligible = 0;
+        let mut counts = OpCounts::default();
         for op in ops.iter() {
             if op.sim_block_number > max_sim_block_number {
                 continue;
@@ -710,12 +718,19 @@ impl Assigner {
             if !is_assignable {
                 continue;
             }
-            assignable += 1;
-            if self.op_meets_fee_requirements(op, required_fees, true) {
-                eligible += 1;
+            counts.assignable += 1;
+            // Counting path: never log per-op rejections here. The assignment
+            // path (`assign_ops_internal`) logs them.
+            if self.op_meets_fee_requirements(op, required_fees, false) {
+                counts.eligible += 1;
+            } else if op.bundler_sponsorship_max_cost.is_some() {
+                // The sponsorship budget is the only fee check applied to a
+                // bundler-sponsored op, so failing it means the op is
+                // budget-blocked.
+                counts.sponsorship_budget_blocked += 1;
             }
         }
-        (assignable, eligible)
+        counts
     }
 
     /// Check if an operation meets the fee requirements for bundling.
@@ -725,8 +740,12 @@ impl Assigner {
     /// later by the proposer. Some sponsored ops may pass this check but be rejected
     /// during bundle proposal when exact gas costs are known.
     ///
-    /// When `log` is true, logs the reason for rejection (used during assignment).
-    /// Set `log` to false for counting paths to avoid duplicate log noise.
+    /// When `log` is true, logs the reason for rejection at debug level (used
+    /// during assignment). Set `log` to false for counting paths to avoid
+    /// duplicate log noise. Rejections are steady-state conditions that
+    /// recur on every assignment pass, so they are reported as levels via
+    /// the `ep_eligible_ops` and `ep_sponsorship_budget_blocked_ops` gauges
+    /// rather than at info.
     fn op_meets_fee_requirements(
         &self,
         op: &PoolOperationSummary,
@@ -739,7 +758,7 @@ impl Assigner {
             if total_cost > max_cost {
                 if log {
                     let hash = op.hash;
-                    tracing::info!(
+                    tracing::debug!(
                         "Builder Assigner: op {hash:?} doesn't meet bundler sponsorship requirements: total_cost: {total_cost:?}, max_cost: {max_cost:?}"
                     );
                 }
@@ -755,7 +774,7 @@ impl Assigner {
                 let hash = op.hash;
                 let max_priority = op.max_priority_fee_per_gas;
                 let max_fee = op.max_fee_per_gas;
-                tracing::info!(
+                tracing::debug!(
                     "Builder Assigner: op {hash:?} doesn't meet fee requirements: max_priority_fee_per_gas: {max_priority:?}, max_fee_per_gas: {max_fee:?}, required_fees: {required_fees:?}"
                 );
             }
@@ -1047,6 +1066,19 @@ struct GlobalMetrics {
     isolating_builders: Gauge,
 }
 
+/// Result of `Assigner::count_ops` for one entrypoint's ops.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct OpCounts {
+    /// Not assigned to another builder and simulated at or before the max block.
+    assignable: usize,
+    /// Assignable and meets the fee requirements.
+    eligible: usize,
+    /// Assignable but bundler-sponsored with a budget that does not cover the
+    /// required fee. A level, not an event: these ops are re-checked on every
+    /// assignment pass and stay blocked until fees drop or the op expires.
+    sponsorship_budget_blocked: usize,
+}
+
 #[derive(Metrics)]
 #[metrics(scope = "builder_assigner")]
 struct PerBuilderMetrics {
@@ -1071,6 +1103,10 @@ struct PerEntrypointMetrics {
     ep_starvation_wakeups: Counter,
     #[metric(describe = "the last-seen eligible op count for this entrypoint.")]
     ep_eligible_ops: Gauge,
+    #[metric(
+        describe = "the last-seen count of bundler-sponsored ops for this entrypoint whose sponsorship budget does not cover the required fee."
+    )]
+    ep_sponsorship_budget_blocked_ops: Gauge,
     #[metric(describe = "the total number of suspect isolation assignments from this entrypoint.")]
     ep_isolation_assignments: Counter,
 }
@@ -1092,15 +1128,19 @@ fn ep_metrics_for_key(key: &ProposerKey) -> PerEntrypointMetrics {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     use alloy_primitives::B256;
     use rundler_types::{
-        EntityInfos, UserOperation, UserOperationPermissions, ValidTimeRange,
+        BundlerSponsorship, EntityInfos, UserOperation, UserOperationPermissions, ValidTimeRange,
         chain::ChainSpec,
         pool::MockPool,
         v0_6::{UserOperationBuilder, UserOperationRequiredFields},
     };
+    use tracing::{Event, Metadata, Subscriber, span};
 
     use super::*;
 
@@ -1689,6 +1729,180 @@ mod tests {
         entry_point: Address,
     ) -> Vec<PoolOperation> {
         create_test_ops_inner(senders, entry_point, 0, 0)
+    }
+
+    /// Counts every tracing event emitted while installed as the default subscriber.
+    struct EventCounter(Arc<AtomicUsize>);
+
+    impl Subscriber for EventCounter {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &span::Attributes<'_>) -> span::Id {
+            span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &span::Id, _values: &span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &span::Id, _follows: &span::Id) {}
+
+        fn event(&self, _event: &Event<'_>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn enter(&self, _span: &span::Id) {}
+
+        fn exit(&self, _span: &span::Id) {}
+    }
+
+    /// A bundler-sponsored op with zero fees of its own, `call_gas_limit` gas,
+    /// and a sponsorship budget of `max_cost` wei.
+    fn create_sponsored_test_op(
+        sender: Address,
+        call_gas_limit: u128,
+        max_cost: U256,
+    ) -> PoolOperation {
+        let mut op = create_test_ops_inner(&[sender], TEST_ENTRY_POINT, 0, 0).remove(0);
+        op.uo = UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                sender,
+                call_gas_limit,
+                ..Default::default()
+            },
+        )
+        .build()
+        .into();
+        op.perms.bundler_sponsorship = Some(BundlerSponsorship {
+            max_cost,
+            valid_until: u64::MAX,
+        });
+        op
+    }
+
+    fn summaries_of(ops: &[PoolOperation]) -> Vec<PoolOperationSummary> {
+        ops.iter().map(|op| op.into()).collect()
+    }
+
+    fn test_assigner_with_empty_pool() -> Assigner {
+        Assigner::new(
+            Box::new(MockPool::new()),
+            test_entrypoints(),
+            4,
+            10,
+            10,
+            0.50,
+        )
+    }
+
+    const TEST_REQUIRED_FEES: GasFees = GasFees {
+        max_fee_per_gas: 100,
+        max_priority_fee_per_gas: 10,
+    };
+
+    #[test]
+    fn test_count_ops_does_not_log_rejections() {
+        // A bundler-sponsored op whose budget cannot cover the required fee
+        // (gas_limit * required.max_fee_per_gas > max_cost), and a non-sponsored
+        // op whose own fees are below the required fees. Both are rejected by
+        // the fee check, and `count_ops` must count them silently: it runs on
+        // every assignment pass for every entrypoint, so a per-op log line here
+        // is emitted thousands of times per second for stranded ops.
+        let ops = vec![
+            create_sponsored_test_op(address(1), 100_000, U256::from(1)),
+            create_test_ops_with_fees(&[address(2)], 1, 1).remove(0),
+        ];
+        let summaries = summaries_of(&ops);
+        assert!(summaries[0].bundler_sponsorship_max_cost.is_some());
+        assert!(summaries[1].bundler_sponsorship_max_cost.is_none());
+
+        let assigner = test_assigner_with_empty_pool();
+
+        let events = Arc::new(AtomicUsize::new(0));
+        let counts = tracing::subscriber::with_default(EventCounter(events.clone()), || {
+            assigner.count_ops(&summaries, address(0), u64::MAX, &TEST_REQUIRED_FEES)
+        });
+
+        assert_eq!(
+            counts,
+            OpCounts {
+                assignable: 2,
+                eligible: 0,
+                sponsorship_budget_blocked: 1,
+            }
+        );
+        assert_eq!(
+            events.load(Ordering::SeqCst),
+            0,
+            "count_ops must not log per-op fee rejections"
+        );
+    }
+
+    #[test]
+    fn test_count_ops_reports_sponsorship_budget_blocked() {
+        // gas_limit * required.max_fee_per_gas = 100_000 * 100 = 10_000_000 wei.
+        let over_budget = U256::from(9_999_999);
+        let exactly_budget = U256::from(10_000_000);
+        let ops = vec![
+            // Non-sponsored, meets the required fees: eligible.
+            create_test_ops_with_fees(&[address(1)], 100, 10).remove(0),
+            create_test_ops_with_fees(&[address(2)], 200, 20).remove(0),
+            // Sponsored, budget covers the required fee exactly: eligible even
+            // though the op's own fees are zero.
+            create_sponsored_test_op(address(3), 100_000, exactly_budget),
+            // Sponsored, budget one wei short: blocked.
+            create_sponsored_test_op(address(4), 100_000, over_budget),
+            create_sponsored_test_op(address(5), 100_000, over_budget),
+            // Non-sponsored, underpriced: neither eligible nor budget-blocked.
+            create_test_ops_with_fees(&[address(6)], 1, 1).remove(0),
+        ];
+        let assigner = test_assigner_with_empty_pool();
+
+        let counts = assigner.count_ops(
+            &summaries_of(&ops),
+            address(0),
+            u64::MAX,
+            &TEST_REQUIRED_FEES,
+        );
+
+        assert_eq!(
+            counts,
+            OpCounts {
+                assignable: 6,
+                eligible: 3,
+                sponsorship_budget_blocked: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn test_count_ops_budget_blocked_recovers_when_fees_drop() {
+        // The budget check is re-evaluated against the current required fees
+        // on every pass: a blocked op becomes eligible again once fees fall.
+        let ops = vec![create_sponsored_test_op(
+            address(1),
+            100_000,
+            U256::from(5_000_000),
+        )];
+        let summaries = summaries_of(&ops);
+        let assigner = test_assigner_with_empty_pool();
+
+        let blocked = assigner.count_ops(&summaries, address(0), u64::MAX, &TEST_REQUIRED_FEES);
+        assert_eq!(
+            (blocked.eligible, blocked.sponsorship_budget_blocked),
+            (0, 1)
+        );
+
+        let lower_fees = GasFees {
+            max_fee_per_gas: 50,
+            max_priority_fee_per_gas: 5,
+        };
+        let recovered = assigner.count_ops(&summaries, address(0), u64::MAX, &lower_fees);
+        assert_eq!(
+            (recovered.eligible, recovered.sponsorship_budget_blocked),
+            (1, 0)
+        );
     }
 
     #[tokio::test]
