@@ -20,7 +20,7 @@ use alloy_primitives::{Address, B256, U256};
 use mockall::automock;
 use rundler_provider::ProviderError;
 use rundler_types::{
-    EntityInfos, ExpectedStorage, UserOperation, ValidTimeRange,
+    AaErrorCode, EntityInfos, ExpectedStorage, UserOperation, ValidTimeRange,
     pool::{MempoolError, SimulationViolation},
 };
 
@@ -78,6 +78,19 @@ pub struct SimulationError {
     pub violation_error: ViolationError<SimulationViolation>,
     /// The addresses and staking states of all the entities involved in an op. This value is None when simulation fails at a point where we are no
     pub entity_infos: Option<EntityInfos>,
+}
+
+impl SimulationError {
+    /// Returns the AA code of the first violation that is an entry point
+    /// validation revert, or `None` if no violation is.
+    pub fn aa_error_code(&self) -> Option<AaErrorCode<'_>> {
+        match &self.violation_error {
+            ViolationError::Violations(violations) => violations
+                .iter()
+                .find_map(SimulationViolation::aa_error_code),
+            ViolationError::Other(_) => None,
+        }
+    }
 }
 
 impl From<anyhow::Error> for SimulationError {

@@ -28,6 +28,7 @@ use rundler_sim::{MempoolConfig, Prechecker, Simulator};
 use rundler_types::{
     Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, GasFees, UserOperation,
     UserOperationId, UserOperationPermissions, UserOperationVariant,
+    entry_point_metrics::{self, AaErrorStage},
     pool::{
         BundleOutcome, MempoolError, PaymasterMetadata, PoolOperation, PoolOperationStatus,
         Reputation, ReputationStatus, StakeStatus,
@@ -656,7 +657,16 @@ where
             .pool_providers
             .simulator()
             .simulate_validation(versioned_op, perms.trusted, block_hash, None)
-            .map_err(Into::into);
+            .map_err(|error| {
+                if let Some(code) = error.aa_error_code() {
+                    entry_point_metrics::record_aa_error(
+                        AaErrorStage::PoolAdmission,
+                        self.config.entry_point,
+                        code,
+                    );
+                }
+                MempoolError::from(error)
+            });
         let execution_gas_check_future =
             self.check_execution_gas_limit_efficiency(op.clone(), block_hash);
         let (sim_result, _) = tokio::try_join!(sim_fut, execution_gas_check_future)?;

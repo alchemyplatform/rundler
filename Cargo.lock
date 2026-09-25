@@ -5774,6 +5774,7 @@ dependencies = [
  "futures-util",
  "metrics",
  "metrics-derive",
+ "metrics-util",
  "mockall",
  "num_enum",
  "parse-display",

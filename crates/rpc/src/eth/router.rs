@@ -26,6 +26,7 @@ use rundler_sim::{GasEstimationError, GasEstimator};
 use rundler_types::{
     EntryPointAbiVersion, EntryPointVersion, GasEstimate, UserOperation, UserOperationOptionalGas,
     UserOperationVariant,
+    entry_point_metrics::{self, AaErrorStage},
 };
 
 use super::events::{
@@ -381,9 +382,20 @@ where
         uo: UserOperationOptionalGas,
         state_override: Option<StateOverride>,
     ) -> Result<GasEstimate, GasEstimationError> {
-        self.gas_estimator
+        let result = self
+            .gas_estimator
             .estimate_op_gas(uo.into(), state_override.unwrap_or_default())
-            .await
+            .await;
+
+        if let Err(GasEstimationError::RevertInValidation(revert)) = &result {
+            entry_point_metrics::record_aa_error(
+                AaErrorStage::Estimation,
+                *self.entry_point.address(),
+                revert.aa_error_code(),
+            );
+        }
+
+        result
     }
 
     async fn check_signature(&self, uo: UserOperationVariant) -> anyhow::Result<bool> {

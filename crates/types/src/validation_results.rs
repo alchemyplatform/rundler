@@ -93,6 +93,18 @@ impl ValidationRevert {
             .map(|m| &m[..4])
     }
 
+    /// Returns the AA code carried by this revert.
+    pub fn aa_error_code(&self) -> AaErrorCode<'_> {
+        match self {
+            Self::EntryPoint(message)
+            | Self::Operation {
+                entry_point_reason: message,
+                ..
+            } => AaErrorCode::from_message(message),
+            Self::Unknown(_) | Self::Panic(_) => AaErrorCode::Uncoded,
+        }
+    }
+
     fn display_operation_error(
         entry_point_message: &str,
         inner_message: &Option<String>,
@@ -100,6 +112,41 @@ impl ValidationRevert {
         match inner_message {
             Some(inner_message) => format!("{entry_point_message} : {inner_message}"),
             None => entry_point_message.to_owned(),
+        }
+    }
+}
+
+/// The AA code carried by an entry point validation revert.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AaErrorCode<'a> {
+    /// A well-formed code, e.g. `"AA26"`.
+    Code(&'a str),
+    /// An entry point revert without an AA code prefix.
+    Uncoded,
+}
+
+impl<'a> AaErrorCode<'a> {
+    /// Parses the code from the start of an entry point revert reason, e.g.
+    /// `"AA26 over verificationGasLimit"`.
+    ///
+    /// Only `AA` followed by two ASCII digits is accepted, so the result is
+    /// bounded and safe to use as a metric label.
+    pub fn from_message(message: &'a str) -> Self {
+        match message.get(..4) {
+            Some(code)
+                if code.starts_with("AA") && code.bytes().skip(2).all(|b| b.is_ascii_digit()) =>
+            {
+                Self::Code(code)
+            }
+            _ => Self::Uncoded,
+        }
+    }
+
+    /// Returns the value to use as a metric label.
+    pub fn as_label(&self) -> &'a str {
+        match self {
+            Self::Code(code) => code,
+            Self::Uncoded => "none",
         }
     }
 }
@@ -460,9 +507,10 @@ impl TryFrom<AggregatorStakeInfoV0_7> for AggregatorInfo {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{address, uint};
+    use alloy_primitives::{Bytes, address, uint};
+    use alloy_sol_types::Panic;
 
-    use super::parse_validation_data;
+    use super::{AaErrorCode, ValidationRevert, parse_validation_data};
 
     #[test]
     fn test_parse_validation_data() {
@@ -488,5 +536,60 @@ mod tests {
 
         assert_eq!(parsed.valid_until, u64::MAX);
         assert_eq!(parsed.valid_after, 0x001122334455);
+    }
+
+    #[test]
+    fn test_aa_error_code_from_message() {
+        assert_eq!(
+            AaErrorCode::from_message("AA26 over verificationGasLimit"),
+            AaErrorCode::Code("AA26")
+        );
+        // v0.7 FailedOpWithRevert is flattened to "{reason}:{inner}"
+        assert_eq!(
+            AaErrorCode::from_message("AA23 reverted:0x1234"),
+            AaErrorCode::Code("AA23")
+        );
+        for message in [
+            "",
+            "AA",
+            "AA2",
+            "AAzz reverted",
+            "Aggregator signature validation failed",
+        ] {
+            assert_eq!(AaErrorCode::from_message(message), AaErrorCode::Uncoded);
+        }
+    }
+
+    #[test]
+    fn test_aa_error_code_multibyte_does_not_panic() {
+        assert_eq!(AaErrorCode::from_message("AA€x"), AaErrorCode::Uncoded);
+        assert_eq!(AaErrorCode::from_message("AA2€"), AaErrorCode::Uncoded);
+    }
+
+    #[test]
+    fn test_aa_error_code_label() {
+        assert_eq!(AaErrorCode::Code("AA25").as_label(), "AA25");
+        assert_eq!(AaErrorCode::Uncoded.as_label(), "none");
+    }
+
+    #[test]
+    fn test_validation_revert_aa_error_code() {
+        let entry_point = ValidationRevert::EntryPoint("AA25 invalid account nonce".to_string());
+        assert_eq!(entry_point.aa_error_code(), AaErrorCode::Code("AA25"));
+        assert_eq!(entry_point.entry_point_error_code(), Some("AA25"));
+
+        let operation = ValidationRevert::Operation {
+            entry_point_reason: "AA23 reverted".to_string(),
+            inner_revert_data: Bytes::new(),
+            inner_revert_reason: Some("AA99 not the entry point".to_string()),
+        };
+        assert_eq!(operation.aa_error_code(), AaErrorCode::Code("AA23"));
+
+        let unknown = ValidationRevert::Unknown(Bytes::from_static(&[1, 2, 3]));
+        assert_eq!(unknown.aa_error_code(), AaErrorCode::Uncoded);
+        assert_eq!(unknown.entry_point_error_code(), None);
+
+        let panic = ValidationRevert::Panic(Panic::from(0x11_u64));
+        assert_eq!(panic.aa_error_code(), AaErrorCode::Uncoded);
     }
 }
