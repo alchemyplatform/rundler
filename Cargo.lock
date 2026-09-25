@@ -5577,6 +5577,7 @@ dependencies = [
  "itertools 0.13.0",
  "metrics",
  "metrics-derive",
+ "metrics-util",
  "mockall",
  "parking_lot",
  "prost 0.13.4",

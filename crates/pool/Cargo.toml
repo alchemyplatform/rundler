@@ -44,6 +44,7 @@ alloy-eips.workspace = true
 alloy-network-primitives.workspace = true
 alloy-rpc-types-eth.workspace = true
 alloy-serde.workspace = true
+metrics-util = { version = "0.19.0", default-features = false, features = ["debugging"] }
 mockall.workspace = true
 reth-tasks.workspace = true
 rundler-provider = { workspace = true, features = ["test-utils"] }

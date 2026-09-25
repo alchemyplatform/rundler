@@ -12,6 +12,10 @@
 // If not, see https://www.gnu.org/licenses/.
 
 mod entity_tracker;
+
+mod gas_metrics;
+pub use gas_metrics::{GAS_EFFICIENCY_BUCKETS, GAS_EFFICIENCY_HISTOGRAMS};
+
 mod pool;
 
 mod reputation;
