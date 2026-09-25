@@ -21,7 +21,10 @@ use metrics_derive::Metrics;
 use rundler_types::{UserOperation, UserOperationVariant};
 
 /// Names of the gas efficiency histograms, without the global metrics prefix.
-pub const GAS_EFFICIENCY_HISTOGRAMS: &[&str] = &["op_pool.mined_op_gas_efficiency"];
+pub const GAS_EFFICIENCY_HISTOGRAMS: &[&str] = &[
+    "op_pool.mined_op_gas_efficiency",
+    "op_pool.admission_verification_gas_efficiency",
+];
 
 /// Histogram buckets for the used / limit ratios, denser near 1.0 where limits are tight.
 pub const GAS_EFFICIENCY_BUCKETS: &[f64] = &[
@@ -115,6 +118,48 @@ pub(crate) fn record_mined_op_gas_efficiency(
     MinedOpGasMetrics::new_with_labels(&labels)
         .mined_op_gas_efficiency
         .record(ratio);
+}
+
+#[derive(Metrics)]
+#[metrics(scope = "op_pool")]
+struct AdmissionGasMetrics {
+    #[metric(
+        describe = "the fraction of the verification gas limit an op used in pool admission simulation, on the scale of verification_gas_limit_efficiency_reject_threshold: v0.6 ops with a paymaster are measured against one verification gas limit, so can exceed 1. has_7702_auth means the op carried an authorization, not necessarily a first delegation."
+    )]
+    admission_verification_gas_efficiency: Histogram,
+}
+
+static DESCRIBE_ADMISSION: Once = Once::new();
+
+/// Returns the fraction of its total verification gas limit an operation used when simulated,
+/// or `None` if that limit is 0.
+///
+/// `pre_op_gas` is the simulation's pre-op gas, which includes the pre-verification gas.
+pub(crate) fn verification_gas_efficiency(
+    uo: &UserOperationVariant,
+    pre_op_gas: u128,
+) -> Option<f64> {
+    efficiency(
+        pre_op_gas.saturating_sub(uo.pre_verification_gas()),
+        uo.total_verification_gas_limit(),
+    )
+}
+
+/// Records how much of its verification gas limit an operation used when simulated for the pool.
+///
+/// `efficiency` is from [`verification_gas_efficiency`]. It is recorded scaled like the pool's
+/// reject threshold, so an op is rejected when the recorded value is below the configured one.
+pub(crate) fn record_admission_verification_gas_efficiency(
+    entry_point: Address,
+    uo: &UserOperationVariant,
+    efficiency: f64,
+) {
+    // `new_with_labels` does not register the metric description
+    DESCRIBE_ADMISSION.call_once(AdmissionGasMetrics::describe);
+
+    AdmissionGasMetrics::new_with_labels(&OpGasLabels::from_op(uo).to_labels(entry_point))
+        .admission_verification_gas_efficiency
+        .record(efficiency / uo.effective_verification_gas_limit_efficiency_reject_threshold(1.0));
 }
 
 #[cfg(test)]
@@ -274,5 +319,90 @@ mod tests {
         );
         // 175_000 used of 350_000
         assert_eq!(value, &DebugValue::Histogram(vec![0.5.into()]));
+    }
+
+    #[test]
+    fn test_record_admission_verification_gas_efficiency() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let chain_spec = ChainSpec::default();
+        let op: UserOperationVariant = v0_7_builder(&chain_spec, U256::ZERO)
+            .paymaster(PAYMASTER, 50_000, 0, Bytes::new())
+            .build()
+            .into();
+
+        // 50_000 pre-verification gas + 125_000 verification gas used
+        let efficiency = verification_gas_efficiency(&op, 175_000).unwrap();
+        metrics::with_local_recorder(&recorder, || {
+            record_admission_verification_gas_efficiency(ENTRY_POINT, &op, efficiency);
+        });
+
+        let snapshot = snapshotter.snapshot().into_vec();
+        assert_eq!(snapshot.len(), 1);
+        let (key, _, _, value) = &snapshot[0];
+        let key = key.key();
+        assert_eq!(key.name(), GAS_EFFICIENCY_HISTOGRAMS[1]);
+
+        let mut labels = key
+            .labels()
+            .map(|label| format!("{}={}", label.key(), label.value()))
+            .collect::<Vec<_>>();
+        labels.sort();
+        assert_eq!(
+            labels,
+            vec![
+                format!("entry_point={ENTRY_POINT}"),
+                "fresh_nonce_slot=true".to_string(),
+                "has_7702_auth=false".to_string(),
+                "has_factory=false".to_string(),
+                "has_paymaster=true".to_string(),
+            ]
+        );
+        // 125_000 used of 200_000 + 50_000
+        assert_eq!(value, &DebugValue::Histogram(vec![0.5.into()]));
+    }
+
+    #[test]
+    fn test_verification_gas_efficiency() {
+        // 150_000 used of 200_000
+        assert_eq!(
+            verification_gas_efficiency(&v0_6_op(false), 200_000),
+            Some(0.75)
+        );
+        // 150_000 used of 2 * 200_000
+        assert_eq!(
+            verification_gas_efficiency(&v0_6_op(true), 200_000),
+            Some(0.375)
+        );
+        // pre-op gas below pre-verification gas
+        assert_eq!(
+            verification_gas_efficiency(&v0_6_op(false), 10_000),
+            Some(0.0)
+        );
+
+        let chain_spec = ChainSpec::default();
+        let no_limit: UserOperationVariant =
+            v0_6::UserOperationBuilder::new(&chain_spec, Default::default())
+                .build()
+                .into();
+        assert_eq!(verification_gas_efficiency(&no_limit, 100_000), None);
+    }
+
+    #[test]
+    fn test_record_admission_verification_gas_efficiency_v0_6_paymaster() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let op = v0_6_op(true);
+
+        // 150_000 used of 2 * 200_000
+        let efficiency = verification_gas_efficiency(&op, 200_000).unwrap();
+        metrics::with_local_recorder(&recorder, || {
+            record_admission_verification_gas_efficiency(ENTRY_POINT, &op, efficiency);
+        });
+
+        let snapshot = snapshotter.snapshot().into_vec();
+        assert_eq!(snapshot.len(), 1);
+        // scaled like the halved reject threshold, 150_000 used of 200_000
+        assert_eq!(snapshot[0].3, DebugValue::Histogram(vec![0.75.into()]));
     }
 }

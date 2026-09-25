@@ -695,19 +695,23 @@ where
             .pool
             .check_associated_storage(&sim_result.associated_addresses, &op)?;
 
-        // Check pre op gas limit efficiency
+        let verification_gas_efficiency =
+            gas_metrics::verification_gas_efficiency(&op, sim_result.pre_op_gas);
+        if let Some(verification_gas_efficiency) = verification_gas_efficiency {
+            gas_metrics::record_admission_verification_gas_efficiency(
+                self.config.entry_point,
+                &op,
+                verification_gas_efficiency,
+            );
+        }
+
+        // Check pre op gas limit efficiency, an op without a verification gas limit is not checked
         if self
             .config
             .verification_gas_limit_efficiency_reject_threshold
             > 0.0
+            && let Some(verification_gas_efficiency) = verification_gas_efficiency
         {
-            let verification_gas_used = sim_result
-                .pre_op_gas
-                .saturating_sub(op.pre_verification_gas());
-
-            let verification_gas_efficiency =
-                verification_gas_used as f64 / op.total_verification_gas_limit() as f64;
-
             let effective_verification_gas_limit_efficiency_reject_threshold = op
                 .effective_verification_gas_limit_efficiency_reject_threshold(
                     self.config
@@ -2290,6 +2294,62 @@ mod tests {
                 assert_eq!(actual, actual_eff);
             }
             _ => panic!("Expected VerificationGasLimitEfficiencyTooLow error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_admission_verification_gas_efficiency() {
+        // recorded whether or not the efficiency threshold then rejects the op
+        for (threshold, accepted) in [(0.0, true), (0.25, false)] {
+            let mut config = default_config();
+            config.verification_gas_limit_efficiency_reject_threshold = threshold;
+
+            let op = create_op_from_op_v0_6(UserOperationRequiredFields {
+                call_gas_limit: 10_000,
+                verification_gas_limit: 500_000,
+                pre_verification_gas: 50_000,
+                max_fee_per_gas: 1,
+                max_priority_fee_per_gas: 1,
+                ..Default::default()
+            });
+
+            let mut ep = MockEntryPointV0_6::new();
+            ep.expect_simulate_handle_op().returning(|_, _, _, _, _| {
+                Ok(Ok(ExecutionResult {
+                    pre_op_gas: 100_000,
+                    paid: uint!(110_000_U256),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+
+            let pool = create_pool_with_entry_point_config(
+                config,
+                vec![op.clone()],
+                ep,
+                MempoolConfig::default(),
+            );
+
+            let recorder = DebuggingRecorder::new();
+            let snapshotter = recorder.snapshotter();
+            let _guard = metrics::set_default_local_recorder(&recorder);
+
+            let ret = pool
+                .add_operation(OperationOrigin::Local, op.op, default_perms())
+                .await;
+            assert_eq!(ret.is_ok(), accepted);
+
+            let samples = snapshotter
+                .snapshot()
+                .into_vec()
+                .into_iter()
+                .filter(|(key, _, _, _)| {
+                    key.key().name() == gas_metrics::GAS_EFFICIENCY_HISTOGRAMS[1]
+                })
+                .map(|(_, _, _, value)| value)
+                .collect::<Vec<_>>();
+            // the simulator reports 100K pre-op gas: 50K PVG + 50K of 500K verification gas
+            assert_eq!(samples, vec![DebugValue::Histogram(vec![0.1.into()])]);
         }
     }
 
