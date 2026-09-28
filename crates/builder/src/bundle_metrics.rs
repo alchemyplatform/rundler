@@ -22,12 +22,9 @@ use metrics_derive::Metrics;
 use crate::transaction_tracker::MinedUserOpEvent;
 
 /// Names of the bundle compensation ratio histograms, without the global metrics prefix.
-pub const BUNDLE_RATIO_HISTOGRAMS: &[&str] = &[
-    "builder.bundle_gas_compensation_ratio",
-    "builder.bundle_fee_compensation_ratio",
-];
+pub const BUNDLE_RATIO_HISTOGRAMS: &[&str] = &["builder.bundle_gas_compensation_ratio"];
 
-/// Histogram buckets for the compensation ratios. Values above 1 are expected for larger
+/// Histogram buckets for the gas compensation ratio. Values above 1 are expected for larger
 /// bundles, since each op's pre-verification gas assumes a bundle of one.
 pub const BUNDLE_RATIO_BUCKETS: &[f64] = &[
     0.0, 0.5, 0.8, 0.9, 0.95, 1.0, 1.05, 1.1, 1.25, 1.5, 2.0, 3.0, 5.0,
@@ -47,26 +44,22 @@ const WEI_PER_GWEI: U256 = U256::from_limbs([1_000_000_000, 0, 0, 0]);
 #[metrics(scope = "builder")]
 struct BundleCompensationCounters {
     #[metric(
-        describe = "the fee paid for mined bundle transactions in gwei (gas used times effective gas price)."
+        describe = "the fee paid for mined bundle transactions in gwei (gas used times effective gas price). has_bundler_sponsored_op is unknown for bundles without user operation events, such as reverted bundles."
     )]
     bundle_fee_paid_gwei: Counter,
     #[metric(
-        describe = "the compensation paid to the bundler by the entry point for mined bundles in gwei (sum of actualGasCost)."
+        describe = "the compensation paid to the bundler by the entry point for mined bundles in gwei (sum of actualGasCost). Bundler sponsored ops pay nothing on chain and are billed separately."
     )]
     bundle_compensation_gwei: Counter,
 }
 
 #[derive(Metrics)]
 #[metrics(scope = "builder")]
-struct BundleCompensationRatios {
+struct BundleGasCompensation {
     #[metric(
-        describe = "the gas the entry point charged ops for divided by the gas the bundle transaction used, for successful bundles."
+        describe = "the gas the entry point charged ops for (sum of actualGasUsed) divided by the gas the bundle transaction used, for successful bundles, including bundler sponsored ones. Not recorded on chains that price DA in preVerificationGas but leave it out of the receipt gas used, such as OP stack chains."
     )]
     bundle_gas_compensation_ratio: Histogram,
-    #[metric(
-        describe = "the compensation paid to the bundler divided by the bundle transaction fee, for successful bundles."
-    )]
-    bundle_fee_compensation_ratio: Histogram,
 }
 
 #[derive(Metrics)]
@@ -75,7 +68,7 @@ struct BundleOpCounts {
     #[metric(describe = "the number of user operations in a successful mined bundle.")]
     bundle_ops: Histogram,
     #[metric(
-        describe = "the number of bundler sponsored user operations (actualGasCost of 0) in a successful mined bundle."
+        describe = "the number of bundler sponsored user operations (actualGasCost of 0) in a successful mined bundle. Not recorded when the bundle gas price is unknown or 0, since then every op has an actualGasCost of 0."
     )]
     bundle_bundler_sponsored_ops: Histogram,
 }
@@ -106,9 +99,13 @@ fn ratio(numerator: U256, denominator: U256) -> Option<f64> {
 ///
 /// Only events emitted by `entry_point` are counted. Reverted bundles have no events, so they
 /// only update the counters.
+///
+/// `da_gas_in_gas_used` is false on chains where ops pay for DA through preVerificationGas but
+/// the receipt gas used leaves it out, such as OP stack chains. The gas compensation ratio is
+/// meaningless there and is not recorded.
 pub(crate) fn record_mined_bundle(
     entry_point: Address,
-    sender: Address,
+    da_gas_in_gas_used: bool,
     is_success: bool,
     gas_used: Option<u64>,
     gas_price: Option<u128>,
@@ -117,7 +114,7 @@ pub(crate) fn record_mined_bundle(
     // `new_with_labels` does not register the metric descriptions
     DESCRIBE.call_once(|| {
         BundleCompensationCounters::describe();
-        BundleCompensationRatios::describe();
+        BundleGasCompensation::describe();
         BundleOpCounts::describe();
     });
 
@@ -125,6 +122,18 @@ pub(crate) fn record_mined_bundle(
         .iter()
         .filter(|event| event.entry_point == entry_point)
         .collect::<Vec<_>>();
+    // With a gas price of 0 every op has an actualGasCost of 0, so sponsored ops can't be told apart
+    let sponsored_ops = gas_price.filter(|price| *price > 0).map(|_| {
+        events
+            .iter()
+            .filter(|event| event.actual_gas_cost.is_zero())
+            .count()
+    });
+    let has_bundler_sponsored_op = match sponsored_ops {
+        Some(0) if !events.is_empty() => "no",
+        Some(1..) => "yes",
+        _ => "unknown",
+    };
     let compensation = events.iter().fold(U256::ZERO, |sum, event| {
         sum.saturating_add(event.actual_gas_cost)
     });
@@ -134,8 +143,11 @@ pub(crate) fn record_mined_bundle(
 
     let counters = BundleCompensationCounters::new_with_labels(&[
         ("entry_point", entry_point.to_string()),
-        ("sender", sender.to_string()),
         ("success", is_success.to_string()),
+        (
+            "has_bundler_sponsored_op",
+            has_bundler_sponsored_op.to_string(),
+        ),
     ]);
     if let Some(fee) = fee {
         counters.bundle_fee_paid_gwei.increment(wei_to_gwei(fee));
@@ -151,29 +163,32 @@ pub(crate) fn record_mined_bundle(
         return;
     }
 
-    let sponsored_ops = events
-        .iter()
-        .filter(|event| event.actual_gas_cost.is_zero())
-        .count();
     let op_counts = BundleOpCounts::new_with_labels(&[("entry_point", entry_point.to_string())]);
     op_counts.bundle_ops.record(events.len() as f64);
-    op_counts
-        .bundle_bundler_sponsored_ops
-        .record(sponsored_ops as f64);
+    if let Some(sponsored_ops) = sponsored_ops {
+        op_counts
+            .bundle_bundler_sponsored_ops
+            .record(sponsored_ops as f64);
+    }
 
-    let ratios = BundleCompensationRatios::new_with_labels(&[
-        ("entry_point", entry_point.to_string()),
-        ("bundle_size", bundle_size_label(events.len()).to_string()),
-        ("has_bundler_sponsored_op", (sponsored_ops > 0).to_string()),
-    ]);
+    if !da_gas_in_gas_used {
+        return;
+    }
+
     let charged_gas = events.iter().fold(U256::ZERO, |sum, event| {
         sum.saturating_add(event.actual_gas_used)
     });
     if let Some(gas_ratio) = ratio(charged_gas, U256::from(gas_used)) {
-        ratios.bundle_gas_compensation_ratio.record(gas_ratio);
-    }
-    if let Some(fee_ratio) = fee.and_then(|fee| ratio(compensation, fee)) {
-        ratios.bundle_fee_compensation_ratio.record(fee_ratio);
+        BundleGasCompensation::new_with_labels(&[
+            ("entry_point", entry_point.to_string()),
+            ("bundle_size", bundle_size_label(events.len()).to_string()),
+            (
+                "has_bundler_sponsored_op",
+                has_bundler_sponsored_op.to_string(),
+            ),
+        ])
+        .bundle_gas_compensation_ratio
+        .record(gas_ratio);
     }
 }
 
@@ -187,7 +202,6 @@ mod tests {
     use super::*;
 
     const ENTRY_POINT: Address = address!("0000000071727De22E5E9d8BAf0edAc6f37da032");
-    const SENDER: Address = address!("00000000000000000000000000000000000000aa");
     const OTHER: Address = address!("00000000000000000000000000000000000000bb");
 
     fn event(entry_point: Address, actual_gas_cost: u64, actual_gas_used: u64) -> MinedUserOpEvent {
@@ -205,10 +219,27 @@ mod tests {
         gas_price: Option<u128>,
         events: &[MinedUserOpEvent],
     ) -> BTreeMap<String, DebugValue> {
+        record_on_chain(true, is_success, gas_used, gas_price, events)
+    }
+
+    fn record_on_chain(
+        da_gas_in_gas_used: bool,
+        is_success: bool,
+        gas_used: Option<u64>,
+        gas_price: Option<u128>,
+        events: &[MinedUserOpEvent],
+    ) -> BTreeMap<String, DebugValue> {
         let recorder = DebuggingRecorder::new();
         let snapshotter = recorder.snapshotter();
         metrics::with_local_recorder(&recorder, || {
-            record_mined_bundle(ENTRY_POINT, SENDER, is_success, gas_used, gas_price, events);
+            record_mined_bundle(
+                ENTRY_POINT,
+                da_gas_in_gas_used,
+                is_success,
+                gas_used,
+                gas_price,
+                events,
+            );
         });
 
         snapshotter
@@ -219,7 +250,7 @@ mod tests {
                 let key = key.key();
                 let mut labels = key
                     .labels()
-                    .filter(|label| !matches!(label.key(), "entry_point" | "sender"))
+                    .filter(|label| label.key() != "entry_point")
                     .map(|label| format!("{}={}", label.key(), label.value()))
                     .collect::<Vec<_>>();
                 labels.sort();
@@ -259,17 +290,18 @@ mod tests {
             ],
         );
 
-        let ratio_labels = "{bundle_size=2-4,has_bundler_sponsored_op=true}";
+        let counter_labels = "{has_bundler_sponsored_op=yes,success=true}";
+        let ratio_labels = "{bundle_size=2-4,has_bundler_sponsored_op=yes}";
         assert_eq!(
             metrics,
             BTreeMap::from([
                 (
-                    "builder.bundle_fee_paid_gwei{success=true}".to_string(),
+                    format!("builder.bundle_fee_paid_gwei{counter_labels}"),
                     // 300_000 gas * 10 gwei
                     DebugValue::Counter(3_000_000)
                 ),
                 (
-                    "builder.bundle_compensation_gwei{success=true}".to_string(),
+                    format!("builder.bundle_compensation_gwei{counter_labels}"),
                     DebugValue::Counter(3_300_000)
                 ),
                 (
@@ -284,11 +316,6 @@ mod tests {
                     format!("{}{ratio_labels}", BUNDLE_RATIO_HISTOGRAMS[0]),
                     // 360_000 charged / 300_000 used
                     DebugValue::Histogram(vec![1.2.into()])
-                ),
-                (
-                    format!("{}{ratio_labels}", BUNDLE_RATIO_HISTOGRAMS[1]),
-                    // 3_300_000 gwei paid back / 3_000_000 gwei fee
-                    DebugValue::Histogram(vec![1.1.into()])
                 ),
             ])
         );
@@ -307,11 +334,13 @@ mod tests {
             metrics,
             BTreeMap::from([
                 (
-                    "builder.bundle_fee_paid_gwei{success=false}".to_string(),
+                    "builder.bundle_fee_paid_gwei{has_bundler_sponsored_op=unknown,success=false}"
+                        .to_string(),
                     DebugValue::Counter(100_000)
                 ),
                 (
-                    "builder.bundle_compensation_gwei{success=false}".to_string(),
+                    "builder.bundle_compensation_gwei{has_bundler_sponsored_op=unknown,success=false}"
+                        .to_string(),
                     DebugValue::Counter(0)
                 ),
             ])
@@ -319,7 +348,34 @@ mod tests {
     }
 
     #[test]
-    fn test_unknown_or_zero_fee_skips_fee_ratio() {
+    fn test_bundle_without_sponsored_ops() {
+        let metrics = record(
+            true,
+            Some(100_000),
+            Some(1_000_000_000),
+            &[event(ENTRY_POINT, 90_000_000_000_000, 90_000)],
+        );
+
+        assert_eq!(
+            metrics
+                .get("builder.bundle_compensation_gwei{has_bundler_sponsored_op=no,success=true}"),
+            Some(&DebugValue::Counter(90_000))
+        );
+        assert_eq!(
+            metrics.get(&format!(
+                "{}{{bundle_size=1,has_bundler_sponsored_op=no}}",
+                BUNDLE_RATIO_HISTOGRAMS[0]
+            )),
+            Some(&DebugValue::Histogram(vec![0.9.into()]))
+        );
+        assert_eq!(
+            metrics.get("builder.bundle_bundler_sponsored_ops{}"),
+            Some(&DebugValue::Histogram(vec![0.0.into()]))
+        );
+    }
+
+    #[test]
+    fn test_unknown_or_zero_fee_does_not_detect_sponsored_ops() {
         for gas_price in [None, Some(0)] {
             let metrics = record(
                 true,
@@ -328,20 +384,57 @@ mod tests {
                 &[event(ENTRY_POINT, 0, 90_000)],
             );
 
-            let ratio_labels = "{bundle_size=1,has_bundler_sponsored_op=true}";
+            // every op costs 0 at a gas price of 0, so sponsorship is unknown
             assert_eq!(
-                metrics.get(&format!("{}{ratio_labels}", BUNDLE_RATIO_HISTOGRAMS[0])),
+                metrics.get(&format!(
+                    "{}{{bundle_size=1,has_bundler_sponsored_op=unknown}}",
+                    BUNDLE_RATIO_HISTOGRAMS[0]
+                )),
                 Some(&DebugValue::Histogram(vec![0.9.into()]))
             );
-            // registered alongside the gas ratio, but no fee ratio sample is recorded
+            // registered with the compensation counter, nothing added
             assert_eq!(
-                metrics.get(&format!("{}{ratio_labels}", BUNDLE_RATIO_HISTOGRAMS[1])),
-                Some(&DebugValue::Histogram(vec![]))
-            );
-            assert_eq!(
-                metrics.get("builder.bundle_fee_paid_gwei{success=true}"),
+                metrics.get(
+                    "builder.bundle_fee_paid_gwei{has_bundler_sponsored_op=unknown,success=true}"
+                ),
                 Some(&DebugValue::Counter(0))
             );
+            assert_eq!(
+                metrics.get("builder.bundle_ops{}"),
+                Some(&DebugValue::Histogram(vec![1.0.into()]))
+            );
+            // registered with the op count histogram, nothing recorded
+            assert_eq!(
+                metrics.get("builder.bundle_bundler_sponsored_ops{}"),
+                Some(&DebugValue::Histogram(vec![]))
+            );
         }
+    }
+
+    #[test]
+    fn test_da_gas_outside_gas_used_skips_gas_ratio() {
+        let metrics = record_on_chain(
+            false,
+            true,
+            Some(50_000),
+            Some(1_000_000_000),
+            // pre-verification gas includes DA gas the receipt gas used leaves out
+            &[event(ENTRY_POINT, 350_000_000_000_000, 350_000)],
+        );
+
+        assert!(
+            !metrics
+                .keys()
+                .any(|key| key.starts_with(BUNDLE_RATIO_HISTOGRAMS[0]))
+        );
+        assert_eq!(
+            metrics
+                .get("builder.bundle_compensation_gwei{has_bundler_sponsored_op=no,success=true}"),
+            Some(&DebugValue::Counter(350_000))
+        );
+        assert_eq!(
+            metrics.get("builder.bundle_ops{}"),
+            Some(&DebugValue::Histogram(vec![1.0.into()]))
+        );
     }
 }

@@ -647,7 +647,8 @@ where
                     if let Some((entry_point, _)) = &pinned {
                         bundle_metrics::record_mined_bundle(
                             *entry_point,
-                            self.sender_eoa,
+                            !self.chain_spec.da_pre_verification_gas
+                                || self.chain_spec.include_da_gas_in_gas_limit,
                             is_success,
                             gas_used,
                             gas_price,
