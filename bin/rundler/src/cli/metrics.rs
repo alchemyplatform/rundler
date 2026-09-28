@@ -58,6 +58,12 @@ pub fn initialize<'a, T: TaskSpawner>(
             rundler_builder::BUNDLE_OP_COUNT_BUCKETS,
         )?;
     }
+    for name in rundler_sim::ESTIMATION_ETH_CALL_HISTOGRAMS {
+        builder = builder.set_buckets_for_metric(
+            Matcher::Full(format!("rundler.{name}")),
+            rundler_sim::ESTIMATION_ETH_CALL_BUCKETS,
+        )?;
+    }
 
     let (recorder, exporter) = builder.build()?;
     task_spawner.spawn_critical(

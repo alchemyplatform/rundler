@@ -321,14 +321,21 @@ where
 
         // Add a buffer to the verification gas limit. Add 10% or 2000 gas, whichever is larger
         // to ensure we get at least a 2000 gas buffer. Cap at the max verification gas.
-        let verification_gas_limit = cmp::max(
+        let buffered_verification_gas_limit = cmp::max(
             math::increase_by_percent(
                 verification_gas_limit,
                 super::VERIFICATION_GAS_BUFFER_PERCENT,
             ),
             verification_gas_limit + simulation::v0_6::REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER,
-        )
-        .min(self.settings.max_verification_gas);
+        );
+        super::record_clamped_estimate(
+            *self.entry_point.address(),
+            "verification",
+            buffered_verification_gas_limit,
+            self.settings.max_verification_gas,
+        );
+        let verification_gas_limit =
+            buffered_verification_gas_limit.min(self.settings.max_verification_gas);
 
         tracing::debug!(
             "verification_gas_limit: {} took {:?}ms",
@@ -365,8 +372,14 @@ where
             .await?;
 
         // Add a buffer to the call gas limit and clamp
-        let call_gas_limit = call_gas_limit
-            .add(super::CALL_GAS_BUFFER_VALUE)
+        let buffered_call_gas_limit = call_gas_limit.add(super::CALL_GAS_BUFFER_VALUE);
+        super::record_clamped_estimate(
+            *self.entry_point.address(),
+            "call",
+            buffered_call_gas_limit,
+            self.settings.max_bundle_execution_gas,
+        );
+        let call_gas_limit = buffered_call_gas_limit
             .clamp(MIN_CALL_GAS_LIMIT, self.settings.max_bundle_execution_gas);
 
         Ok(call_gas_limit)
@@ -514,14 +527,22 @@ where
             Err(e) => GasEstimationError::ProviderError(e),
         }
     }
+
+    fn entry_point(&self) -> Address {
+        *self.entry_point.address()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
 
     use alloy_primitives::{hex, uint};
     use alloy_sol_types::{Revert, SolError, SolValue};
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder, Snapshotter};
     use rundler_contracts::{
         common::EstimationTypes::*, v0_6::UserOperation as ContractUserOperation,
     };
@@ -540,7 +561,7 @@ mod tests {
     use crate::{
         VerificationGasEstimatorImpl,
         estimation::{
-            CALL_GAS_BUFFER_VALUE, VERIFICATION_GAS_BUFFER_PERCENT,
+            CALL_GAS_BUFFER_VALUE, ESTIMATION_ETH_CALL_HISTOGRAMS, VERIFICATION_GAS_BUFFER_PERCENT,
             estimate_call_gas::PROXY_IMPLEMENTATION_ADDRESS_MARKER,
         },
         simulation::v0_6::REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER,
@@ -877,6 +898,87 @@ mod tests {
         assert_eq!(expected_with_buffer, estimation);
     }
 
+    /// Returns `"name{sorted labels}" => value` for the gas estimator search and estimate metrics.
+    fn estimator_metrics(snapshotter: &Snapshotter) -> Vec<(String, DebugValue)> {
+        let mut metrics = snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .filter_map(|(key, _, _, value)| {
+                let key = key.key();
+                if !(key.name().ends_with("eth_calls") || key.name().ends_with("clamped_estimates"))
+                {
+                    return None;
+                }
+                let mut labels = key
+                    .labels()
+                    .map(|label| format!("{}={}", label.key(), label.value()))
+                    .collect::<Vec<_>>();
+                labels.sort();
+                Some((format!("{}{{{}}}", key.name(), labels.join(",")), value))
+            })
+            .collect::<Vec<_>>();
+        metrics.sort_by(|a, b| a.0.cmp(&b.0));
+        metrics
+    }
+
+    #[tokio::test]
+    async fn test_binary_search_verification_gas_clamped() {
+        let (entry, mut provider) = create_base_config();
+        let gas_usage = 100_000;
+
+        add_verification_gas_result(
+            &mut provider,
+            EstimationTypesErrors::EstimateGasResult(EstimateGasResult {
+                gas: U256::from(gas_usage),
+                numRounds: U256::from(10),
+            }),
+        );
+
+        let (_, mut settings) = create_estimator(create_base_config().0, MockEvmProvider::new());
+        // below the buffered estimate, so the cap sets the returned limit
+        settings.max_verification_gas = 140_000;
+        let estimator = create_custom_estimator(
+            ChainSpec::default(),
+            provider,
+            MockFeeEstimator::new(),
+            entry,
+            settings,
+        );
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _guard = metrics::set_default_local_recorder(&recorder);
+
+        let optional_op = demo_user_op_optional_gas(Some(10000));
+        let user_op = demo_user_op();
+        let estimation = estimator
+            .estimate_verification_gas(&optional_op, &user_op, B256::ZERO, StateOverride::default())
+            .await
+            .unwrap();
+
+        assert_eq!(estimation, 140_000);
+        assert_eq!(
+            estimator_metrics(&snapshotter),
+            vec![
+                (
+                    format!(
+                        "gas_estimator.clamped_estimates{{entry_point={},field=verification}}",
+                        Address::ZERO
+                    ),
+                    DebugValue::Counter(1)
+                ),
+                (
+                    format!(
+                        "gas_estimator.eth_calls{{entry_point={},field=verification,outcome=success}}",
+                        Address::ZERO
+                    ),
+                    DebugValue::Histogram(vec![1.0.into()])
+                ),
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn test_binary_search_verification_gas_should_not_overflow() {
         let (entry, mut provider) = create_base_config();
@@ -1052,6 +1154,124 @@ mod tests {
         // I update the spoofed value to 200
 
         assert_eq!(estimation, 200);
+    }
+
+    #[tokio::test]
+    async fn test_estimate_call_gas_continuation_records_eth_calls() {
+        let (mut entry, mut provider) = create_base_config();
+
+        entry
+            .expect_simulate_handle_op_estimate_gas()
+            .returning(|_a, _b, _c, _d, _e| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateGasContinuation {
+                        minGas: U256::from(100),
+                        maxGas: U256::from(100000),
+                        numRounds: U256::from(10),
+                    }
+                    .abi_encode()
+                    .into(),
+                    target_success: false,
+                    ..Default::default()
+                }))
+            })
+            .times(1);
+        entry
+            .expect_simulate_handle_op_estimate_gas()
+            .returning(|_a, _b, _c, _d, _e| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateGasResult {
+                        gas: U256::from(200),
+                        numRounds: U256::from(10),
+                    }
+                    .abi_encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            })
+            .times(1);
+
+        provider
+            .expect_get_code()
+            .returning(|_a, _b| Ok(Bytes::new()));
+
+        let (estimator, _) = create_estimator(entry, provider);
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _guard = metrics::set_default_local_recorder(&recorder);
+
+        let estimation = estimator
+            .call_gas_estimator
+            .estimate_call_gas(demo_user_op(), B256::ZERO, StateOverride::default())
+            .await
+            .unwrap();
+
+        assert_eq!(estimation, 200);
+        assert_eq!(
+            estimator_metrics(&snapshotter),
+            vec![(
+                format!(
+                    "{}{{entry_point={},field=call,outcome=success}}",
+                    ESTIMATION_ETH_CALL_HISTOGRAMS[0],
+                    Address::ZERO
+                ),
+                DebugValue::Histogram(vec![2.0.into()])
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_estimate_call_gas_not_converged() {
+        let (mut entry, mut provider) = create_base_config();
+
+        // always asks for another round while making progress, so the search runs out of rounds
+        let calls = Arc::new(AtomicU64::new(0));
+        entry
+            .expect_simulate_handle_op_estimate_gas()
+            .returning(move |_a, _b, _c, _d, _e| {
+                let call = calls.fetch_add(1, Ordering::Relaxed) + 1;
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateGasContinuation {
+                        minGas: U256::from(100 * call),
+                        maxGas: U256::from(100000),
+                        numRounds: U256::from(10),
+                    }
+                    .abi_encode()
+                    .into(),
+                    target_success: false,
+                    ..Default::default()
+                }))
+            });
+
+        provider
+            .expect_get_code()
+            .returning(|_a, _b| Ok(Bytes::new()));
+
+        let (estimator, settings) = create_estimator(entry, provider);
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _guard = metrics::set_default_local_recorder(&recorder);
+
+        let error = estimator
+            .call_gas_estimator
+            .estimate_call_gas(demo_user_op(), B256::ZERO, StateOverride::default())
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("failed to converge"));
+        assert_eq!(
+            estimator_metrics(&snapshotter),
+            vec![(
+                format!(
+                    "gas_estimator.eth_calls{{entry_point={},field=call,outcome=not_converged}}",
+                    Address::ZERO
+                ),
+                DebugValue::Histogram(vec![f64::from(settings.max_gas_estimation_rounds).into()])
+            )]
+        );
     }
 
     #[tokio::test]

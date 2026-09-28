@@ -140,6 +140,8 @@ where
             round_fn,
             self.settings.max_bundle_execution_gas,
             self.settings.max_gas_estimation_rounds,
+            *self.entry_point.address(),
+            "call",
         )
         .await?;
 

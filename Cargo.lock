@@ -5732,6 +5732,7 @@ dependencies = [
  "futures-util",
  "metrics",
  "metrics-derive",
+ "metrics-util",
  "mockall",
  "rundler-contracts",
  "rundler-provider",

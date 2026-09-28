@@ -387,6 +387,9 @@ where
             .estimate_op_gas(uo.into(), state_override.unwrap_or_default())
             .await;
 
+        if let Err(error) = &result {
+            rundler_sim::record_estimation_error(*self.entry_point.address(), error);
+        }
         if let Err(GasEstimationError::RevertInValidation(revert)) = &result {
             entry_point_metrics::record_aa_error(
                 AaErrorStage::Estimation,

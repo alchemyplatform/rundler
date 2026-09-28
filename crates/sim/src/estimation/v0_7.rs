@@ -379,11 +379,18 @@ where
             .estimate_verification_gas(full_op, block_hash, state_override)
             .await?;
 
-        let verification_gas_limit = math::increase_by_percent(
+        let buffered_verification_gas_limit = math::increase_by_percent(
             verification_gas_limit,
             super::VERIFICATION_GAS_BUFFER_PERCENT,
-        )
-        .min(self.settings.max_verification_gas);
+        );
+        super::record_clamped_estimate(
+            *self.entry_point.address(),
+            "verification",
+            buffered_verification_gas_limit,
+            self.settings.max_verification_gas,
+        );
+        let verification_gas_limit =
+            buffered_verification_gas_limit.min(self.settings.max_verification_gas);
 
         tracing::debug!(
             "verification_gas_limit: {} took {:?}ms",
@@ -421,11 +428,18 @@ where
             .estimate_verification_gas(full_op, block_hash, state_override)
             .await?;
 
-        let paymaster_verification_gas_limit = math::increase_by_percent(
+        let buffered_paymaster_verification_gas_limit = math::increase_by_percent(
             paymaster_verification_gas_limit,
             super::VERIFICATION_GAS_BUFFER_PERCENT,
-        )
-        .min(self.settings.max_verification_gas);
+        );
+        super::record_clamped_estimate(
+            *self.entry_point.address(),
+            "paymaster_verification",
+            buffered_paymaster_verification_gas_limit,
+            self.settings.max_verification_gas,
+        );
+        let paymaster_verification_gas_limit =
+            buffered_paymaster_verification_gas_limit.min(self.settings.max_verification_gas);
 
         tracing::debug!(
             "paymaster_verification_gas_limit: {} took {:?}ms",
@@ -462,8 +476,14 @@ where
             .await?;
 
         // Add a buffer to the call gas limit and clamp
-        let call_gas_limit = call_gas_limit
-            .add(super::CALL_GAS_BUFFER_VALUE)
+        let buffered_call_gas_limit = call_gas_limit.add(super::CALL_GAS_BUFFER_VALUE);
+        super::record_clamped_estimate(
+            *self.entry_point.address(),
+            "call",
+            buffered_call_gas_limit,
+            self.settings.max_bundle_execution_gas,
+        );
+        let call_gas_limit = buffered_call_gas_limit
             .clamp(MIN_CALL_GAS_LIMIT, self.settings.max_bundle_execution_gas);
 
         Ok(call_gas_limit)
@@ -646,6 +666,10 @@ where
     fn decode_revert(&self, revert_data: &Bytes) -> GasEstimationError {
         decode_validation_revert::<EP>(revert_data)
     }
+
+    fn entry_point(&self) -> Address {
+        *self.entry_point.address()
+    }
 }
 
 /// Specialization for paymaster verification gas estimation
@@ -680,6 +704,14 @@ where
 
     fn decode_revert(&self, revert_data: &Bytes) -> GasEstimationError {
         decode_validation_revert::<EP>(revert_data)
+    }
+
+    fn entry_point(&self) -> Address {
+        *self.entry_point.address()
+    }
+
+    fn estimated_field(&self) -> &'static str {
+        "paymaster_verification"
     }
 }
 

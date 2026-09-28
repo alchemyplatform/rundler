@@ -36,6 +36,7 @@ alloy-primitives = { workspace = true, features = ["rand"] }
 alloy-signer.workspace = true
 alloy-signer-local.workspace = true
 alloy-transport.workspace = true
+metrics-util = { version = "0.19.0", default-features = false, features = ["debugging"] }
 mockall.workspace = true
 rundler-provider = { workspace = true, features = ["test-utils"] }
 rundler-types = { workspace = true, features = ["test-utils"] }
