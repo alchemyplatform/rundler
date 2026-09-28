@@ -15,13 +15,15 @@ use std::sync::Arc;
 
 use alloy_consensus::Transaction;
 use alloy_primitives::{Address, B256, I256, U256};
+use alloy_sol_types::SolEvent;
 use anyhow::bail;
 use async_trait::async_trait;
 use metrics::{Gauge, Histogram};
 use metrics_derive::Metrics;
 #[cfg(test)]
 use mockall::automock;
-use rundler_provider::{EvmProvider, ReceiptResponse, TransactionRequest};
+use rundler_contracts::v0_7::IEntryPoint::UserOperationEvent;
+use rundler_provider::{EvmProvider, Log, ReceiptResponse, TransactionRequest};
 use rundler_signer::{SignerLease, SignerManager};
 use rundler_types::{ExpectedStorage, GasFees, pool::AddressUpdate};
 use tokio::time::Instant;
@@ -127,6 +129,7 @@ pub(crate) enum TrackerUpdate {
         gas_used: Option<u64>,
         gas_price: Option<u128>,
         is_success: bool,
+        user_op_events: Vec<MinedUserOpEvent>,
     },
     LatestTxDropped {
         nonce: u64,
@@ -134,6 +137,33 @@ pub(crate) enum TrackerUpdate {
     NonceUsedForOtherTx {
         nonce: u64,
     },
+}
+
+/// A `UserOperationEvent` from a mined transaction's receipt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MinedUserOpEvent {
+    /// The address that emitted the log, only an entry point if it matches one
+    pub(crate) entry_point: Address,
+    pub(crate) actual_gas_cost: U256,
+    pub(crate) actual_gas_used: U256,
+}
+
+impl MinedUserOpEvent {
+    /// Decodes a `UserOperationEvent` log, returning `None` for any other log.
+    ///
+    /// The event has the same signature and layout in every entry point version.
+    fn from_log(log: &Log) -> Option<Self> {
+        if log.topic0() != Some(&UserOperationEvent::SIGNATURE_HASH) {
+            return None;
+        }
+        let decoded = log.log_decode::<UserOperationEvent>().ok()?;
+        let event = decoded.data();
+        Some(Self {
+            entry_point: log.address(),
+            actual_gas_cost: event.actualGasCost,
+            actual_gas_used: event.actualGasUsed,
+        })
+    }
 }
 
 pub(crate) struct TransactionTrackerImpl<P, T> {
@@ -282,6 +312,13 @@ where
                 gas_used: Some(r.inner.gas_used()),
                 gas_price: Some(r.effective_gas_price),
                 is_success: r.inner.status(),
+                user_op_events: r
+                    .inner
+                    .inner
+                    .logs()
+                    .iter()
+                    .filter_map(MinedUserOpEvent::from_log)
+                    .collect(),
             })),
             None => {
                 warn!("failed to find transaction receipt for tx: {}", tx_hash);
@@ -298,6 +335,7 @@ struct MinedTxInfo {
     gas_used: Option<u64>,
     gas_price: Option<u128>,
     is_success: bool,
+    user_op_events: Vec<MinedUserOpEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -567,6 +605,7 @@ where
                     gas_used: mined_tx_info.gas_used,
                     gas_price: mined_tx_info.gas_price,
                     is_success: mined_tx_info.is_success,
+                    user_op_events: mined_tx_info.user_op_events,
                 };
 
                 if let Some(sent_at_time) = tx.sent_at_time {
@@ -698,9 +737,9 @@ mod tests {
         atomic::{AtomicBool, Ordering},
     };
 
-    use alloy_consensus::{Signed, TxEip1559, transaction::Recovered};
+    use alloy_consensus::{Receipt, Signed, TxEip1559, transaction::Recovered};
     use alloy_network::TxSigner;
-    use alloy_primitives::{Address, Signature, U256};
+    use alloy_primitives::{Address, Bytes, Log as PrimitiveLog, LogData, Signature, U256};
     use alloy_rpc_types_eth::{
         Transaction as AlloyTransaction, TransactionReceipt as AlloyTransactionReceipt,
     };
@@ -1097,6 +1136,119 @@ mod tests {
         .into()
     }
     #[tokio::test]
+    async fn test_process_update_mined_keeps_user_op_events() {
+        let (mut sender, mut provider, signer) = create_base_config(0);
+
+        let tx_hash = B256::random();
+        let entry_point = Address::random();
+        let other = Address::random();
+
+        sender
+            .expect_send_transaction()
+            .returning(move |_a, _b, _c| Box::pin(async move { Ok(tx_hash) }));
+
+        provider
+            .expect_get_transaction_by_hash()
+            .returning(|hash: B256| Ok(Some(sign_transaction(hash))));
+
+        provider
+            .expect_get_transaction_receipt()
+            .returning(move |_: B256| {
+                let user_op_log =
+                    |address: Address, actual_gas_cost: u64, actual_gas_used: u64| Log {
+                        inner: PrimitiveLog {
+                            address,
+                            data: UserOperationEvent {
+                                userOpHash: B256::random(),
+                                sender: Address::random(),
+                                paymaster: Address::ZERO,
+                                nonce: U256::ZERO,
+                                success: true,
+                                actualGasCost: U256::from(actual_gas_cost),
+                                actualGasUsed: U256::from(actual_gas_used),
+                            }
+                            .encode_log_data(),
+                        },
+                        ..Default::default()
+                    };
+                // a log that is not a UserOperationEvent
+                let other_log = Log {
+                    inner: PrimitiveLog {
+                        address: entry_point,
+                        data: LogData::new_unchecked(vec![B256::random()], Bytes::new()),
+                    },
+                    ..Default::default()
+                };
+
+                Ok(Some(WithOtherFields::new(AlloyTransactionReceipt {
+                    inner: AnyReceiptEnvelope {
+                        inner: ReceiptWithBloom {
+                            receipt: Receipt {
+                                status: true.into(),
+                                cumulative_gas_used: 0,
+                                logs: vec![
+                                    user_op_log(entry_point, 1_000, 100),
+                                    other_log,
+                                    user_op_log(other, 2_000, 200),
+                                ],
+                            },
+                            logs_bloom: Default::default(),
+                        },
+                        r#type: 0,
+                    },
+                    transaction_hash: B256::ZERO,
+                    transaction_index: None,
+                    block_hash: None,
+                    block_number: None,
+                    gas_used: 0,
+                    effective_gas_price: 0,
+                    blob_gas_used: None,
+                    blob_gas_price: None,
+                    from: Address::ZERO,
+                    to: None,
+                    contract_address: None,
+                })))
+            });
+
+        let mut tracker = create_tracker(sender, provider, signer).await;
+
+        let tx = TransactionRequest::default().nonce(0);
+        let exp = ExpectedStorage::default();
+
+        // send dummy transaction
+        let _sent = tracker.send_transaction(tx, &exp, 0).await;
+        let update = AddressUpdate {
+            address: Address::ZERO,
+            nonce: Some(1),
+            mined_tx_hashes: vec![tx_hash],
+            balance: U256::from(1000),
+        };
+
+        let Some(TrackerUpdate::Mined { user_op_events, .. }) =
+            tracker.process_update(&update).await.unwrap()
+        else {
+            panic!("expected a mined update");
+        };
+
+        // events are kept with their emitter, filtering by entry point happens in the sender
+        assert_eq!(
+            user_op_events,
+            vec![
+                MinedUserOpEvent {
+                    entry_point,
+                    actual_gas_cost: U256::from(1_000),
+                    actual_gas_used: U256::from(100),
+                },
+                MinedUserOpEvent {
+                    entry_point: other,
+                    actual_gas_cost: U256::from(2_000),
+                    actual_gas_used: U256::from(200),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn test_process_update_mined() {
         let (mut sender, mut provider, signer) = create_base_config(0);
 
@@ -1148,7 +1300,10 @@ mod tests {
 
         let tracker_update = tracker.process_update(&update).await.unwrap().unwrap();
 
-        assert!(matches!(tracker_update, TrackerUpdate::Mined { .. }));
+        assert!(matches!(
+            tracker_update,
+            TrackerUpdate::Mined { ref user_op_events, .. } if user_op_events.is_empty()
+        ));
 
         let state = tracker.get_state().unwrap();
         assert_eq!(

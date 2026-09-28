@@ -22,6 +22,13 @@
 use alloy_primitives::Address;
 
 mod assigner;
+
+mod bundle_metrics;
+pub use bundle_metrics::{
+    BUNDLE_OP_COUNT_BUCKETS, BUNDLE_OP_COUNT_HISTOGRAMS, BUNDLE_RATIO_BUCKETS,
+    BUNDLE_RATIO_HISTOGRAMS,
+};
+
 mod bundle_proposer;
 mod bundle_sender;
 mod delegation_sender;

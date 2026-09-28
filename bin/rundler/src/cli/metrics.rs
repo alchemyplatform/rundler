@@ -46,6 +46,18 @@ pub fn initialize<'a, T: TaskSpawner>(
             rundler_pool::GAS_EFFICIENCY_BUCKETS,
         )?;
     }
+    for name in rundler_builder::BUNDLE_RATIO_HISTOGRAMS {
+        builder = builder.set_buckets_for_metric(
+            Matcher::Full(format!("rundler.{name}")),
+            rundler_builder::BUNDLE_RATIO_BUCKETS,
+        )?;
+    }
+    for name in rundler_builder::BUNDLE_OP_COUNT_HISTOGRAMS {
+        builder = builder.set_buckets_for_metric(
+            Matcher::Full(format!("rundler.{name}")),
+            rundler_builder::BUNDLE_OP_COUNT_BUCKETS,
+        )?;
+    }
 
     let (recorder, exporter) = builder.build()?;
     task_spawner.spawn_critical(
