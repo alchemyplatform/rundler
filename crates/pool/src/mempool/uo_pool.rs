@@ -601,10 +601,10 @@ where
         //
         // This doesn't clear all race conditions, as the pool may need to update its state before
         // a UO can be valid, i.e. for replacement.
-        let (block_hash, block_number) = self
+        let (block_hash, block_number, block_timestamp) = self
             .ep_providers
             .evm()
-            .get_latest_block_hash_and_number()
+            .get_latest_block_hash_number_and_timestamp()
             .await
             .map_err(anyhow::Error::from)?;
 
@@ -633,12 +633,7 @@ where
                 }
             };
 
-            op = op.transform_for_aggregator(
-                &self.config.chain_spec,
-                aggregator,
-                agg.costs().clone(),
-                signature,
-            );
+            op = op.transform_for_aggregator(aggregator, agg.costs().clone(), signature);
         }
 
         let versioned_op: UP::UO = op.clone().into();
@@ -647,7 +642,7 @@ where
         let precheck_ret = self
             .pool_providers
             .prechecker()
-            .check(&versioned_op, &perms, block_hash)
+            .check(&versioned_op, &perms, block_hash, block_timestamp)
             .await?;
 
         // Only let ops with successful simulations through
@@ -2591,8 +2586,8 @@ mod tests {
             .return_const(EntryPointVersion::V0_6);
 
         let mut evm = MockEvmProvider::new();
-        evm.expect_get_latest_block_hash_and_number()
-            .returning(|| Ok((B256::ZERO, 0)));
+        evm.expect_get_latest_block_hash_number_and_timestamp()
+            .returning(|| Ok((B256::ZERO, 0, 0)));
 
         let mut simulator = MockSimulator::new();
         let mut prechecker = MockPrechecker::new();
@@ -2639,7 +2634,7 @@ mod tests {
             });
 
         for op in ops {
-            prechecker.expect_check().returning(move |_, _, _| {
+            prechecker.expect_check().returning(move |_, _, _, _| {
                 if let Some(error) = &op.precheck_error {
                     Err(PrecheckError::Violations(vec![error.clone()]))
                 } else {

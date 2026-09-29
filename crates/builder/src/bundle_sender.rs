@@ -874,6 +874,13 @@ where
         state: &mut SenderMachineState<T, TRIG>,
         fee_increase_count: u64,
     ) -> anyhow::Result<SendBundleAttemptResult> {
+        let block_timestamp = state.block_timestamp().with_context(|| {
+            format!(
+                "no timestamp for block {}, can't select its gas schedule",
+                state.block_hash()
+            )
+        })?;
+
         // Get tracker state first to pass required_fees to assign_work
         let TrackerState {
             nonce,
@@ -923,6 +930,7 @@ where
                             sender_eoa: self.sender_eoa,
                             nonce,
                             block_hash: state.block_hash(),
+                            block_timestamp,
                             max_bundle_fee: balance,
                             bundle_fees,
                             base_fee,
@@ -1517,6 +1525,10 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
         self.trigger.last_block().block_hash
     }
 
+    fn block_timestamp(&self) -> Option<u64> {
+        self.trigger.last_block().block_timestamp
+    }
+
     fn send_result(&mut self, result: SendBundleResult) {
         if let Some(r) = self.send_bundle_response.take()
             && r.send(result).is_err()
@@ -1817,6 +1829,7 @@ impl BundleSenderTrigger {
             last_block: NewHead {
                 block_hash: B256::ZERO,
                 block_number: 0,
+                block_timestamp: None,
                 address_updates: vec![],
             },
         })
@@ -2041,6 +2054,31 @@ mod tests {
 
         // the accepted submission was recorded in the provider-health window
         assert_eq!(sender.provider_event_signal.observations(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_send_bundle_errors_without_block_timestamp() {
+        let Mocks {
+            mut mock_proposer_t,
+            mut mock_tracker,
+            mut mock_trigger,
+            mut mock_pool,
+        } = new_mocks();
+
+        mock_trigger.expect_last_block().return_const(NewHead {
+            block_timestamp: None,
+            ..new_head(0)
+        });
+        // no work is assigned or built without a gas schedule
+        mock_tracker.expect_get_state().times(0);
+        mock_pool.expect_get_ops_summaries().times(0);
+        mock_proposer_t.expect_make_bundle().times(0);
+
+        let mut sender = new_sender(mock_proposer_t, mock_pool);
+        let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
+
+        let err = sender.send_bundle(&mut state, 0).await.unwrap_err();
+        assert!(err.to_string().contains("no timestamp for block"), "{err}");
     }
 
     #[tokio::test]
@@ -3612,6 +3650,7 @@ mod tests {
         NewHead {
             block_number,
             block_hash: B256::ZERO,
+            block_timestamp: Some(0),
             address_updates: vec![],
         }
     }
@@ -3620,6 +3659,7 @@ mod tests {
         NewHead {
             block_number,
             block_hash: B256::ZERO,
+            block_timestamp: Some(0),
             address_updates: vec![AddressUpdate {
                 address: Address::ZERO,
                 nonce: Some(0),

@@ -90,16 +90,17 @@ where
             })
             .transpose()?;
 
-        let (block_hash, _) = self
+        let (block_hash, _, block_timestamp) = self
             .provider
-            .get_latest_block_hash_and_number()
+            .get_latest_block_hash_number_and_timestamp()
             .await
             .map_err(anyhow::Error::from)?;
+        let chain_spec = self.chain_spec.at_timestamp(block_timestamp);
 
         let mut full_op = op
             .clone()
             .into_user_operation_builder(
-                &self.chain_spec,
+                &chain_spec,
                 self.settings.max_bundle_execution_gas,
                 self.settings.max_verification_gas,
             )
@@ -107,16 +108,15 @@ where
             .build();
         if let Some(agg) = agg {
             full_op = full_op.transform_for_aggregator(
-                &self.chain_spec,
                 agg.address(),
                 agg.costs().clone(),
                 agg.dummy_uo_signature().clone(),
             );
         }
 
-        let random_op = op.random_fill(&self.chain_spec);
+        let random_op = op.random_fill(&chain_spec);
         let da_gas_future = gas::estimate_da_gas_with_fees(
-            &self.chain_spec,
+            &chain_spec,
             &self.entry_point,
             &self.fee_estimator,
             &random_op,
@@ -126,8 +126,13 @@ where
             self.metrics.pvg_estimate_ms.clone(),
         );
 
-        let verification_future =
-            self.estimate_verification_gas(&op, &full_op, block_hash, state_override.clone());
+        let verification_future = self.estimate_verification_gas(
+            &op,
+            &full_op,
+            block_hash,
+            &chain_spec,
+            state_override.clone(),
+        );
         let call_future = self.estimate_call_gas(&op, full_op.clone(), block_hash, state_override);
 
         // Not try_join! because then the output is nondeterministic if both
@@ -144,41 +149,38 @@ where
         } else {
             // TODO(bundle): assuming a bundle size of 1
             let bundle_size = 1;
-            let base_op = op.max_fill(&self.chain_spec);
-            if self.chain_spec.charge_gas_limit_via_pvg {
-                let op_with_limits = UserOperationBuilder::from_uo(base_op, &self.chain_spec)
+            let base_op = op.max_fill(&chain_spec);
+            if chain_spec.charge_gas_limit_via_pvg {
+                let op_with_limits = UserOperationBuilder::from_uo(base_op, &chain_spec)
                     .verification_gas_limit(verification_gas_limit)
                     .call_gas_limit(call_gas_limit)
                     .build();
-                op_with_limits.required_pre_verification_gas(
-                    &self.chain_spec,
-                    bundle_size,
-                    da_gas,
-                    None,
-                )
+                op_with_limits.required_pre_verification_gas(&chain_spec, bundle_size, da_gas, None)
             } else {
                 // Use original op baseline to match validation behavior
-                base_op.required_pre_verification_gas(&self.chain_spec, bundle_size, da_gas, None)
+                base_op.required_pre_verification_gas(&chain_spec, bundle_size, da_gas, None)
             }
         };
 
         // Verify total gas limit
-        let op_with_gas = UserOperationBuilder::from_uo(full_op, &self.chain_spec)
+        let op_with_gas = UserOperationBuilder::from_uo(full_op, &chain_spec)
             .verification_gas_limit(verification_gas_limit)
             .call_gas_limit(call_gas_limit)
             .pre_verification_gas(pre_verification_gas)
             .build();
 
         // require that this can fit in a bundle of size 1
-        let gas_limit = op_with_gas.bundle_computation_gas_limit(&self.chain_spec, Some(1));
+        let gas_limit = op_with_gas.bundle_computation_gas_limit(&chain_spec, Some(1));
         if gas_limit > self.settings.max_bundle_execution_gas {
             return Err(GasEstimationError::GasTotalTooLarge(
                 gas_limit,
                 self.settings.max_bundle_execution_gas,
             ));
-        } else if op_with_gas.calldata_floor_gas_limit() > self.settings.max_bundle_execution_gas {
+        } else if op_with_gas.calldata_floor_gas_limit(&chain_spec)
+            > self.settings.max_bundle_execution_gas
+        {
             return Err(GasEstimationError::GasTotalTooLarge(
-                op_with_gas.calldata_floor_gas_limit(),
+                op_with_gas.calldata_floor_gas_limit(&chain_spec),
                 self.settings.max_bundle_execution_gas,
             ));
         }
@@ -191,7 +193,8 @@ where
                 &op_with_gas,
                 pre_verification_gas - da_gas,
                 da_gas,
-                op.max_fill(&self.chain_spec).calldata_floor_gas_limit(),
+                op.max_fill(&chain_spec)
+                    .calldata_floor_gas_limit(&chain_spec),
                 self.settings
                     .verification_gas_limit_efficiency_reject_threshold,
             )
@@ -235,7 +238,6 @@ where
         }
 
         let verification_gas_estimator = VerificationGasEstimatorImpl::new(
-            chain_spec.clone(),
             settings,
             provider.clone(),
             VerificationGasEstimatorSpecializationV06 {
@@ -300,6 +302,7 @@ where
         optional_op: &UserOperationOptionalGas,
         full_op: &UserOperation,
         block_hash: B256,
+        chain_spec: &ChainSpec,
         state_override: StateOverride,
     ) -> Result<u128, GasEstimationError> {
         // if set and non-zero, don't estimate
@@ -318,6 +321,11 @@ where
             .verification_gas_estimator
             .estimate_verification_gas(full_op, block_hash, state_override)
             .await?;
+        let verification_gas_limit = if full_op.paymaster().is_none() {
+            verification_gas_limit + chain_spec.deposit_transfer_overhead()
+        } else {
+            verification_gas_limit
+        };
 
         // Add a buffer to the verification gas limit. Add 10% or 2000 gas, whichever is larger
         // to ensure we get at least a 2000 gas buffer. Cap at the max verification gas.
@@ -865,7 +873,13 @@ mod tests {
         let optional_op = demo_user_op_optional_gas(Some(10000));
         let user_op = demo_user_op();
         let estimation = estimator
-            .estimate_verification_gas(&optional_op, &user_op, B256::ZERO, StateOverride::default())
+            .estimate_verification_gas(
+                &optional_op,
+                &user_op,
+                B256::ZERO,
+                &ChainSpec::default(),
+                StateOverride::default(),
+            )
             .await
             .unwrap();
 
@@ -895,7 +909,13 @@ mod tests {
         let optional_op = demo_user_op_optional_gas(Some(10000));
         let user_op = demo_user_op();
         let estimation = estimator
-            .estimate_verification_gas(&optional_op, &user_op, B256::ZERO, StateOverride::default())
+            .estimate_verification_gas(
+                &optional_op,
+                &user_op,
+                B256::ZERO,
+                &ChainSpec::default(),
+                StateOverride::default(),
+            )
             .await
             .err();
 
@@ -918,7 +938,13 @@ mod tests {
         let optional_op = demo_user_op_optional_gas(Some(10000));
         let user_op = demo_user_op();
         let estimation = estimator
-            .estimate_verification_gas(&optional_op, &user_op, B256::ZERO, StateOverride::default())
+            .estimate_verification_gas(
+                &optional_op,
+                &user_op,
+                B256::ZERO,
+                &ChainSpec::default(),
+                StateOverride::default(),
+            )
             .await;
 
         assert!(estimation.is_err());
@@ -1086,8 +1112,8 @@ mod tests {
             .expect_get_code()
             .returning(|_a, _b| Ok(Bytes::new()));
         provider
-            .expect_get_latest_block_hash_and_number()
-            .returning(|| Ok((B256::ZERO, 0)));
+            .expect_get_latest_block_hash_number_and_timestamp()
+            .returning(|| Ok((B256::ZERO, 0, 0)));
         provider.expect_get_gas_used().returning(move |_a| {
             Ok(GasUsedResult {
                 gasUsed: U256::from(gas_usage),
@@ -1203,8 +1229,8 @@ mod tests {
         let (mut entry, mut provider) = create_base_config();
 
         provider
-            .expect_get_latest_block_hash_and_number()
-            .returning(|| Ok((B256::ZERO, 0)));
+            .expect_get_latest_block_hash_number_and_timestamp()
+            .returning(|| Ok((B256::ZERO, 0, 0)));
 
         entry
             .expect_simulate_handle_op_estimate_gas()
@@ -1252,8 +1278,8 @@ mod tests {
         let (mut entry, mut provider) = create_base_config();
 
         provider
-            .expect_get_latest_block_hash_and_number()
-            .returning(|| Ok((B256::ZERO, 0)));
+            .expect_get_latest_block_hash_number_and_timestamp()
+            .returning(|| Ok((B256::ZERO, 0, 0)));
 
         let revert_msg = "test revert".to_string();
         let err = Revert {
@@ -1299,8 +1325,8 @@ mod tests {
         let (mut entry, mut provider) = create_base_config();
 
         provider
-            .expect_get_latest_block_hash_and_number()
-            .returning(|| Ok((B256::ZERO, 0)));
+            .expect_get_latest_block_hash_number_and_timestamp()
+            .returning(|| Ok((B256::ZERO, 0, 0)));
 
         entry
             .expect_simulate_handle_op_estimate_gas()

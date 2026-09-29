@@ -185,7 +185,7 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     fn static_pre_verification_gas(&self, chain_spec: &ChainSpec) -> u128;
 
     /// Returns the calldata floor gas limit
-    fn calldata_floor_gas_limit(&self) -> u128;
+    fn calldata_floor_gas_limit(&self, chain_spec: &ChainSpec) -> u128;
 
     /// Abi encode size of the user operation
     fn abi_encoded_size(&self) -> usize;
@@ -203,7 +203,6 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// 3) Updates any internally cached values
     fn transform_for_aggregator(
         self,
-        chain_spec: &ChainSpec,
         aggregator: Address,
         aggregator_costs: AggregatorCosts,
         new_signature: Bytes,
@@ -319,7 +318,7 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     ) -> u128 {
         self.static_pre_verification_gas(chain_spec)
             .saturating_add(optional_bundle_per_uo_shared_gas(chain_spec, bundle_size))
-            .saturating_add(self.authorization_gas_limit())
+            .saturating_add(self.authorization_gas_limit(chain_spec))
             .saturating_add(self.aggregator_gas_limit(chain_spec, bundle_size))
     }
 
@@ -363,7 +362,7 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
                 self,
                 self.pre_verification_execution_gas_limit(chain_spec, Some(bundle_size)),
                 da_gas,
-                self.calldata_floor_gas_limit(),
+                self.calldata_floor_gas_limit(chain_spec),
                 thresh,
             )
         } else {
@@ -416,9 +415,9 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     fn aggregator_gas_limit(&self, chain_spec: &ChainSpec, bundle_size: Option<usize>) -> u128;
 
     /// Returns the gas limit for the authorization
-    fn authorization_gas_limit(&self) -> u128 {
+    fn authorization_gas_limit(&self, chain_spec: &ChainSpec) -> u128 {
         if self.authorization_tuple().is_some() {
-            alloy_eips::eip7702::constants::PER_EMPTY_ACCOUNT_COST as u128
+            chain_spec.eip7702_authorization_gas()
         } else {
             0
         }
@@ -507,7 +506,6 @@ fn dummy_transform_for_aggregator<UO: UserOperation>(
         panic!("Aggregator {aggregator:?} not found in chain spec");
     };
     uo.transform_for_aggregator(
-        chain_spec,
         agg.address(),
         agg.costs().clone(),
         agg.dummy_uo_signature().clone(),
@@ -674,10 +672,10 @@ impl UserOperation for UserOperationVariant {
         }
     }
 
-    fn calldata_floor_gas_limit(&self) -> u128 {
+    fn calldata_floor_gas_limit(&self, chain_spec: &ChainSpec) -> u128 {
         match self {
-            UserOperationVariant::V0_6(op) => op.calldata_floor_gas_limit(),
-            UserOperationVariant::V0_7(op) => op.calldata_floor_gas_limit(),
+            UserOperationVariant::V0_6(op) => op.calldata_floor_gas_limit(chain_spec),
+            UserOperationVariant::V0_7(op) => op.calldata_floor_gas_limit(chain_spec),
         }
     }
 
@@ -711,28 +709,17 @@ impl UserOperation for UserOperationVariant {
 
     fn transform_for_aggregator(
         self,
-        chain_spec: &ChainSpec,
         aggregator: Address,
         aggregator_costs: AggregatorCosts,
         new_signature: Bytes,
     ) -> Self {
         match self {
-            UserOperationVariant::V0_6(op) => {
-                UserOperationVariant::V0_6(op.transform_for_aggregator(
-                    chain_spec,
-                    aggregator,
-                    aggregator_costs,
-                    new_signature,
-                ))
-            }
-            UserOperationVariant::V0_7(op) => {
-                UserOperationVariant::V0_7(op.transform_for_aggregator(
-                    chain_spec,
-                    aggregator,
-                    aggregator_costs,
-                    new_signature,
-                ))
-            }
+            UserOperationVariant::V0_6(op) => UserOperationVariant::V0_6(
+                op.transform_for_aggregator(aggregator, aggregator_costs, new_signature),
+            ),
+            UserOperationVariant::V0_7(op) => UserOperationVariant::V0_7(
+                op.transform_for_aggregator(aggregator, aggregator_costs, new_signature),
+            ),
         }
     }
 
@@ -893,35 +880,40 @@ impl<UO: UserOperation + Into<UserOperationVariant>> UserOpsPerAggregator<UO> {
     }
 }
 
-pub(crate) fn calc_calldata_gas_costs<UO: SolValue>(
-    uo: &UO,
-    chain_spec: &ChainSpec,
-) -> (u128, u128) {
-    let data = uo.abi_encode();
-    let total_bytes = data.len();
-    let non_zero_bytes = data.iter().filter(|&&x| x != 0).count();
-    (
-        op_calldata_gas_cost(total_bytes, non_zero_bytes, chain_spec),
-        op_calldata_floor_gas_cost(total_bytes, non_zero_bytes, chain_spec),
-    )
-}
-
-fn op_calldata_gas_cost(total_bytes: usize, non_zero_bytes: usize, chain_spec: &ChainSpec) -> u128 {
-    let length_in_words: u128 = (total_bytes as u128 + 31) >> 5; // ceil(encoded_op.len() / 32)
-    let zero_bytes = total_bytes - non_zero_bytes;
-    let call_data_cost = chain_spec.calldata_zero_byte_gas() * zero_bytes as u128
-        + chain_spec.calldata_non_zero_byte_gas() * non_zero_bytes as u128;
-    call_data_cost + chain_spec.per_user_op_word_gas() * length_in_words
-}
-
-fn op_calldata_floor_gas_cost(
+/// Byte counts of a user operation's ABI encoding
+///
+/// Cached instead of gas costs so that costs always use the gas schedule of the block being
+/// priced.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CalldataStats {
     total_bytes: usize,
     non_zero_bytes: usize,
-    chain_spec: &ChainSpec,
-) -> u128 {
-    let zero_bytes = total_bytes - non_zero_bytes;
-    chain_spec.calldata_floor_zero_byte_gas() * zero_bytes as u128
-        + chain_spec.calldata_floor_non_zero_byte_gas() * non_zero_bytes as u128
+}
+
+impl CalldataStats {
+    pub(crate) fn of<UO: SolValue>(uo: &UO) -> Self {
+        let data = uo.abi_encode();
+        Self {
+            total_bytes: data.len(),
+            non_zero_bytes: data.iter().filter(|&&x| x != 0).count(),
+        }
+    }
+
+    pub(crate) fn gas_cost(&self, chain_spec: &ChainSpec) -> u128 {
+        let length_in_words: u128 = (self.total_bytes as u128 + 31) >> 5; // ceil(encoded_op.len() / 32)
+        let call_data_cost = chain_spec.calldata_zero_byte_gas() * self.zero_bytes()
+            + chain_spec.calldata_non_zero_byte_gas() * self.non_zero_bytes as u128;
+        call_data_cost + chain_spec.per_user_op_word_gas() * length_in_words
+    }
+
+    pub(crate) fn floor_gas_cost(&self, chain_spec: &ChainSpec) -> u128 {
+        chain_spec.calldata_floor_zero_byte_gas() * self.zero_bytes()
+            + chain_spec.calldata_floor_non_zero_byte_gas() * self.non_zero_bytes as u128
+    }
+
+    fn zero_bytes(&self) -> u128 {
+        (self.total_bytes - self.non_zero_bytes) as u128
+    }
 }
 
 /// Calculates the size a byte array padded to the next largest multiple of 32

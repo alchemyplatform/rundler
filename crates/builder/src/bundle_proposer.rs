@@ -187,6 +187,8 @@ pub(crate) struct BundleProposalRequest {
     pub(crate) nonce: u64,
     /// The block hash to build against
     pub(crate) block_hash: B256,
+    /// The timestamp of `block_hash`, which selects the gas schedule
+    pub(crate) block_timestamp: u64,
     /// The maximum fee the bundle can spend (signer balance)
     pub(crate) max_bundle_fee: U256,
     /// Gas fees for the bundle transaction
@@ -252,6 +254,7 @@ where
             sender_eoa,
             nonce: _,
             block_hash,
+            block_timestamp,
             max_bundle_fee,
             bundle_fees,
             base_fee,
@@ -259,6 +262,7 @@ where
             condition_not_met,
         } = request;
         let timer = Instant::now();
+        let chain_spec = self.settings.chain_spec.at_timestamp(block_timestamp);
         let all_paymaster_addresses = ops
             .iter()
             .filter_map(|op| op.uo.paymaster())
@@ -289,6 +293,7 @@ where
                 self.check_fees(
                     op,
                     block_hash,
+                    &chain_spec,
                     da_block_data.as_ref(),
                     base_fee,
                     required_op_fees,
@@ -308,7 +313,7 @@ where
         }
 
         // (2) Limit the amount of operations for simulation
-        let (ops, gas_limit) = self.limit_user_operations_for_simulation(ops);
+        let (ops, gas_limit) = self.limit_user_operations_for_simulation(ops, &chain_spec);
 
         debug!(
             "Bundle proposal after gas limit had {} ops and {:?} gas limit",
@@ -353,11 +358,12 @@ where
                 ops_with_simulations,
                 balances_by_paymaster,
                 eip7702_sender_states,
+                &chain_spec,
             )
             .await;
         while !context.is_empty() {
             let gas_estimate = self
-                .estimate_gas_rejecting_failed_ops(&mut context, bundle_fees)
+                .estimate_gas_rejecting_failed_ops(&mut context, &chain_spec, bundle_fees)
                 .await?;
             if let Some(gas_estimate) = gas_estimate {
                 tracing::debug!(
@@ -624,6 +630,7 @@ where
         &self,
         op: PoolOperation,
         block_hash: B256,
+        chain_spec: &ChainSpec,
         da_block_data: Option<&DAGasBlockData>,
         base_fee: u128,
         required_op_fees: GasFees,
@@ -659,7 +666,7 @@ where
             return None;
         }
 
-        if !self.settings.chain_spec.da_pre_verification_gas {
+        if !chain_spec.da_pre_verification_gas {
             // Skip PVG check if no da pre-verification gas as this is checked on entry to the mempool.
             return Some(PoolOperationWithSponsoredDAGas {
                 op,
@@ -721,7 +728,7 @@ where
         };
 
         let mut required_pvg = op.uo.required_pre_verification_gas(
-            &self.settings.chain_spec,
+            chain_spec,
             bundle_size,
             required_da_gas,
             Some(
@@ -754,10 +761,7 @@ where
         // Check total gas cost and time for bundler sponsorship
         let mut sponsored_da_gas = 0;
         if let Some(bundler_sponsorship) = &op.perms.bundler_sponsorship {
-            let gas_limit = op
-                .uo
-                .bundle_gas_limit(&self.settings.chain_spec, Some(bundle_size))
-                + required_pvg; // PVG is added as part of the gas limit as this is part of the cost of sponsorship
+            let gas_limit = op.uo.bundle_gas_limit(chain_spec, Some(bundle_size)) + required_pvg; // PVG is added as part of the gas limit as this is part of the cost of sponsorship
 
             let total_gas_cost = U256::from(gas_limit) * U256::from(gas_price);
             if total_gas_cost > bundler_sponsorship.max_cost {
@@ -832,6 +836,7 @@ where
         Some(result)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn assemble_context(
         &self,
         sender_eoa: Address,
@@ -843,6 +848,7 @@ where
         )>,
         mut balances_by_paymaster: HashMap<Address, U256>,
         eip7702_sender_states: HashMap<Address, Eip7702SenderState>,
+        chain_spec: &ChainSpec,
     ) -> ProposalContext<EP::UO> {
         if max_bundle_fee == U256::ZERO {
             warn!("Max bundle fee is zero, skipping bundle");
@@ -963,7 +969,7 @@ where
 
             // Limit by max bundle computation gas (excluding DA gas)
             let bundle_computation_gas_limit =
-                context_with_op.get_bundle_computation_gas_limit(&self.settings.chain_spec);
+                context_with_op.get_bundle_computation_gas_limit(chain_spec);
             if bundle_computation_gas_limit > self.settings.max_bundle_gas {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
@@ -974,8 +980,7 @@ where
             }
 
             // Limit by max bundle fee
-            let total_gas_cost =
-                context_with_op.get_bundle_cost(&self.settings.chain_spec, gas_price);
+            let total_gas_cost = context_with_op.get_bundle_cost(chain_spec, gas_price);
             if total_gas_cost > buffered_max_bundle_fee {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
@@ -986,11 +991,8 @@ where
             }
 
             // Limit by transaction size
-            let bundle_transaction_size =
-                context_with_op.get_bundle_transaction_size(&self.settings.chain_spec);
-            if bundle_transaction_size
-                >= self.settings.chain_spec.max_transaction_size_bytes as u128
-            {
+            let bundle_transaction_size = context_with_op.get_bundle_transaction_size(chain_spec);
+            if bundle_transaction_size >= chain_spec.max_transaction_size_bytes as u128 {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
                     op.hash(),
@@ -1236,12 +1238,13 @@ where
     async fn estimate_gas_rejecting_failed_ops(
         &self,
         context: &mut ProposalContext<EP::UO>,
+        chain_spec: &ChainSpec,
         bundle_fees: GasFees,
     ) -> BundleProposerResult<Option<u64>> {
         // sum up the gas needed for all the ops in the bundle
         // and apply an overhead multiplier
         let gas = math::increase_by_percent(
-            context.get_bundle_gas_limit(&self.settings.chain_spec),
+            context.get_bundle_gas_limit(chain_spec),
             BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
         );
 
@@ -1664,6 +1667,7 @@ where
     fn limit_user_operations_for_simulation(
         &self,
         ops: Vec<PoolOperationWithSponsoredDAGas>,
+        chain_spec: &ChainSpec,
     ) -> (Vec<PoolOperationWithSponsoredDAGas>, u128) {
         let mut gas_left = self.settings.max_bundle_gas;
         let mut ops_in_bundle = Vec::new();
@@ -1686,10 +1690,7 @@ where
 
             // Here we use optimistic gas limits for the UOs by assuming none of the paymaster UOs use postOp calls.
             // This way after simulation once we have determined if each UO actually uses a postOp call or not we can still pack a full bundle
-            let gas = op
-                .op
-                .uo
-                .bundle_computation_gas_limit(&self.settings.chain_spec, None);
+            let gas = op.op.uo.bundle_computation_gas_limit(chain_spec, None);
             if gas_left < gas {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
@@ -2140,7 +2141,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
         }
 
         for sim_op in self.iter_ops_with_simulations() {
-            let op_authorization_gas = sim_op.op.authorization_gas_limit();
+            let op_authorization_gas = sim_op.op.authorization_gas_limit(chain_spec);
             authorization_gas = authorization_gas.saturating_add(op_authorization_gas);
 
             // EIP-7623 calculations require this to be done without the EIP-7702 intrinsic gas. Its added later in the final calculation.
@@ -2148,8 +2149,8 @@ impl<UO: UserOperation> ProposalContext<UO> {
                 sim_op.op.bundle_computation_gas_limit(chain_spec, None) - op_authorization_gas,
             );
 
-            calldata_floor_gas_limit =
-                calldata_floor_gas_limit.saturating_add(sim_op.op.calldata_floor_gas_limit());
+            calldata_floor_gas_limit = calldata_floor_gas_limit
+                .saturating_add(sim_op.op.calldata_floor_gas_limit(chain_spec));
 
             if include_da_gas {
                 da_gas_limit = da_gas_limit.saturating_add(
@@ -2404,7 +2405,7 @@ mod tests {
         aggregator::{
             AggregatorCosts, MockSignatureAggregator, SignatureAggregator, SignatureAggregatorError,
         },
-        chain::ContractRegistry,
+        chain::{ContractRegistry, ForkActivation},
         da::BedrockDAGasBlockData,
         pool::SimulationViolation,
         proxy::MockSubmissionProxy,
@@ -3514,7 +3515,7 @@ mod tests {
         ))
         .build();
 
-        let auth_gas = op.authorization_gas_limit();
+        let auth_gas = op.authorization_gas_limit(&cs);
         assert!(auth_gas > 0, "op must have authorization gas");
 
         let mut groups_by_aggregator = LinkedHashMap::new();
@@ -3548,7 +3549,7 @@ mod tests {
         let execution_gas = op.bundle_gas_limit(&cs, None) + rundler_types::bundle_shared_gas(&cs);
         let calldata_floor = context.bundle_overhead_bytes(&cs)
             * cs.calldata_floor_non_zero_byte_gas()
-            + op.calldata_floor_gas_limit();
+            + op.calldata_floor_gas_limit(&cs);
         assert!(
             calldata_floor > execution_gas,
             "calldata floor ({calldata_floor}) must exceed execution gas ({execution_gas}) for this test to be valid"
@@ -3560,6 +3561,64 @@ mod tests {
             gas_limit,
             cs.transaction_intrinsic_gas() + calldata_floor + auth_gas
         );
+    }
+
+    #[tokio::test]
+    async fn test_bundle_gas_limit_uses_gas_schedule_of_block() {
+        const ACTIVATION: u64 = 1_000;
+        let op = UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                pre_verification_gas: DEFAULT_PVG,
+                verification_gas_limit: 10_000,
+                // Large calldata so the calldata floor sets the bundle gas limit
+                call_data: Bytes::from(vec![1_u8; 4_096]),
+                ..Default::default()
+            },
+        )
+        .build();
+
+        let gas_estimate_at = |activation: ForkActivation, block_timestamp: u64| {
+            let op = op.clone();
+            async move {
+                mock_make_bundle_at(
+                    vec![MockOp {
+                        op,
+                        simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                        perms: UserOperationPermissions::default(),
+                    }],
+                    vec![],
+                    vec![HandleOpsOut::Success],
+                    vec![],
+                    0,
+                    0,
+                    false,
+                    ExpectedStorage::default(),
+                    false,
+                    vec![],
+                    None,
+                    U256::MAX,
+                    None,
+                    vec![],
+                    activation,
+                    block_timestamp,
+                )
+                .await
+                .unwrap()
+                .gas_estimate
+            }
+        };
+
+        let activation = ForkActivation::Timestamp(ACTIVATION);
+        let pre = gas_estimate_at(activation, ACTIVATION - 1).await;
+        let post = gas_estimate_at(activation, ACTIVATION).await;
+        let genesis = gas_estimate_at(ForkActivation::Genesis, 0).await;
+
+        assert!(
+            post > pre,
+            "post-fork gas {post} should exceed pre-fork gas {pre}"
+        );
+        assert_eq!(post, genesis);
     }
 
     #[tokio::test]
@@ -3580,8 +3639,8 @@ mod tests {
             ))
             .build();
 
-        assert_eq!(op_without_authorization.authorization_gas_limit(), 0);
-        assert_eq!(op_with_authorization.authorization_gas_limit(), 25_000);
+        assert_eq!(op_without_authorization.authorization_gas_limit(&cs), 0);
+        assert_eq!(op_with_authorization.authorization_gas_limit(&cs), 25_000);
 
         let mut groups_without_authorization = LinkedHashMap::new();
         groups_without_authorization.insert(
@@ -4837,9 +4896,51 @@ mod tests {
         max_transaction_size_bytes: Option<usize>,
         mock_7702_sender_states: Vec<(Address, u64, Bytes)>,
     ) -> BundleProposerResult<Bundle<UserOperation>> {
+        mock_make_bundle_at(
+            mock_ops,
+            mock_aggregators,
+            mock_handle_ops_call_results,
+            mock_paymaster_deposits,
+            base_fee,
+            max_priority_fee_per_gas,
+            notify_condition_not_met,
+            actual_storage,
+            da_gas_tracking_enabled,
+            aggregators,
+            proxy,
+            max_bundle_fee,
+            max_transaction_size_bytes,
+            mock_7702_sender_states,
+            ForkActivation::Never,
+            0,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn mock_make_bundle_at(
+        mock_ops: Vec<MockOp>,
+        mock_aggregators: Vec<MockAggregator>,
+        mock_handle_ops_call_results: Vec<HandleOpsOut>,
+        mock_paymaster_deposits: Vec<U256>,
+        base_fee: u128,
+        max_priority_fee_per_gas: u128,
+        notify_condition_not_met: bool,
+        actual_storage: ExpectedStorage,
+        da_gas_tracking_enabled: bool,
+        aggregators: Vec<MockSignatureAggregator>,
+        proxy: Option<MockSubmissionProxy>,
+        max_bundle_fee: U256,
+        max_transaction_size_bytes: Option<usize>,
+        mock_7702_sender_states: Vec<(Address, u64, Bytes)>,
+        glamsterdam_activation: ForkActivation,
+        block_timestamp: u64,
+    ) -> BundleProposerResult<Bundle<UserOperation>> {
         let mut chain_spec = ChainSpec {
             da_pre_verification_gas: da_gas_tracking_enabled,
             max_transaction_size_bytes: max_transaction_size_bytes.unwrap_or(usize::MAX),
+            eip7623_enabled: glamsterdam_activation != ForkActivation::Never,
+            glamsterdam_activation,
             ..Default::default()
         };
         let sender_eoa = address(124);
@@ -4912,8 +5013,8 @@ mod tests {
 
         let mut provider = MockEvmProvider::new();
         provider
-            .expect_get_latest_block_hash_and_number()
-            .returning(move || Ok((current_block_hash, 0)));
+            .expect_get_latest_block_hash_number_and_timestamp()
+            .returning(move || Ok((current_block_hash, 0, 0)));
 
         for (sender, transaction_count, code) in mock_7702_sender_states {
             provider
@@ -5011,6 +5112,7 @@ mod tests {
                 sender_eoa,
                 nonce: 0,
                 block_hash: current_block_hash,
+                block_timestamp,
                 max_bundle_fee,
                 bundle_fees,
                 base_fee,
@@ -5076,12 +5178,7 @@ mod tests {
             pre_verification_gas: DEFAULT_PVG,
             ..Default::default()
         });
-        op = op.transform_for_aggregator(
-            &ChainSpec::default(),
-            aggregator,
-            AggregatorCosts::default(),
-            new_signature,
-        );
+        op = op.transform_for_aggregator(aggregator, AggregatorCosts::default(), new_signature);
         op
     }
 
