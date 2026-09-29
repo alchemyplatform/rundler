@@ -50,16 +50,19 @@ the gas schedule before Glamsterdam.
 The Glamsterdam schedule is a preset (`GasSchedule::glamsterdam_preset` in
 [chain.rs](../../crates/types/src/chain.rs)), with any `glamsterdam_<field>` override applied
 on top, for example `glamsterdam_per_user_op_v0_7_gas = 40000`. Only the gas fields above can be
-overridden. Rundler rejects a chain spec at startup if either schedule is invalid, and logs both
-schedules when an activation is configured.
+overridden. Rundler rejects a chain spec at startup if either schedule is invalid, including a
+zero transaction intrinsic or EIP-7702 authorization gas cost, and logs both schedules when an
+activation is configured.
 
-Rundler picks the schedule from the timestamp of the block each calculation is pinned to:
+Rundler chooses gas costs as follows:
 - gas estimation and pool admission use the latest block, fetched once per request;
-- bundle building uses the block that triggered the bundle.
+- bundle building uses a gas schedule that covers both the triggering block and any later
+  inclusion block while a timestamp activation is pending. This uses the larger cost for each
+  gas field, because a submitted transaction may remain pending across the activation.
 
-A request that spans the activation keeps the schedule of its pinned block. The activation
-doesn't need a restart or config reload, but every Rundler process (RPC, pool, builder) must run
-with the same activation before the timestamp is reached.
+An estimation or admission request that spans the activation keeps the schedule of its pinned
+block. The activation doesn't need a restart or config reload, but every Rundler process (RPC,
+pool, builder) must run with the same activation before the timestamp is reached.
 
 On chains with an activation configured, pool maintenance rechecks every operation's
 preVerificationGas against the current block's schedule. Operations that no longer cover it

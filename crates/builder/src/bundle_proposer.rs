@@ -262,7 +262,10 @@ where
             condition_not_met,
         } = request;
         let timer = Instant::now();
-        let chain_spec = self.settings.chain_spec.at_timestamp(block_timestamp);
+        let chain_spec = self
+            .settings
+            .chain_spec
+            .for_bundle_inclusion_after(block_timestamp);
         let all_paymaster_addresses = ops
             .iter()
             .filter_map(|op| op.uo.paymaster())
@@ -3564,7 +3567,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_bundle_gas_limit_uses_gas_schedule_of_block() {
+    async fn test_bundle_gas_limit_covers_pending_fork() {
         const ACTIVATION: u64 = 1_000;
         let op = UserOperationBuilder::new(
             &ChainSpec::default(),
@@ -3610,14 +3613,16 @@ mod tests {
         };
 
         let activation = ForkActivation::Timestamp(ACTIVATION);
+        let never = gas_estimate_at(ForkActivation::Never, ACTIVATION - 1).await;
         let pre = gas_estimate_at(activation, ACTIVATION - 1).await;
         let post = gas_estimate_at(activation, ACTIVATION).await;
         let genesis = gas_estimate_at(ForkActivation::Genesis, 0).await;
 
         assert!(
-            post > pre,
-            "post-fork gas {post} should exceed pre-fork gas {pre}"
+            pre > never,
+            "pre-fork gas {pre} should cover the possible post-fork cost, not {never}"
         );
+        assert!(pre >= post);
         assert_eq!(post, genesis);
     }
 

@@ -342,10 +342,11 @@ impl GasSchedule {
             // the same for zero and non-zero bytes.
             eip7623_calldata_floor_zero_byte_gas: 64,
             eip7623_calldata_floor_non_zero_byte_gas: 64,
-            // TODO(verify): EIP-8037 (STATE_BYTES_PER_NEW_ACCOUNT 120 + STATE_BYTES_PER_AUTH_BASE
-            // 23) x CPSB 1,530 = 218,790 state gas for an authority that doesn't exist yet, plus
-            // EIP-2780 EXECUTION_PER_AUTH_BASE_COST 7,816. An existing authority costs 43,006.
-            eip7702_authorization_gas: 226_606,
+            // EIP-8037 (STATE_BYTES_PER_NEW_ACCOUNT 120 + STATE_BYTES_PER_AUTH_BASE 23) x CPSB
+            // 1,530 = 218,790 state gas for a new authority, plus EIP-2780
+            // EXECUTION_PER_AUTH_BASE_COST 7,816 and ACCOUNT_WRITE 9,000. An existing authority
+            // with a new delegation indicator costs 52,006.
+            eip7702_authorization_gas: 235_606,
             // TODO(verify): EIP-2780 leaves calldata metering unchanged.
             calldata_zero_byte_gas: pre.calldata_zero_byte_gas,
             calldata_non_zero_byte_gas: pre.calldata_non_zero_byte_gas,
@@ -362,6 +363,9 @@ impl GasSchedule {
     fn validate(&self) -> Result<(), String> {
         if self.transaction_intrinsic_gas == 0 {
             return Err("transaction_intrinsic_gas must be non-zero".to_string());
+        }
+        if self.eip7702_authorization_gas == 0 {
+            return Err("eip7702_authorization_gas must be non-zero".to_string());
         }
         if self.eip7623_enabled
             && (self.eip7623_calldata_floor_zero_byte_gas < self.calldata_zero_byte_gas
@@ -580,6 +584,53 @@ impl ChainSpec {
                 spec.glamsterdam_activation = ForkActivation::Genesis;
                 Cow::Owned(spec)
             }
+        }
+    }
+
+    /// A gas schedule safe for a transaction submitted after the given head
+    ///
+    /// A submitted transaction may remain pending across a timestamp fork. Before activation,
+    /// use the larger cost from each schedule so its gas limit covers either inclusion block.
+    pub fn for_bundle_inclusion_after(&self, head_timestamp: u64) -> Cow<'_, ChainSpec> {
+        match self.glamsterdam_activation {
+            ForkActivation::Timestamp(activation) if head_timestamp < activation => {
+                let pre = self.pre_glamsterdam_gas_schedule();
+                let post = self.glamsterdam_gas_schedule();
+                let mut spec = self.clone();
+                spec.set_gas_schedule(GasSchedule {
+                    transaction_intrinsic_gas: pre
+                        .transaction_intrinsic_gas
+                        .max(post.transaction_intrinsic_gas),
+                    calldata_zero_byte_gas: pre
+                        .calldata_zero_byte_gas
+                        .max(post.calldata_zero_byte_gas),
+                    calldata_non_zero_byte_gas: pre
+                        .calldata_non_zero_byte_gas
+                        .max(post.calldata_non_zero_byte_gas),
+                    eip7623_enabled: pre.eip7623_enabled || post.eip7623_enabled,
+                    eip7623_calldata_floor_zero_byte_gas: pre
+                        .eip7623_calldata_floor_zero_byte_gas
+                        .max(post.eip7623_calldata_floor_zero_byte_gas),
+                    eip7623_calldata_floor_non_zero_byte_gas: pre
+                        .eip7623_calldata_floor_non_zero_byte_gas
+                        .max(post.eip7623_calldata_floor_non_zero_byte_gas),
+                    eip7702_authorization_gas: pre
+                        .eip7702_authorization_gas
+                        .max(post.eip7702_authorization_gas),
+                    per_user_op_v0_6_gas: pre.per_user_op_v0_6_gas.max(post.per_user_op_v0_6_gas),
+                    per_user_op_v0_7_gas: pre.per_user_op_v0_7_gas.max(post.per_user_op_v0_7_gas),
+                    per_user_op_word_gas: pre.per_user_op_word_gas.max(post.per_user_op_word_gas),
+                    per_user_op_deploy_overhead_gas: pre
+                        .per_user_op_deploy_overhead_gas
+                        .max(post.per_user_op_deploy_overhead_gas),
+                    deposit_transfer_overhead: pre
+                        .deposit_transfer_overhead
+                        .max(post.deposit_transfer_overhead),
+                });
+                spec.glamsterdam_activation = ForkActivation::Never;
+                Cow::Owned(spec)
+            }
+            _ => self.at_timestamp(head_timestamp),
         }
     }
 
@@ -883,7 +934,7 @@ mod tests {
         assert!(post.eip7623_enabled);
         assert_eq!(post.eip7623_calldata_floor_zero_byte_gas, 64);
         assert_eq!(post.eip7623_calldata_floor_non_zero_byte_gas, 64);
-        assert_eq!(post.eip7702_authorization_gas, 226_606);
+        assert_eq!(post.eip7702_authorization_gas, 235_606);
         assert_eq!(post.calldata_zero_byte_gas, pre.calldata_zero_byte_gas);
         assert_eq!(post.per_user_op_v0_7_gas, pre.per_user_op_v0_7_gas);
         assert_eq!(
@@ -924,7 +975,7 @@ mod tests {
         assert_eq!(post.transaction_intrinsic_gas(), 15_000);
         assert_eq!(post.calldata_floor_zero_byte_gas(), 64);
         assert_eq!(post.calldata_floor_non_zero_byte_gas(), 64);
-        assert_eq!(post.eip7702_authorization_gas(), 226_606);
+        assert_eq!(post.eip7702_authorization_gas(), 235_606);
         // the derived spec stays post-fork whatever timestamp it's asked about
         assert_eq!(post.gas_schedule_at(0), spec.glamsterdam_gas_schedule());
     }
@@ -938,8 +989,35 @@ mod tests {
         assert_eq!(
             spec_with_activation(ForkActivation::Timestamp(ACTIVATION))
                 .max_eip7702_authorization_gas(),
-            226_606
+            235_606
         );
+    }
+
+    #[test]
+    fn bundle_inclusion_schedule_covers_both_sides_of_activation() {
+        let spec = ChainSpec {
+            glamsterdam_calldata_non_zero_byte_gas: Some(8),
+            glamsterdam_per_user_op_v0_7_gas: Some(10_000),
+            ..spec_with_activation(ForkActivation::Timestamp(ACTIVATION))
+        };
+
+        let inclusion = spec.for_bundle_inclusion_after(ACTIVATION - 1);
+        assert_eq!(inclusion.transaction_intrinsic_gas(), 21_000);
+        assert_eq!(inclusion.calldata_non_zero_byte_gas(), 16);
+        assert_eq!(inclusion.calldata_floor_non_zero_byte_gas(), 64);
+        assert_eq!(inclusion.eip7702_authorization_gas(), 235_606);
+        assert_eq!(inclusion.per_user_op_v0_7_gas(), 19_500);
+
+        let post = spec.for_bundle_inclusion_after(ACTIVATION);
+        assert_eq!(post.transaction_intrinsic_gas(), 15_000);
+        assert_eq!(post.calldata_non_zero_byte_gas(), 8);
+        assert_eq!(post.per_user_op_v0_7_gas(), 10_000);
+
+        let never = spec_with_activation(ForkActivation::Never);
+        assert!(matches!(
+            never.for_bundle_inclusion_after(ACTIVATION - 1),
+            Cow::Borrowed(_)
+        ));
     }
 
     #[test]
@@ -966,6 +1044,12 @@ mod tests {
             ..Default::default()
         };
         assert!(zero_intrinsic.validate_gas_schedules().is_err());
+
+        let zero_authorization = ChainSpec {
+            eip7702_authorization_gas: 0,
+            ..Default::default()
+        };
+        assert!(zero_authorization.validate_gas_schedules().is_err());
     }
 
     #[test]
