@@ -16,5 +16,6 @@
 pub mod authorization;
 pub mod calldata;
 pub mod chain;
+pub mod e2e;
 pub mod hazards;
 pub mod overhead;
