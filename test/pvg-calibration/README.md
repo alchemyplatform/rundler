@@ -12,7 +12,7 @@ for any later fork.
 
 ```
 contracts/     foundry project with the probe fixtures (Probes.sol), built by build.rs
-src/           rundler-pvg-calibration binary (workspace member, not a default member)
+src/           rundler-pvg-calibration binary (standalone crate: own workspace, lockfile and target/)
 results/       JSON reports (raw reports are git-ignored; commit summaries only)
 .env.example   variables the binary reads
 ```
@@ -33,19 +33,21 @@ already have code. Every run therefore rebuilds its own fixtures after a devnet 
 
 ## Running
 
-Requires `forge` (for `build.rs`). The key is read from the environment only:
+Requires `forge` (for `build.rs`). The crate is excluded from the rundler workspace, so run
+it from this directory (it depends on `rundler-types` / `rundler-contracts` by path). The key
+is read from the environment only:
 
 ```sh
 export PVG_RPC_URL=https://rpc.plataberget.ethpandaops.io
 export PVG_PRIVATE_KEY=...        # funded EOA; never commit it
-cargo run -p rundler-pvg-calibration -- --label devnet calibrate-chain
+cargo run -- --label devnet calibrate-chain
 ```
 
 Baseline on a pre-Glamsterdam fork, using anvil's first dev account:
 
 ```sh
 anvil --hardfork prague --port 8645
-PVG_PRIVATE_KEY=<anvil dev key 0> cargo run -p rundler-pvg-calibration -- \
+PVG_PRIVATE_KEY=<anvil dev key 0> cargo run -- \
   --rpc-url http://127.0.0.1:8645 --label anvil-prague calibrate-chain
 ```
 
@@ -60,7 +62,7 @@ and needs about 15 GB.
 ```sh
 ./devnet-node.sh start ~/pvg-devnet-node   # data dir outside the repo
 ./devnet-node.sh status                    # "synced" when ready
-PVG_RPC_URL=http://127.0.0.1:8547 cargo run -p rundler-pvg-calibration -- --label devnet calibrate-chain
+PVG_RPC_URL=http://127.0.0.1:8547 cargo run -- --label devnet calibrate-chain
 ./devnet-node.sh stop
 ```
 
