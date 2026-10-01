@@ -28,6 +28,7 @@ use rundler_sim::{MempoolConfig, Prechecker, Simulator};
 use rundler_types::{
     Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, GasFees, UserOperation,
     UserOperationId, UserOperationPermissions, UserOperationVariant,
+    entry_point_metrics::{self, AaErrorStage},
     pool::{
         BundleOutcome, MempoolError, PaymasterMetadata, PoolOperation, PoolOperationStatus,
         Reputation, ReputationStatus, StakeStatus,
@@ -39,7 +40,7 @@ use tonic::async_trait;
 use tracing::{info, instrument};
 
 use super::{
-    Mempool, MempoolResult, OperationOrigin, PoolConfig, paymaster::PaymasterTracker,
+    Mempool, MempoolResult, OperationOrigin, PoolConfig, gas_metrics, paymaster::PaymasterTracker,
     pool::PoolInner, reputation::AddressReputation,
 };
 use crate::{
@@ -345,6 +346,15 @@ where
                 // Only account for an entity once
                 for entity_addr in pool_op.entities().map(|e| e.address).unique() {
                     self.reputation.add_included(entity_addr);
+                }
+                // The pool copy can be a replacement with different limits, see Pool::mine_operation
+                if pool_op.uo.hash() == op.hash {
+                    gas_metrics::record_mined_op_gas_efficiency(
+                        self.config.entry_point,
+                        &pool_op.uo,
+                        op.success,
+                        op.actual_gas_used,
+                    );
                 }
                 mined_op_count += 1;
             }
@@ -656,7 +666,16 @@ where
             .pool_providers
             .simulator()
             .simulate_validation(versioned_op, perms.trusted, block_hash, None)
-            .map_err(Into::into);
+            .map_err(|error| {
+                if let Some(code) = error.aa_error_code() {
+                    entry_point_metrics::record_aa_error(
+                        AaErrorStage::PoolAdmission,
+                        self.config.entry_point,
+                        code,
+                    );
+                }
+                MempoolError::from(error)
+            });
         let execution_gas_check_future =
             self.check_execution_gas_limit_efficiency(op.clone(), block_hash);
         let (sim_result, _) = tokio::try_join!(sim_fut, execution_gas_check_future)?;
@@ -676,19 +695,23 @@ where
             .pool
             .check_associated_storage(&sim_result.associated_addresses, &op)?;
 
-        // Check pre op gas limit efficiency
+        let verification_gas_efficiency =
+            gas_metrics::verification_gas_efficiency(&op, sim_result.pre_op_gas);
+        if let Some(verification_gas_efficiency) = verification_gas_efficiency {
+            gas_metrics::record_admission_verification_gas_efficiency(
+                self.config.entry_point,
+                &op,
+                verification_gas_efficiency,
+            );
+        }
+
+        // Check pre op gas limit efficiency, an op without a verification gas limit is not checked
         if self
             .config
             .verification_gas_limit_efficiency_reject_threshold
             > 0.0
+            && let Some(verification_gas_efficiency) = verification_gas_efficiency
         {
-            let verification_gas_used = sim_result
-                .pre_op_gas
-                .saturating_sub(op.pre_verification_gas());
-
-            let verification_gas_efficiency =
-                verification_gas_used as f64 / op.total_verification_gas_limit() as f64;
-
             let effective_verification_gas_limit_efficiency_reject_threshold = op
                 .effective_verification_gas_limit_efficiency_reject_threshold(
                     self.config
@@ -1092,6 +1115,7 @@ mod tests {
     use alloy_rpc_types_eth::TransactionReceipt as AlloyTransactionReceipt;
     use alloy_serde::WithOtherFields;
     use alloy_sol_types::SolEvent;
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
     use mockall::Sequence;
     use rundler_contracts::v0_6::IEntryPoint::UserOperationEvent as UserOperationEventV06;
     use rundler_provider::{
@@ -1313,6 +1337,8 @@ mod tests {
                 nonce: uos[0].nonce(),
                 actual_gas_cost: U256::ZERO,
                 paymaster: None,
+                success: true,
+                actual_gas_used: U256::ZERO,
             }],
             unmined_ops: vec![],
             preconfirmed_txns: vec![],
@@ -1415,6 +1441,8 @@ mod tests {
                 nonce: uos[0].nonce(),
                 actual_gas_cost: U256::from(10),
                 paymaster: Some(paymaster),
+                success: true,
+                actual_gas_used: U256::ZERO,
             }],
             unmined_ops: vec![],
 
@@ -1460,6 +1488,8 @@ mod tests {
                 nonce: uos[0].nonce(),
                 actual_gas_cost: U256::from(10),
                 paymaster: None,
+                success: true,
+                actual_gas_used: U256::ZERO,
             }],
             entity_balance_updates: vec![],
             unmined_entity_balance_updates: vec![BalanceUpdate {
@@ -1505,6 +1535,8 @@ mod tests {
                 nonce: uos[0].nonce(),
                 actual_gas_cost: U256::ZERO,
                 paymaster: None,
+                success: true,
+                actual_gas_used: U256::ZERO,
             }],
             unmined_ops: vec![],
             preconfirmed_txns: vec![],
@@ -1551,6 +1583,8 @@ mod tests {
                 nonce: uos[0].nonce(),
                 actual_gas_cost: U256::ZERO,
                 paymaster: None,
+                success: true,
+                actual_gas_used: U256::ZERO,
             }],
             unmined_ops: vec![],
             preconfirmed_txns: vec![],
@@ -1568,6 +1602,73 @@ mod tests {
         assert_eq!(rep[0].address, address);
         assert_eq!(rep[0].ops_seen, 2); // 2 ops seen, 1 rejected at insert
         assert_eq!(rep[0].ops_included, 1); // 1 op included
+    }
+
+    #[tokio::test]
+    async fn test_mined_op_gas_efficiency() {
+        let ops = (0..2)
+            .map(|_| {
+                create_op_from_required(UserOperationRequiredFields {
+                    sender: Address::random(),
+                    call_gas_limit: 100_000,
+                    verification_gas_limit: 50_000,
+                    pre_verification_gas: 50_000,
+                    max_fee_per_gas: 1,
+                    ..Default::default()
+                })
+            })
+            .collect();
+        let (pool, uos) = create_pool_insert_ops(ops).await;
+        check_ops_unordered(&pool.best_operations(2, None).unwrap(), &uos);
+
+        let mined_op = |uo: &UserOperationVariant, hash: B256| MinedOp {
+            entry_point: pool.config.entry_point,
+            hash,
+            sender: uo.sender(),
+            nonce: uo.nonce(),
+            actual_gas_cost: U256::ZERO,
+            paymaster: None,
+            success: true,
+            actual_gas_used: U256::from(160_000),
+        };
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _guard = metrics::set_default_local_recorder(&recorder);
+
+        pool.on_chain_update(&ChainUpdate {
+            latest_block_number: 1,
+            latest_block_hash: B256::random(),
+            latest_block_timestamp: 0.into(),
+            earliest_remembered_block_number: 0,
+            reorg_depth: 0,
+            mined_ops: vec![
+                mined_op(&uos[0], uos[0].hash()),
+                // same id as the pool op but a different hash, e.g. a replaced op
+                mined_op(&uos[1], B256::random()),
+            ],
+            unmined_ops: vec![],
+            preconfirmed_txns: vec![],
+            preconfirmed_block_number: None,
+            entity_balance_updates: vec![],
+            unmined_entity_balance_updates: vec![],
+            address_updates: vec![],
+            reorg_larger_than_history: false,
+            update_type: UpdateType::Confirmed,
+        })
+        .await;
+
+        // both ops are removed from the pool, only the one with a matching hash is recorded
+        assert!(pool.best_operations(2, None).unwrap().is_empty());
+        let samples = snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .filter(|(key, _, _, _)| key.key().name() == gas_metrics::GAS_EFFICIENCY_HISTOGRAMS[0])
+            .map(|(_, _, _, value)| value)
+            .collect::<Vec<_>>();
+        // 160_000 used of 200_000
+        assert_eq!(samples, vec![DebugValue::Histogram(vec![0.8.into()])]);
     }
 
     #[tokio::test]
@@ -1631,6 +1732,8 @@ mod tests {
                 nonce: uos[0].nonce(),
                 actual_gas_cost: U256::ZERO,
                 paymaster: None,
+                success: true,
+                actual_gas_used: U256::ZERO,
             }],
             entity_balance_updates: vec![],
             preconfirmed_txns: vec![],
@@ -2191,6 +2294,62 @@ mod tests {
                 assert_eq!(actual, actual_eff);
             }
             _ => panic!("Expected VerificationGasLimitEfficiencyTooLow error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_admission_verification_gas_efficiency() {
+        // recorded whether or not the efficiency threshold then rejects the op
+        for (threshold, accepted) in [(0.0, true), (0.25, false)] {
+            let mut config = default_config();
+            config.verification_gas_limit_efficiency_reject_threshold = threshold;
+
+            let op = create_op_from_op_v0_6(UserOperationRequiredFields {
+                call_gas_limit: 10_000,
+                verification_gas_limit: 500_000,
+                pre_verification_gas: 50_000,
+                max_fee_per_gas: 1,
+                max_priority_fee_per_gas: 1,
+                ..Default::default()
+            });
+
+            let mut ep = MockEntryPointV0_6::new();
+            ep.expect_simulate_handle_op().returning(|_, _, _, _, _| {
+                Ok(Ok(ExecutionResult {
+                    pre_op_gas: 100_000,
+                    paid: uint!(110_000_U256),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+
+            let pool = create_pool_with_entry_point_config(
+                config,
+                vec![op.clone()],
+                ep,
+                MempoolConfig::default(),
+            );
+
+            let recorder = DebuggingRecorder::new();
+            let snapshotter = recorder.snapshotter();
+            let _guard = metrics::set_default_local_recorder(&recorder);
+
+            let ret = pool
+                .add_operation(OperationOrigin::Local, op.op, default_perms())
+                .await;
+            assert_eq!(ret.is_ok(), accepted);
+
+            let samples = snapshotter
+                .snapshot()
+                .into_vec()
+                .into_iter()
+                .filter(|(key, _, _, _)| {
+                    key.key().name() == gas_metrics::GAS_EFFICIENCY_HISTOGRAMS[1]
+                })
+                .map(|(_, _, _, value)| value)
+                .collect::<Vec<_>>();
+            // the simulator reports 100K pre-op gas: 50K PVG + 50K of 500K verification gas
+            assert_eq!(samples, vec![DebugValue::Histogram(vec![0.1.into()])]);
         }
     }
 

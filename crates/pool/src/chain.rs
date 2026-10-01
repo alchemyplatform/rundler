@@ -131,6 +131,8 @@ pub(crate) struct MinedOp {
     pub nonce: U256,
     pub actual_gas_cost: U256,
     pub paymaster: Option<Address>,
+    pub success: bool,
+    pub actual_gas_used: U256,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -938,6 +940,8 @@ impl<P: EvmProvider> Chain<P> {
                     nonce: event.nonce,
                     actual_gas_cost: event.actualGasCost,
                     paymaster,
+                    success: event.success,
+                    actual_gas_used: event.actualGasUsed,
                 };
                 mined_ops.push(mined);
             }
@@ -1000,6 +1004,8 @@ impl<P: EvmProvider> Chain<P> {
                     nonce: event.nonce,
                     actual_gas_cost: event.actualGasCost,
                     paymaster,
+                    success: event.success,
+                    actual_gas_used: event.actualGasUsed,
                 };
                 mined_ops.push(mined);
             }
@@ -2430,6 +2436,49 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_load_mined_op_keeps_success_and_actual_gas_used() {
+        let op_hash = hash(1);
+        let actual_gas_used = U256::from(123_456);
+
+        let mut log_v0_6 = fake_mined_log_v0_6(op_hash);
+        log_v0_6.inner.data.data = UserOperationEventV06 {
+            userOpHash: op_hash,
+            sender: Address::ZERO,
+            paymaster: Address::ZERO,
+            nonce: U256::ZERO,
+            success: false,
+            actualGasCost: U256::ZERO,
+            actualGasUsed: actual_gas_used,
+        }
+        .encode_data()
+        .into();
+
+        let mut log_v0_7 = fake_mined_log_v0_7(op_hash);
+        log_v0_7.inner.data.data = UserOperationEventV07 {
+            userOpHash: op_hash,
+            sender: Address::ZERO,
+            paymaster: Address::ZERO,
+            nonce: U256::ZERO,
+            success: false,
+            actualGasCost: U256::ZERO,
+            actualGasUsed: actual_gas_used,
+        }
+        .encode_data()
+        .into();
+
+        let mut mined_ops = vec![];
+        let mut balance_updates = vec![];
+        Chain::<MockEvmProvider>::load_v0_6(log_v0_6, &mut mined_ops, &mut balance_updates);
+        Chain::<MockEvmProvider>::load_v0_7(log_v0_7, &mut mined_ops, &mut balance_updates);
+
+        assert_eq!(mined_ops.len(), 2);
+        for mined_op in mined_ops {
+            assert!(!mined_op.success);
+            assert_eq!(mined_op.actual_gas_used, actual_gas_used);
+        }
+    }
+
     fn fake_mined_op(n: u8, ep: Address) -> MinedOp {
         MinedOp {
             hash: hash(n),
@@ -2438,6 +2487,8 @@ mod tests {
             nonce: U256::ZERO,
             actual_gas_cost: U256::ZERO,
             paymaster: None,
+            success: true,
+            actual_gas_used: U256::ZERO,
         }
     }
 

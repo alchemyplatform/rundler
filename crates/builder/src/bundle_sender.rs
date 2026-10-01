@@ -42,6 +42,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     ProposerKey,
     assigner::{Assigner, AssignmentResult},
+    bundle_metrics,
     bundle_proposer::{BundleData, BundleProposalRequest, BundleProposerError, BundleProposerT},
     emit::{BuilderEvent, BundleTxDetails},
     sender::{ProviderEventSignal, RpcOutcomeClass, TxSenderError},
@@ -621,9 +622,11 @@ where
                     attempt_number,
                     gas_limit,
                     gas_used,
+                    gas_price,
                     tx_hash,
                     nonce,
                     is_success,
+                    user_op_events,
                     ..
                 } => {
                     info!(
@@ -640,6 +643,17 @@ where
                     }
                     if let Some(used) = gas_used {
                         self.increment_counter("builder_bundle_gas_used", &pinned, used);
+                    }
+                    if let Some((entry_point, _)) = &pinned {
+                        bundle_metrics::record_mined_bundle(
+                            *entry_point,
+                            !self.chain_spec.da_pre_verification_gas
+                                || self.chain_spec.include_da_gas_in_gas_limit,
+                            is_success,
+                            gas_used,
+                            gas_price,
+                            &user_op_events,
+                        );
                     }
 
                     if !is_success && let Err(e) = self.process_revert(tx_hash, &pinned).await {
@@ -2285,6 +2299,7 @@ mod tests {
                     tx_hash: B256::ZERO,
                     attempt_number: 0,
                     is_success: true,
+                    user_op_events: vec![],
                 }))
             })
         });
@@ -2734,6 +2749,7 @@ mod tests {
             tx_hash: B256::ZERO,
             attempt_number: 0,
             is_success: true,
+            user_op_events: vec![],
         });
         sender_impl
             .step_after_trigger(&mut state, update)
@@ -2947,6 +2963,7 @@ mod tests {
                     tx_hash: B256::ZERO,
                     attempt_number: 0,
                     is_success: false, // revert
+                    user_op_events: vec![],
                 }))
             })
         });
@@ -3410,6 +3427,7 @@ mod tests {
                     tx_hash: B256::ZERO,
                     attempt_number: 0,
                     is_success: false, // revert
+                    user_op_events: vec![],
                 }))
             })
         });

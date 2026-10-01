@@ -16,7 +16,7 @@ use std::{net::SocketAddr, time::Duration};
 use itertools::Itertools;
 use metrics::Gauge;
 use metrics_derive::Metrics;
-use metrics_exporter_prometheus::PrometheusBuilder;
+use metrics_exporter_prometheus::{Matcher, PrometheusBuilder};
 use metrics_process::Collector;
 use metrics_util::layers::{PrefixLayer, Stack};
 use rundler_task::TaskSpawner;
@@ -39,6 +39,31 @@ pub fn initialize<'a, T: TaskSpawner>(
     }
 
     builder = builder.set_buckets(buckets)?;
+    // ratio histograms need their own buckets, the global ones are sized for milliseconds
+    for name in rundler_pool::GAS_EFFICIENCY_HISTOGRAMS {
+        builder = builder.set_buckets_for_metric(
+            Matcher::Full(format!("rundler.{name}")),
+            rundler_pool::GAS_EFFICIENCY_BUCKETS,
+        )?;
+    }
+    for name in rundler_builder::BUNDLE_RATIO_HISTOGRAMS {
+        builder = builder.set_buckets_for_metric(
+            Matcher::Full(format!("rundler.{name}")),
+            rundler_builder::BUNDLE_RATIO_BUCKETS,
+        )?;
+    }
+    for name in rundler_builder::BUNDLE_OP_COUNT_HISTOGRAMS {
+        builder = builder.set_buckets_for_metric(
+            Matcher::Full(format!("rundler.{name}")),
+            rundler_builder::BUNDLE_OP_COUNT_BUCKETS,
+        )?;
+    }
+    for name in rundler_sim::ESTIMATION_ETH_CALL_HISTOGRAMS {
+        builder = builder.set_buckets_for_metric(
+            Matcher::Full(format!("rundler.{name}")),
+            rundler_sim::ESTIMATION_ETH_CALL_BUCKETS,
+        )?;
+    }
 
     let (recorder, exporter) = builder.build()?;
     task_spawner.spawn_critical(
