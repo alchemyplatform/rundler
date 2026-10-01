@@ -101,6 +101,11 @@ pub async fn run() -> anyhow::Result<()> {
             cs.pre_glamsterdam_gas_schedule(),
             cs.glamsterdam_gas_schedule(),
         );
+        if let ForkActivation::Timestamp(activation) = cs.glamsterdam_activation {
+            tracing::warn!(
+                "For bundles built before Glamsterdam activation at {activation}, gas limits and preVerificationGas checks use the larger costs from both schedules. This may reduce bundle capacity or skip operations admitted to the pool."
+            );
+        }
     }
 
     match opt.command {

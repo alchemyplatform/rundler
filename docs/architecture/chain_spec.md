@@ -59,6 +59,17 @@ Rundler chooses gas costs as follows:
 - bundle building uses a gas schedule that covers both the triggering block and any later
   inclusion block while a timestamp activation is pending. This uses the larger cost for each
   gas field, because a submitted transaction may remain pending across the activation.
+  Before activation, the builder also checks each operation's preVerificationGas against that
+  inclusion schedule, even on chains without DA gas. An operation admitted under the current
+  schedule can therefore remain in the pool but be skipped for a bundle until it is replaced with
+  enough preVerificationGas.
+
+This conservative bundle sizing starts as soon as a future timestamp is configured, even well
+before activation. It can reduce bundle capacity, particularly for EIP-7702 operations: the
+default Glamsterdam preset raises the per-authorization allowance from 25,000 to 235,606 gas.
+The delegation sender also uses the larger authorization allowance when setting its batch size.
+Large calldata can hit the higher floor. With `glamsterdam_activation = "never"`, the builder uses
+only the existing top-level gas schedule and skips this additional PVG check.
 
 An estimation or admission request that spans the activation keeps the schedule of its pinned
 block. The activation doesn't need a restart or config reload, but every Rundler process (RPC,

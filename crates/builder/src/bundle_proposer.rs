@@ -42,7 +42,7 @@ use rundler_types::{
     UserOpsPerAggregator, ValidTimeRange, ValidationRevert,
     aggregator::SignatureAggregatorResult,
     authorization::Eip7702Auth,
-    chain::ChainSpec,
+    chain::{ChainSpec, ForkActivation},
     da::{DAGasBlockData, DAGasData},
     pool::{PoolOperation, SimulationViolation},
     proxy::SubmissionProxy,
@@ -669,8 +669,14 @@ where
             return None;
         }
 
-        if !chain_spec.da_pre_verification_gas {
-            // Skip PVG check if no da pre-verification gas as this is checked on entry to the mempool.
+        if !chain_spec.da_pre_verification_gas
+            && !matches!(
+                self.settings.chain_spec.glamsterdam_activation,
+                ForkActivation::Timestamp(_)
+            )
+        {
+            // Admission already checked PVG for this schedule. Before a timestamp fork, the
+            // bundle may land under the higher schedule, so check that cost below.
             return Some(PoolOperationWithSponsoredDAGas {
                 op,
                 sponsored_da_gas: 0,
@@ -686,7 +692,9 @@ where
             op.uo.gas_price(base_fee)
         };
 
-        let required_da_gas = if self.settings.da_gas_tracking_enabled
+        let required_da_gas = if !chain_spec.da_pre_verification_gas {
+            0
+        } else if self.settings.da_gas_tracking_enabled
             && op.da_gas_data != DAGasData::Empty
             && let Some(da_block_data) = da_block_data
             && let Some(da_gas_oracle) = self.ep_providers.da_gas_oracle_sync().as_ref()
@@ -3624,6 +3632,77 @@ mod tests {
         );
         assert!(pre >= post);
         assert_eq!(post, genesis);
+    }
+
+    #[tokio::test]
+    async fn test_pre_fork_bundle_checks_pvg_for_possible_post_fork_inclusion() {
+        const ACTIVATION: u64 = 1_000;
+        let chain_spec = ChainSpec {
+            eip7623_enabled: true,
+            glamsterdam_activation: ForkActivation::Timestamp(ACTIVATION),
+            ..Default::default()
+        };
+        let required = UserOperationRequiredFields {
+            pre_verification_gas: DEFAULT_PVG,
+            call_data: Bytes::from(vec![1_u8; 4_096]),
+            ..Default::default()
+        };
+        let probe = UserOperationBuilder::new(&chain_spec, required.clone()).build();
+        let required_pvg = |op: &UserOperation, spec: &ChainSpec| {
+            op.required_pre_verification_gas(spec, 1, 0, Some(0.5))
+        };
+        let pre = required_pvg(&probe, &chain_spec.at_timestamp(ACTIVATION - 1));
+        let inclusion = required_pvg(
+            &probe,
+            &chain_spec.for_bundle_inclusion_after(ACTIVATION - 1),
+        );
+        assert!(inclusion > pre);
+
+        let op = UserOperationBuilder::new(
+            &chain_spec,
+            UserOperationRequiredFields {
+                pre_verification_gas: (pre + inclusion) / 2,
+                ..required
+            },
+        )
+        .build();
+        assert!(op.pre_verification_gas() >= required_pvg(&op, &chain_spec));
+        assert!(
+            op.pre_verification_gas()
+                < required_pvg(&op, &chain_spec.for_bundle_inclusion_after(ACTIVATION - 1))
+        );
+
+        let make_bundle = |op: UserOperation, activation| async move {
+            mock_make_bundle_at(
+                vec![MockOp {
+                    op,
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    perms: UserOperationPermissions::default(),
+                }],
+                vec![],
+                vec![HandleOpsOut::Success],
+                vec![],
+                0,
+                0,
+                false,
+                ExpectedStorage::default(),
+                false,
+                vec![],
+                None,
+                U256::MAX,
+                None,
+                vec![],
+                activation,
+                ACTIVATION - 1,
+            )
+            .await
+        };
+
+        assert!(make_bundle(op.clone(), ForkActivation::Never).await.is_ok());
+        assert!(matches!(
+            make_bundle(op, ForkActivation::Timestamp(ACTIVATION)).await,
+            Err(BundleProposerError::NoOperationsAfterFeeFilter)
+        ));
     }
 
     #[tokio::test]
