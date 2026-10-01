@@ -5646,6 +5646,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "rundler-pvg-calibration"
+version = "0.11.0"
+dependencies = [
+ "alloy-eips",
+ "alloy-json-rpc",
+ "alloy-network",
+ "alloy-primitives",
+ "alloy-provider",
+ "alloy-rpc-client",
+ "alloy-rpc-types-eth",
+ "alloy-signer",
+ "alloy-signer-local",
+ "alloy-sol-macro",
+ "alloy-sol-types",
+ "alloy-transport",
+ "anyhow",
+ "clap",
+ "dotenvy",
+ "rundler-contracts",
+ "rundler-types",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "rundler-rpc"
 version = "0.11.0"
 dependencies = [

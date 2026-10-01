@@ -12,7 +12,8 @@ members = [
     "crates/sim/",
     "crates/task/",
     "crates/types/",
-    "crates/utils/"
+    "crates/utils/",
+    "test/pvg-calibration/"
 ]
 default-members = ["bin/rundler"]
 resolver = "2"
