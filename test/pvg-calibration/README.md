@@ -83,8 +83,30 @@ moves the sender's balance in the same block.
 | E3 | `calldata`        | unmetered gas per byte of `callData` and of `signature`, zero vs non-zero, floor-bound cases |
 | E4 | `authorization`   | unmetered cost per EIP-7702 authorization by authority state (empty, funded, re-delegation), vs rundler's `authorization_gas_limit` |
 | E5 | `hazards`         | storage shapes that move gas across metering spans: same-sender zero-deposit ops, exact paymaster drain, cross-op and cross-span slot clears |
+| E6 | `end-to-end`      | through a running rundler: LightAccount v2, MultiOwnerLightAccount v2, ModularAccount v2 and 7702 (SemiModularAccount7702) ops estimated, signed, sent and bundled by rundler; bundler margin per bundle |
 
-Planned: E6 validation of the new formula, E7 v0.6.
+Planned: E7 v0.6.
+
+### E6 — end to end through rundler
+
+Run rundler against the same node with the Glamsterdam chain spec, keeping estimation calls under
+the 2^24 cap, and a separate funded builder key:
+
+```sh
+SIGNER_PRIVATE_KEYS=<builder key> cargo run --release -p rundler -- node \
+  --network ethereum_glamsterdam_devnet --node_http http://127.0.0.1:8547 \
+  --enabled_entry_points v0.7 --max_gas_estimation_gas 16000000 --max_gas_estimation_rounds 10 \
+  --rpc.host 127.0.0.1 --rpc.port 3000 --metrics.port 8091     # from the repo root
+
+PVG_RPC_URL=http://127.0.0.1:8547 cargo run -- --label devnet end-to-end   # from this directory
+```
+
+The harness acts as the wallet: it funds self-paying senders, takes every gas field from
+`eth_estimateUserOperationGas`, signs with the account owner, submits with
+`eth_sendUserOperation`, and waits for the receipt. Ops are sent one at a time (single-op
+bundles) and then as a concurrent batch (one multi-op bundle). For each bundle,
+`margin = Σ actualGasCost − gasUsed × effectiveGasPrice`. A negative margin means rundler lost
+money on it.
 
 On chains without the canonical EntryPoint v0.7 (anvil), E1 deploys the submodule's
 EntryPoint built with the canonical settings (solc 0.8.23, 1M optimizer runs, viaIR). It is
