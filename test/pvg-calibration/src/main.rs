@@ -90,6 +90,17 @@ enum Command {
     Authorization,
     /// E5: storage shapes that move gas between metered and unmetered (EntryPoint v0.7)
     Hazards,
+    /// E6: end to end through a running rundler, with real account implementations; measures
+    /// the bundler's margin on each bundle rundler sends
+    EndToEnd {
+        /// JSON-RPC URL of the rundler instance under test
+        #[arg(
+            long,
+            env = "PVG_BUNDLER_RPC_URL",
+            default_value = "http://127.0.0.1:3000"
+        )]
+        bundler_rpc_url: String,
+    },
 }
 
 #[tokio::main]
@@ -107,6 +118,14 @@ async fn main() -> anyhow::Result<()> {
             let report = experiments::chain::run(&harness).await?;
             let path = write_report(&cli.out_dir, &cli.label, "e0", report.chain_id(), &report)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
+            eprintln!("report written to {}", path.display());
+        }
+        Command::EndToEnd { bundler_rpc_url } => {
+            let chain_id = harness.chain_info().await?.chain_id;
+            let fixtures = fixtures::ensure(&harness).await?;
+            let report =
+                experiments::e2e::run(&harness, &fixtures, chain_id, &bundler_rpc_url).await?;
+            let path = write_report(&cli.out_dir, &cli.label, "e6", chain_id, &report)?;
             eprintln!("report written to {}", path.display());
         }
         Command::Fixtures => {
@@ -140,7 +159,9 @@ async fn main() -> anyhow::Result<()> {
                     let report = experiments::hazards::run(&runner).await?;
                     write_report(&cli.out_dir, label, "e5", id, &report)?
                 }
-                Command::CalibrateChain | Command::Fixtures => unreachable!(),
+                Command::CalibrateChain | Command::Fixtures | Command::EndToEnd { .. } => {
+                    unreachable!()
+                }
             };
             eprintln!("report written to {}", path.display());
         }
