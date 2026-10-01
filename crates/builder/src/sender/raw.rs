@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::B256;
+use alloy_primitives::{B256, keccak256};
 use anyhow::Context;
 use async_trait::async_trait;
 use rundler_provider::{EvmProvider, ProviderError, TransactionRequest};
@@ -44,6 +44,7 @@ where
             .sign_tx_raw(tx)
             .await
             .context("failed to sign transaction")?;
+        let tx_hash = keccak256(&raw_tx);
 
         let result = if self.use_conditional_rpc {
             self.submit_provider
@@ -56,7 +57,7 @@ where
             self.submit_provider.send_raw_transaction(raw_tx).await
         };
 
-        result.map_err(|e| self.map_provider_error(e))
+        self.accept_already_known(result, tx_hash)
     }
 
     async fn cancel_transaction(
@@ -72,11 +73,19 @@ where
             .sign_tx_raw(tx)
             .await
             .context("failed to sign transaction")?;
+        let expected_tx_hash = keccak256(&raw_tx);
 
         let tx_hash = self
             .submit_provider
             .send_raw_transaction(raw_tx)
             .await
+            .or_else(|error| {
+                if error.is_already_known() {
+                    Ok(expected_tx_hash)
+                } else {
+                    Err(error)
+                }
+            })
             .map_err(|e| self.map_provider_error(e))?;
 
         Ok(CancelTxInfo {
@@ -101,6 +110,18 @@ impl<P> RawTransactionSender<P> {
 
     fn map_provider_error(&self, error: ProviderError) -> TxSenderError {
         TxSenderError::from(error).promote_terminal_error(&self.chain_spec)
+    }
+
+    fn accept_already_known(
+        &self,
+        result: std::result::Result<B256, ProviderError>,
+        tx_hash: B256,
+    ) -> Result<B256> {
+        match result {
+            Ok(hash) => Ok(hash),
+            Err(error) if error.is_already_known() => Ok(tx_hash),
+            Err(error) => Err(self.map_provider_error(error)),
+        }
     }
 }
 
@@ -157,5 +178,18 @@ mod tests {
                 TxSenderError::TerminalRpcError { .. }
             ));
         }
+    }
+
+    #[test]
+    fn treats_already_known_as_success() {
+        let sender = RawTransactionSender::new(MockEvmProvider::new(), false, ChainSpec::default());
+        let expected_hash = B256::repeat_byte(0x42);
+
+        let result = sender.accept_already_known(
+            Err(rpc_error_response(-32000, "already known")),
+            expected_hash,
+        );
+
+        assert_eq!(result.unwrap(), expected_hash);
     }
 }

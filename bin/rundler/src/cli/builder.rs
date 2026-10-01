@@ -105,6 +105,15 @@ pub struct BuilderArgs {
     )]
     pub submit_url: Option<String>,
 
+    /// Additional fallback URLs used by the raw sender.
+    #[arg(
+        long = "builder.submit_fallback_url",
+        name = "builder.submit_fallback_url",
+        env = "BUILDER_SUBMIT_FALLBACK_URLS",
+        value_delimiter = ','
+    )]
+    pub submit_fallback_urls: Vec<String>,
+
     /// Use the conditional RPC endpoint for transaction submission.
     ///
     /// Only used when BUILDER_SENDER is "raw"
@@ -362,6 +371,7 @@ impl BuilderArgs {
         // fallback is only useful on an endpoint independent of the primary.
         let fallback_args = || RawSenderArgs {
             submit_url: rpc_url.into(),
+            submit_fallback_urls: Vec::new(),
             use_conditional_rpc: false,
             chain_spec: chain_spec.clone(),
         };
@@ -383,6 +393,7 @@ impl BuilderArgs {
         match self.sender_type {
             TransactionSenderKind::Raw => Ok(TransactionSenderArgs::Raw(RawSenderArgs {
                 submit_url: self.submit_url.clone().unwrap_or_else(|| rpc_url.into()),
+                submit_fallback_urls: self.submit_fallback_urls.clone(),
                 use_conditional_rpc: self.use_conditional_rpc,
                 chain_spec: chain_spec.clone(),
             })),
@@ -607,6 +618,7 @@ mod tests {
 
     const RPC_URL: &str = "https://node.example.com/v2/key";
     const SUBMIT_URL: &str = "https://priv-rpc-gateway.example.com/?key=key";
+    const SUBMIT_FALLBACK_URL: &str = "https://fallback.example.com/v2/key";
 
     #[derive(Parser)]
     struct TestCli {
@@ -686,6 +698,23 @@ mod tests {
         let raw = unwrap_raw(args.sender_args(&ChainSpec::default(), RPC_URL).unwrap());
 
         assert_eq!(raw.submit_url, SUBMIT_URL);
+    }
+
+    #[test]
+    fn raw_sender_accepts_repeated_submit_fallback_urls() {
+        let args = builder_args(&[
+            "--builder.submit_fallback_url",
+            SUBMIT_FALLBACK_URL,
+            "--builder.submit_fallback_url",
+            RPC_URL,
+        ]);
+
+        let raw = unwrap_raw(args.sender_args(&ChainSpec::default(), SUBMIT_URL).unwrap());
+
+        assert_eq!(
+            raw.submit_fallback_urls,
+            vec![SUBMIT_FALLBACK_URL.to_string(), RPC_URL.to_string()]
+        );
     }
 
     #[test]

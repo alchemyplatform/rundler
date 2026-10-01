@@ -11,14 +11,17 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::time::Duration;
+use std::{num::NonZeroUsize, time::Duration};
 
 use alloy_provider::{Provider as AlloyProvider, ProviderBuilder, network::AnyNetwork};
 use alloy_rpc_client::ClientBuilder;
-use alloy_transport::{TransportError, TransportErrorKind};
+use alloy_transport::{
+    BoxTransport, IntoBoxTransport, TransportError, TransportErrorKind, layers::FallbackLayer,
+};
+use alloy_transport_http::Http;
 use evm::AlloyEvmProvider;
 use metrics::AlloyMetricLayer;
-use tower::{BoxError, ServiceBuilder, timeout::error::Elapsed};
+use tower::{BoxError, Layer, ServiceBuilder, timeout::error::Elapsed};
 use url::Url;
 
 use crate::EvmProvider;
@@ -30,11 +33,15 @@ pub(crate) mod entry_point;
 pub(crate) mod evm;
 pub(crate) mod metrics;
 
+const CLIENT_TIMEOUT_ERROR: &str = "provider request timeout from client side";
+
 /// Configuration for an Alloy network provider
 #[derive(Debug, Clone)]
 pub struct AlloyNetworkConfig {
     /// RPC URL
     pub rpc_url: Url,
+    /// Additional RPC URLs used by Alloy's fallback transport
+    pub rpc_fallback_urls: Vec<Url>,
     /// Client timeout in seconds
     pub client_timeout_seconds: u64,
     /// Whether to enable consistency retry
@@ -59,6 +66,7 @@ impl Default for AlloyNetworkConfig {
     fn default() -> Self {
         Self {
             rpc_url: Url::parse("http://localhost:9009").unwrap(),
+            rpc_fallback_urls: Vec::new(),
             client_timeout_seconds: 15,
             consistency_retry_enabled: false,
             consistency_retry_max_retries: 5,
@@ -84,6 +92,29 @@ pub fn new_alloy_evm_provider(
 pub fn new_alloy_provider(
     config: &AlloyNetworkConfig,
 ) -> anyhow::Result<impl AlloyProvider<AnyNetwork> + Clone + use<>> {
+    let mut rpc_urls = Vec::with_capacity(1 + config.rpc_fallback_urls.len());
+    rpc_urls.push(config.rpc_url.clone());
+    rpc_urls.extend(config.rpc_fallback_urls.iter().cloned());
+
+    let transports = rpc_urls
+        .into_iter()
+        .map(|rpc_url| new_http_transport(config, rpc_url))
+        .collect::<Vec<_>>();
+    let active_transport_count =
+        NonZeroUsize::new(transports.len()).expect("primary RPC transport is always present");
+    let transport = FallbackLayer::default()
+        .with_active_transport_count(active_transport_count)
+        .with_sequential_method("eth_sendRawTransaction")
+        .with_sequential_method("eth_sendRawTransactionConditional")
+        .layer(transports);
+    let client = ClientBuilder::default().transport(transport, false);
+
+    Ok(ProviderBuilder::new()
+        .network::<AnyNetwork>()
+        .connect_client(client))
+}
+
+fn new_http_transport(config: &AlloyNetworkConfig, rpc_url: Url) -> BoxTransport {
     let create_rate_limit_layer = |config: &AlloyNetworkConfig| {
         alloy_transport::layers::RetryBackoffLayer::new(
             config.rate_limit_retry_max_retries,
@@ -104,43 +135,43 @@ pub fn new_alloy_provider(
         .map_err(map_timeout_error)
         .timeout(Duration::from_secs(config.client_timeout_seconds));
 
-    // Build the client with layers based on configuration
-    let client = match (
+    let transport = Http::new(rpc_url);
+    match (
         config.rate_limit_retry_enabled,
         config.consistency_retry_enabled,
     ) {
-        (true, true) => ClientBuilder::default()
+        (true, true) => ServiceBuilder::new()
             .layer(create_rate_limit_layer(config))
             .layer(create_consistency_layer(config))
             .layer(metric_layer)
             .layer(timeout_layer)
-            .http(config.rpc_url.clone()),
-        (true, false) => ClientBuilder::default()
+            .service(transport)
+            .into_box_transport(),
+        (true, false) => ServiceBuilder::new()
             .layer(create_rate_limit_layer(config))
             .layer(metric_layer)
             .layer(timeout_layer)
-            .http(config.rpc_url.clone()),
-        (false, true) => ClientBuilder::default()
+            .service(transport)
+            .into_box_transport(),
+        (false, true) => ServiceBuilder::new()
             .layer(create_consistency_layer(config))
             .layer(metric_layer)
             .layer(timeout_layer)
-            .http(config.rpc_url.clone()),
-        (false, false) => ClientBuilder::default()
+            .service(transport)
+            .into_box_transport(),
+        (false, false) => ServiceBuilder::new()
             .layer(metric_layer)
             .layer(timeout_layer)
-            .http(config.rpc_url.clone()),
-    };
-
-    Ok(ProviderBuilder::new()
-        .network::<AnyNetwork>()
-        .connect_client(client))
+            .service(transport)
+            .into_box_transport(),
+    }
 }
 
 /// Maps errors from a [`tower::timeout::Timeout`]-wrapped transport back to
 /// [`TransportError`], as required by alloy's `Transport` contract.
 fn map_timeout_error(error: BoxError) -> TransportError {
     match error.downcast::<Elapsed>() {
-        Ok(_) => TransportError::local_usage_str("provider request timeout from client side"),
+        Ok(_) => TransportError::local_usage_str(CLIENT_TIMEOUT_ERROR),
         Err(error) => match error.downcast::<TransportError>() {
             Ok(error) => *error,
             // Unreachable in practice: the inner transport's error type is
