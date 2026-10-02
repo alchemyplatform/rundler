@@ -177,7 +177,7 @@ where
         block_hash: B256,
         block_timestamp: u64,
     ) -> Result<PrecheckReturn, PrecheckError> {
-        let chain_spec = self.chain_spec.at_timestamp(block_timestamp);
+        let chain_spec = self.chain_spec.for_bundle_inclusion_after(block_timestamp);
         let async_data = self
             .load_async_data(op, block_hash, &chain_spec, perms)
             .await?;
@@ -687,7 +687,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_check_uses_gas_schedule_of_block() {
+    async fn test_check_uses_bundle_inclusion_schedule() {
         const ACTIVATION: u64 = 1_000;
         let cs = ChainSpec {
             eip7623_enabled: true,
@@ -722,7 +722,7 @@ mod tests {
         let op = UserOperationBuilder::new(
             &cs,
             UserOperationRequiredFields {
-                call_data: Bytes::from(vec![1_u8; 1_000]),
+                call_data: Bytes::from(vec![1_u8; 4_000]),
                 call_gas_limit: MIN_CALL_GAS_LIMIT,
                 verification_gas_limit: 100_000,
                 pre_verification_gas: 1_000_000,
@@ -734,7 +734,7 @@ mod tests {
 
         let expected_pvg = |timestamp: u64| {
             op.required_pre_verification_gas(
-                &cs.at_timestamp(timestamp),
+                &cs.for_bundle_inclusion_after(timestamp),
                 1,
                 0,
                 Some(settings.verification_gas_limit_efficiency_reject_threshold),
@@ -755,9 +755,16 @@ mod tests {
             expected_pvg(ACTIVATION - 1)
         );
         assert_eq!(post.required_pre_verification_gas, expected_pvg(ACTIVATION));
-        assert_ne!(
-            pre.required_pre_verification_gas,
-            post.required_pre_verification_gas
+        // before the fork, the requirement also covers inclusion after it
+        assert!(pre.required_pre_verification_gas >= post.required_pre_verification_gas);
+        assert!(
+            pre.required_pre_verification_gas
+                > op.required_pre_verification_gas(
+                    &cs.at_timestamp(ACTIVATION - 1),
+                    1,
+                    0,
+                    Some(settings.verification_gas_limit_efficiency_reject_threshold),
+                )
         );
     }
 

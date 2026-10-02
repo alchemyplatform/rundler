@@ -103,7 +103,7 @@ pub async fn run() -> anyhow::Result<()> {
         );
         if let ForkActivation::Timestamp(activation) = cs.glamsterdam_activation {
             tracing::warn!(
-                "For bundles built before Glamsterdam activation at {activation}, gas limits and preVerificationGas checks use the larger costs from both schedules. This may reduce bundle capacity or skip operations admitted to the pool."
+                "Until Glamsterdam activation at {activation}, gas estimation, pool admission and bundle building use the larger cost of each gas field from both schedules. Required preVerificationGas is higher and bundle capacity may be lower until then."
             );
         }
     }

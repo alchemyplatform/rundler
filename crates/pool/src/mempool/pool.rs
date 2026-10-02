@@ -492,7 +492,7 @@ where
         let suspect_threshold = self.config.rpc_failures_before_suspect;
 
         let timestamp = block_timestamp.seconds_since_epoch();
-        let chain_spec = self.config.chain_spec.at_timestamp(timestamp);
+        let chain_spec = self.config.chain_spec.for_bundle_inclusion_after(timestamp);
         let gas_schedule_id = self.config.chain_spec.gas_schedule_id_at(timestamp);
         let gas_schedule_changed = self
             .gas_schedule_id
@@ -1880,11 +1880,16 @@ mod tests {
         conf
     }
 
-    /// An op with enough preVerificationGas before the activation, but not after
-    fn create_op_short_pvg_after_activation(conf: &PoolInnerConfig) -> PoolOperation {
-        let required_pvg = |po: &PoolOperation, timestamp: u64| {
+    /// An op whose preVerificationGas covers what `low` requires, but not `high`
+    fn create_op_with_pvg_between(
+        conf: &PoolInnerConfig,
+        call_data: Bytes,
+        low: &ChainSpec,
+        high: &ChainSpec,
+    ) -> PoolOperation {
+        let required_pvg = |po: &PoolOperation, spec: &ChainSpec| {
             po.uo.required_pre_verification_gas(
-                &conf.chain_spec.at_timestamp(timestamp),
+                spec,
                 1,
                 0,
                 Some(conf.verification_gas_limit_efficiency_reject_threshold),
@@ -1894,21 +1899,29 @@ mod tests {
             sender: Address::random(),
             max_fee_per_gas: 10,
             max_priority_fee_per_gas: 10,
-            // large calldata so the calldata floor increase dominates
-            call_data: Bytes::from(vec![1_u8; 2_000]),
+            call_data,
             ..base_required_fields()
         };
         let probe = create_op_from_required(required.clone());
-        let pre = required_pvg(&probe, GLAMSTERDAM_ACTIVATION - 1);
-        let post = required_pvg(&probe, GLAMSTERDAM_ACTIVATION);
-
         let po = create_op_from_required(UserOperationRequiredFields {
-            pre_verification_gas: (pre + post) / 2,
+            pre_verification_gas: (required_pvg(&probe, low) + required_pvg(&probe, high)) / 2,
             ..required
         });
-        assert!(required_pvg(&po, GLAMSTERDAM_ACTIVATION - 1) <= po.uo.pre_verification_gas());
-        assert!(required_pvg(&po, GLAMSTERDAM_ACTIVATION) > po.uo.pre_verification_gas());
+        assert!(required_pvg(&po, low) <= po.uo.pre_verification_gas());
+        assert!(required_pvg(&po, high) > po.uo.pre_verification_gas());
         po
+    }
+
+    /// An op priced for the block before the activation, ignoring a possible post-fork inclusion
+    fn create_op_priced_for_pre_fork_block(conf: &PoolInnerConfig) -> PoolOperation {
+        let cs = &conf.chain_spec;
+        create_op_with_pvg_between(
+            conf,
+            // large calldata so the calldata floor increase dominates
+            Bytes::from(vec![1_u8; 2_000]),
+            &cs.at_timestamp(GLAMSTERDAM_ACTIVATION - 1),
+            &cs.for_bundle_inclusion_after(GLAMSTERDAM_ACTIVATION - 1),
+        )
     }
 
     fn maintain_at(pool: &mut PoolInner<Box<dyn DAGasOracleSync>>, timestamp: u64) {
@@ -1916,29 +1929,49 @@ mod tests {
     }
 
     #[test]
-    fn test_pvg_rechecked_when_gas_schedule_changes() {
+    fn test_pvg_rechecked_against_bundle_inclusion_schedule_before_activation() {
         let conf = glamsterdam_conf();
-        let po = create_op_short_pvg_after_activation(&conf);
+        let po = create_op_priced_for_pre_fork_block(&conf);
         let mut pool = pool_with_conf(conf);
         pool.add_operation(po, 0, 0).unwrap();
 
+        // the builder would skip it, so it isn't offered
         maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION - 1);
-        assert_eq!(pool.best_operations().count(), 1);
-
-        maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION);
         assert_eq!(pool.best_operations().count(), 0);
         // still in the pool, just not bundleable
         assert_eq!(pool.by_hash.len(), 1);
+    }
 
-        // a reorg back before the activation makes it eligible again
+    #[test]
+    fn test_pvg_rechecked_when_gas_schedule_changes() {
+        let conf = glamsterdam_conf();
+        let cs = &conf.chain_spec;
+        let po = create_op_with_pvg_between(
+            &conf,
+            // small calldata so the pre-fork intrinsic gas dominates
+            Bytes::new(),
+            &cs.at_timestamp(GLAMSTERDAM_ACTIVATION),
+            &cs.for_bundle_inclusion_after(GLAMSTERDAM_ACTIVATION - 1),
+        );
+        let mut pool = pool_with_conf(conf);
+        pool.add_operation(po, 0, 0).unwrap();
+
+        maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION);
+        assert_eq!(pool.best_operations().count(), 1);
+
+        // a reorg back before the activation raises the requirement
         maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION - 1);
+        assert_eq!(pool.best_operations().count(), 0);
+        assert_eq!(pool.by_hash.len(), 1);
+
+        maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION);
         assert_eq!(pool.best_operations().count(), 1);
     }
 
     #[test]
     fn test_op_with_enough_pvg_stays_eligible_across_gas_schedule_change() {
         let conf = glamsterdam_conf();
-        let po = create_op_short_pvg_after_activation(&conf);
+        let po = create_op_priced_for_pre_fork_block(&conf);
         let po = create_op_from_required(UserOperationRequiredFields {
             sender: po.uo.sender(),
             max_fee_per_gas: 10,
@@ -1951,6 +1984,7 @@ mod tests {
         pool.add_operation(po, 0, 0).unwrap();
 
         maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION - 1);
+        assert_eq!(pool.best_operations().count(), 1);
         maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION);
         assert_eq!(pool.best_operations().count(), 1);
     }
@@ -1958,7 +1992,7 @@ mod tests {
     #[test]
     fn test_bundler_sponsored_op_skips_pvg_recheck() {
         let conf = glamsterdam_conf();
-        let mut po = create_op_short_pvg_after_activation(&conf);
+        let mut po = create_op_priced_for_pre_fork_block(&conf);
         po.perms.bundler_sponsorship = Some(BundlerSponsorship {
             max_cost: U256::MAX,
             valid_until: u64::MAX,
@@ -1966,7 +2000,7 @@ mod tests {
         let mut pool = pool_with_conf(conf);
         pool.add_operation(po, 0, 0).unwrap();
 
-        maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION);
+        maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION - 1);
         assert_eq!(pool.best_operations().count(), 1);
     }
 

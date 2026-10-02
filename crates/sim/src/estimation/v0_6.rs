@@ -95,7 +95,7 @@ where
             .get_latest_block_hash_number_and_timestamp()
             .await
             .map_err(anyhow::Error::from)?;
-        let chain_spec = self.chain_spec.at_timestamp(block_timestamp);
+        let chain_spec = self.chain_spec.for_bundle_inclusion_after(block_timestamp);
 
         let mut full_op = op
             .clone()

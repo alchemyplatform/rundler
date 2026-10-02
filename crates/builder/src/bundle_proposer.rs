@@ -675,8 +675,8 @@ where
                 ForkActivation::Timestamp(_)
             )
         {
-            // Admission already checked PVG for this schedule. Before a timestamp fork, the
-            // bundle may land under the higher schedule, so check that cost below.
+            // Admission already checked PVG. With a timestamp fork, a reorg across the activation
+            // can raise the required PVG after admission, so check it against this schedule.
             return Some(PoolOperationWithSponsoredDAGas {
                 op,
                 sponsored_da_gas: 0,

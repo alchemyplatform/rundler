@@ -102,7 +102,7 @@ where
             .get_latest_block_hash_number_and_timestamp()
             .await
             .map_err(anyhow::Error::from)?;
-        let chain_spec = self.chain_spec.at_timestamp(block_timestamp);
+        let chain_spec = self.chain_spec.for_bundle_inclusion_after(block_timestamp);
 
         let mut full_op = op
             .clone()
@@ -952,7 +952,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pvg_uses_gas_schedule_of_block() {
+    async fn test_pvg_covers_bundle_inclusion_schedule() {
         const ACTIVATION: u64 = 1_000;
 
         let estimate_pvg_at = |activation: ForkActivation, block_timestamp: u64| {
@@ -1004,10 +1004,14 @@ mod tests {
         let pre = estimate_pvg_at(activation, ACTIVATION - 1).await;
         let post = estimate_pvg_at(activation, ACTIVATION).await;
 
-        assert_eq!(pre, never);
+        // before the fork, the estimate covers inclusion on either side of it
         assert!(
-            post > pre,
-            "post-fork pvg {post} should exceed pre-fork pvg {pre}"
+            pre > never,
+            "pre-fork pvg {pre} should exceed pvg without a fork {never}"
+        );
+        assert!(
+            pre >= post,
+            "pre-fork pvg {pre} should cover post-fork pvg {post}"
         );
     }
 

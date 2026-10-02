@@ -572,8 +572,6 @@ impl ChainSpec {
     }
 
     /// The chain spec with the gas schedule for a block with the given timestamp applied
-    ///
-    /// All gas calculations for a block must use the spec returned here, not a startup copy.
     pub fn at_timestamp(&self, timestamp: u64) -> Cow<'_, ChainSpec> {
         match self.gas_schedule_id_at(timestamp) {
             GasScheduleId::PreGlamsterdam => Cow::Borrowed(self),
@@ -591,6 +589,9 @@ impl ChainSpec {
     ///
     /// A submitted transaction may remain pending across a timestamp fork. Before activation,
     /// use the larger cost from each schedule so its gas limit covers either inclusion block.
+    ///
+    /// Estimation, admission, pool maintenance and bundle building all price preVerificationGas
+    /// with this spec, so an op estimated before the fork is bundleable before and after it.
     pub fn for_bundle_inclusion_after(&self, head_timestamp: u64) -> Cow<'_, ChainSpec> {
         match self.glamsterdam_activation {
             ForkActivation::Timestamp(activation) if head_timestamp < activation => {

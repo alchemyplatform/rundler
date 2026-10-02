@@ -54,32 +54,33 @@ overridden. Rundler rejects a chain spec at startup if either schedule is invali
 zero transaction intrinsic or EIP-7702 authorization gas cost, and logs both schedules when an
 activation is configured.
 
-Rundler chooses gas costs as follows:
-- gas estimation and pool admission use the latest block, fetched once per request;
-- bundle building uses a gas schedule that covers both the triggering block and any later
-  inclusion block while a timestamp activation is pending. This uses the larger cost for each
-  gas field, because a submitted transaction may remain pending across the activation.
-  Before activation, the builder also checks each operation's preVerificationGas against that
-  inclusion schedule, even on chains without DA gas. An operation admitted under the current
-  schedule can therefore remain in the pool but be skipped for a bundle until it is replaced with
-  enough preVerificationGas.
+Rundler chooses gas costs from the latest block (for estimation and pool admission, fetched once
+per request) or the triggering block (for pool maintenance and bundle building):
 
-This conservative bundle sizing starts as soon as a future timestamp is configured, even well
-before activation. It can reduce bundle capacity, particularly for EIP-7702 operations: the
+- before a timestamp activation, it uses the larger cost of each gas field from the two schedules,
+  because a bundle submitted before the activation may be included after it. Estimation, pool
+  admission, pool maintenance and bundle building all use this schedule, so the
+  preVerificationGas Rundler estimates before the fork is enough for the builder on either side
+  of it;
+- at or after the activation, or with `"never"` or `"genesis"`, it uses that block's schedule.
+
+The higher pre-fork costs start as soon as a future timestamp is configured, even well before
+activation. Required preVerificationGas goes up, particularly for EIP-7702 operations: the
 default Glamsterdam preset raises the per-authorization allowance from 25,000 to 235,606 gas.
-The delegation sender also uses the larger authorization allowance when setting its batch size.
-Large calldata can hit the higher floor. With `glamsterdam_activation = "never"`, the builder uses
-only the existing top-level gas schedule and skips this additional PVG check.
+Large calldata can hit the higher floor. Bundle capacity can also drop, and the delegation sender
+uses the larger authorization allowance when setting its batch size. With
+`glamsterdam_activation = "never"`, Rundler uses only the existing top-level gas schedule.
 
-An estimation or admission request that spans the activation keeps the schedule of its pinned
-block. The activation doesn't need a restart or config reload, but every Rundler process (RPC,
-pool, builder) must run with the same activation before the timestamp is reached.
+The activation doesn't need a restart or config reload, but every Rundler process (RPC, pool,
+builder) must run with the same activation before the timestamp is reached.
 
 On chains with an activation configured, pool maintenance rechecks every operation's
-preVerificationGas against the current block's schedule. Operations that no longer cover it
-become ineligible for bundling. They stay in the pool until they expire or are replaced, and
-become eligible again if a reorg moves the chain back before the activation. Signed gas limits
-are never changed, so a client must re-estimate and re-sign to get such an operation bundled.
+preVerificationGas against the triggering block's schedule, and the builder checks it again
+when building a bundle. Operations that don't cover it become ineligible for bundling, for
+example ones admitted after the activation when a reorg moves the chain back before it. They stay
+in the pool until they expire or are replaced, and become eligible again once they cover the
+schedule. Signed gas limits are never changed, so a client must re-estimate and re-sign to get
+such an operation bundled.
 
 ### Hardcoded Chan Specs
 
