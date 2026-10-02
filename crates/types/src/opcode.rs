@@ -117,8 +117,10 @@ pub enum Opcode {
     SHR,
     /// Opcode 0x1D - Arithmetic (signed) right shift operation
     SAR,
+    /// Opcode 0x1E - Count leading zeros (EIP-7939)
+    CLZ,
 
-    // 0x1E - 0x1F are invalid
+    // 0x1F is invalid
 
     // 0x20 range - crypto.
     /// Opcode 0x20 - Compute Keccak-256 hash
@@ -191,8 +193,11 @@ pub enum Opcode {
     BLOBHASH,
     /// Opcode 0x4A - Returns the value of the blob base-fee of the current block
     BLOBBASEFEE,
+    // TODO(verify): EIP-7843 byte value and geth tracer name
+    /// Opcode 0x4B - Get the beacon chain slot number of the current block (EIP-7843)
+    SLOTNUM,
 
-    // 0x4B - 0x4F are invalid
+    // 0x4C - 0x4F are invalid
 
     // 0x50 range - 'storage' and execution.
     /// Opcode 0x50 - Remove item from stack
@@ -376,7 +381,17 @@ pub enum Opcode {
     /// Opcode 0xA4 - Append log record with five topics
     LOG4,
 
-    // 0xA5 - 0xEF are invalid
+    // 0xA5 - 0xE5 are invalid
+
+    // TODO(verify): EIP-8024 byte values and geth tracer names
+    /// Opcode 0xE6 - Duplicate the Nth stack item (EIP-8024)
+    DUPN = 0xe6,
+    /// Opcode 0xE7 - Exchange 1st and Nth stack items (EIP-8024)
+    SWAPN,
+    /// Opcode 0xE8 - Exchange two stack items (EIP-8024)
+    EXCHANGE,
+
+    // 0xE9 - 0xEF are invalid
 
     // 0xF0 range - closures.
     /// Opcode 0xF0 - Create a new account with associated code
@@ -421,5 +436,33 @@ impl Default for Opcode {
 impl From<Opcode> for u8 {
     fn from(value: Opcode) -> Self {
         value as u8
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn new_opcodes_have_expected_byte_values() {
+        assert_eq!(Opcode::try_from(0x1e_u8).unwrap(), Opcode::CLZ);
+        assert_eq!(Opcode::try_from(0x4b_u8).unwrap(), Opcode::SLOTNUM);
+        assert_eq!(Opcode::try_from(0xe6_u8).unwrap(), Opcode::DUPN);
+        assert_eq!(Opcode::try_from(0xe7_u8).unwrap(), Opcode::SWAPN);
+        assert_eq!(Opcode::try_from(0xe8_u8).unwrap(), Opcode::EXCHANGE);
+        assert_eq!(Opcode::try_from(0xf0_u8).unwrap(), Opcode::CREATE);
+    }
+
+    #[test]
+    fn tracer_opcode_counts_with_new_opcodes_deserialize() {
+        let counts: HashMap<Opcode, u64> = serde_json::from_str(
+            r#"{"CLZ": 1, "SLOTNUM": 2, "DUPN": 3, "SWAPN": 4, "EXCHANGE": 5, "SLOAD": 6}"#,
+        )
+        .unwrap();
+        assert_eq!(counts[&Opcode::SLOTNUM], 2);
+        assert_eq!(counts[&Opcode::EXCHANGE], 5);
+        assert_eq!(counts[&Opcode::SLOAD], 6);
     }
 }

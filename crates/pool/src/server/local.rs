@@ -780,6 +780,9 @@ impl LocalPoolServerRunner {
                                 let _ = block_sender.send(NewHead {
                                     block_hash: chain_update.latest_block_hash,
                                     block_number: chain_update.latest_block_number,
+                                    block_timestamp: Some(
+                                        chain_update.latest_block_timestamp.seconds_since_epoch(),
+                                    ),
                                     address_updates: chain_update.address_updates.clone(),
                                 });
                             }

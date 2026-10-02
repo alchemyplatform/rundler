@@ -860,10 +860,11 @@ mod tests {
         let (mut provider, entry_point, mut context) = create_base_config();
 
         provider
-            .expect_get_latest_block_hash_and_number()
+            .expect_get_latest_block_hash_number_and_timestamp()
             .returning(|| {
                 Ok((
                     b256!("38138f1cb4653ab6ab1c89ae3a6acc8705b54bd16a997d880c4421014ed66c3d"),
+                    0,
                     0,
                 ))
             });
@@ -1206,7 +1207,6 @@ mod tests {
 
         let mut context = get_test_context();
         context.op = context.op.transform_for_aggregator(
-            &ChainSpec::default(),
             actual_agg,
             AggregatorCosts::default(),
             Bytes::new(),

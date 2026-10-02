@@ -615,6 +615,8 @@ message NewHead {
   uint64 block_number = 2;
   // Address Updates
   repeated AddressUpdate address_updates = 3;
+  // The block timestamp, unset if sent by an older pool
+  optional uint64 block_timestamp = 4;
 }
 message AddressUpdate {
   // The address
