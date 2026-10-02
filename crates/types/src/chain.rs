@@ -108,7 +108,24 @@ pub struct ChainSpec {
     /// Gas cost for a non-zero byte in calldata for the floor operation
     pub eip7623_calldata_floor_non_zero_byte_gas: u64,
     /// Intrinsic gas charged per EIP-7702 authorization in a bundle transaction
+    ///
+    /// The worst case, for an authority account that does not exist yet. The two parts below
+    /// are not charged when the authority's state at the priced block shows they don't apply.
     pub eip7702_authorization_gas: u64,
+    /// Part of `eip7702_authorization_gas` for creating the authority account, not charged
+    /// when the authority already exists
+    pub eip7702_authorization_new_account_gas: u64,
+    /// Part of `eip7702_authorization_gas` for writing the delegation indicator, not charged
+    /// when the authority already has code
+    pub eip7702_authorization_delegation_gas: u64,
+    /// Extra gas per 32-byte word of a user operation's `callData`, on top of
+    /// `per_user_op_word_gas`: the EntryPoint copies `callData` into memory for its inner call
+    /// outside its metered spans
+    pub call_data_word_gas: u64,
+    /// Unmetered gas of the EntryPoint's refund write for a self-paying sender whose deposit is
+    /// zero at bundle start: the write re-creates the deposit slot after the EntryPoint stops
+    /// metering
+    pub zero_deposit_refund_gas: u64,
 
     /*
      * Glamsterdam
@@ -143,6 +160,14 @@ pub struct ChainSpec {
     pub glamsterdam_per_user_op_deploy_overhead_gas: Option<u64>,
     /// Override for `deposit_transfer_overhead` after Glamsterdam
     pub glamsterdam_deposit_transfer_overhead: Option<u64>,
+    /// Override for `eip7702_authorization_new_account_gas` after Glamsterdam
+    pub glamsterdam_eip7702_authorization_new_account_gas: Option<u64>,
+    /// Override for `eip7702_authorization_delegation_gas` after Glamsterdam
+    pub glamsterdam_eip7702_authorization_delegation_gas: Option<u64>,
+    /// Override for `call_data_word_gas` after Glamsterdam
+    pub glamsterdam_call_data_word_gas: Option<u64>,
+    /// Override for `zero_deposit_refund_gas` after Glamsterdam
+    pub glamsterdam_zero_deposit_refund_gas: Option<u64>,
 
     /*
      * Fee estimation
@@ -325,21 +350,38 @@ pub struct GasSchedule {
     pub per_user_op_deploy_overhead_gas: u64,
     /// See `ChainSpec::deposit_transfer_overhead`
     pub deposit_transfer_overhead: u64,
+    /// See `ChainSpec::eip7702_authorization_new_account_gas`
+    pub eip7702_authorization_new_account_gas: u64,
+    /// See `ChainSpec::eip7702_authorization_delegation_gas`
+    pub eip7702_authorization_delegation_gas: u64,
+    /// See `ChainSpec::call_data_word_gas`
+    pub call_data_word_gas: u64,
+    /// See `ChainSpec::zero_deposit_refund_gas`
+    pub zero_deposit_refund_gas: u64,
 }
 
 impl GasSchedule {
+    /// See `ChainSpec::has_state_dependent_pvg`
+    pub fn has_state_dependent_pvg(&self) -> bool {
+        self.zero_deposit_refund_gas > 0
+            || self.eip7702_authorization_new_account_gas > 0
+            || self.eip7702_authorization_delegation_gas > 0
+    }
+
     /// The Glamsterdam gas schedule, derived from the chain's pre-Glamsterdam schedule
     ///
     /// Values Glamsterdam doesn't change are carried over from `pre`.
     pub fn glamsterdam_preset(pre: &GasSchedule) -> GasSchedule {
         GasSchedule {
-            // TODO(verify): EIP-2780 TX_BASE_COST (12,000) + COLD_ACCOUNT_ACCESS (3,000) for
-            // the `to` of a value-less call to an existing contract, i.e. a bundle transaction.
+            // EIP-2780 TX_BASE_COST (12,000) + COLD_ACCOUNT_ACCESS (3,000) for the `to` of a
+            // value-less call to an existing contract, i.e. a bundle transaction. Measured on
+            // glamsterdam-devnet-8.
             transaction_intrinsic_gas: 15_000,
-            // TODO(verify): EIP-7976 keeps the EIP-7623 floor and raises it.
+            // EIP-7976 keeps the EIP-7623 floor and raises it.
             eip7623_enabled: true,
-            // TODO(verify): EIP-7976 TOTAL_COST_FLOOR_PER_TOKEN (16) x 4 floor tokens per byte,
-            // the same for zero and non-zero bytes.
+            // EIP-7976 TOTAL_COST_FLOOR_PER_TOKEN (16) x 4 floor tokens per byte, the same for
+            // zero and non-zero bytes. Measured on glamsterdam-devnet-8 (floor = 15,000 + 64 x
+            // bytes).
             eip7623_calldata_floor_zero_byte_gas: 64,
             eip7623_calldata_floor_non_zero_byte_gas: 64,
             // EIP-8037 (STATE_BYTES_PER_NEW_ACCOUNT 120 + STATE_BYTES_PER_AUTH_BASE 23) x CPSB
@@ -347,14 +389,29 @@ impl GasSchedule {
             // EXECUTION_PER_AUTH_BASE_COST 7,816 and ACCOUNT_WRITE 9,000. An existing authority
             // with a new delegation indicator costs 52,006.
             eip7702_authorization_gas: 235_606,
-            // TODO(verify): EIP-2780 leaves calldata metering unchanged.
+            // Measured on glamsterdam-devnet-8: an existing authority costs 52,006 and an
+            // already-delegated one 16,816. 120 x 1,530 = 183,600 is the new account, and
+            // 23 x 1,530 = 35,190 the delegation indicator.
+            eip7702_authorization_new_account_gas: 183_600,
+            eip7702_authorization_delegation_gas: 35_190,
+            // Measured on glamsterdam-devnet-8 (EntryPoint v0.7): the unmetered callData copy
+            // costs ~5 gas per word beyond `per_user_op_word_gas`.
+            call_data_word_gas: 6,
+            // EIP-8037 STORAGE_SET 64 x 1,530: measured on glamsterdam-devnet-8 as exactly the
+            // extra unmetered gas of a self-paying op whose deposit starts at zero.
+            zero_deposit_refund_gas: 97_920,
+            // EIP-2780 leaves calldata metering unchanged (4 / 16, measured on
+            // glamsterdam-devnet-8).
             calldata_zero_byte_gas: pre.calldata_zero_byte_gas,
             calldata_non_zero_byte_gas: pre.calldata_non_zero_byte_gas,
             per_user_op_word_gas: pre.per_user_op_word_gas,
-            // TODO(verify): placeholders. These EntryPoint overheads are measured, and EIP-8037 and
-            // EIP-8038 raise storage costs, so re-measure them on a Glamsterdam network.
-            per_user_op_v0_6_gas: pre.per_user_op_v0_6_gas,
-            per_user_op_v0_7_gas: pre.per_user_op_v0_7_gas,
+            // Measured on glamsterdam-devnet-8 with EntryPoint v0.7: single-op bundles imply
+            // 21,771-21,872 (with a 15,000 intrinsic gas). TODO(verify): v0.6 is provisional, the
+            // same +2,400 over its pre-Glamsterdam value, until measured on EntryPoint v0.6.
+            per_user_op_v0_6_gas: 20_700,
+            per_user_op_v0_7_gas: 21_900,
+            // Unchanged on glamsterdam-devnet-8 with EntryPoint v0.7: the deploy overhead, and the
+            // deposit charge and refill, which cancel inside the metered validation span.
             per_user_op_deploy_overhead_gas: pre.per_user_op_deploy_overhead_gas,
             deposit_transfer_overhead: pre.deposit_transfer_overhead,
         }
@@ -366,6 +423,17 @@ impl GasSchedule {
         }
         if self.eip7702_authorization_gas == 0 {
             return Err("eip7702_authorization_gas must be non-zero".to_string());
+        }
+        if self.eip7702_authorization_new_account_gas + self.eip7702_authorization_delegation_gas
+            > self.eip7702_authorization_gas
+        {
+            return Err(format!(
+                "eip7702 authorization new account ({}) and delegation ({}) gas must not exceed \
+                 eip7702_authorization_gas ({})",
+                self.eip7702_authorization_new_account_gas,
+                self.eip7702_authorization_delegation_gas,
+                self.eip7702_authorization_gas,
+            ));
         }
         if self.eip7623_enabled
             && (self.eip7623_calldata_floor_zero_byte_gas < self.calldata_zero_byte_gas
@@ -421,6 +489,10 @@ impl Default for ChainSpec {
             eip7623_calldata_floor_zero_byte_gas: 10,
             eip7623_calldata_floor_non_zero_byte_gas: 40,
             eip7702_authorization_gas: PER_EMPTY_ACCOUNT_COST,
+            eip7702_authorization_new_account_gas: 0,
+            eip7702_authorization_delegation_gas: 0,
+            call_data_word_gas: 0,
+            zero_deposit_refund_gas: 0,
             glamsterdam_activation: ForkActivation::Never,
             glamsterdam_transaction_intrinsic_gas: None,
             glamsterdam_calldata_zero_byte_gas: None,
@@ -434,6 +506,10 @@ impl Default for ChainSpec {
             glamsterdam_per_user_op_word_gas: None,
             glamsterdam_per_user_op_deploy_overhead_gas: None,
             glamsterdam_deposit_transfer_overhead: None,
+            glamsterdam_eip7702_authorization_new_account_gas: None,
+            glamsterdam_eip7702_authorization_delegation_gas: None,
+            glamsterdam_call_data_word_gas: None,
+            glamsterdam_zero_deposit_refund_gas: None,
             da_pre_verification_gas: false,
             da_gas_oracle_type: DAGasOracleType::default(),
             da_gas_oracle_contract_address: Address::ZERO,
@@ -542,6 +618,45 @@ impl ChainSpec {
         self.eip7702_authorization_gas as u128
     }
 
+    /// Get the part of the authorization gas for creating the authority account
+    pub fn eip7702_authorization_new_account_gas(&self) -> u128 {
+        self.eip7702_authorization_new_account_gas as u128
+    }
+
+    /// Get the part of the authorization gas for writing the delegation indicator
+    pub fn eip7702_authorization_delegation_gas(&self) -> u128 {
+        self.eip7702_authorization_delegation_gas as u128
+    }
+
+    /// Get the extra gas per word of a user operation's `callData`
+    pub fn call_data_word_gas(&self) -> u128 {
+        self.call_data_word_gas as u128
+    }
+
+    /// Get the unmetered refund-write gas for a self-paying sender whose deposit is zero
+    pub fn zero_deposit_refund_gas(&self) -> u128 {
+        self.zero_deposit_refund_gas as u128
+    }
+
+    /// True if pre-verification gas in this schedule depends on account state (see
+    /// `UserOperation::required_pre_verification_gas`)
+    pub fn has_state_dependent_pvg(&self) -> bool {
+        self.zero_deposit_refund_gas > 0
+            || self.eip7702_authorization_new_account_gas > 0
+            || self.eip7702_authorization_delegation_gas > 0
+    }
+
+    /// True if pre-verification gas depends on account state in this schedule or in a
+    /// scheduled later one
+    ///
+    /// State read before activation must already be kept, so operations that cross the fork
+    /// are not repriced as the worst case.
+    pub fn pvg_may_depend_on_state(&self) -> bool {
+        self.has_state_dependent_pvg()
+            || (self.glamsterdam_activation != ForkActivation::Never
+                && self.glamsterdam_gas_schedule().has_state_dependent_pvg())
+    }
+
     /// The largest per-authorization gas of any schedule this chain can be on
     ///
     /// For gas limits that can't be tied to a specific block.
@@ -626,6 +741,18 @@ impl ChainSpec {
                     deposit_transfer_overhead: pre
                         .deposit_transfer_overhead
                         .max(post.deposit_transfer_overhead),
+                    // Parts that state can waive from the authorization gas: waive only what
+                    // both schedules waive.
+                    eip7702_authorization_new_account_gas: pre
+                        .eip7702_authorization_new_account_gas
+                        .min(post.eip7702_authorization_new_account_gas),
+                    eip7702_authorization_delegation_gas: pre
+                        .eip7702_authorization_delegation_gas
+                        .min(post.eip7702_authorization_delegation_gas),
+                    call_data_word_gas: pre.call_data_word_gas.max(post.call_data_word_gas),
+                    zero_deposit_refund_gas: pre
+                        .zero_deposit_refund_gas
+                        .max(post.zero_deposit_refund_gas),
                 });
                 spec.glamsterdam_activation = ForkActivation::Never;
                 Cow::Owned(spec)
@@ -649,6 +776,10 @@ impl ChainSpec {
             per_user_op_word_gas: self.per_user_op_word_gas,
             per_user_op_deploy_overhead_gas: self.per_user_op_deploy_overhead_gas,
             deposit_transfer_overhead: self.deposit_transfer_overhead,
+            eip7702_authorization_new_account_gas: self.eip7702_authorization_new_account_gas,
+            eip7702_authorization_delegation_gas: self.eip7702_authorization_delegation_gas,
+            call_data_word_gas: self.call_data_word_gas,
+            zero_deposit_refund_gas: self.zero_deposit_refund_gas,
         }
     }
 
@@ -692,6 +823,18 @@ impl ChainSpec {
             deposit_transfer_overhead: self
                 .glamsterdam_deposit_transfer_overhead
                 .unwrap_or(preset.deposit_transfer_overhead),
+            eip7702_authorization_new_account_gas: self
+                .glamsterdam_eip7702_authorization_new_account_gas
+                .unwrap_or(preset.eip7702_authorization_new_account_gas),
+            eip7702_authorization_delegation_gas: self
+                .glamsterdam_eip7702_authorization_delegation_gas
+                .unwrap_or(preset.eip7702_authorization_delegation_gas),
+            call_data_word_gas: self
+                .glamsterdam_call_data_word_gas
+                .unwrap_or(preset.call_data_word_gas),
+            zero_deposit_refund_gas: self
+                .glamsterdam_zero_deposit_refund_gas
+                .unwrap_or(preset.zero_deposit_refund_gas),
         }
     }
 
@@ -722,6 +865,10 @@ impl ChainSpec {
             per_user_op_word_gas,
             per_user_op_deploy_overhead_gas,
             deposit_transfer_overhead,
+            eip7702_authorization_new_account_gas,
+            eip7702_authorization_delegation_gas,
+            call_data_word_gas,
+            zero_deposit_refund_gas,
         } = schedule;
         self.transaction_intrinsic_gas = transaction_intrinsic_gas;
         self.calldata_zero_byte_gas = calldata_zero_byte_gas;
@@ -735,6 +882,10 @@ impl ChainSpec {
         self.per_user_op_word_gas = per_user_op_word_gas;
         self.per_user_op_deploy_overhead_gas = per_user_op_deploy_overhead_gas;
         self.deposit_transfer_overhead = deposit_transfer_overhead;
+        self.eip7702_authorization_new_account_gas = eip7702_authorization_new_account_gas;
+        self.eip7702_authorization_delegation_gas = eip7702_authorization_delegation_gas;
+        self.call_data_word_gas = call_data_word_gas;
+        self.zero_deposit_refund_gas = zero_deposit_refund_gas;
     }
 
     /// Calculate a multiple of the block limit
@@ -936,7 +1087,12 @@ mod tests {
         assert_eq!(post.eip7623_calldata_floor_non_zero_byte_gas, 64);
         assert_eq!(post.eip7702_authorization_gas, 235_606);
         assert_eq!(post.calldata_zero_byte_gas, pre.calldata_zero_byte_gas);
-        assert_eq!(post.per_user_op_v0_7_gas, pre.per_user_op_v0_7_gas);
+        assert_eq!(post.per_user_op_v0_6_gas, 20_700);
+        assert_eq!(post.per_user_op_v0_7_gas, 21_900);
+        assert_eq!(
+            post.per_user_op_deploy_overhead_gas,
+            pre.per_user_op_deploy_overhead_gas
+        );
         assert_eq!(
             post.deposit_transfer_overhead,
             pre.deposit_transfer_overhead
@@ -978,6 +1134,76 @@ mod tests {
         assert_eq!(post.eip7702_authorization_gas(), 235_606);
         // the derived spec stays post-fork whatever timestamp it's asked about
         assert_eq!(post.gas_schedule_at(0), spec.glamsterdam_gas_schedule());
+    }
+
+    #[test]
+    fn state_dependent_terms_only_after_activation() {
+        let spec = spec_with_activation(ForkActivation::Timestamp(ACTIVATION));
+
+        let pre = spec.at_timestamp(ACTIVATION - 1);
+        assert!(!pre.has_state_dependent_pvg());
+        assert!(pre.pvg_may_depend_on_state());
+        assert!(!spec_with_activation(ForkActivation::Never).pvg_may_depend_on_state());
+        assert_eq!(pre.call_data_word_gas(), 0);
+        assert_eq!(pre.zero_deposit_refund_gas(), 0);
+        assert_eq!(pre.eip7702_authorization_new_account_gas(), 0);
+        assert_eq!(pre.eip7702_authorization_delegation_gas(), 0);
+        assert_eq!(pre.per_user_op_v0_6_gas(), 18_300);
+        assert_eq!(pre.per_user_op_v0_7_gas(), 19_500);
+
+        let post = spec.at_timestamp(ACTIVATION);
+        assert!(post.has_state_dependent_pvg());
+        assert_eq!(post.call_data_word_gas(), 6);
+        assert_eq!(post.zero_deposit_refund_gas(), 97_920);
+        assert_eq!(post.eip7702_authorization_new_account_gas(), 183_600);
+        assert_eq!(post.eip7702_authorization_delegation_gas(), 35_190);
+        assert_eq!(post.per_user_op_v0_6_gas(), 20_700);
+        assert_eq!(post.per_user_op_v0_7_gas(), 21_900);
+        // Measured authorization costs: missing, existing without code, already delegated.
+        let auth = post.eip7702_authorization_gas();
+        assert_eq!(auth, 235_606);
+        assert_eq!(auth - post.eip7702_authorization_new_account_gas(), 52_006);
+        assert_eq!(
+            auth - post.eip7702_authorization_new_account_gas()
+                - post.eip7702_authorization_delegation_gas(),
+            16_816
+        );
+
+        let overridden = ChainSpec {
+            glamsterdam_call_data_word_gas: Some(1),
+            glamsterdam_zero_deposit_refund_gas: Some(2),
+            glamsterdam_eip7702_authorization_new_account_gas: Some(3),
+            glamsterdam_eip7702_authorization_delegation_gas: Some(4),
+            ..spec.clone()
+        };
+        let post = overridden.at_timestamp(ACTIVATION);
+        assert_eq!(post.call_data_word_gas(), 1);
+        assert_eq!(post.zero_deposit_refund_gas(), 2);
+        assert_eq!(post.eip7702_authorization_new_account_gas(), 3);
+        assert_eq!(post.eip7702_authorization_delegation_gas(), 4);
+    }
+
+    #[test]
+    fn bundle_inclusion_schedule_prices_state_terms_as_worst_case() {
+        let spec = spec_with_activation(ForkActivation::Timestamp(ACTIVATION));
+        let inclusion = spec.for_bundle_inclusion_after(ACTIVATION - 1);
+        // Extra gas from either schedule is charged...
+        assert_eq!(inclusion.call_data_word_gas(), 6);
+        assert_eq!(inclusion.zero_deposit_refund_gas(), 97_920);
+        assert_eq!(inclusion.per_user_op_v0_7_gas(), 21_900);
+        // ...and only authorization gas that both schedules waive is waived.
+        assert_eq!(inclusion.eip7702_authorization_gas(), 235_606);
+        assert_eq!(inclusion.eip7702_authorization_new_account_gas(), 0);
+        assert_eq!(inclusion.eip7702_authorization_delegation_gas(), 0);
+    }
+
+    #[test]
+    fn validate_rejects_authorization_parts_above_total() {
+        let spec = ChainSpec {
+            glamsterdam_eip7702_authorization_new_account_gas: Some(235_606),
+            ..spec_with_activation(ForkActivation::Genesis)
+        };
+        assert!(spec.validate_gas_schedules().is_err());
     }
 
     #[test]
