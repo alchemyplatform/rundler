@@ -34,12 +34,12 @@ use rundler_provider::{
     decode_v0_6_handle_ops_revert, decode_v0_6_ops_from_calldata, decode_v0_7_handle_ops_revert,
     decode_v0_7_ops_from_calldata, get_auth_list_from_transaction,
 };
-use rundler_sim::{SimulationError, SimulationResult, Simulator, ViolationError};
+use rundler_sim::{SimulationError, SimulationResult, Simulator, ViolationError, gas};
 use rundler_types::{
     AaErrorCode, BUNDLE_BYTE_OVERHEAD, BundleExpectedStorage, Entity, EntityInfo, EntityInfos,
     EntityType, EntityUpdate, EntityUpdateType, EntryPointAbiVersion, EntryPointVersion,
-    ExpectedStorage, GasFees, TIME_RANGE_BUFFER, Timestamp, UserOperation, UserOperationVariant,
-    UserOpsPerAggregator, ValidTimeRange, ValidationRevert,
+    ExpectedStorage, GasFees, PvgState, TIME_RANGE_BUFFER, Timestamp, UserOperation,
+    UserOperationVariant, UserOpsPerAggregator, ValidTimeRange, ValidationRevert,
     aggregator::SignatureAggregatorResult,
     authorization::Eip7702Auth,
     chain::ChainSpec,
@@ -284,15 +284,18 @@ where
             None
         };
         // (1) Filter out ops that don't pay enough to be included
+        let pvg_states = self.load_pvg_states(&ops, block_hash).await;
         let fee_futs = ops
             .into_iter()
-            .map(|op| {
+            .zip(pvg_states)
+            .map(|(op, pvg_state)| {
                 self.check_fees(
                     op,
                     block_hash,
                     da_block_data.as_ref(),
                     base_fee,
                     required_op_fees,
+                    pvg_state,
                 )
             })
             .collect::<Vec<_>>();
@@ -637,8 +640,12 @@ where
         da_block_data: Option<&DAGasBlockData>,
         base_fee: u128,
         required_op_fees: GasFees,
+        pvg_state: PvgState,
     ) -> Option<PoolOperationWithSponsoredDAGas> {
         let op_hash = op.uo.hash();
+        let state_gas = op
+            .uo
+            .state_pre_verification_gas(&self.settings.chain_spec, &pvg_state);
 
         let mut required_max_fee_per_gas = required_op_fees.max_fee_per_gas;
         let mut required_max_priority_fee_per_gas = required_op_fees.max_priority_fee_per_gas;
@@ -669,11 +676,16 @@ where
             return None;
         }
 
-        if !self.settings.chain_spec.da_pre_verification_gas {
-            // Skip PVG check if no da pre-verification gas as this is checked on entry to the mempool.
+        // Skip PVG check if no da pre-verification gas as this is checked on entry to the mempool.
+        // State gas depends on state at the bundle block (e.g. a sender deposit withdrawn since
+        // entry), so it is always re-checked when it applies.
+        if !self.settings.chain_spec.da_pre_verification_gas
+            && !self.settings.chain_spec.glamsterdam_enabled
+        {
             return Some(PoolOperationWithSponsoredDAGas {
                 op,
                 sponsored_da_gas: 0,
+                state_gas,
             });
         }
 
@@ -686,7 +698,9 @@ where
             op.uo.gas_price(base_fee)
         };
 
-        let required_da_gas = if self.settings.da_gas_tracking_enabled
+        let required_da_gas = if !self.settings.chain_spec.da_pre_verification_gas {
+            0
+        } else if self.settings.da_gas_tracking_enabled
             && op.da_gas_data != DAGasData::Empty
             && let Some(da_block_data) = da_block_data
             && let Some(da_gas_oracle) = self.ep_providers.da_gas_oracle_sync().as_ref()
@@ -738,6 +752,7 @@ where
                 self.settings
                     .verification_gas_limit_efficiency_reject_threshold,
             ),
+            &pvg_state,
         );
 
         if let Some(pct) = op.perms.underpriced_bundle_pct {
@@ -788,7 +803,32 @@ where
         Some(PoolOperationWithSponsoredDAGas {
             op,
             sponsored_da_gas,
+            state_gas,
         })
+    }
+
+    /// Reads, at the bundle block, the state each op's state-dependent pre-verification gas
+    /// depends on. Makes no calls when the chain has no state gas. An op whose state cannot be
+    /// read is priced as the worst case.
+    async fn load_pvg_states(&self, ops: &[PoolOperation], block_hash: B256) -> Vec<PvgState> {
+        let futs = ops.iter().map(|op| async move {
+            gas::load_pvg_state(
+                &self.settings.chain_spec,
+                self.ep_providers.evm(),
+                self.ep_providers.entry_point(),
+                &op.uo,
+                Some(block_hash.into()),
+            )
+            .await
+            .unwrap_or_else(|e| {
+                warn!(
+                    "Failed to load pre-verification gas state for op {:?}, pricing worst case: {e:?}",
+                    op.uo.hash()
+                );
+                PvgState::unknown()
+            })
+        });
+        future::join_all(futs).await
     }
 
     // Simulate a single op. Returns None if the op should be skipped.
@@ -976,6 +1016,7 @@ where
                     op: op.clone().into(),
                     simulation: simulation.clone(),
                     sponsored_da_gas: po.sponsored_da_gas,
+                    state_gas: po.state_gas,
                 });
 
             // Limit by max bundle computation gas (excluding DA gas)
@@ -1091,6 +1132,7 @@ where
                     op: op.into(),
                     simulation,
                     sponsored_da_gas: po.sponsored_da_gas,
+                    state_gas: po.state_gas,
                 });
         }
 
@@ -1772,6 +1814,8 @@ where
 struct PoolOperationWithSponsoredDAGas {
     op: PoolOperation,
     sponsored_da_gas: u128,
+    /// State-dependent pre-verification gas at the bundle block (0 without state gas)
+    state_gas: u128,
 }
 
 /// Chain state of an EIP-7702 sender at bundle proposal time, used to
@@ -1787,6 +1831,8 @@ struct OpWithSimulation<UO> {
     op: UO,
     simulation: SimulationResult,
     sponsored_da_gas: u128,
+    /// State-dependent gas the bundle spends for this op (0 without state gas)
+    state_gas: u128,
 }
 
 /// A struct used internally to represent the current state of a proposed bundle
@@ -2142,6 +2188,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
 
     fn get_bundle_gas_limit_inner(&self, chain_spec: &ChainSpec, include_da_gas: bool) -> u128 {
         let mut authorization_gas = 0_u128;
+        let mut state_gas = 0_u128;
         let mut standard_gas_limit = 0_u128;
         let mut calldata_floor_gas_limit = 0_u128;
         let mut da_gas_limit = 0_u128;
@@ -2162,8 +2209,10 @@ impl<UO: UserOperation> ProposalContext<UO> {
         }
 
         for sim_op in self.iter_ops_with_simulations() {
-            let op_authorization_gas = sim_op.op.authorization_gas_limit();
+            let op_authorization_gas = sim_op.op.authorization_gas_limit(chain_spec);
             authorization_gas = authorization_gas.saturating_add(op_authorization_gas);
+            // Like authorization gas, kept outside the calldata floor comparison.
+            state_gas = state_gas.saturating_add(sim_op.state_gas);
 
             // EIP-7623 calculations require this to be done without the EIP-7702 intrinsic gas. Its added later in the final calculation.
             standard_gas_limit = standard_gas_limit.saturating_add(
@@ -2190,8 +2239,9 @@ impl<UO: UserOperation> ProposalContext<UO> {
         let execution_gas_limit = standard_gas_limit.max(calldata_floor_gas_limit);
 
         chain_spec
-            .transaction_intrinsic_gas()
+            .bundle_intrinsic_gas()
             .saturating_add(authorization_gas)
+            .saturating_add(state_gas)
             .saturating_add(da_gas_limit)
             .saturating_add(execution_gas_limit)
     }
@@ -2422,7 +2472,8 @@ mod tests {
     };
     use rundler_sim::MockSimulator;
     use rundler_types::{
-        BundlerSponsorship, UserOperation as _, UserOperationPermissions, ValidTimeRange,
+        AuthorityState, BundlerSponsorship, UserOperation as _, UserOperationPermissions,
+        ValidTimeRange,
         aggregator::{
             AggregatorCosts, MockSignatureAggregator, SignatureAggregator, SignatureAggregatorError,
         },
@@ -3429,6 +3480,7 @@ mod tests {
                             ..Default::default()
                         },
                         sponsored_da_gas: 100_000,
+                        state_gas: 0,
                     },
                     OpWithSimulation {
                         op: op2.clone(),
@@ -3437,6 +3489,7 @@ mod tests {
                             ..Default::default()
                         },
                         sponsored_da_gas: 0,
+                        state_gas: 0,
                     },
                 ],
                 signature: Default::default(),
@@ -3479,6 +3532,7 @@ mod tests {
                             ..Default::default()
                         },
                         sponsored_da_gas: 0,
+                        state_gas: 0,
                     },
                     OpWithSimulation {
                         op: op2.clone(),
@@ -3487,6 +3541,7 @@ mod tests {
                             ..Default::default()
                         },
                         sponsored_da_gas: 0,
+                        state_gas: 0,
                     },
                 ],
                 signature: Default::default(),
@@ -3536,7 +3591,7 @@ mod tests {
         ))
         .build();
 
-        let auth_gas = op.authorization_gas_limit();
+        let auth_gas = op.authorization_gas_limit(&cs);
         assert!(auth_gas > 0, "op must have authorization gas");
 
         let mut groups_by_aggregator = LinkedHashMap::new();
@@ -3550,6 +3605,7 @@ mod tests {
                         ..Default::default()
                     },
                     sponsored_da_gas: 0,
+                    state_gas: 0,
                 }],
                 signature: Default::default(),
             },
@@ -3602,8 +3658,8 @@ mod tests {
             ))
             .build();
 
-        assert_eq!(op_without_authorization.authorization_gas_limit(), 0);
-        assert_eq!(op_with_authorization.authorization_gas_limit(), 25_000);
+        assert_eq!(op_without_authorization.authorization_gas_limit(&cs), 0);
+        assert_eq!(op_with_authorization.authorization_gas_limit(&cs), 25_000);
 
         let mut groups_without_authorization = LinkedHashMap::new();
         groups_without_authorization.insert(
@@ -3613,6 +3669,7 @@ mod tests {
                     op: op_without_authorization,
                     simulation: SimulationResult::default(),
                     sponsored_da_gas: 0,
+                    state_gas: 0,
                 }],
                 signature: Default::default(),
             },
@@ -3634,6 +3691,7 @@ mod tests {
                     op: op_with_authorization,
                     simulation: SimulationResult::default(),
                     sponsored_da_gas: 0,
+                    state_gas: 0,
                 }],
                 signature: Default::default(),
             },
@@ -3655,6 +3713,84 @@ mod tests {
             25_000,
             "authorization should add only EIP-7702 empty account intrinsic gas"
         );
+    }
+
+    fn single_op_context(op: UserOperation, state_gas: u128) -> ProposalContext<UserOperation> {
+        let mut groups = LinkedHashMap::new();
+        groups.insert(
+            Address::ZERO,
+            AggregatorGroup {
+                ops_with_simulations: vec![OpWithSimulation {
+                    op,
+                    simulation: SimulationResult::default(),
+                    sponsored_da_gas: 0,
+                    state_gas,
+                }],
+                signature: Default::default(),
+            },
+        );
+        ProposalContext {
+            sender_eoa: Address::ZERO,
+            groups_by_aggregator: groups,
+            rejected_ops: vec![],
+            suspect_ops: vec![],
+            entity_updates: BTreeMap::new(),
+            bundle_expected_storage: BundleExpectedStorage::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bundle_gas_limit_includes_glamsterdam_state_gas() {
+        let cs = ChainSpec {
+            glamsterdam_enabled: true,
+            ..Default::default()
+        };
+        let required = UserOperationRequiredFields {
+            pre_verification_gas: 100_000,
+            call_gas_limit: 100_000,
+            verification_gas_limit: 100_000,
+            ..Default::default()
+        };
+        let op = UserOperationBuilder::new(&cs, required)
+            .authorization_tuple(rundler_types::authorization::Eip7702Auth::new_dummy(
+                cs.id,
+                address(1),
+            ))
+            .build();
+        // Self-paying sender with a zero deposit, authority that does not exist yet.
+        let state = PvgState {
+            sender_deposit_is_zero: Some(true),
+            authority: Some(AuthorityState::Missing),
+        };
+        let state_gas = op.state_pre_verification_gas(&cs, &state);
+        assert_eq!(state_gas, 97_920 + 35_190 + 183_600);
+        // Only the state-independent authorization gas is in the op's own gas limit.
+        assert_eq!(op.authorization_gas_limit(&cs), 16_816);
+
+        let without_state = single_op_context(op.clone(), 0).get_bundle_gas_limit(&cs);
+        let with_state = single_op_context(op, state_gas).get_bundle_gas_limit(&cs);
+        assert_eq!(with_state - without_state, state_gas);
+    }
+
+    #[tokio::test]
+    async fn test_bundle_gas_limit_uses_glamsterdam_intrinsic_gas() {
+        let required = UserOperationRequiredFields {
+            pre_verification_gas: 100_000,
+            call_gas_limit: 100_000,
+            verification_gas_limit: 100_000,
+            ..Default::default()
+        };
+        let before = ChainSpec::default();
+        let glamsterdam = ChainSpec {
+            glamsterdam_enabled: true,
+            ..Default::default()
+        };
+        let op = UserOperationBuilder::new(&before, required).build();
+        let context = single_op_context(op, 0);
+        // Shared intrinsic gas drops by 6,000; the op's per-op overhead rises by 2,400.
+        let delta =
+            context.get_bundle_gas_limit(&before) - context.get_bundle_gas_limit(&glamsterdam);
+        assert_eq!(delta, (21_000 - 15_000) - (21_900 - 19_500));
     }
 
     #[tokio::test]
@@ -4395,8 +4531,13 @@ mod tests {
             ..Default::default()
         };
         let mock_op0 = op_with_sender_and_fees(address(1), 10000, 0, DEFAULT_PVG);
-        let required_pvg =
-            mock_op0.required_pre_verification_gas(&cs, 1, DEFAULT_DA_PVG, Some(0.5));
+        let required_pvg = mock_op0.required_pre_verification_gas(
+            &cs,
+            1,
+            DEFAULT_DA_PVG,
+            Some(0.5),
+            &PvgState::unknown(),
+        );
 
         let op0 = op_with_sender_and_fees(address(1), 10000, 0, math::percent(required_pvg, 75)); // accept
         let op1 =

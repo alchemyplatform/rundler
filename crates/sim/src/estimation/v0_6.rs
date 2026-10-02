@@ -129,12 +129,24 @@ where
         let verification_future =
             self.estimate_verification_gas(&op, &full_op, block_hash, state_override.clone());
         let call_future = self.estimate_call_gas(&op, full_op.clone(), block_hash, state_override);
+        let pvg_state_future = gas::load_pvg_state(
+            &self.chain_spec,
+            &self.provider,
+            &self.entry_point,
+            &full_op,
+            Some(block_hash.into()),
+        );
 
         // Not try_join! because then the output is nondeterministic if both
         // verification and call estimation fail.
-        let (da_gas_result, verification_gas_limit_result, call_gas_limit_result) =
-            join!(da_gas_future, verification_future, call_future);
+        let (da_gas_result, verification_gas_limit_result, call_gas_limit_result, pvg_state_result) = join!(
+            da_gas_future,
+            verification_future,
+            call_future,
+            pvg_state_future
+        );
         let da_gas = da_gas_result?;
+        let pvg_state = pvg_state_result.map_err(anyhow::Error::from)?;
         let verification_gas_limit = verification_gas_limit_result?;
         let call_gas_limit = call_gas_limit_result?;
 
@@ -155,10 +167,17 @@ where
                     bundle_size,
                     da_gas,
                     None,
+                    &pvg_state,
                 )
             } else {
                 // Use original op baseline to match validation behavior
-                base_op.required_pre_verification_gas(&self.chain_spec, bundle_size, da_gas, None)
+                base_op.required_pre_verification_gas(
+                    &self.chain_spec,
+                    bundle_size,
+                    da_gas,
+                    None,
+                    &pvg_state,
+                )
             }
         };
 
@@ -551,7 +570,7 @@ mod tests {
         ProviderError,
     };
     use rundler_types::{
-        GasFees,
+        GasFees, PvgState,
         da::DAGasOracleType,
         v0_6::{UserOperation, UserOperationOptionalGas, UserOperationRequiredFields},
     };
@@ -725,8 +744,13 @@ mod tests {
         // Test the PVG calculation directly using the UO method
         let bundle_size = 1;
         let da_gas = 0; // Default chain spec doesn't use DA gas
-        let estimation =
-            full_op.required_pre_verification_gas(&ChainSpec::default(), bundle_size, da_gas, None);
+        let estimation = full_op.required_pre_verification_gas(
+            &ChainSpec::default(),
+            bundle_size,
+            da_gas,
+            None,
+            &PvgState::unknown(),
+        );
 
         let uo = user_op.max_fill(&ChainSpec::default());
 
@@ -783,7 +807,13 @@ mod tests {
         // Test the PVG calculation directly using the UO method
         let bundle_size = 1;
         let da_gas = TEST_FEE; // Mock returns TEST_FEE for DA gas
-        let estimation = full_op.required_pre_verification_gas(&cs, bundle_size, da_gas, None);
+        let estimation = full_op.required_pre_verification_gas(
+            &cs,
+            bundle_size,
+            da_gas,
+            None,
+            &PvgState::unknown(),
+        );
 
         let uo = user_op.max_fill(&ChainSpec::default());
 
@@ -843,7 +873,13 @@ mod tests {
         // Test the PVG calculation directly using the UO method
         let bundle_size = 1;
         let da_gas = TEST_FEE; // Mock returns TEST_FEE for DA gas
-        let estimation = full_op.required_pre_verification_gas(&cs, bundle_size, da_gas, None);
+        let estimation = full_op.required_pre_verification_gas(
+            &cs,
+            bundle_size,
+            da_gas,
+            None,
+            &PvgState::unknown(),
+        );
 
         let uo = user_op.max_fill(&ChainSpec::default());
 

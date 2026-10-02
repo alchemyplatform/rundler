@@ -26,7 +26,8 @@ use parking_lot::RwLock;
 use rand::Rng;
 use rundler_provider::DAGasOracleSync;
 use rundler_types::{
-    Entity, EntityType, GasFees, Timestamp, UserOperation, UserOperationId, UserOperationVariant,
+    Entity, EntityType, GasFees, PvgState, Timestamp, UserOperation, UserOperationId,
+    UserOperationVariant,
     chain::ChainSpec,
     da::DAGasBlockData,
     pool::{
@@ -208,11 +209,24 @@ where
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn add_operation(
         &mut self,
         op: PoolOperation,
         base_fee: u128,
         required_pvg: u128,
+    ) -> MempoolResult<B256> {
+        self.add_operation_with_pvg_state(op, base_fee, required_pvg, PvgState::unknown())
+    }
+
+    /// Adds an operation whose `required_pvg` was priced with `pvg_state`. The state is kept so
+    /// that maintenance re-prices the operation the same way.
+    pub(crate) fn add_operation_with_pvg_state(
+        &mut self,
+        op: PoolOperation,
+        base_fee: u128,
+        required_pvg: u128,
+        pvg_state: PvgState,
     ) -> MempoolResult<B256> {
         // only eligibility criteria is required PVG which is enabled when da_gas_tracking is enabled
         let is_eligible = if self.config.da_gas_tracking_enabled && self.da_gas_oracle.is_some() {
@@ -239,6 +253,7 @@ where
             is_eligible,
             base_fee,
             self.prev_block_number,
+            pvg_state,
         ));
 
         let hash = self.add_operation_internal(pool_op)?;
@@ -573,6 +588,7 @@ where
                         self.config
                             .verification_gas_limit_efficiency_reject_threshold,
                     ),
+                    &op.pvg_state,
                 );
                 if let Some(pct) = op.po.perms.underpriced_bundle_pct {
                     required_pvg = math::percent_ceil(required_pvg, pct);
@@ -1081,6 +1097,8 @@ struct OrderedPoolOperation {
     /// The block number at which the operation was added to the pool
     added_at_block: u64,
     suspect_state: RwLock<SuspectState>,
+    /// On-chain state the operation's required pre-verification gas was priced with at precheck
+    pvg_state: PvgState,
 }
 
 impl OrderedPoolOperation {
@@ -1090,6 +1108,7 @@ impl OrderedPoolOperation {
         eligible: bool,
         base_fee: u128,
         current_block_number: u64,
+        pvg_state: PvgState,
     ) -> Self {
         Self {
             gas_price: RwLock::new(po.uo.gas_price(base_fee)),
@@ -1100,6 +1119,7 @@ impl OrderedPoolOperation {
             time_to_mine: RwLock::new(Some(TimeToMineInfo::new(current_block_number))),
             added_at_block: current_block_number,
             suspect_state: RwLock::new(SuspectState::default()),
+            pvg_state,
         }
     }
 
@@ -1721,7 +1741,7 @@ mod tests {
         assert_eq!(pool.address_count(&sender), 1);
         assert_eq!(
             pool.pool_size,
-            OrderedPoolOperation::new(Arc::new(po1), 0, true, 0, 0).mem_size(),
+            OrderedPoolOperation::new(Arc::new(po1), 0, true, 0, 0, PvgState::unknown()).mem_size(),
         );
     }
 
@@ -1763,7 +1783,7 @@ mod tests {
         assert_eq!(pool.address_count(&paymaster2), 1);
         assert_eq!(
             pool.pool_size,
-            OrderedPoolOperation::new(Arc::new(po2), 0, true, 0, 0).mem_size()
+            OrderedPoolOperation::new(Arc::new(po2), 0, true, 0, 0, PvgState::unknown()).mem_size()
         );
     }
 
@@ -2981,8 +3001,15 @@ mod tests {
     }
 
     fn mem_size_of_ordered_pool_op() -> usize {
-        OrderedPoolOperation::new(Arc::new(create_op(Address::random(), 1, 1)), 1, true, 0, 0)
-            .mem_size()
+        OrderedPoolOperation::new(
+            Arc::new(create_op(Address::random(), 1, 1)),
+            1,
+            true,
+            0,
+            0,
+            PvgState::unknown(),
+        )
+        .mem_size()
     }
 
     fn base_required_fields() -> UserOperationRequiredFields {

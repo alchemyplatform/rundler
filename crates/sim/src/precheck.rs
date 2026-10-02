@@ -22,7 +22,7 @@ use futures_util::TryFutureExt;
 use mockall::automock;
 use rundler_provider::{DAGasProvider, EntryPoint, EvmProvider, FeeEstimator};
 use rundler_types::{
-    EntryPointVersion, PriorityFeeMode, UserOperation, UserOperationPermissions,
+    EntryPointVersion, PriorityFeeMode, PvgState, UserOperation, UserOperationPermissions,
     chain::ChainSpec,
     da::DAGasData,
     pool::{MempoolError, PrecheckViolation},
@@ -42,6 +42,8 @@ pub struct PrecheckReturn {
     pub da_gas_data: DAGasData,
     /// The required pre-verification gas for the operation
     pub required_pre_verification_gas: u128,
+    /// The on-chain state the required pre-verification gas was priced with
+    pub pvg_state: PvgState,
     /// If the sender is 7702
     pub sender_is_7702: bool,
 }
@@ -147,6 +149,7 @@ struct AsyncData {
     base_fee: u128,
     min_pre_verification_gas: u128,
     da_gas_data: DAGasData,
+    pvg_state: PvgState,
     eip7702_authority_data: Option<Eip7702AuthorityData>,
 }
 
@@ -189,6 +192,7 @@ where
         Ok(PrecheckReturn {
             da_gas_data: async_data.da_gas_data,
             required_pre_verification_gas: async_data.min_pre_verification_gas,
+            pvg_state: async_data.pvg_state,
             sender_is_7702: op.authorization_tuple().is_some()
                 || authorization_utils::eip7702_delegate_from_code(&async_data.sender_bytecode)
                     .is_some(),
@@ -498,7 +502,7 @@ where
             sender_bytecode,
             paymaster_exists,
             payer_funds,
-            (min_pre_verification_gas, da_gas_data),
+            (min_pre_verification_gas, da_gas_data, pvg_state),
             eip7702_authority_data,
         ) = tokio::try_join!(
             self.is_contract(op.factory()),
@@ -516,6 +520,7 @@ where
             base_fee,
             min_pre_verification_gas,
             da_gas_data,
+            pvg_state,
             eip7702_authority_data,
         })
     }
@@ -583,12 +588,21 @@ where
         block_hash: B256,
         base_fee: u128,
         perms: &UserOperationPermissions,
-    ) -> anyhow::Result<(u128, DAGasData)> {
+    ) -> anyhow::Result<(u128, DAGasData, PvgState)> {
         if perms.bundler_sponsorship.is_some() {
-            return Ok((0, DAGasData::Empty));
+            return Ok((0, DAGasData::Empty, PvgState::unknown()));
         }
 
-        gas::calc_required_pre_verification_gas(
+        let pvg_state = gas::load_pvg_state(
+            &self.chain_spec,
+            &self.provider,
+            &self.entry_point,
+            &op,
+            None,
+        )
+        .await
+        .context("precheck should load pre-verification gas state")?;
+        let (required_pvg, da_gas_data) = gas::calc_required_pre_verification_gas(
             &self.chain_spec,
             &self.entry_point,
             &op,
@@ -596,8 +610,10 @@ where
             base_fee,
             self.settings
                 .verification_gas_limit_efficiency_reject_threshold,
+            &pvg_state,
         )
-        .await
+        .await?;
+        Ok((required_pvg, da_gas_data, pvg_state))
     }
 
     async fn get_eip7702_authority_data(
@@ -664,6 +680,7 @@ mod tests {
             payer_funds: U256::from(5_000_000),
             base_fee: 4_000,
             min_pre_verification_gas: 1_000,
+            pvg_state: PvgState::unknown(),
             da_gas_data: DAGasData::Empty,
             eip7702_authority_data: None,
         }
@@ -1337,6 +1354,47 @@ mod tests {
                     signature: Bytes::default(),
                 },
             )
+        }
+
+        fn glamsterdam_prechecker(deposit: U256) -> (ChainSpec, TestPrechecker) {
+            let cs = ChainSpec {
+                id: 1,
+                eip7702_enabled: true,
+                glamsterdam_enabled: true,
+                ..Default::default()
+            };
+            let mut entry_point = MockEntryPointV0_7::new();
+            entry_point
+                .expect_balance_of()
+                .withf(|address, _| *address == TEST_SENDER)
+                .returning(move |_, _| Ok(deposit));
+            let prechecker = PrecheckerImpl::new(
+                cs.clone(),
+                Arc::new(MockEvmProvider::new()),
+                entry_point,
+                MockFeeEstimator::new(),
+                Settings::default(),
+            );
+            (cs, prechecker)
+        }
+
+        #[tokio::test]
+        async fn test_required_pvg_prices_zero_sender_deposit_with_glamsterdam() {
+            let perms = UserOperationPermissions::default();
+            let (cs, zero) = glamsterdam_prechecker(U256::ZERO);
+            let op = create_uo_builder(&cs, EntryPointVersion::V0_7).build();
+            let (pvg_zero, _, state) = zero
+                .get_required_pre_verification_gas(op.clone(), B256::ZERO, 1, &perms)
+                .await
+                .unwrap();
+            assert_eq!(state.sender_deposit_is_zero, Some(true));
+
+            let (_, funded) = glamsterdam_prechecker(U256::from(1_000_000));
+            let (pvg_funded, _, _) = funded
+                .get_required_pre_verification_gas(op, B256::ZERO, 1, &perms)
+                .await
+                .unwrap();
+            assert_eq!(pvg_zero - pvg_funded, 97_920);
         }
 
         #[tokio::test]

@@ -145,6 +145,13 @@ where
         );
         let call_gas_future =
             self.estimate_call_gas(&op, full_op.clone(), block_hash, state_override);
+        let pvg_state_future = gas::load_pvg_state(
+            &self.chain_spec,
+            provider,
+            &self.entry_point,
+            &full_op,
+            Some(block_hash.into()),
+        );
 
         // Not try_join! because then the output is nondeterministic if multiple calls fail.
         let (
@@ -152,14 +159,17 @@ where
             verification_gas_limit_result,
             paymaster_verification_gas_limit_result,
             call_gas_limit_result,
+            pvg_state_result,
         ) = join!(
             da_gas_future,
             verification_gas_future,
             paymaster_verification_gas_future,
-            call_gas_future
+            call_gas_future,
+            pvg_state_future
         );
 
         let da_gas = da_gas_result.map_err(GasEstimationError::from)?;
+        let pvg_state = pvg_state_result.map_err(anyhow::Error::from)?;
         let verification_gas_limit = verification_gas_limit_result?;
         let paymaster_verification_gas_limit = paymaster_verification_gas_limit_result?;
         let call_gas_limit = call_gas_limit_result?;
@@ -183,9 +193,16 @@ where
                     bundle_size,
                     da_gas,
                     None,
+                    &pvg_state,
                 )
             } else {
-                base_op.required_pre_verification_gas(&self.chain_spec, bundle_size, da_gas, None)
+                base_op.required_pre_verification_gas(
+                    &self.chain_spec,
+                    bundle_size,
+                    da_gas,
+                    None,
+                    &pvg_state,
+                )
             }
         };
 
