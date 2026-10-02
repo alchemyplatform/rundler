@@ -129,12 +129,24 @@ where
         let verification_future =
             self.estimate_verification_gas(&op, &full_op, block_hash, state_override.clone());
         let call_future = self.estimate_call_gas(&op, full_op.clone(), block_hash, state_override);
+        let pvg_state_future = gas::load_pvg_state(
+            &self.chain_spec,
+            &self.provider,
+            &self.entry_point,
+            &full_op,
+            Some(block_hash.into()),
+        );
 
         // Not try_join! because then the output is nondeterministic if both
         // verification and call estimation fail.
-        let (da_gas_result, verification_gas_limit_result, call_gas_limit_result) =
-            join!(da_gas_future, verification_future, call_future);
+        let (da_gas_result, verification_gas_limit_result, call_gas_limit_result, pvg_state_result) = join!(
+            da_gas_future,
+            verification_future,
+            call_future,
+            pvg_state_future
+        );
         let da_gas = da_gas_result?;
+        let pvg_state = pvg_state_result.map_err(anyhow::Error::from)?;
         let verification_gas_limit = verification_gas_limit_result?;
         let call_gas_limit = call_gas_limit_result?;
 
@@ -155,10 +167,17 @@ where
                     bundle_size,
                     da_gas,
                     None,
+                    &pvg_state,
                 )
             } else {
                 // Use original op baseline to match validation behavior
-                base_op.required_pre_verification_gas(&self.chain_spec, bundle_size, da_gas, None)
+                base_op.required_pre_verification_gas(
+                    &self.chain_spec,
+                    bundle_size,
+                    da_gas,
+                    None,
+                    &pvg_state,
+                )
             }
         };
 
@@ -551,7 +570,7 @@ mod tests {
         ProviderError,
     };
     use rundler_types::{
-        GasFees,
+        GasFees, PvgState,
         da::DAGasOracleType,
         v0_6::{UserOperation, UserOperationOptionalGas, UserOperationRequiredFields},
     };
@@ -725,8 +744,13 @@ mod tests {
         // Test the PVG calculation directly using the UO method
         let bundle_size = 1;
         let da_gas = 0; // Default chain spec doesn't use DA gas
-        let estimation =
-            full_op.required_pre_verification_gas(&ChainSpec::default(), bundle_size, da_gas, None);
+        let estimation = full_op.required_pre_verification_gas(
+            &ChainSpec::default(),
+            bundle_size,
+            da_gas,
+            None,
+            &PvgState::unknown(),
+        );
 
         let uo = user_op.max_fill(&ChainSpec::default());
 
@@ -783,7 +807,13 @@ mod tests {
         // Test the PVG calculation directly using the UO method
         let bundle_size = 1;
         let da_gas = TEST_FEE; // Mock returns TEST_FEE for DA gas
-        let estimation = full_op.required_pre_verification_gas(&cs, bundle_size, da_gas, None);
+        let estimation = full_op.required_pre_verification_gas(
+            &cs,
+            bundle_size,
+            da_gas,
+            None,
+            &PvgState::unknown(),
+        );
 
         let uo = user_op.max_fill(&ChainSpec::default());
 
@@ -843,7 +873,13 @@ mod tests {
         // Test the PVG calculation directly using the UO method
         let bundle_size = 1;
         let da_gas = TEST_FEE; // Mock returns TEST_FEE for DA gas
-        let estimation = full_op.required_pre_verification_gas(&cs, bundle_size, da_gas, None);
+        let estimation = full_op.required_pre_verification_gas(
+            &cs,
+            bundle_size,
+            da_gas,
+            None,
+            &PvgState::unknown(),
+        );
 
         let uo = user_op.max_fill(&ChainSpec::default());
 
@@ -1416,6 +1452,72 @@ mod tests {
             estimation,
             GasEstimationError::GasFieldTooLarge("callGasLimit", TEST_MAX_GAS_LIMITS)
         ));
+    }
+
+    /// Gas estimation with Glamsterdam pricing and a mocked sender deposit: the gas limits are
+    /// provided, PVG is left to the estimator.
+    async fn glamsterdam_estimated_pvg(
+        sender_deposit: U256,
+        charge_gas_limit_via_pvg: bool,
+    ) -> u128 {
+        let (mut entry, mut provider) = create_base_config();
+        provider
+            .expect_get_latest_block_hash_and_number()
+            .returning(|| Ok((B256::ZERO, 0)));
+        entry
+            .expect_simulate_handle_op_estimate_gas()
+            .returning(move |_a, _b, _c, _d, _e| {
+                Ok(Ok(ExecutionResult {
+                    target_result: TestCallGasResult {
+                        success: true,
+                        gasUsed: U256::ZERO,
+                        revertData: Bytes::new(),
+                    }
+                    .abi_encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+        entry
+            .expect_balance_of()
+            .returning(move |_, _| Ok(sender_deposit));
+
+        let (base_entry, base_provider) = create_base_config();
+        let (_, settings) = create_estimator(base_entry, base_provider);
+        let chain_spec = ChainSpec {
+            glamsterdam_enabled: true,
+            charge_gas_limit_via_pvg,
+            ..ChainSpec::default()
+        };
+        let estimator = create_custom_estimator(
+            chain_spec,
+            provider,
+            MockFeeEstimator::new(),
+            entry,
+            settings,
+        );
+
+        let mut optional_op = demo_user_op_optional_gas(None);
+        optional_op.call_gas_limit = Some(10000);
+        optional_op.verification_gas_limit = Some(10000);
+
+        estimator
+            .estimate_op_gas(optional_op, StateOverride::default())
+            .await
+            .unwrap()
+            .pre_verification_gas
+    }
+
+    #[tokio::test]
+    async fn test_glamsterdam_pvg_prices_zero_sender_deposit() {
+        let funded_deposit = U256::from(1_000_000_000_000_000_000_u128);
+        // Also when the gas limits are charged through PVG.
+        for charge_gas_limit_via_pvg in [false, true] {
+            let zero = glamsterdam_estimated_pvg(U256::ZERO, charge_gas_limit_via_pvg).await;
+            let funded = glamsterdam_estimated_pvg(funded_deposit, charge_gas_limit_via_pvg).await;
+            assert_eq!(zero - funded, 97_920);
+        }
     }
 
     #[tokio::test]

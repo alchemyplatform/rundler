@@ -113,6 +113,7 @@ define_hardcoded_chain_specs!(
     dev,
     ethereum,
     ethereum_sepolia,
+    ethereum_glamsterdam_devnet,
     optimism,
     optimism_sepolia,
     base,
@@ -124,3 +125,30 @@ define_hardcoded_chain_specs!(
     avax,
     avax_fuji
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glamsterdam_devnet_enables_glamsterdam() {
+        let spec = resolve_chain_spec(&Some("ethereum_glamsterdam_devnet".to_string()), &None);
+        assert_eq!(spec.id, 7091047534);
+        assert!(spec.glamsterdam_enabled);
+        assert_eq!(spec.bundle_intrinsic_gas(), 15_000);
+        assert_eq!(spec.transaction_gas_limit(), 16_777_216);
+    }
+
+    #[test]
+    fn glamsterdam_disabled_on_existing_networks() {
+        for network in HARDCODED_CHAIN_SPECS {
+            if *network == "ethereum_glamsterdam_devnet" {
+                continue;
+            }
+            let spec = resolve_chain_spec(&Some(network.to_string()), &None);
+            let unchanged = !spec.glamsterdam_enabled
+                && spec.bundle_intrinsic_gas() == spec.transaction_intrinsic_gas();
+            assert!(unchanged, "{network}");
+        }
+    }
+}

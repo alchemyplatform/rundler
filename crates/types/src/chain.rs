@@ -15,6 +15,7 @@
 
 use std::{collections::HashMap, str::FromStr, sync::Arc};
 
+use alloy_eips::eip7702::constants::PER_EMPTY_ACCOUNT_COST;
 use alloy_primitives::Address;
 use serde::{Deserialize, Serialize};
 
@@ -106,6 +107,41 @@ pub struct ChainSpec {
     pub eip7623_calldata_floor_zero_byte_gas: u64,
     /// Gas cost for a non-zero byte in calldata for the floor operation
     pub eip7623_calldata_floor_non_zero_byte_gas: u64,
+
+    /*
+     * Glamsterdam (EIP-2780, EIP-7976, EIP-8037, EIP-8038)
+     *
+     * Values measured on glamsterdam-devnet-8 with EntryPoint v0.7, see
+     * test/pvg-calibration/README.md. They apply only when `glamsterdam_enabled` is true;
+     * the accessors below select them, so callers never check the flag themselves.
+     */
+    /// true if the Glamsterdam gas schedule applies to this chain
+    pub glamsterdam_enabled: bool,
+    /// Intrinsic gas of a bundle transaction: EIP-2780 base plus the cold access of the
+    /// EntryPoint
+    pub glamsterdam_bundle_intrinsic_gas: u64,
+    /// Per user operation gas cost for v0.6.
+    ///
+    /// Provisional: derived from the v0.7 delta, not yet measured on a v0.6 EntryPoint.
+    pub glamsterdam_per_user_op_v0_6_gas: u64,
+    /// Per user operation gas cost for v0.7
+    pub glamsterdam_per_user_op_v0_7_gas: u64,
+    /// Gas cost of every calldata byte, zero or not, for the EIP-7976 floor
+    pub glamsterdam_calldata_floor_byte_gas: u64,
+    /// Extra gas per 32-byte word of a user operation's `callData`, on top of
+    /// `per_user_op_word_gas`: the EntryPoint copies `callData` into memory for the inner call
+    /// outside its metered spans
+    pub glamsterdam_call_data_word_gas: u64,
+    /// Execution gas of processing one EIP-7702 authorization, charged for every authorization
+    pub glamsterdam_authorization_execution_gas: u64,
+    /// State gas of writing the delegation code, charged when the authority has no code yet
+    pub glamsterdam_authorization_delegation_state_gas: u64,
+    /// State gas of creating an account, charged when the authority does not exist yet
+    pub glamsterdam_new_account_state_gas: u64,
+    /// State gas of the EntryPoint's refund write when it re-creates a deposit slot that was
+    /// zero at transaction start (a self-paying sender with no deposit). The write happens
+    /// after the EntryPoint stops metering, so it is unmetered.
+    pub glamsterdam_zero_deposit_refund_state_gas: u64,
 
     /*
      * Fee estimation
@@ -207,6 +243,16 @@ impl Default for ChainSpec {
             eip7623_enabled: false,
             eip7623_calldata_floor_zero_byte_gas: 10,
             eip7623_calldata_floor_non_zero_byte_gas: 40,
+            glamsterdam_enabled: false,
+            glamsterdam_bundle_intrinsic_gas: 15_000,
+            glamsterdam_per_user_op_v0_6_gas: 20_700,
+            glamsterdam_per_user_op_v0_7_gas: 21_900,
+            glamsterdam_calldata_floor_byte_gas: 64,
+            glamsterdam_call_data_word_gas: 6,
+            glamsterdam_authorization_execution_gas: 16_816,
+            glamsterdam_authorization_delegation_state_gas: 35_190,
+            glamsterdam_new_account_state_gas: 183_600,
+            glamsterdam_zero_deposit_refund_state_gas: 97_920,
             da_pre_verification_gas: false,
             da_gas_oracle_type: DAGasOracleType::default(),
             da_gas_oracle_contract_address: Address::ZERO,
@@ -241,6 +287,16 @@ impl ChainSpec {
         self.transaction_intrinsic_gas as u128
     }
 
+    /// Get the intrinsic gas of a bundle transaction (a call to the EntryPoint), shared by all
+    /// user operations in the bundle
+    pub fn bundle_intrinsic_gas(&self) -> u128 {
+        if self.glamsterdam_enabled {
+            self.glamsterdam_bundle_intrinsic_gas as u128
+        } else {
+            self.transaction_intrinsic_gas as u128
+        }
+    }
+
     /// Resolve the transaction gas limit
     ///
     /// If the transaction gas limit is 0, the block gas limit is returned.
@@ -269,12 +325,20 @@ impl ChainSpec {
 
     /// Get the per user operation v0_6 gas
     pub fn per_user_op_v0_6_gas(&self) -> u128 {
-        self.per_user_op_v0_6_gas as u128
+        if self.glamsterdam_enabled {
+            self.glamsterdam_per_user_op_v0_6_gas as u128
+        } else {
+            self.per_user_op_v0_6_gas as u128
+        }
     }
 
     /// Get the per user operation v0_7 gas
     pub fn per_user_op_v0_7_gas(&self) -> u128 {
-        self.per_user_op_v0_7_gas as u128
+        if self.glamsterdam_enabled {
+            self.glamsterdam_per_user_op_v0_7_gas as u128
+        } else {
+            self.per_user_op_v0_7_gas as u128
+        }
     }
 
     /// Get the calldata zero byte gas
@@ -289,7 +353,10 @@ impl ChainSpec {
 
     /// Get the calldata floor zero byte gas
     pub fn calldata_floor_zero_byte_gas(&self) -> u128 {
-        if self.eip7623_enabled {
+        if self.glamsterdam_enabled {
+            // EIP-7976: every byte costs the same floor gas
+            self.glamsterdam_calldata_floor_byte_gas as u128
+        } else if self.eip7623_enabled {
             self.eip7623_calldata_floor_zero_byte_gas as u128
         } else {
             0
@@ -298,8 +365,58 @@ impl ChainSpec {
 
     /// Get the calldata floor non zero byte gas
     pub fn calldata_floor_non_zero_byte_gas(&self) -> u128 {
-        if self.eip7623_enabled {
+        if self.glamsterdam_enabled {
+            self.glamsterdam_calldata_floor_byte_gas as u128
+        } else if self.eip7623_enabled {
             self.eip7623_calldata_floor_non_zero_byte_gas as u128
+        } else {
+            0
+        }
+    }
+
+    /// Get the extra gas per word of a user operation's `callData`, 0 when not applicable
+    pub fn call_data_word_gas(&self) -> u128 {
+        if self.glamsterdam_enabled {
+            self.glamsterdam_call_data_word_gas as u128
+        } else {
+            0
+        }
+    }
+
+    /// Get the gas of one EIP-7702 authorization that does not depend on the authority's state
+    pub fn authorization_execution_gas(&self) -> u128 {
+        if self.glamsterdam_enabled {
+            self.glamsterdam_authorization_execution_gas as u128
+        } else {
+            PER_EMPTY_ACCOUNT_COST as u128
+        }
+    }
+
+    /// Get the state gas of an EIP-7702 authorization whose authority has no code yet,
+    /// 0 when state gas does not apply
+    pub fn authorization_delegation_state_gas(&self) -> u128 {
+        if self.glamsterdam_enabled {
+            self.glamsterdam_authorization_delegation_state_gas as u128
+        } else {
+            0
+        }
+    }
+
+    /// Get the state gas of creating an account (e.g. an EIP-7702 authority that does not
+    /// exist yet), 0 when state gas does not apply
+    pub fn new_account_state_gas(&self) -> u128 {
+        if self.glamsterdam_enabled {
+            self.glamsterdam_new_account_state_gas as u128
+        } else {
+            0
+        }
+    }
+
+    /// Get the unmetered state gas of the EntryPoint refund write for a self-paying sender whose
+    /// deposit is zero at bundle start, 0 when state gas does not apply
+    pub fn zero_deposit_refund_state_gas(&self) -> u128 {
+        if self.glamsterdam_enabled {
+            self.glamsterdam_zero_deposit_refund_state_gas as u128
         } else {
             0
         }
