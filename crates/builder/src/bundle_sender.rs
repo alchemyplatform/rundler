@@ -145,6 +145,8 @@ enum SendBundleAttemptResult {
     NonceTooLow,
     // The submission endpoint is rate limiting us
     RateLimited,
+    // The triggering block has no timestamp, so its gas schedule is unknown. Nothing was built.
+    NoBlockTimestamp,
 }
 
 impl SendBundleAttemptResult {
@@ -163,6 +165,7 @@ impl SendBundleAttemptResult {
             // Rejected while building, so the submission endpoint never saw a request.
             Self::SimulationUnderpriced
             | Self::RateLimited
+            | Self::NoBlockTimestamp
             | Self::NoOperationsInitially
             | Self::NoOperationsAfterFeeFilter
             | Self::NoOperationsAfterSimulation => false,
@@ -534,6 +537,20 @@ where
                 );
                 state.simulation_underpriced();
             }
+            Ok(SendBundleAttemptResult::NoBlockTimestamp) => {
+                // Release locks only when nothing is pending (continuing)
+                if state.transaction_tracker.num_pending_transactions() == 0 {
+                    self.assigner.release_all(self.sender_eoa);
+                }
+                warn!(
+                    "No timestamp for block {}, can't select its gas schedule, skipping until the next trigger",
+                    state.block_hash()
+                );
+                state.retry_on_next_trigger(anyhow::anyhow!(
+                    "no timestamp for block {}, can't select its gas schedule",
+                    state.block_hash()
+                ));
+            }
             Ok(SendBundleAttemptResult::ReplacementUnderpriced) => {
                 // Release locks only when nothing is pending (continuing)
                 if state.transaction_tracker.num_pending_transactions() == 0 {
@@ -874,12 +891,9 @@ where
         state: &mut SenderMachineState<T, TRIG>,
         fee_increase_count: u64,
     ) -> anyhow::Result<SendBundleAttemptResult> {
-        let block_timestamp = state.block_timestamp().with_context(|| {
-            format!(
-                "no timestamp for block {}, can't select its gas schedule",
-                state.block_hash()
-            )
-        })?;
+        let Some(block_timestamp) = state.block_timestamp() else {
+            return Ok(SendBundleAttemptResult::NoBlockTimestamp);
+        };
 
         // Get tracker state first to pass required_fees to assign_work
         let TrackerState {
@@ -1438,9 +1452,15 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
     // replace, so `fee_increase_count` is left alone. `condition_not_met` is preserved
     // because the rebuild still needs to re-check conditions.
     fn simulation_underpriced(&mut self) {
-        self.send_result(SendBundleResult::Error(anyhow::anyhow!(
+        self.retry_on_next_trigger(anyhow::anyhow!(
             "bundle validation call rejected as underpriced"
-        )));
+        ));
+    }
+
+    // Nothing was submitted: report the error and rebuild on the next trigger, keeping the
+    // fee increase count, underpriced info and `condition_not_met`.
+    fn retry_on_next_trigger(&mut self, error: anyhow::Error) {
+        self.send_result(SendBundleResult::Error(error));
 
         self.inner = match &self.inner {
             InnerState::Building(s) => InnerState::Building(BuildingState {
@@ -1450,7 +1470,7 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
             }),
             _ => {
                 panic!(
-                    "invalid state transition, simulation_underpriced called when not in building state"
+                    "invalid state transition, retry_on_next_trigger called when not in building state"
                 )
             }
         }
@@ -2057,7 +2077,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_send_bundle_errors_without_block_timestamp() {
+    async fn test_send_bundle_skips_block_without_timestamp() {
         let Mocks {
             mut mock_proposer_t,
             mut mock_tracker,
@@ -2077,8 +2097,51 @@ mod tests {
         let mut sender = new_sender(mock_proposer_t, mock_pool);
         let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
 
-        let err = sender.send_bundle(&mut state, 0).await.unwrap_err();
-        assert!(err.to_string().contains("no timestamp for block"), "{err}");
+        let result = sender.send_bundle(&mut state, 0).await.unwrap();
+        assert!(matches!(result, SendBundleAttemptResult::NoBlockTimestamp));
+    }
+
+    #[tokio::test]
+    async fn test_missing_block_timestamp_keeps_pending_replacement() {
+        let Mocks {
+            mock_proposer_t,
+            mut mock_tracker,
+            mut mock_trigger,
+            mock_pool,
+        } = new_mocks();
+
+        mock_trigger.expect_last_block().return_const(NewHead {
+            block_timestamp: None,
+            ..new_head(0)
+        });
+        mock_tracker
+            .expect_num_pending_transactions()
+            .return_const(1_usize);
+        // the in-flight transaction stays tracked so it can still be replaced
+        mock_tracker.expect_reset().times(0);
+        mock_tracker.expect_abandon().times(0);
+
+        let mut sender = new_sender(mock_proposer_t, mock_pool);
+        let inner = BuildingState {
+            wait_for_trigger: false,
+            fee_increase_count: 1,
+            underpriced_info: None,
+        };
+        let mut state = new_state_with(mock_trigger, mock_tracker, InnerState::Building(inner));
+
+        sender
+            .handle_building_state(&mut state, inner)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            state.inner,
+            InnerState::Building(BuildingState {
+                wait_for_trigger: true,
+                fee_increase_count: 1,
+                underpriced_info: None,
+            })
+        ));
     }
 
     #[tokio::test]
