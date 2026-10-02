@@ -3793,6 +3793,126 @@ mod tests {
         assert_eq!(delta, (21_000 - 15_000) - (21_900 - 19_500));
     }
 
+    type TestProposer = BundleProposerImpl<
+        ProvidersWithEntryPoint<
+            UserOperation,
+            Arc<MockEvmProvider>,
+            Arc<MockEntryPointV0_6>,
+            Arc<MockDAGasOracleSync>,
+            Arc<MockFeeEstimator>,
+        >,
+        BundleProposerProviders<MockSimulator>,
+    >;
+
+    fn glamsterdam_proposer(mut entry_point: MockEntryPointV0_6) -> TestProposer {
+        entry_point.expect_address().return_const(Address::ZERO);
+        let (event_sender, _) = broadcast::channel(16);
+        BundleProposerImpl::new(
+            "test".to_string(),
+            ProvidersWithEntryPoint::new(
+                Arc::new(MockEvmProvider::new()),
+                Arc::new(entry_point),
+                None,
+                Arc::new(MockFeeEstimator::new()),
+            ),
+            BundleProposerProviders::new(MockSimulator::new()),
+            Settings {
+                chain_spec: ChainSpec {
+                    glamsterdam_enabled: true,
+                    ..Default::default()
+                },
+                target_bundle_gas: 10_000_000,
+                max_bundle_gas: 25_000_000,
+                da_gas_tracking_enabled: false,
+                max_expected_storage_slots: MAX_EXPECTED_STORAGE_SLOTS,
+                verification_gas_limit_efficiency_reject_threshold: 0.5,
+                submission_proxy: None,
+            },
+            event_sender,
+        )
+    }
+
+    fn pool_op(op: UserOperation) -> PoolOperation {
+        PoolOperation {
+            uo: op.into(),
+            expected_code_hash: hash(126),
+            entry_point: ChainSpec::default().entry_point_address_v0_6,
+            sim_block_hash: hash(125),
+            sim_block_number: 0,
+            account_is_staked: false,
+            valid_time_range: ValidTimeRange::default(),
+            entity_infos: EntityInfos::default(),
+            aggregator: None,
+            da_gas_data: Default::default(),
+            filter_id: None,
+            perms: UserOperationPermissions::default(),
+            sender_is_7702: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_check_fees_rechecks_glamsterdam_state_gas_on_l1() {
+        let mut entry_point = MockEntryPointV0_6::new();
+        entry_point
+            .expect_balance_of()
+            .returning(|_, _| Ok(U256::ZERO));
+        let proposer = glamsterdam_proposer(entry_point);
+        let cs = proposer.settings.chain_spec.clone();
+        let fees = GasFees {
+            max_fee_per_gas: 10_000,
+            max_priority_fee_per_gas: 0,
+        };
+
+        // A self-paying op priced as if its deposit were not zero, then with the refund write.
+        let probe = op_with_sender_and_fees(address(1), 10_000, 0, 0);
+        let funded = PvgState {
+            sender_deposit_is_zero: Some(false),
+            authority: None,
+        };
+        let without_state = probe.required_pre_verification_gas(&cs, 1, 0, Some(0.5), &funded);
+        let underpaid = pool_op(op_with_sender_and_fees(
+            address(1),
+            10_000,
+            0,
+            without_state,
+        ));
+        // Headroom: the PVG value is part of the packed op, so its own bytes add calldata gas.
+        let paid = pool_op(op_with_sender_and_fees(
+            address(1),
+            10_000,
+            0,
+            without_state + 97_920 + 1_000,
+        ));
+
+        let states = proposer
+            .load_pvg_states(&[underpaid.clone(), paid.clone()], hash(125))
+            .await;
+        assert_eq!(states[0].sender_deposit_is_zero, Some(true));
+
+        // On a non-DA chain the PVG check still runs when state gas applies.
+        let skipped = proposer
+            .check_fees(underpaid, hash(125), None, 1_000, fees, states[0])
+            .await;
+        assert!(skipped.is_none());
+        let kept = proposer
+            .check_fees(paid, hash(125), None, 1_000, fees, states[1])
+            .await
+            .expect("op paying the state gas is kept");
+        assert_eq!(kept.state_gas, 97_920);
+    }
+
+    #[tokio::test]
+    async fn test_load_pvg_states_prices_worst_case_when_state_read_fails() {
+        let mut entry_point = MockEntryPointV0_6::new();
+        entry_point
+            .expect_balance_of()
+            .returning(|_, _| Err(anyhow::anyhow!("rpc down").into()));
+        let proposer = glamsterdam_proposer(entry_point);
+        let op = pool_op(op_with_sender_and_fees(address(1), 10_000, 0, 0));
+        let states = proposer.load_pvg_states(&[op], hash(125)).await;
+        assert_eq!(states, vec![PvgState::unknown()]);
+    }
+
     #[tokio::test]
     async fn test_post_op_revert() {
         let op1 = op_with_sender(address(1));

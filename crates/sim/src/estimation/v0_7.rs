@@ -937,6 +937,58 @@ mod tests {
         ));
     }
 
+    /// Gas estimation with Glamsterdam pricing and a mocked sender deposit: the gas limits are
+    /// provided, PVG is left to the estimator.
+    async fn glamsterdam_estimated_pvg(sender_deposit: U256) -> u128 {
+        let (mut entry, mut provider) = create_base_config();
+        provider
+            .expect_get_latest_block_hash_and_number()
+            .returning(|| Ok((B256::ZERO, 0)));
+        entry
+            .expect_simulate_handle_op_estimate_gas()
+            .returning(move |_a, _b, _c, _d, _e| {
+                Ok(Ok(ExecutionResult {
+                    target_result: TestCallGasResult {
+                        success: true,
+                        gasUsed: U256::ZERO,
+                        revertData: Bytes::new(),
+                    }
+                    .abi_encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+        entry
+            .expect_balance_of()
+            .returning(move |_, _| Ok(sender_deposit));
+
+        let (base_entry, base_provider) = create_base_config();
+        let (_, settings) = create_estimator(base_entry, base_provider);
+        let chain_spec = ChainSpec {
+            glamsterdam_enabled: true,
+            ..ChainSpec::default()
+        };
+        let estimator = create_custom_estimator(chain_spec, provider, entry, settings);
+
+        let mut optional_op = demo_user_op_optional_gas(None);
+        optional_op.call_gas_limit = Some(10000);
+        optional_op.verification_gas_limit = Some(10000);
+
+        estimator
+            .estimate_op_gas(optional_op, StateOverride::default())
+            .await
+            .unwrap()
+            .pre_verification_gas
+    }
+
+    #[tokio::test]
+    async fn test_glamsterdam_pvg_prices_zero_sender_deposit() {
+        let zero = glamsterdam_estimated_pvg(U256::ZERO).await;
+        let funded = glamsterdam_estimated_pvg(U256::from(1_000_000_000_000_000_000_u128)).await;
+        assert_eq!(zero - funded, 97_920);
+    }
+
     #[tokio::test]
     async fn test_return_provided_limits() {
         let (mut entry, mut provider) = create_base_config();

@@ -1092,15 +1092,8 @@ mod glamsterdam_tests {
     /// The prediction must cover the measured gas, and single-op bundles must not be
     /// overcharged by more than `max_overcharge`.
     fn assert_covers(predicted: u128, measured: u128, max_overcharge: u128) {
-        assert!(
-            predicted >= measured,
-            "undercharged: predicted {predicted} < measured {measured}"
-        );
-        assert!(
-            predicted - measured <= max_overcharge,
-            "overcharged by {}: predicted {predicted}, measured {measured}",
-            predicted - measured
-        );
+        let overcharge = predicted.checked_sub(measured).expect("undercharged");
+        assert!(overcharge <= max_overcharge, "overcharged by {overcharge}");
     }
 
     const PREFUNDED: PvgState = PvgState {

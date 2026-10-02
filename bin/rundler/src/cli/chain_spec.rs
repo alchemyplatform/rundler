@@ -146,12 +146,9 @@ mod tests {
                 continue;
             }
             let spec = resolve_chain_spec(&Some(network.to_string()), &None);
-            assert!(!spec.glamsterdam_enabled, "{network}");
-            assert_eq!(
-                spec.bundle_intrinsic_gas(),
-                spec.transaction_intrinsic_gas(),
-                "{network}"
-            );
+            let unchanged = !spec.glamsterdam_enabled
+                && spec.bundle_intrinsic_gas() == spec.transaction_intrinsic_gas();
+            assert!(unchanged, "{network}");
         }
     }
 }
