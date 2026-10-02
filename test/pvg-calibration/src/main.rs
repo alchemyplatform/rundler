@@ -35,7 +35,7 @@ mod harness;
 
 use bundle::BundleRunner;
 use harness::Harness;
-use rundler_types::chain::ChainSpec;
+use rundler_types::chain::{ChainSpec, ForkActivation};
 
 #[derive(Parser)]
 #[command(about = "Measure the gas the EntryPoint does not meter, to calibrate PVG")]
@@ -62,6 +62,11 @@ struct Cli {
     /// `Paymaster/deploy,PaymasterPostOp/deploy,beneficiary,penalty-check`
     #[arg(long, global = true)]
     only: Option<String>,
+
+    /// Compare measurements with rundler's Glamsterdam gas schedule (`glamsterdam_activation`)
+    /// instead of today's
+    #[arg(long, global = true)]
+    glamsterdam_prediction: bool,
 
     /// Label for the report file name, e.g. `anvil-prague` or `devnet`
     #[arg(long, global = true, default_value = "run")]
@@ -111,7 +116,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Overhead | Command::Calldata | Command::Authorization | Command::Hazards => {
             let chain_id = harness.chain_info().await?.chain_id;
             let fixtures = fixtures::ensure(&harness).await?;
-            let spec = prediction_spec(chain_id);
+            let spec = prediction_spec(chain_id, cli.glamsterdam_prediction);
             let runner = BundleRunner {
                 harness: &harness,
                 fixtures: &fixtures,
@@ -144,13 +149,21 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// The ChainSpec whose PVG formula the measurements are compared against: rundler's
-/// defaults with EIP-7623 enabled, as on Ethereum mainnet and Sepolia today.
-fn prediction_spec(chain_id: u64) -> ChainSpec {
-    ChainSpec {
+/// defaults with EIP-7623 enabled, as on Ethereum mainnet and Sepolia today, optionally with the
+/// Glamsterdam gas schedule.
+fn prediction_spec(chain_id: u64, glamsterdam: bool) -> ChainSpec {
+    let spec = ChainSpec {
         id: chain_id,
         eip7623_enabled: true,
+        glamsterdam_activation: if glamsterdam {
+            ForkActivation::Genesis
+        } else {
+            ForkActivation::Never
+        },
         ..ChainSpec::default()
-    }
+    };
+    // Apply the active gas schedule so the ChainSpec accessors return its values.
+    spec.at_timestamp(0).into_owned()
 }
 
 fn write_report<T: serde::Serialize>(
