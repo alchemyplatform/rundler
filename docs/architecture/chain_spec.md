@@ -54,4 +54,4 @@ See the files [here](../../bin/rundler/chain_specs/) for a list of hardcoded cha
 | `glamsterdam_new_account_state_gas` | 183,600 | per authorization whose authority does not exist |
 | `glamsterdam_zero_deposit_refund_state_gas` | 97,920 | self-paying op whose sender deposit is zero |
 
-The values were measured on glamsterdam-devnet-8 with EntryPoint v0.7 using [`test/pvg-calibration`](../../test/pvg-calibration/README.md). `ethereum_glamsterdam_devnet` is the hardcoded spec for that devnet. See [Glamsterdam pre-verification gas](./glamsterdam_pvg.md) for how the state-dependent terms are applied.
+The values were measured on glamsterdam-devnet-8 with EntryPoint v0.7 using the calibration harness in [#1345](https://github.com/alchemyplatform/rundler/pull/1345) ([`test/pvg-calibration/README.md`](https://github.com/alchemyplatform/rundler/blob/rado/calibrate-pvg/test/pvg-calibration/README.md)). `ethereum_glamsterdam_devnet` is the hardcoded spec for that devnet. See [Glamsterdam pre-verification gas](./glamsterdam_pvg.md) for how the state-dependent terms are applied.
