@@ -1551,6 +1551,8 @@ mod tests {
             entry_point: pool.config.entry_point,
             sender,
             nonce: U256::from(nonce),
+            success: true,
+            actual_gas_used: U256::ZERO,
         };
 
         pool.mine_operation(&mined_op, 1);
@@ -1587,6 +1589,8 @@ mod tests {
             entry_point: pool.config.entry_point,
             sender,
             nonce: U256::from(nonce),
+            success: true,
+            actual_gas_used: U256::ZERO,
         };
 
         pool.mine_operation(&mined_op, 1);

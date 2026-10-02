@@ -36,14 +36,15 @@ use rundler_provider::{
 };
 use rundler_sim::{SimulationError, SimulationResult, Simulator, ViolationError};
 use rundler_types::{
-    BUNDLE_BYTE_OVERHEAD, BundleExpectedStorage, Entity, EntityInfo, EntityInfos, EntityType,
-    EntityUpdate, EntityUpdateType, EntryPointAbiVersion, EntryPointVersion, ExpectedStorage,
-    GasFees, TIME_RANGE_BUFFER, Timestamp, UserOperation, UserOperationVariant,
+    AaErrorCode, BUNDLE_BYTE_OVERHEAD, BundleExpectedStorage, Entity, EntityInfo, EntityInfos,
+    EntityType, EntityUpdate, EntityUpdateType, EntryPointAbiVersion, EntryPointVersion,
+    ExpectedStorage, GasFees, TIME_RANGE_BUFFER, Timestamp, UserOperation, UserOperationVariant,
     UserOpsPerAggregator, ValidTimeRange, ValidationRevert,
     aggregator::SignatureAggregatorResult,
     authorization::Eip7702Auth,
     chain::{ChainSpec, ForkActivation},
     da::{DAGasBlockData, DAGasData},
+    entry_point_metrics::{self, AaErrorStage},
     pool::{PoolOperation, SimulationViolation},
     proxy::SubmissionProxy,
 };
@@ -524,14 +525,6 @@ where
             return Ok(RevertOutcome::unattributed(all_op_hashes));
         };
 
-        // If we have a submission proxy, use it to process the revert first
-        if let Some(proxy) = &self.settings.submission_proxy {
-            let to_remove = proxy.process_revert(revert_data, &ops).await;
-            if !to_remove.is_empty() {
-                return Ok(RevertOutcome::remove(to_remove));
-            }
-        }
-
         // Decode the revert using version-specific decoding
         let handle_ops_out = match self.ep_providers.entry_point().version().abi_version() {
             EntryPointAbiVersion::V0_6 => {
@@ -541,6 +534,23 @@ where
                 decode_v0_7_handle_ops_revert(revert_message, &Some(revert_data.clone()))
             }
         };
+        // Recorded before the submission proxy, which can attribute the revert itself
+        if let Some(HandleOpsOut::FailedOp(_, message)) = &handle_ops_out {
+            entry_point_metrics::record_aa_error(
+                AaErrorStage::Onchain,
+                address,
+                AaErrorCode::from_message(message),
+            );
+        }
+
+        // If we have a submission proxy, use it to process the revert first
+        if let Some(proxy) = &self.settings.submission_proxy {
+            let to_remove = proxy.process_revert(revert_data, &ops).await;
+            if !to_remove.is_empty() {
+                return Ok(RevertOutcome::remove(to_remove));
+            }
+        }
+
         warn!("Onchain revert data for {tx_hash:?}: {revert_data:?}");
         warn!("decoded handle ops out: {handle_ops_out:?}");
 
@@ -883,6 +893,13 @@ where
             let simulation = match simulation {
                 Ok(simulation) => simulation,
                 Err(error) => {
+                    if let Some(code) = error.aa_error_code() {
+                        entry_point_metrics::record_aa_error(
+                            AaErrorStage::BundleRevalidation,
+                            *self.ep_providers.entry_point().address(),
+                            code,
+                        );
+                    }
                     self.emit(BuilderEvent::rejected_op(
                         self.builder_tag.clone(),
                         op.hash(),
@@ -1306,6 +1323,11 @@ where
                 Err(BundleProposerError::SimulationUnderpriced)
             }
             HandleOpsOut::FailedOp(index, message) => {
+                entry_point_metrics::record_aa_error(
+                    AaErrorStage::BundleHandleOps,
+                    *self.ep_providers.entry_point().address(),
+                    AaErrorCode::from_message(&message),
+                );
                 self.emit(BuilderEvent::rejected_op(
                     self.builder_tag.clone(),
                     context.get_op_at(index)?.op.hash(),

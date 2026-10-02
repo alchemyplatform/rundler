@@ -25,7 +25,7 @@ mod emit;
 pub use emit::OpPoolEvent as PoolEvent;
 
 mod mempool;
-pub use mempool::PoolConfig;
+pub use mempool::{GAS_EFFICIENCY_BUCKETS, GAS_EFFICIENCY_HISTOGRAMS, PoolConfig};
 
 mod server;
 pub use server::{LocalPoolBuilder, LocalPoolHandle, RemotePoolClient};

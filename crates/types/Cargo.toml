@@ -32,6 +32,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 alloy-primitives = { workspace = true, features = ["rand"] }
+metrics-util = { workspace = true, features = ["debugging"] }
 serde_json.workspace = true
 
 [features]

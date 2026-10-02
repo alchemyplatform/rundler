@@ -11,12 +11,12 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{future::Future, pin::Pin};
+use std::{future::Future, pin::Pin, sync::Once};
 
 use alloy_primitives::{Address, Bytes};
 use alloy_sol_types::SolInterface;
 use anyhow::{Context, anyhow};
-use metrics::Histogram;
+use metrics::{Counter, Histogram};
 use metrics_derive::Metrics;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -80,6 +80,23 @@ pub enum GasEstimationError {
     /// Other error
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+impl GasEstimationError {
+    /// Returns a bounded label value for the error variant
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::RevertInValidation(_) => "revert_in_validation",
+            Self::RevertInCallWithMessage(_) | Self::RevertInCallWithBytes(_) => "revert_in_call",
+            Self::CallGasLimitTooLow(_) => "call_gas_limit_too_low",
+            Self::GasUsedTooLarge => "gas_used_too_large",
+            Self::GasFieldTooLarge(_, _) => "gas_field_too_large",
+            Self::GasTotalTooLarge(_, _) => "gas_total_too_large",
+            Self::UnsupportedAggregator(_) => "unsupported_aggregator",
+            Self::ProviderError(_) => "provider",
+            Self::Other(_) => "other",
+        }
+    }
 }
 
 /// Gas estimator trait
@@ -155,6 +172,103 @@ struct Metrics {
     pvgl_estimate_ms: Histogram,
 }
 
+/// Names of the estimation eth_call histograms, without the global metrics prefix.
+pub const ESTIMATION_ETH_CALL_HISTOGRAMS: &[&str] = &["gas_estimator.eth_calls"];
+
+/// Histogram buckets for the number of eth_calls a binary search used.
+pub const ESTIMATION_ETH_CALL_BUCKETS: &[f64] = &[1.0, 2.0, 3.0, 4.0, 5.0, 10.0];
+
+// Separate structs because the metrics have different labels, and `new_with_labels`
+// registers every field of a struct
+#[derive(Metrics)]
+#[metrics(scope = "gas_estimator")]
+struct SearchCallMetrics {
+    #[metric(
+        describe = "the number of eth_calls a gas estimation binary search used, by entry point, field and outcome (success, revert, error, or not_converged when all max_gas_estimation_rounds were used), including the call that failed."
+    )]
+    eth_calls: Histogram,
+}
+
+#[derive(Metrics)]
+#[metrics(scope = "gas_estimator")]
+struct ClampMetrics {
+    #[metric(
+        describe = "the count of estimates where the buffered value was cut down to its maximum, by entry point and field."
+    )]
+    clamped_estimates: Counter,
+}
+
+#[derive(Metrics)]
+#[metrics(scope = "gas_estimator")]
+struct ErrorMetrics {
+    #[metric(describe = "the count of gas estimation errors, by entry point and error kind.")]
+    errors: Counter,
+}
+
+static DESCRIBE: Once = Once::new();
+
+fn describe_metrics() {
+    // `new_with_labels` does not register the metric descriptions
+    DESCRIBE.call_once(|| {
+        SearchCallMetrics::describe();
+        ClampMetrics::describe();
+        ErrorMetrics::describe();
+    });
+}
+
+/// Records the eth_calls of one binary search, labelled by how it ended.
+fn record_search(
+    entry_point: Address,
+    field: &'static str,
+    eth_calls: u32,
+    result: &Result<Option<BinarySearchResult>, GasEstimationError>,
+) {
+    describe_metrics();
+    let outcome = match result {
+        Ok(Some(BinarySearchResult::Success(..))) => "success",
+        Ok(Some(BinarySearchResult::Revert(_))) => "revert",
+        Ok(None) => "not_converged",
+        Err(_) => "error",
+    };
+    SearchCallMetrics::new_with_labels(&[
+        ("entry_point", entry_point.to_string()),
+        ("field", field.to_string()),
+        ("outcome", outcome.to_string()),
+    ])
+    .eth_calls
+    .record(f64::from(eth_calls));
+}
+
+/// Counts one gas estimation error by its kind.
+pub fn record_estimation_error(entry_point: Address, error: &GasEstimationError) {
+    describe_metrics();
+    ErrorMetrics::new_with_labels(&[
+        ("entry_point", entry_point.to_string()),
+        ("kind", error.kind().to_string()),
+    ])
+    .errors
+    .increment(1);
+}
+
+/// Counts an estimate whose buffered value is above its cap, so the cap sets the returned limit.
+pub(crate) fn record_clamped_estimate(
+    entry_point: Address,
+    field: &'static str,
+    estimate: u128,
+    cap: u128,
+) {
+    if estimate <= cap {
+        return;
+    }
+    describe_metrics();
+    ClampMetrics::new_with_labels(&[
+        ("entry_point", entry_point.to_string()),
+        ("field", field.to_string()),
+    ])
+    .clamped_estimates
+    .increment(1);
+}
+
 enum BinarySearchResult {
     Success(u128, u32),
     Revert(Bytes),
@@ -164,7 +278,38 @@ async fn run_binary_search<F>(
     round_fn: F,
     max_gas: u128,
     max_rounds: u32,
+    entry_point: Address,
+    field: &'static str,
 ) -> Result<BinarySearchResult, GasEstimationError>
+where
+    F: Fn(
+        u128, // min gas
+        u128, // max gas
+        bool, // is continuation
+    ) -> Pin<Box<dyn Future<Output = Result<Bytes, GasEstimationError>> + Send>>,
+{
+    let mut eth_calls = 0_u32;
+    let result = binary_search(round_fn, max_gas, max_rounds, &mut eth_calls).await;
+
+    record_search(entry_point, field, eth_calls, &result);
+    match result {
+        Ok(Some(result)) => Ok(result),
+        Ok(None) => Err(anyhow!(
+            "gas estimation failed to converge after {max_rounds} rounds"
+        ))?,
+        Err(error) => Err(error),
+    }
+}
+
+/// Runs the binary search, returning `None` if it did not converge within `max_rounds`.
+///
+/// `eth_calls` counts the rounds started, including one that fails.
+async fn binary_search<F>(
+    round_fn: F,
+    max_gas: u128,
+    max_rounds: u32,
+    eth_calls: &mut u32,
+) -> Result<Option<BinarySearchResult>, GasEstimationError>
 where
     F: Fn(
         u128, // min gas
@@ -178,6 +323,7 @@ where
     let mut is_continuation = false;
 
     for _ in 0..max_rounds {
+        *eth_calls += 1;
         let revert_data = round_fn(min_gas, max_gas, is_continuation).await?;
 
         let decoded =
@@ -190,16 +336,16 @@ where
                     .context("num rounds return overflow")?;
 
                 num_rounds += ret_num_rounds;
-                return Ok(BinarySearchResult::Success(
+                return Ok(Some(BinarySearchResult::Success(
                     result
                         .gas
                         .try_into()
                         .map_err(|_| GasEstimationError::GasUsedTooLarge)?,
                     num_rounds,
-                ));
+                )));
             }
             EstimationTypesErrors::EstimateGasRevertAtMax(revert) => {
-                return Ok(BinarySearchResult::Revert(revert.revertData));
+                return Ok(Some(BinarySearchResult::Revert(revert.revertData)));
             }
             EstimationTypesErrors::EstimateGasContinuation(continuation) => {
                 let ret_min_gas = continuation
@@ -235,7 +381,242 @@ where
         }
     }
 
-    Err(anyhow!(
-        "gas estimation failed to converge after {max_rounds} rounds"
-    ))?
+    Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use alloy_primitives::{U256, address};
+    use alloy_sol_types::SolError;
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+    use rundler_contracts::common::EstimationTypes::{
+        EstimateGasContinuation, EstimateGasResult, EstimateGasRevertAtMax,
+    };
+
+    use super::*;
+
+    const ENTRY_POINT: Address = address!("0000000071727De22E5E9d8BAf0edAc6f37da032");
+
+    fn counters(recorder: &DebuggingRecorder) -> Vec<(String, DebugValue)> {
+        let mut counters = recorder
+            .snapshotter()
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .map(|(key, _, _, value)| {
+                let key = key.key();
+                let mut labels = key
+                    .labels()
+                    .map(|label| format!("{}={}", label.key(), label.value()))
+                    .collect::<Vec<_>>();
+                labels.sort();
+                (format!("{}{{{}}}", key.name(), labels.join(",")), value)
+            })
+            .collect::<Vec<_>>();
+        counters.sort_by(|a, b| a.0.cmp(&b.0));
+        counters
+    }
+
+    #[test]
+    fn test_gas_estimation_error_kind() {
+        let cases = [
+            (
+                GasEstimationError::RevertInValidation(ValidationRevert::EntryPoint(
+                    "AA26 over verificationGasLimit".to_string(),
+                )),
+                "revert_in_validation",
+            ),
+            (
+                GasEstimationError::RevertInCallWithMessage("reverted".to_string()),
+                "revert_in_call",
+            ),
+            (
+                GasEstimationError::RevertInCallWithBytes(Bytes::new()),
+                "revert_in_call",
+            ),
+            (
+                GasEstimationError::CallGasLimitTooLow(1),
+                "call_gas_limit_too_low",
+            ),
+            (GasEstimationError::GasUsedTooLarge, "gas_used_too_large"),
+            (
+                GasEstimationError::GasFieldTooLarge("callGasLimit", 1),
+                "gas_field_too_large",
+            ),
+            (
+                GasEstimationError::GasTotalTooLarge(2, 1),
+                "gas_total_too_large",
+            ),
+            (
+                GasEstimationError::UnsupportedAggregator(Address::ZERO),
+                "unsupported_aggregator",
+            ),
+            (
+                GasEstimationError::ProviderError(ProviderError::Other(anyhow!("provider"))),
+                "provider",
+            ),
+            (GasEstimationError::Other(anyhow!("other")), "other"),
+        ];
+        for (error, kind) in cases {
+            assert_eq!(error.kind(), kind, "{error:?}");
+        }
+    }
+
+    #[test]
+    fn test_record_estimation_error() {
+        let recorder = DebuggingRecorder::new();
+        metrics::with_local_recorder(&recorder, || {
+            record_estimation_error(ENTRY_POINT, &GasEstimationError::GasUsedTooLarge);
+            record_estimation_error(ENTRY_POINT, &GasEstimationError::GasUsedTooLarge);
+        });
+
+        assert_eq!(
+            counters(&recorder),
+            vec![(
+                format!(
+                    "gas_estimator.errors{{entry_point={ENTRY_POINT},kind=gas_used_too_large}}"
+                ),
+                DebugValue::Counter(2)
+            )]
+        );
+    }
+
+    #[test]
+    fn test_record_clamped_estimate() {
+        let recorder = DebuggingRecorder::new();
+        metrics::with_local_recorder(&recorder, || {
+            // at or below the cap is not clamped
+            record_clamped_estimate(ENTRY_POINT, "verification", 99, 100);
+            record_clamped_estimate(ENTRY_POINT, "verification", 100, 100);
+            record_clamped_estimate(ENTRY_POINT, "verification", 101, 100);
+        });
+
+        assert_eq!(
+            counters(&recorder),
+            vec![(
+                format!(
+                    "gas_estimator.clamped_estimates{{entry_point={ENTRY_POINT},field=verification}}"
+                ),
+                DebugValue::Counter(1)
+            )]
+        );
+    }
+
+    fn continuation(min_gas: u64, max_gas: u64) -> Option<Bytes> {
+        Some(
+            EstimateGasContinuation {
+                minGas: U256::from(min_gas),
+                maxGas: U256::from(max_gas),
+                numRounds: U256::from(1),
+            }
+            .abi_encode()
+            .into(),
+        )
+    }
+
+    fn converged(gas: u64) -> Option<Bytes> {
+        Some(
+            EstimateGasResult {
+                gas: U256::from(gas),
+                numRounds: U256::from(1),
+            }
+            .abi_encode()
+            .into(),
+        )
+    }
+
+    /// Runs a search whose rounds return `responses` in order, `None` being a failed eth_call.
+    async fn search(
+        responses: Vec<Option<Bytes>>,
+        max_rounds: u32,
+    ) -> (
+        Result<BinarySearchResult, GasEstimationError>,
+        Vec<(String, DebugValue)>,
+    ) {
+        let responses = Arc::new(responses);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let round_fn = move |_: u128, _: u128, _: bool| {
+            let response = responses[calls.fetch_add(1, Ordering::SeqCst)].clone();
+            Box::pin(async move {
+                response.ok_or_else(|| GasEstimationError::Other(anyhow!("eth_call failed")))
+            })
+                as Pin<Box<dyn Future<Output = Result<Bytes, GasEstimationError>> + Send>>
+        };
+
+        let recorder = DebuggingRecorder::new();
+        let _guard = metrics::set_default_local_recorder(&recorder);
+        let result = run_binary_search(round_fn, 1_000_000, max_rounds, ENTRY_POINT, "call").await;
+        (result, counters(&recorder))
+    }
+
+    fn eth_calls(outcome: &str, calls: f64) -> (String, DebugValue) {
+        (
+            format!(
+                "gas_estimator.eth_calls{{entry_point={ENTRY_POINT},field=call,outcome={outcome}}}"
+            ),
+            DebugValue::Histogram(vec![calls.into()]),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_binary_search_success() {
+        let (result, metrics) = search(vec![continuation(100, 10_000), converged(5_000)], 3).await;
+
+        assert!(matches!(result, Ok(BinarySearchResult::Success(5_000, 2))));
+        assert_eq!(metrics, vec![eth_calls("success", 2.0)]);
+    }
+
+    #[tokio::test]
+    async fn test_binary_search_revert() {
+        let revert = EstimateGasRevertAtMax {
+            revertData: Bytes::from_static(b"reverted"),
+        };
+        let (result, metrics) = search(
+            vec![continuation(100, 10_000), Some(revert.abi_encode().into())],
+            3,
+        )
+        .await;
+
+        assert!(matches!(result, Ok(BinarySearchResult::Revert(_))));
+        assert_eq!(metrics, vec![eth_calls("revert", 2.0)]);
+    }
+
+    #[tokio::test]
+    async fn test_binary_search_not_converged() {
+        let (result, metrics) = search(
+            vec![
+                continuation(100, 10_000),
+                continuation(200, 9_000),
+                continuation(300, 8_000),
+            ],
+            3,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(metrics, vec![eth_calls("not_converged", 3.0)]);
+    }
+
+    #[tokio::test]
+    async fn test_binary_search_failures_record_eth_calls() {
+        let cases = [
+            // no progress on the second continuation
+            vec![continuation(100, 10_000), continuation(100, 10_000)],
+            // the second eth_call fails
+            vec![continuation(100, 10_000), None],
+            // revert data that is not an estimation result
+            vec![continuation(100, 10_000), Some(Bytes::from_static(b"bad"))],
+        ];
+        for responses in cases {
+            let (result, metrics) = search(responses, 3).await;
+
+            assert!(result.is_err());
+            assert_eq!(metrics, vec![eth_calls("error", 2.0)]);
+        }
+    }
 }

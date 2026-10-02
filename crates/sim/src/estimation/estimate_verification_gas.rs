@@ -54,6 +54,14 @@ pub trait VerificationGasEstimatorSpecialization: Send + Sync {
     fn get_call(&self, op: Self::UO, args: &EstimateGasArgs) -> Bytes;
 
     fn decode_revert(&self, revert_data: &Bytes) -> GasEstimationError;
+
+    /// The address of the entry point being estimated for, used as a metrics label
+    fn entry_point(&self) -> Address;
+
+    /// The gas field this specialization estimates, used as a metrics label
+    fn estimated_field(&self) -> &'static str {
+        "verification"
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +123,8 @@ where
             round_fn,
             self.settings.max_verification_gas,
             self.settings.max_gas_estimation_rounds,
+            self.specialization.entry_point(),
+            self.specialization.estimated_field(),
         )
         .await?;
 

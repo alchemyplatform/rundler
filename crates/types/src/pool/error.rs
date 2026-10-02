@@ -15,7 +15,7 @@ use alloy_primitives::{Address, U256};
 
 use crate::{
     Entity, EntityType, StorageSlot, Timestamp, ViolationOpCode,
-    validation_results::ValidationRevert,
+    validation_results::{AaErrorCode, ValidationRevert},
 };
 
 /// Pool server error type
@@ -290,6 +290,22 @@ pub enum SimulationViolation {
     AccessedUnsupportedContractType(String, Address),
 }
 
+impl SimulationViolation {
+    /// Returns the AA code if this violation is an entry point validation revert,
+    /// or `None` for violations detected by the bundler itself.
+    pub fn aa_error_code(&self) -> Option<AaErrorCode<'_>> {
+        match self {
+            Self::ValidationRevert(revert) => Some(revert.aa_error_code()),
+            // v0.6 safe simulation reports entry point reverts without a ValidationRevert
+            Self::UnintendedRevertWithMessage(_, message, _) => {
+                Some(AaErrorCode::from_message(message))
+            }
+            Self::UnintendedRevert(_, _) => Some(AaErrorCode::Uncoded),
+            _ => None,
+        }
+    }
+}
+
 /// Information about a storage violation based on stake status
 #[derive(Debug, PartialEq, Clone, PartialOrd, Eq, Ord)]
 pub struct NeedsStakeInformation {
@@ -307,4 +323,45 @@ pub struct NeedsStakeInformation {
     pub min_stake: U256,
     /// Minumum delay after an unstake event
     pub min_unstake_delay: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy_primitives::Bytes;
+
+    use super::*;
+
+    #[test]
+    fn test_simulation_violation_aa_error_code() {
+        let validation_revert =
+            SimulationViolation::ValidationRevert(ValidationRevert::Operation {
+                entry_point_reason: "AA33 reverted".to_string(),
+                inner_revert_data: Bytes::new(),
+                inner_revert_reason: None,
+            });
+        assert_eq!(
+            validation_revert.aa_error_code(),
+            Some(AaErrorCode::Code("AA33"))
+        );
+
+        let unknown_revert =
+            SimulationViolation::ValidationRevert(ValidationRevert::Unknown(Bytes::new()));
+        assert_eq!(unknown_revert.aa_error_code(), Some(AaErrorCode::Uncoded));
+
+        let v0_6_revert = SimulationViolation::UnintendedRevertWithMessage(
+            EntityType::Account,
+            "AA23 reverted (or OOG)".to_string(),
+            None,
+        );
+        assert_eq!(v0_6_revert.aa_error_code(), Some(AaErrorCode::Code("AA23")));
+
+        let v0_6_unknown_revert = SimulationViolation::UnintendedRevert(EntityType::Account, None);
+        assert_eq!(
+            v0_6_unknown_revert.aa_error_code(),
+            Some(AaErrorCode::Uncoded)
+        );
+
+        assert_eq!(SimulationViolation::CodeHashChanged.aa_error_code(), None);
+        assert_eq!(SimulationViolation::InvalidSignature.aa_error_code(), None);
+    }
 }

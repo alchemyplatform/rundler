@@ -54,9 +54,11 @@ pub use storage::*;
 
 mod validation_results;
 pub use validation_results::{
-    AggregatorInfo, StakeInfo, ValidationOutput, ValidationReturnInfo, ValidationRevert,
-    parse_validation_data,
+    AaErrorCode, AggregatorInfo, StakeInfo, ValidationOutput, ValidationReturnInfo,
+    ValidationRevert, parse_validation_data,
 };
+
+pub mod entry_point_metrics;
 
 pub mod task;
 
