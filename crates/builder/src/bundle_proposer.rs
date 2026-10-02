@@ -821,10 +821,8 @@ where
             )
             .await
             .unwrap_or_else(|e| {
-                warn!(
-                    "Failed to load pre-verification gas state for op {:?}, pricing worst case: {e:?}",
-                    op.uo.hash()
-                );
+                let op_hash = op.uo.hash();
+                warn!("PVG state read failed for {op_hash:?}, pricing worst case: {e:?}");
                 PvgState::unknown()
             })
         });

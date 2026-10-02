@@ -939,7 +939,10 @@ mod tests {
 
     /// Gas estimation with Glamsterdam pricing and a mocked sender deposit: the gas limits are
     /// provided, PVG is left to the estimator.
-    async fn glamsterdam_estimated_pvg(sender_deposit: U256) -> u128 {
+    async fn glamsterdam_estimated_pvg(
+        sender_deposit: U256,
+        charge_gas_limit_via_pvg: bool,
+    ) -> u128 {
         let (mut entry, mut provider) = create_base_config();
         provider
             .expect_get_latest_block_hash_and_number()
@@ -967,6 +970,7 @@ mod tests {
         let (_, settings) = create_estimator(base_entry, base_provider);
         let chain_spec = ChainSpec {
             glamsterdam_enabled: true,
+            charge_gas_limit_via_pvg,
             ..ChainSpec::default()
         };
         let estimator = create_custom_estimator(chain_spec, provider, entry, settings);
@@ -984,9 +988,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_glamsterdam_pvg_prices_zero_sender_deposit() {
-        let zero = glamsterdam_estimated_pvg(U256::ZERO).await;
-        let funded = glamsterdam_estimated_pvg(U256::from(1_000_000_000_000_000_000_u128)).await;
-        assert_eq!(zero - funded, 97_920);
+        let funded_deposit = U256::from(1_000_000_000_000_000_000_u128);
+        // Also when the gas limits are charged through PVG.
+        for charge_gas_limit_via_pvg in [false, true] {
+            let zero = glamsterdam_estimated_pvg(U256::ZERO, charge_gas_limit_via_pvg).await;
+            let funded = glamsterdam_estimated_pvg(funded_deposit, charge_gas_limit_via_pvg).await;
+            assert_eq!(zero - funded, 97_920);
+        }
     }
 
     #[tokio::test]
