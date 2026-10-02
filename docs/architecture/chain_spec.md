@@ -84,3 +84,27 @@ are never changed, so a client must re-estimate and re-sign to get such an opera
 ### Hardcoded Chan Specs
 
 See the files [here](../../bin/rundler/chain_specs/) for a list of hardcoded chain specifications.
+
+### Glamsterdam gas schedule values
+
+The Glamsterdam preset adds four gas fields that are 0 before Glamsterdam, so pre-Glamsterdam
+pricing is unchanged. Each can be overridden like the others (`glamsterdam_<field>`).
+
+| Field | Preset | Meaning |
+| --- | --- | --- |
+| `call_data_word_gas` | 6 | extra gas per 32-byte word of an op's `callData` (the EntryPoint's unmetered copy of it) |
+| `zero_deposit_refund_gas` | 97,920 | self-paying op whose sender deposit is zero |
+| `eip7702_authorization_new_account_gas` | 183,600 | part of `eip7702_authorization_gas` waived when the authority exists |
+| `eip7702_authorization_delegation_gas` | 35,190 | part of `eip7702_authorization_gas` also waived when the authority already has code |
+
+The preset also sets measured values for existing fields:
+
+| Field | Preset | Meaning |
+| --- | --- | --- |
+| `transaction_intrinsic_gas` | 15,000 | intrinsic gas of a bundle tx (EIP-2780 base + cold EntryPoint) |
+| `per_user_op_v0_7_gas` | 21,900 | per-op unmetered EntryPoint overhead, v0.7 |
+| `per_user_op_v0_6_gas` | 20,700 | per-op overhead, v0.6 (provisional, not yet measured) |
+| `eip7623_calldata_floor_*_byte_gas` | 64 | EIP-7976 floor gas per calldata byte |
+| `eip7702_authorization_gas` | 235,606 | per EIP-7702 authorization whose authority does not exist (52,006 if it exists, 16,816 if it already has code) |
+
+The values were measured on glamsterdam-devnet-8 with EntryPoint v0.7 using the calibration harness in [#1345](https://github.com/alchemyplatform/rundler/pull/1345) ([`test/pvg-calibration/README.md`](https://github.com/alchemyplatform/rundler/blob/rado/calibrate-pvg/test/pvg-calibration/README.md)). `ethereum_glamsterdam_devnet` is the hardcoded spec for that devnet (`glamsterdam_activation = "genesis"`). See [Glamsterdam pre-verification gas](./glamsterdam_pvg.md) for how the state-dependent terms are applied.
