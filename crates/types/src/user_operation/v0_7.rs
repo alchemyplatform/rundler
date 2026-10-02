@@ -295,6 +295,7 @@ impl UserOperationTrait for UserOperation {
     fn static_pre_verification_gas(&self, chain_spec: &ChainSpec) -> u128 {
         self.calldata_stats.gas_cost(chain_spec)
             + chain_spec.per_user_op_v0_7_gas()
+            + super::call_data_copy_gas(chain_spec, &self.call_data)
             + (if self.factory.is_some() {
                 chain_spec.per_user_op_deploy_overhead_gas()
             } else {
