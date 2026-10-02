@@ -38,7 +38,7 @@ use alloy_sol_types::{SolCall, SolEvent};
 use anyhow::{Context, bail};
 use rundler_contracts::v0_7::{IEntryPoint, PackedUserOperation};
 use rundler_types::{
-    EntryPointVersion, UserOperation as _,
+    AuthorityState, EntryPointVersion, PvgState, UserOperation as _,
     authorization::Eip7702Auth,
     chain::ChainSpec,
     v0_7::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
@@ -213,7 +213,7 @@ pub struct FloorInfo {
     pub non_zero_bytes: usize,
     /// EIP-7623 tokens: `zero + 4 * non_zero`.
     pub tokens: u64,
-    /// `transaction_intrinsic_gas + floor_per_token * tokens`, using the prediction ChainSpec.
+    /// `bundle_intrinsic_gas + floor gas per byte * bytes`, using the prediction ChainSpec.
     pub floor_gas: u64,
     /// `receipt.gasUsed == floor_gas`: the transaction paid the floor, not its execution.
     pub floor_bound: bool,
@@ -232,6 +232,10 @@ pub struct OpResult {
     pub success: bool,
     /// Rundler's `authorization_gas_limit` for this op (included in the predictions).
     pub predicted_authorization_gas: u128,
+    /// State the op was priced with, read just before the bundle was sent
+    pub pvg_state: PvgState,
+    /// Rundler's `state_pre_verification_gas` for this op (included in the predictions)
+    pub predicted_state_gas: u128,
     /// Gas the EntryPoint metered for this op (PVG is 0, penalty is 0).
     pub actual_gas_used: u128,
     pub actual_gas_cost: U256,
@@ -239,8 +243,8 @@ pub struct OpResult {
     pub post_op_actual_gas_cost: Option<U256>,
     /// Rundler's `static_pre_verification_gas` for this op.
     pub predicted_static_pvg: u128,
-    /// Rundler's `pre_verification_execution_gas_limit` at this bundle size (static + shared).
-    /// This is what gas estimation returns (it does not apply the calldata floor).
+    /// Rundler's required PVG at this bundle size without the calldata floor (static + shared +
+    /// state gas). This is what gas estimation returns.
     pub predicted_execution_pvg: u128,
     /// Rundler's `required_pre_verification_gas` at this bundle size with the EIP-7623 floor
     /// top-up, as the mempool precheck and the bundle builder require it.
@@ -293,6 +297,10 @@ impl BundleRunner<'_> {
         let label = label.into();
         let n = specs.len();
         let ops = self.prepare(specs).await?;
+        let mut pvg_states = Vec::with_capacity(ops.len());
+        for op in &ops {
+            pvg_states.push(self.pvg_state(&op.uo).await?);
+        }
         let beneficiary_address = self.beneficiary_address(beneficiary).await?;
 
         let input: Bytes = IEntryPoint::handleOpsCall {
@@ -325,7 +333,7 @@ impl BundleRunner<'_> {
         let (events, post_ops) = self.decode_logs(&tx, &paymasters)?;
         let mut post_ops = post_ops.into_iter();
         let mut results = Vec::with_capacity(n);
-        for op in &ops {
+        for (op, pvg_state) in ops.iter().zip(&pvg_states) {
             let sender = op.uo.sender();
             let nonce = op.uo.nonce();
             let event = events
@@ -338,7 +346,9 @@ impl BundleRunner<'_> {
                 sender,
                 nonce,
                 has_authorization: op.spec.authorization.is_some(),
-                predicted_authorization_gas: op.uo.authorization_gas_limit(),
+                predicted_authorization_gas: op.uo.authorization_gas_limit(self.spec),
+                pvg_state: *pvg_state,
+                predicted_state_gas: op.uo.state_pre_verification_gas(self.spec, pvg_state),
                 payer: op.spec.payer,
                 deploy_in_op: op.spec.deploy_in_op,
                 call_data_len: op.spec.call_data.len(),
@@ -351,12 +361,13 @@ impl BundleRunner<'_> {
                 predicted_static_pvg: op.uo.static_pre_verification_gas(self.spec),
                 predicted_execution_pvg: op
                     .uo
-                    .pre_verification_execution_gas_limit(self.spec, Some(n)),
+                    .required_pre_verification_gas(self.spec, n, 0, None, pvg_state),
                 predicted_required_pvg: op.uo.required_pre_verification_gas(
                     self.spec,
                     n,
                     0,
                     Some(VERIFICATION_EFFICIENCY_THRESHOLD),
+                    pvg_state,
                 ),
             });
         }
@@ -519,6 +530,33 @@ impl BundleRunner<'_> {
         Ok(ops)
     }
 
+    /// Reads the state rundler prices the op with, the same way `rundler_sim::gas::load_pvg_state`
+    /// does: the sender's EntryPoint deposit without a paymaster, and the authority account for
+    /// an op with an authorization.
+    async fn pvg_state(&self, uo: &UserOperation) -> anyhow::Result<PvgState> {
+        let sender = uo.sender();
+        let sender_deposit_is_zero = if uo.paymaster().is_none() {
+            let deposit =
+                fixtures::deposit_of(self.harness, self.fixtures.entry_point, sender).await?;
+            Some(deposit.is_zero())
+        } else {
+            None
+        };
+        let authority = if uo.authorization_tuple().is_some() {
+            let provider = &self.harness.provider;
+            let code = provider.get_code_at(sender).await?;
+            let nonce = provider.get_transaction_count(sender).await?;
+            let balance = provider.get_balance(sender).await?;
+            Some(AuthorityState::from_account(&code, nonce, balance))
+        } else {
+            None
+        };
+        Ok(PvgState {
+            sender_deposit_is_zero,
+            authority,
+        })
+    }
+
     /// `maxFeePerGas` ops get when their spec does not pin one.
     pub async fn default_max_fee(&self) -> anyhow::Result<u128> {
         let base_fee = self
@@ -626,9 +664,10 @@ impl BundleRunner<'_> {
         let non_zero_bytes = input.len() - zero_bytes;
         let tokens = (zero_bytes + 4 * non_zero_bytes) as u64;
         // ChainSpec floor prices are per byte: zero = 1 token, non-zero = 4 tokens.
-        let floor_gas = self.spec.transaction_intrinsic_gas
-            + self.spec.eip7623_calldata_floor_zero_byte_gas * zero_bytes as u64
-            + self.spec.eip7623_calldata_floor_non_zero_byte_gas * non_zero_bytes as u64;
+        let floor_gas = (self.spec.bundle_intrinsic_gas()
+            + self.spec.calldata_floor_zero_byte_gas() * zero_bytes as u128
+            + self.spec.calldata_floor_non_zero_byte_gas() * non_zero_bytes as u128)
+            as u64;
         FloorInfo {
             calldata_len: input.len(),
             zero_bytes,

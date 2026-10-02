@@ -63,6 +63,11 @@ struct Cli {
     #[arg(long, global = true)]
     only: Option<String>,
 
+    /// Compare measurements with rundler's Glamsterdam pricing (`glamsterdam_enabled`) instead of
+    /// today's
+    #[arg(long, global = true)]
+    glamsterdam_prediction: bool,
+
     /// Label for the report file name, e.g. `anvil-prague` or `devnet`
     #[arg(long, global = true, default_value = "run")]
     label: String,
@@ -111,7 +116,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Overhead | Command::Calldata | Command::Authorization | Command::Hazards => {
             let chain_id = harness.chain_info().await?.chain_id;
             let fixtures = fixtures::ensure(&harness).await?;
-            let spec = prediction_spec(chain_id);
+            let spec = prediction_spec(chain_id, cli.glamsterdam_prediction);
             let runner = BundleRunner {
                 harness: &harness,
                 fixtures: &fixtures,
@@ -144,11 +149,13 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// The ChainSpec whose PVG formula the measurements are compared against: rundler's
-/// defaults with EIP-7623 enabled, as on Ethereum mainnet and Sepolia today.
-fn prediction_spec(chain_id: u64) -> ChainSpec {
+/// defaults with EIP-7623 enabled, as on Ethereum mainnet and Sepolia today, optionally with the
+/// Glamsterdam gas schedule.
+fn prediction_spec(chain_id: u64, glamsterdam: bool) -> ChainSpec {
     ChainSpec {
         id: chain_id,
         eip7623_enabled: true,
+        glamsterdam_enabled: glamsterdam,
         ..ChainSpec::default()
     }
 }

@@ -90,6 +90,11 @@ On chains without the canonical EntryPoint v0.7 (anvil), E1 deploys the submodul
 EntryPoint built with the canonical settings (solc 0.8.23, 1M optimizer runs, viaIR). It is
 gas-equivalent but has a different address and code hash, both recorded in every report.
 
+`--glamsterdam-prediction` compares the measurements with rundler's Glamsterdam pricing
+(`glamsterdam_enabled`) instead of today's. Each op is priced with the state rundler would read:
+the sender's EntryPoint deposit when there is no paymaster, and the authority account for 7702
+ops.
+
 ### How E2/E3 measure unmetered gas
 
 The harness EOA acts as the bundler and submits `handleOps` itself. Every op carries
