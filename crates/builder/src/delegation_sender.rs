@@ -368,7 +368,7 @@ where
         // replacement supersedes the previous pending tx rather than queuing behind it.
         let nonce = self
             .provider
-            .get_transaction_count(signer.address())
+            .get_transaction_count(signer.address(), None)
             .await
             .context("failed to get signer nonce")?;
 

@@ -27,3 +27,5 @@ The `Builder` and `RPC` modules can be configured to communicate to other tasks 
 ## Other Notable Topics
 
 [EIP-7623 Handling](./eip7623.md)
+
+[Glamsterdam pre-verification gas](./glamsterdam_pvg.md)
