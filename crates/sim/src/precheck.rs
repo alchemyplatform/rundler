@@ -635,7 +635,7 @@ where
             return Ok(None);
         }
         let sender = op.sender();
-        let tx_count_fut = self.provider.get_transaction_count(sender);
+        let tx_count_fut = self.provider.get_transaction_count(sender, None);
 
         let (transaction_count, pending_transaction_count) =
             if self.settings.eip7702_authority_pending_check_enabled {

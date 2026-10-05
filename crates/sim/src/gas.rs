@@ -204,7 +204,7 @@ async fn authority_state<UO: UserOperation, P: EvmProvider>(
     let sender = op.sender();
     let (code, nonce, balance) = future::try_join3(
         provider.get_code(sender, block),
-        provider.get_transaction_count(sender),
+        provider.get_transaction_count(sender, block),
         provider.get_balance(sender, block),
     )
     .await?;
@@ -309,7 +309,9 @@ mod tests {
         provider
             .expect_get_code()
             .returning(|_, _| Ok(bytes!("ef01001234567890123456789012345678901234567890")));
-        provider.expect_get_transaction_count().returning(|_| Ok(3));
+        provider
+            .expect_get_transaction_count()
+            .returning(|_, _| Ok(3));
         provider
             .expect_get_balance()
             .returning(|_, _| Ok(U256::ZERO));
@@ -321,6 +323,39 @@ mod tests {
             .unwrap();
         assert_eq!(state.sender_deposit_is_zero, None);
         assert_eq!(state.authority, Some(AuthorityState::HasCode));
+    }
+
+    #[tokio::test]
+    async fn load_pvg_state_reads_authority_at_one_block() {
+        let spec = glamsterdam_spec();
+        let block = BlockId::hash(B256::repeat_byte(0x33));
+        let at_block = move |b: &Option<BlockId>| *b == Some(block);
+        let mut provider = MockEvmProvider::new();
+        // Missing at the priced block; a nonce read at a later block would make it look existing.
+        provider
+            .expect_get_code()
+            .withf(move |_, b| at_block(b))
+            .returning(|_, _| Ok(Bytes::new()));
+        provider
+            .expect_get_transaction_count()
+            .withf(move |_, b| at_block(b))
+            .returning(|_, _| Ok(0));
+        provider
+            .expect_get_balance()
+            .withf(move |_, b| at_block(b))
+            .returning(|_, _| Ok(U256::ZERO));
+        let entry_point = MockEntryPointV0_7::new();
+
+        let state = load_pvg_state(
+            &spec,
+            &provider,
+            &entry_point,
+            &op(&spec, true, true),
+            Some(block),
+        )
+        .await
+        .unwrap();
+        assert_eq!(state.authority, Some(AuthorityState::Missing));
     }
 
     #[tokio::test]

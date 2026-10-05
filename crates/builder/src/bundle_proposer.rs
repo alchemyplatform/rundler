@@ -1435,7 +1435,7 @@ where
     ) -> BundleProposerResult<HashMap<Address, Eip7702SenderState>> {
         let futures = senders.into_iter().map(|sender| async move {
             let (transaction_count, code) = tokio::try_join!(
-                self.ep_providers.evm().get_transaction_count(sender),
+                self.ep_providers.evm().get_transaction_count(sender, None),
                 self.ep_providers.evm().get_code(sender, None)
             )?;
             Ok::<_, anyhow::Error>((
@@ -2229,8 +2229,13 @@ impl<UO: UserOperation> ProposalContext<UO> {
                 .saturating_add(sim_op.op.calldata_floor_gas_limit(chain_spec));
 
             if include_da_gas {
+                // The DA part is the PVG left over after execution gas, which also pays for the
+                // state gas; that is already counted above, so leave it out here.
                 da_gas_limit = da_gas_limit.saturating_add(
-                    sim_op.op.pre_verification_da_gas_limit(chain_spec, None)
+                    sim_op
+                        .op
+                        .pre_verification_da_gas_limit(chain_spec, None)
+                        .saturating_sub(sim_op.state_gas)
                         + sim_op.sponsored_da_gas,
                 );
             }
@@ -3914,6 +3919,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_bundle_gas_limit_counts_state_gas_once_with_da_gas_in_gas_limit() {
+        let cs = ChainSpec {
+            da_pre_verification_gas: true,
+            include_da_gas_in_gas_limit: true,
+            ..glamsterdam_spec()
+        }
+        .at_timestamp(0)
+        .into_owned();
+        let required = UserOperationRequiredFields {
+            pre_verification_gas: 500_000,
+            call_gas_limit: 100_000,
+            verification_gas_limit: 100_000,
+            ..Default::default()
+        };
+        let op = UserOperationBuilder::new(&cs, required).build();
+        let state_gas = 97_920;
+        // The op's PVG already pays for the state gas, so the bundle gas limit doesn't change.
+        assert_eq!(
+            single_op_context(op.clone(), state_gas).get_bundle_gas_limit(&cs),
+            single_op_context(op, 0).get_bundle_gas_limit(&cs)
+        );
+    }
+
+    #[tokio::test]
     async fn test_bundle_gas_limit_uses_glamsterdam_intrinsic_gas() {
         let required = UserOperationRequiredFields {
             pre_verification_gas: 100_000,
@@ -5389,8 +5418,8 @@ mod tests {
         for (sender, transaction_count, code) in mock_7702_sender_states {
             provider
                 .expect_get_transaction_count()
-                .withf(move |&a| a == sender)
-                .returning(move |_| Ok(transaction_count));
+                .withf(move |&a, _| a == sender)
+                .returning(move |_, _| Ok(transaction_count));
             provider
                 .expect_get_code()
                 .withf(move |&a, _| a == sender)
