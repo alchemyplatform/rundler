@@ -125,6 +125,7 @@ define_hardcoded_chain_specs!(
     dev,
     ethereum,
     ethereum_sepolia,
+    ethereum_glamsterdam_devnet,
     optimism,
     optimism_sepolia,
     base,
@@ -238,5 +239,16 @@ mod tests {
         for network in HARDCODED_CHAIN_SPECS {
             resolve(network, &[]);
         }
+    }
+
+    #[test]
+    fn glamsterdam_devnet_activates_glamsterdam_at_genesis() {
+        let spec = resolve("ethereum_glamsterdam_devnet", &[]);
+        assert_eq!(spec.id, 7091047534);
+        assert_eq!(spec.glamsterdam_activation, ForkActivation::Genesis);
+        assert_eq!(spec.transaction_gas_limit(), 16_777_216);
+        let spec = spec.at_timestamp(0);
+        assert_eq!(spec.transaction_intrinsic_gas(), 15_000);
+        assert_eq!(spec.zero_deposit_refund_gas(), 97_920);
     }
 }

@@ -34,12 +34,12 @@ use rundler_provider::{
     decode_v0_6_handle_ops_revert, decode_v0_6_ops_from_calldata, decode_v0_7_handle_ops_revert,
     decode_v0_7_ops_from_calldata, get_auth_list_from_transaction,
 };
-use rundler_sim::{SimulationError, SimulationResult, Simulator, ViolationError};
+use rundler_sim::{SimulationError, SimulationResult, Simulator, ViolationError, gas};
 use rundler_types::{
     AaErrorCode, BUNDLE_BYTE_OVERHEAD, BundleExpectedStorage, Entity, EntityInfo, EntityInfos,
     EntityType, EntityUpdate, EntityUpdateType, EntryPointAbiVersion, EntryPointVersion,
-    ExpectedStorage, GasFees, TIME_RANGE_BUFFER, Timestamp, UserOperation, UserOperationVariant,
-    UserOpsPerAggregator, ValidTimeRange, ValidationRevert,
+    ExpectedStorage, GasFees, PvgState, TIME_RANGE_BUFFER, Timestamp, UserOperation,
+    UserOperationVariant, UserOpsPerAggregator, ValidTimeRange, ValidationRevert,
     aggregator::SignatureAggregatorResult,
     authorization::Eip7702Auth,
     chain::{ChainSpec, ForkActivation},
@@ -291,9 +291,11 @@ where
             None
         };
         // (1) Filter out ops that don't pay enough to be included
+        let pvg_states = self.load_pvg_states(&ops, block_hash).await;
         let fee_futs = ops
             .into_iter()
-            .map(|op| {
+            .zip(pvg_states)
+            .map(|(op, pvg_state)| {
                 self.check_fees(
                     op,
                     block_hash,
@@ -301,6 +303,7 @@ where
                     da_block_data.as_ref(),
                     base_fee,
                     required_op_fees,
+                    pvg_state,
                 )
             })
             .collect::<Vec<_>>();
@@ -639,6 +642,7 @@ where
     // - Insufficient gas fees
     // - Insufficient pre-verification gas. The initial PVG check is done when the block is updated in the mempool. However,
     //   that check uses the initial gas fee estimate, whereas this check uses the gas fees specifically from this bundle.
+    #[allow(clippy::too_many_arguments)]
     async fn check_fees(
         &self,
         op: PoolOperation,
@@ -647,8 +651,10 @@ where
         da_block_data: Option<&DAGasBlockData>,
         base_fee: u128,
         required_op_fees: GasFees,
+        pvg_state: PvgState,
     ) -> Option<PoolOperationWithSponsoredDAGas> {
         let op_hash = op.uo.hash();
+        let state_gas = op.uo.state_pre_verification_gas(chain_spec, &pvg_state);
 
         let mut required_max_fee_per_gas = required_op_fees.max_fee_per_gas;
         let mut required_max_priority_fee_per_gas = required_op_fees.max_priority_fee_per_gas;
@@ -684,12 +690,16 @@ where
                 self.settings.chain_spec.glamsterdam_activation,
                 ForkActivation::Timestamp(_)
             )
+            && !chain_spec.pvg_may_depend_on_state()
         {
             // Admission already checked PVG. With a timestamp fork, a reorg across the activation
-            // can raise the required PVG after admission, so check it against this schedule.
+            // can raise the required PVG after admission, so check it against this schedule. State
+            // gas depends on state at the bundle block (e.g. a sender deposit withdrawn since
+            // entry), so it is always re-checked when it applies.
             return Some(PoolOperationWithSponsoredDAGas {
                 op,
                 sponsored_da_gas: 0,
+                state_gas,
             });
         }
 
@@ -756,6 +766,7 @@ where
                 self.settings
                     .verification_gas_limit_efficiency_reject_threshold,
             ),
+            &pvg_state,
         );
 
         if let Some(pct) = op.perms.underpriced_bundle_pct {
@@ -803,7 +814,30 @@ where
         Some(PoolOperationWithSponsoredDAGas {
             op,
             sponsored_da_gas,
+            state_gas,
         })
+    }
+
+    /// Reads, at the bundle block, the state each op's state-dependent pre-verification gas
+    /// depends on. Makes no calls when the chain has no state gas. An op whose state cannot be
+    /// read is priced as the worst case.
+    async fn load_pvg_states(&self, ops: &[PoolOperation], block_hash: B256) -> Vec<PvgState> {
+        let futs = ops.iter().map(|op| async move {
+            gas::load_pvg_state(
+                &self.settings.chain_spec,
+                self.ep_providers.evm(),
+                self.ep_providers.entry_point(),
+                &op.uo,
+                Some(block_hash.into()),
+            )
+            .await
+            .unwrap_or_else(|e| {
+                let op_hash = op.uo.hash();
+                warn!("PVG state read failed for {op_hash:?}, pricing worst case: {e:?}");
+                PvgState::unknown()
+            })
+        });
+        future::join_all(futs).await
     }
 
     // Simulate a single op. Returns None if the op should be skipped.
@@ -993,6 +1027,7 @@ where
                     op: op.clone().into(),
                     simulation: simulation.clone(),
                     sponsored_da_gas: po.sponsored_da_gas,
+                    state_gas: po.state_gas,
                 });
 
             // Limit by max bundle computation gas (excluding DA gas)
@@ -1104,6 +1139,7 @@ where
                     op: op.into(),
                     simulation,
                     sponsored_da_gas: po.sponsored_da_gas,
+                    state_gas: po.state_gas,
                 });
         }
 
@@ -1399,7 +1435,7 @@ where
     ) -> BundleProposerResult<HashMap<Address, Eip7702SenderState>> {
         let futures = senders.into_iter().map(|sender| async move {
             let (transaction_count, code) = tokio::try_join!(
-                self.ep_providers.evm().get_transaction_count(sender),
+                self.ep_providers.evm().get_transaction_count(sender, None),
                 self.ep_providers.evm().get_code(sender, None)
             )?;
             Ok::<_, anyhow::Error>((
@@ -1784,6 +1820,8 @@ where
 struct PoolOperationWithSponsoredDAGas {
     op: PoolOperation,
     sponsored_da_gas: u128,
+    /// State-dependent pre-verification gas at the bundle block (0 without state gas)
+    state_gas: u128,
 }
 
 /// Chain state of an EIP-7702 sender at bundle proposal time, used to
@@ -1799,6 +1837,8 @@ struct OpWithSimulation<UO> {
     op: UO,
     simulation: SimulationResult,
     sponsored_da_gas: u128,
+    /// State-dependent gas the bundle spends for this op (0 without state gas)
+    state_gas: u128,
 }
 
 /// A struct used internally to represent the current state of a proposed bundle
@@ -2154,6 +2194,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
 
     fn get_bundle_gas_limit_inner(&self, chain_spec: &ChainSpec, include_da_gas: bool) -> u128 {
         let mut authorization_gas = 0_u128;
+        let mut state_gas = 0_u128;
         let mut standard_gas_limit = 0_u128;
         let mut calldata_floor_gas_limit = 0_u128;
         let mut da_gas_limit = 0_u128;
@@ -2176,6 +2217,8 @@ impl<UO: UserOperation> ProposalContext<UO> {
         for sim_op in self.iter_ops_with_simulations() {
             let op_authorization_gas = sim_op.op.authorization_gas_limit(chain_spec);
             authorization_gas = authorization_gas.saturating_add(op_authorization_gas);
+            // Like authorization gas, kept outside the calldata floor comparison.
+            state_gas = state_gas.saturating_add(sim_op.state_gas);
 
             // EIP-7623 calculations require this to be done without the EIP-7702 intrinsic gas. Its added later in the final calculation.
             standard_gas_limit = standard_gas_limit.saturating_add(
@@ -2186,8 +2229,13 @@ impl<UO: UserOperation> ProposalContext<UO> {
                 .saturating_add(sim_op.op.calldata_floor_gas_limit(chain_spec));
 
             if include_da_gas {
+                // The DA part is the PVG left over after execution gas, which also pays for the
+                // state gas; that is already counted above, so leave it out here.
                 da_gas_limit = da_gas_limit.saturating_add(
-                    sim_op.op.pre_verification_da_gas_limit(chain_spec, None)
+                    sim_op
+                        .op
+                        .pre_verification_da_gas_limit(chain_spec, None)
+                        .saturating_sub(sim_op.state_gas)
                         + sim_op.sponsored_da_gas,
                 );
             }
@@ -2204,6 +2252,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
         chain_spec
             .transaction_intrinsic_gas()
             .saturating_add(authorization_gas)
+            .saturating_add(state_gas)
             .saturating_add(da_gas_limit)
             .saturating_add(execution_gas_limit)
     }
@@ -2434,7 +2483,8 @@ mod tests {
     };
     use rundler_sim::MockSimulator;
     use rundler_types::{
-        BundlerSponsorship, UserOperation as _, UserOperationPermissions, ValidTimeRange,
+        AuthorityState, BundlerSponsorship, UserOperation as _, UserOperationPermissions,
+        ValidTimeRange,
         aggregator::{
             AggregatorCosts, MockSignatureAggregator, SignatureAggregator, SignatureAggregatorError,
         },
@@ -3441,6 +3491,7 @@ mod tests {
                             ..Default::default()
                         },
                         sponsored_da_gas: 100_000,
+                        state_gas: 0,
                     },
                     OpWithSimulation {
                         op: op2.clone(),
@@ -3449,6 +3500,7 @@ mod tests {
                             ..Default::default()
                         },
                         sponsored_da_gas: 0,
+                        state_gas: 0,
                     },
                 ],
                 signature: Default::default(),
@@ -3491,6 +3543,7 @@ mod tests {
                             ..Default::default()
                         },
                         sponsored_da_gas: 0,
+                        state_gas: 0,
                     },
                     OpWithSimulation {
                         op: op2.clone(),
@@ -3499,6 +3552,7 @@ mod tests {
                             ..Default::default()
                         },
                         sponsored_da_gas: 0,
+                        state_gas: 0,
                     },
                 ],
                 signature: Default::default(),
@@ -3562,6 +3616,7 @@ mod tests {
                         ..Default::default()
                     },
                     sponsored_da_gas: 0,
+                    state_gas: 0,
                 }],
                 signature: Default::default(),
             },
@@ -3671,7 +3726,7 @@ mod tests {
         };
         let probe = UserOperationBuilder::new(&chain_spec, required.clone()).build();
         let required_pvg = |op: &UserOperation, spec: &ChainSpec| {
-            op.required_pre_verification_gas(spec, 1, 0, Some(0.5))
+            op.required_pre_verification_gas(spec, 1, 0, Some(0.5), &PvgState::unknown())
         };
         let pre = required_pvg(&probe, &chain_spec.at_timestamp(ACTIVATION - 1));
         let inclusion = required_pvg(
@@ -3756,6 +3811,7 @@ mod tests {
                     op: op_without_authorization,
                     simulation: SimulationResult::default(),
                     sponsored_da_gas: 0,
+                    state_gas: 0,
                 }],
                 signature: Default::default(),
             },
@@ -3777,6 +3833,7 @@ mod tests {
                     op: op_with_authorization,
                     simulation: SimulationResult::default(),
                     sponsored_da_gas: 0,
+                    state_gas: 0,
                 }],
                 signature: Default::default(),
             },
@@ -3798,6 +3855,226 @@ mod tests {
             25_000,
             "authorization should add only EIP-7702 empty account intrinsic gas"
         );
+    }
+
+    fn single_op_context(op: UserOperation, state_gas: u128) -> ProposalContext<UserOperation> {
+        let mut groups = LinkedHashMap::new();
+        groups.insert(
+            Address::ZERO,
+            AggregatorGroup {
+                ops_with_simulations: vec![OpWithSimulation {
+                    op,
+                    simulation: SimulationResult::default(),
+                    sponsored_da_gas: 0,
+                    state_gas,
+                }],
+                signature: Default::default(),
+            },
+        );
+        ProposalContext {
+            sender_eoa: Address::ZERO,
+            groups_by_aggregator: groups,
+            rejected_ops: vec![],
+            suspect_ops: vec![],
+            entity_updates: BTreeMap::new(),
+            bundle_expected_storage: BundleExpectedStorage::default(),
+        }
+    }
+
+    fn glamsterdam_spec() -> ChainSpec {
+        ChainSpec {
+            glamsterdam_activation: ForkActivation::Genesis,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bundle_gas_limit_includes_glamsterdam_state_gas() {
+        let cs = glamsterdam_spec().at_timestamp(0).into_owned();
+        let required = UserOperationRequiredFields {
+            pre_verification_gas: 100_000,
+            call_gas_limit: 100_000,
+            verification_gas_limit: 100_000,
+            ..Default::default()
+        };
+        let op = UserOperationBuilder::new(&cs, required)
+            .authorization_tuple(rundler_types::authorization::Eip7702Auth::new_dummy(
+                cs.id,
+                address(1),
+            ))
+            .build();
+        // Self-paying sender with a zero deposit, authority that does not exist yet.
+        let state = PvgState {
+            sender_deposit_is_zero: Some(true),
+            authority: Some(AuthorityState::Missing),
+        };
+        let state_gas = op.state_pre_verification_gas(&cs, &state);
+        assert_eq!(state_gas, 97_920);
+        // The authorization stays priced as the worst case in the op's own gas limit.
+        assert_eq!(op.authorization_gas_limit(&cs), 235_606);
+
+        let without_state = single_op_context(op.clone(), 0).get_bundle_gas_limit(&cs);
+        let with_state = single_op_context(op, state_gas).get_bundle_gas_limit(&cs);
+        assert_eq!(with_state - without_state, state_gas);
+    }
+
+    #[tokio::test]
+    async fn test_bundle_gas_limit_counts_state_gas_once_with_da_gas_in_gas_limit() {
+        let cs = ChainSpec {
+            da_pre_verification_gas: true,
+            include_da_gas_in_gas_limit: true,
+            ..glamsterdam_spec()
+        }
+        .at_timestamp(0)
+        .into_owned();
+        let required = UserOperationRequiredFields {
+            pre_verification_gas: 500_000,
+            call_gas_limit: 100_000,
+            verification_gas_limit: 100_000,
+            ..Default::default()
+        };
+        let op = UserOperationBuilder::new(&cs, required).build();
+        let state_gas = 97_920;
+        // The op's PVG already pays for the state gas, so the bundle gas limit doesn't change.
+        assert_eq!(
+            single_op_context(op.clone(), state_gas).get_bundle_gas_limit(&cs),
+            single_op_context(op, 0).get_bundle_gas_limit(&cs)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bundle_gas_limit_uses_glamsterdam_intrinsic_gas() {
+        let required = UserOperationRequiredFields {
+            pre_verification_gas: 100_000,
+            call_gas_limit: 100_000,
+            verification_gas_limit: 100_000,
+            ..Default::default()
+        };
+        let before = ChainSpec::default();
+        let glamsterdam = glamsterdam_spec().at_timestamp(0).into_owned();
+        let op = UserOperationBuilder::new(&before, required).build();
+        let context = single_op_context(op, 0);
+        // Shared intrinsic gas drops by 6,000; the op's per-op overhead rises by 2,400.
+        let delta =
+            context.get_bundle_gas_limit(&before) - context.get_bundle_gas_limit(&glamsterdam);
+        assert_eq!(delta, (21_000 - 15_000) - (21_900 - 19_500));
+    }
+
+    type TestProposer = BundleProposerImpl<
+        ProvidersWithEntryPoint<
+            UserOperation,
+            Arc<MockEvmProvider>,
+            Arc<MockEntryPointV0_6>,
+            Arc<MockDAGasOracleSync>,
+            Arc<MockFeeEstimator>,
+        >,
+        BundleProposerProviders<MockSimulator>,
+    >;
+
+    fn glamsterdam_proposer(mut entry_point: MockEntryPointV0_6) -> TestProposer {
+        entry_point.expect_address().return_const(Address::ZERO);
+        let (event_sender, _) = broadcast::channel(16);
+        BundleProposerImpl::new(
+            "test".to_string(),
+            ProvidersWithEntryPoint::new(
+                Arc::new(MockEvmProvider::new()),
+                Arc::new(entry_point),
+                None,
+                Arc::new(MockFeeEstimator::new()),
+            ),
+            BundleProposerProviders::new(MockSimulator::new()),
+            Settings {
+                chain_spec: glamsterdam_spec(),
+                target_bundle_gas: 10_000_000,
+                max_bundle_gas: 25_000_000,
+                da_gas_tracking_enabled: false,
+                max_expected_storage_slots: MAX_EXPECTED_STORAGE_SLOTS,
+                verification_gas_limit_efficiency_reject_threshold: 0.5,
+                submission_proxy: None,
+            },
+            event_sender,
+        )
+    }
+
+    fn pool_op(op: UserOperation) -> PoolOperation {
+        PoolOperation {
+            uo: op.into(),
+            expected_code_hash: hash(126),
+            entry_point: ChainSpec::default().entry_point_address_v0_6,
+            sim_block_hash: hash(125),
+            sim_block_number: 0,
+            account_is_staked: false,
+            valid_time_range: ValidTimeRange::default(),
+            entity_infos: EntityInfos::default(),
+            aggregator: None,
+            da_gas_data: Default::default(),
+            filter_id: None,
+            perms: UserOperationPermissions::default(),
+            sender_is_7702: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_check_fees_rechecks_glamsterdam_state_gas_on_l1() {
+        let mut entry_point = MockEntryPointV0_6::new();
+        entry_point
+            .expect_balance_of()
+            .returning(|_, _| Ok(U256::ZERO));
+        let proposer = glamsterdam_proposer(entry_point);
+        let cs = proposer.settings.chain_spec.at_timestamp(0).into_owned();
+        let fees = GasFees {
+            max_fee_per_gas: 10_000,
+            max_priority_fee_per_gas: 0,
+        };
+
+        // A self-paying op priced as if its deposit were not zero, then with the refund write.
+        let probe = op_with_sender_and_fees(address(1), 10_000, 0, 0);
+        let funded = PvgState {
+            sender_deposit_is_zero: Some(false),
+            authority: None,
+        };
+        let without_state = probe.required_pre_verification_gas(&cs, 1, 0, Some(0.5), &funded);
+        let underpaid = pool_op(op_with_sender_and_fees(
+            address(1),
+            10_000,
+            0,
+            without_state,
+        ));
+        // Headroom: the PVG value is part of the packed op, so its own bytes add calldata gas.
+        let paid = pool_op(op_with_sender_and_fees(
+            address(1),
+            10_000,
+            0,
+            without_state + 97_920 + 1_000,
+        ));
+
+        let states = proposer
+            .load_pvg_states(&[underpaid.clone(), paid.clone()], hash(125))
+            .await;
+        assert_eq!(states[0].sender_deposit_is_zero, Some(true));
+
+        // On a non-DA chain the PVG check still runs when state gas applies.
+        let skipped = proposer
+            .check_fees(underpaid, hash(125), &cs, None, 1_000, fees, states[0])
+            .await;
+        assert!(skipped.is_none());
+        let kept = proposer
+            .check_fees(paid, hash(125), &cs, None, 1_000, fees, states[1])
+            .await
+            .expect("op paying the state gas is kept");
+        assert_eq!(kept.state_gas, 97_920);
+    }
+
+    #[tokio::test]
+    async fn test_load_pvg_states_prices_worst_case_when_state_read_fails() {
+        let mut entry_point = MockEntryPointV0_6::new();
+        entry_point
+            .expect_balance_of()
+            .returning(|_, _| Err(anyhow::anyhow!("rpc down").into()));
+        let proposer = glamsterdam_proposer(entry_point);
+        let op = pool_op(op_with_sender_and_fees(address(1), 10_000, 0, 0));
+        let states = proposer.load_pvg_states(&[op], hash(125)).await;
+        assert_eq!(states, vec![PvgState::unknown()]);
     }
 
     #[tokio::test]
@@ -4538,8 +4815,13 @@ mod tests {
             ..Default::default()
         };
         let mock_op0 = op_with_sender_and_fees(address(1), 10000, 0, DEFAULT_PVG);
-        let required_pvg =
-            mock_op0.required_pre_verification_gas(&cs, 1, DEFAULT_DA_PVG, Some(0.5));
+        let required_pvg = mock_op0.required_pre_verification_gas(
+            &cs,
+            1,
+            DEFAULT_DA_PVG,
+            Some(0.5),
+            &PvgState::unknown(),
+        );
 
         let op0 = op_with_sender_and_fees(address(1), 10000, 0, math::percent(required_pvg, 75)); // accept
         let op1 =
@@ -5111,6 +5393,17 @@ mod tests {
                 .times(..=1)
                 .return_once(move |_, _| Ok(deposit));
         }
+        // Self-paying senders are read for the Glamsterdam zero-deposit term; give them a
+        // deposit so the tests price only the gas schedule.
+        let self_paying_senders: HashSet<Address> = ops
+            .iter()
+            .filter(|op| op.uo.paymaster().is_none())
+            .map(|op| op.uo.sender())
+            .collect();
+        entry_point
+            .expect_balance_of()
+            .withf(move |address, _| self_paying_senders.contains(address))
+            .returning(|_, _| Ok(U256::from(1_000_000_000_000_000_000_u128)));
 
         let signatures_by_aggregator: HashMap<_, _> = mock_aggregators
             .into_iter()
@@ -5125,8 +5418,8 @@ mod tests {
         for (sender, transaction_count, code) in mock_7702_sender_states {
             provider
                 .expect_get_transaction_count()
-                .withf(move |&a| a == sender)
-                .returning(move |_| Ok(transaction_count));
+                .withf(move |&a, _| a == sender)
+                .returning(move |_, _| Ok(transaction_count));
             provider
                 .expect_get_code()
                 .withf(move |&a, _| a == sender)

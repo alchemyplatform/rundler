@@ -19,6 +19,9 @@ use alloy_sol_types::SolValue;
 /// User operation permissions
 mod permissions;
 pub use permissions::{BundlerSponsorship, UserOperationPermissions};
+
+mod pvg_state;
+pub use pvg_state::{AuthorityState, PvgState};
 use strum::{EnumCount, EnumString};
 
 /// User Operation types for Entry Point v0.6
@@ -350,23 +353,32 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// `da_gas` is the DA gas cost for the user operation, calculated elsewhere
     /// `verification_efficiency_accept_threshold` is the threshold for the verification efficiency
     /// If set - the PVG will be increased to account for the calldata floor gas, else calldata floor gas is ignored
+    /// `state` is the on-chain state the state-dependent terms are priced with (see
+    /// [`Self::state_pre_verification_gas`] and [`Self::authorization_state_discount`])
     fn required_pre_verification_gas(
         &self,
         chain_spec: &ChainSpec,
         bundle_size: usize,
         da_gas: u128,
         verification_gas_limit_efficiency_reject_threshold: Option<f64>,
+        state: &PvgState,
     ) -> u128 {
+        // State-dependent gas is real gas the bundle uses, so it counts towards the calldata
+        // floor too.
+        let execution_pvg = self
+            .pre_verification_execution_gas_limit(chain_spec, Some(bundle_size))
+            .saturating_sub(self.authorization_state_discount(chain_spec, state))
+            .saturating_add(self.state_pre_verification_gas(chain_spec, state));
         let base_pvg = if let Some(thresh) = verification_gas_limit_efficiency_reject_threshold {
             increase_required_pvg_with_calldata_floor_gas(
                 self,
-                self.pre_verification_execution_gas_limit(chain_spec, Some(bundle_size)),
+                execution_pvg,
                 da_gas,
                 self.calldata_floor_gas_limit(chain_spec),
                 thresh,
             )
         } else {
-            self.pre_verification_execution_gas_limit(chain_spec, Some(bundle_size)) + da_gas
+            execution_pvg + da_gas
         };
 
         if chain_spec.charge_gas_limit_via_pvg {
@@ -415,6 +427,9 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     fn aggregator_gas_limit(&self, chain_spec: &ChainSpec, bundle_size: Option<usize>) -> u128;
 
     /// Returns the gas limit for the authorization
+    ///
+    /// This is the worst case, for an authority that does not exist yet. See
+    /// [`Self::authorization_state_discount`] for the part the authority's state can waive.
     fn authorization_gas_limit(&self, chain_spec: &ChainSpec) -> u128 {
         if self.authorization_tuple().is_some() {
             chain_spec.eip7702_authorization_gas()
@@ -422,6 +437,44 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
             0
         }
     }
+
+    /// Returns the part of [`Self::authorization_gas_limit`] that the authority's state shows
+    /// will not be charged: the new account gas if the authority exists, and also the
+    /// delegation gas if it already has code. 0 for an unknown state, and when the gas schedule
+    /// has no state-dependent authorization gas.
+    fn authorization_state_discount(&self, chain_spec: &ChainSpec, state: &PvgState) -> u128 {
+        if self.authorization_tuple().is_none() {
+            return 0;
+        }
+        match state.authority {
+            None | Some(AuthorityState::Missing) => 0,
+            Some(AuthorityState::NoCode) => chain_spec.eip7702_authorization_new_account_gas(),
+            Some(AuthorityState::HasCode) => chain_spec
+                .eip7702_authorization_new_account_gas()
+                .saturating_add(chain_spec.eip7702_authorization_delegation_gas()),
+        }
+    }
+
+    /// Returns extra pre-verification gas that depends on on-chain state: unmetered state gas
+    /// the EntryPoint spends for this user operation (EIP-8037). 0 when the gas schedule has
+    /// no such term.
+    ///
+    /// A sender paying for itself (no paymaster) whose EntryPoint deposit is zero (or unknown)
+    /// at bundle start: the refund write after metering re-creates the deposit slot.
+    fn state_pre_verification_gas(&self, chain_spec: &ChainSpec, state: &PvgState) -> u128 {
+        if self.paymaster().is_none() && state.sender_deposit_is_zero.unwrap_or(true) {
+            chain_spec.zero_deposit_refund_gas()
+        } else {
+            0
+        }
+    }
+}
+
+/// Returns the unmetered gas of the EntryPoint copying `call_data` into memory for the inner
+/// call, beyond what `per_user_op_word_gas` already prices (0 when the gas schedule has no such
+/// term)
+pub(crate) fn call_data_copy_gas(chain_spec: &ChainSpec, call_data: &Bytes) -> u128 {
+    chain_spec.call_data_word_gas() * call_data.len().div_ceil(32) as u128
 }
 
 /// Returns the total shared gas for a bundle
@@ -975,5 +1028,216 @@ mod tests {
         // pre_op = pvg(300) + verification(200) + paymaster_verification(400)
         // execution = call(100) + paymaster_post_op(500)
         assert_eq!(uo.total_gas_limit(), 1500);
+    }
+}
+
+/// Regression fixtures measured on glamsterdam-devnet-8 with EntryPoint v0.7 (see
+/// `test/pvg-calibration`). Each fixture is the `handleOps` calldata of a mined bundle together
+/// with its measured unmetered gas (`receipt.gasUsed - Σ actualGasUsed`), which is what the
+/// bundle's pre-verification gas has to cover.
+#[cfg(test)]
+mod glamsterdam_tests {
+    use alloy_primitives::hex;
+    use alloy_sol_types::SolCall;
+    use rundler_contracts::v0_7::IEntryPoint;
+
+    use super::*;
+    use crate::{
+        EntryPointVersion,
+        chain::ForkActivation,
+        v0_7::{UserOperation as UserOperationV0_7, UserOperationBuilder},
+    };
+
+    const DEVNET_CHAIN_ID: u64 = 7091047534;
+
+    fn glamsterdam_spec() -> ChainSpec {
+        ChainSpec {
+            id: DEVNET_CHAIN_ID,
+            glamsterdam_activation: ForkActivation::Genesis,
+            ..ChainSpec::default()
+        }
+        .at_timestamp(0)
+        .into_owned()
+    }
+
+    fn fixture_ops(
+        calldata_hex: &str,
+        spec: &ChainSpec,
+        with_auth: bool,
+    ) -> Vec<UserOperationV0_7> {
+        let calldata = hex::decode(calldata_hex.trim()).unwrap();
+        let call = IEntryPoint::handleOpsCall::abi_decode(&calldata).unwrap();
+        call.ops
+            .into_iter()
+            .map(|packed| {
+                let auth =
+                    with_auth.then(|| Eip7702Auth::new_dummy(DEVNET_CHAIN_ID, Address::ZERO));
+                UserOperationBuilder::from_packed(packed, spec, EntryPointVersion::V0_7, auth)
+                    .unwrap()
+                    .build()
+            })
+            .collect()
+    }
+
+    /// Σ required PVG for a bundle of `ops`, as gas estimation computes it (no floor top-up)
+    fn predicted(ops: &[UserOperationV0_7], spec: &ChainSpec, state: &PvgState) -> u128 {
+        ops.iter()
+            .map(|op| op.required_pre_verification_gas(spec, ops.len(), 0, None, state))
+            .sum()
+    }
+
+    /// The prediction must cover the measured gas, and must not overcharge by more than
+    /// `max_overcharge`.
+    fn assert_covers(predicted: u128, measured: u128, max_overcharge: u128) {
+        let overcharge = predicted.checked_sub(measured).expect("undercharged");
+        assert!(overcharge <= max_overcharge, "overcharged by {overcharge}");
+    }
+
+    const PREFUNDED: PvgState = PvgState {
+        sender_deposit_is_zero: Some(false),
+        authority: None,
+    };
+
+    #[test]
+    fn paymaster_op_n1() {
+        let spec = glamsterdam_spec();
+        let ops = fixture_ops(
+            include_str!("testdata/glamsterdam_devnet8/paymaster_n1.hex"),
+            &spec,
+            false,
+        );
+        // A paymaster pays, so the sender deposit does not matter.
+        assert_covers(predicted(&ops, &spec, &PvgState::unknown()), 41_789, 300);
+    }
+
+    #[test]
+    fn self_pay_prefunded_n2() {
+        let spec = glamsterdam_spec();
+        let ops = fixture_ops(
+            include_str!("testdata/glamsterdam_devnet8/self_pay_prefunded_n2.hex"),
+            &spec,
+            false,
+        );
+        // Multi-op bundles stay conservatively overcharged: ~14k of real per-bundle overhead is
+        // still booked per op, as before Glamsterdam.
+        assert_covers(predicted(&ops, &spec, &PREFUNDED), 53_492, 15_000);
+    }
+
+    #[test]
+    fn self_pay_zero_deposit_n2() {
+        let spec = glamsterdam_spec();
+        let ops = fixture_ops(
+            include_str!("testdata/glamsterdam_devnet8/self_pay_zero_deposit_n2.hex"),
+            &spec,
+            false,
+        );
+        let zero_deposit = PvgState {
+            sender_deposit_is_zero: Some(true),
+            authority: None,
+        };
+        let p = predicted(&ops, &spec, &zero_deposit);
+        assert_covers(p, 249_332, 15_000);
+        // Unknown deposit is priced as zero.
+        assert_eq!(predicted(&ops, &spec, &PvgState::unknown()), p);
+        // Exactly the refund write per op on top of a prefunded sender.
+        assert_eq!(p - predicted(&ops, &spec, &PREFUNDED), 2 * 97_920);
+    }
+
+    #[test]
+    fn authorization_missing_authority_n1() {
+        let spec = glamsterdam_spec();
+        let ops = fixture_ops(
+            include_str!("testdata/glamsterdam_devnet8/auth_empty_paymaster_n1.hex"),
+            &spec,
+            true,
+        );
+        let state = PvgState {
+            sender_deposit_is_zero: None,
+            authority: Some(AuthorityState::Missing),
+        };
+        assert_covers(predicted(&ops, &spec, &state), 277_395, 300);
+        // Unknown authority is priced as missing.
+        assert_eq!(
+            predicted(&ops, &spec, &PvgState::unknown()),
+            predicted(&ops, &spec, &state)
+        );
+    }
+
+    #[test]
+    fn authorization_existing_authority_n1() {
+        let spec = glamsterdam_spec();
+        let ops = fixture_ops(
+            include_str!("testdata/glamsterdam_devnet8/auth_funded_paymaster_n1.hex"),
+            &spec,
+            true,
+        );
+        let state = PvgState {
+            sender_deposit_is_zero: None,
+            authority: Some(AuthorityState::NoCode),
+        };
+        assert_covers(predicted(&ops, &spec, &state), 93_795, 300);
+
+        // Re-delegation (measured +16,816 over the no-auth baseline of 41,789).
+        let delegated = PvgState {
+            sender_deposit_is_zero: None,
+            authority: Some(AuthorityState::HasCode),
+        };
+        assert_covers(predicted(&ops, &spec, &delegated), 41_789 + 16_816, 300);
+
+        // The gas limit itself stays the worst case, whatever the state.
+        assert_eq!(ops[0].authorization_gas_limit(&spec), 235_606);
+    }
+
+    #[test]
+    fn large_call_data_n1() {
+        let spec = glamsterdam_spec();
+        // 1 KiB of callData: the EntryPoint's unmetered copy of callData was 30 gas short of
+        // per_user_op_word_gas alone; the callData word gas covers it.
+        for (fixture, measured) in [
+            (
+                include_str!("testdata/glamsterdam_devnet8/call_data_zero_1024_n1.hex"),
+                44_670,
+            ),
+            (
+                include_str!("testdata/glamsterdam_devnet8/call_data_non_zero_1024_n1.hex"),
+                56_958,
+            ),
+        ] {
+            let ops = fixture_ops(fixture, &spec, false);
+            assert_covers(predicted(&ops, &spec, &PREFUNDED), measured, 300);
+            assert_eq!(super::call_data_copy_gas(&spec, ops[0].call_data()), 6 * 32);
+        }
+    }
+
+    #[test]
+    fn pre_glamsterdam_prices_as_before() {
+        let spec = ChainSpec {
+            id: DEVNET_CHAIN_ID,
+            eip7623_enabled: true,
+            ..ChainSpec::default()
+        };
+        let ops = fixture_ops(
+            include_str!("testdata/glamsterdam_devnet8/auth_empty_paymaster_n1.hex"),
+            &spec,
+            true,
+        );
+        let op = &ops[0];
+        // No state-dependent gas, whatever the state.
+        for state in [
+            PvgState::unknown(),
+            PvgState {
+                sender_deposit_is_zero: Some(true),
+                authority: Some(AuthorityState::HasCode),
+            },
+        ] {
+            assert_eq!(op.state_pre_verification_gas(&spec, &state), 0);
+            assert_eq!(op.authorization_state_discount(&spec, &state), 0);
+            assert_eq!(
+                op.required_pre_verification_gas(&spec, 1, 0, None, &state),
+                op.pre_verification_execution_gas_limit(&spec, Some(1))
+            );
+        }
+        assert_eq!(op.authorization_gas_limit(&spec), 25_000);
+        assert_eq!(super::call_data_copy_gas(&spec, op.call_data()), 0);
     }
 }
