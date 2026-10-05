@@ -97,7 +97,7 @@ mockall::mock! {
             trace_options: GethDebugTracingCallOptions,
         ) -> ProviderResult<GethTrace>;
 
-        async fn get_latest_block_hash_and_number(&self) -> ProviderResult<(B256, u64)>;
+        async fn get_latest_block_hash_number_and_timestamp(&self) -> ProviderResult<(B256, u64, u64)>;
         /// Get the pending block hash and number
         async fn get_pending_block_hash_and_number(&self) -> ProviderResult<(B256, u64)>;
 

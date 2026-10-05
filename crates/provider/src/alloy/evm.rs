@@ -163,11 +163,15 @@ where
     }
 
     #[instrument(skip_all)]
-    async fn get_latest_block_hash_and_number(&self) -> ProviderResult<(B256, u64)> {
+    async fn get_latest_block_hash_number_and_timestamp(&self) -> ProviderResult<(B256, u64, u64)> {
         let latest_block = EvmProvider::get_block(self, BlockId::latest())
             .await?
             .context("latest block should exist")?;
-        Ok((latest_block.header.hash, latest_block.header.number))
+        Ok((
+            latest_block.header.hash,
+            latest_block.header.number,
+            latest_block.header.timestamp,
+        ))
     }
 
     #[instrument(skip_all)]
