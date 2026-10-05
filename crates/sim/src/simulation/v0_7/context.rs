@@ -54,6 +54,7 @@ const BANNED_OPCODES: &[Opcode] = &[
     Opcode::BLOBBASEFEE,
     Opcode::BLOBHASH,
     Opcode::NUMBER,
+    Opcode::SLOTNUM,
     Opcode::SELFBALANCE,
     Opcode::BALANCE,
     Opcode::ORIGIN,
@@ -543,5 +544,33 @@ where
             ),
             sim_settings,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slotnum_is_a_forbidden_opcode() {
+        let call: TopLevelCallInfo = serde_json::from_str(
+            r#"{
+                "topLevelMethodSig": "0x19822f7c",
+                "topLevelTargetAddress": "0x0000000000000000000000000000000000000001",
+                "opcodes": {"SLOTNUM": 1, "CLZ": 1, "DUPN": 1, "SWAPN": 1, "EXCHANGE": 1},
+                "access": {},
+                "contractInfo": {},
+                "extCodeAccessInfo": {},
+                "oog": false
+            }"#,
+        )
+        .unwrap();
+
+        let phase =
+            ValidationContextProvider::<()>::parse_call_to_phase(&call, EntityType::Account);
+        assert_eq!(
+            phase.forbidden_opcodes_used,
+            vec!["0x0000000000000000000000000000000000000001:SLOTNUM".to_string()]
+        );
     }
 }

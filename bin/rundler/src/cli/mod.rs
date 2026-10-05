@@ -54,7 +54,7 @@ use rundler_sim::{
 };
 use rundler_types::{
     EntryPointAbiVersion, EntryPointVersion, PriorityFeeMode,
-    chain::{ChainSpec, TryFromWithSpec},
+    chain::{ChainSpec, ForkActivation, TryFromWithSpec},
     da::DAGasOracleType,
     v0_6::UserOperation as UserOperationV0_6,
     v0_7::UserOperation as UserOperationV0_7,
@@ -94,6 +94,19 @@ pub async fn run() -> anyhow::Result<()> {
     aggregator::instantiate_aggregators(&opt.common, &mut cs, &providers);
 
     tracing::info!("Chain spec: {:#?}", cs);
+    if cs.glamsterdam_activation != ForkActivation::Never {
+        tracing::info!(
+            "Glamsterdam activation: {:?}, pre-Glamsterdam gas schedule: {:?}, Glamsterdam gas schedule: {:?}",
+            cs.glamsterdam_activation,
+            cs.pre_glamsterdam_gas_schedule(),
+            cs.glamsterdam_gas_schedule(),
+        );
+        if let ForkActivation::Timestamp(activation) = cs.glamsterdam_activation {
+            tracing::warn!(
+                "Until Glamsterdam activation at {activation}, gas estimation, pool admission and bundle building use the larger cost of each gas field from both schedules. Required preVerificationGas is higher and bundle capacity may be lower until then."
+            );
+        }
+    }
 
     match opt.command {
         Command::Node(args) => {
