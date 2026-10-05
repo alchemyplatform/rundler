@@ -785,10 +785,11 @@ where
         let hash = {
             let mut state = self.state.write();
             let base_fee = state.base_fee;
-            let hash = state.pool.add_operation(
+            let hash = state.pool.add_operation_with_pvg_state(
                 pool_op.clone(),
                 base_fee,
                 precheck_ret.required_pre_verification_gas,
+                precheck_ret.pvg_state,
             )?;
 
             if throttled {
@@ -1124,7 +1125,7 @@ mod tests {
         SimulationError, SimulationResult, SimulationSettings, ViolationError,
     };
     use rundler_types::{
-        EntityInfo, EntityInfos, EntityType, EntryPointVersion,
+        EntityInfo, EntityInfos, EntityType, EntryPointVersion, PvgState,
         UserOperation as UserOperationTrait, ValidTimeRange,
         aggregator::{
             AggregatorCosts, MockSignatureAggregator, SignatureAggregator, SignatureAggregatorError,
@@ -2811,6 +2812,7 @@ mod tests {
                     Ok(PrecheckReturn {
                         da_gas_data: DAGasData::Empty,
                         required_pre_verification_gas: 100_000,
+                        pvg_state: PvgState::unknown(),
                         sender_is_7702: false,
                     })
                 }

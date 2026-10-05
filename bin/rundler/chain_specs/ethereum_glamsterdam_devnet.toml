@@ -1,0 +1,13 @@
+base = "ethereum"
+
+# glamsterdam-devnet-8 ("plataberget"), https://glamsterdam-devnet-8.ethpandaops.io
+name = "Ethereum Glamsterdam Devnet"
+id = 7091047534
+
+flashbots_enabled = false
+
+block_gas_limit = 200000000
+# EIP-7825 cap; keeping bundles at or below it leaves the EIP-8037 state-gas reservoir empty
+transaction_gas_limit = 16777216
+
+glamsterdam_activation = "genesis"

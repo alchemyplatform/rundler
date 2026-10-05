@@ -107,7 +107,11 @@ mockall::mock! {
 
         async fn get_code(&self, address: Address, block: Option<BlockId>) -> ProviderResult<Bytes>;
 
-        async fn get_transaction_count(&self, address: Address) -> ProviderResult<u64>;
+        async fn get_transaction_count(
+            &self,
+            address: Address,
+            block: Option<BlockId>,
+        ) -> ProviderResult<u64>;
 
         async fn get_pending_transaction_count(&self, address: Address) -> ProviderResult<u64>;
 
