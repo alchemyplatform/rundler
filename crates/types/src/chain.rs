@@ -406,9 +406,10 @@ impl GasSchedule {
             calldata_non_zero_byte_gas: pre.calldata_non_zero_byte_gas,
             per_user_op_word_gas: pre.per_user_op_word_gas,
             // Measured on glamsterdam-devnet-8 with EntryPoint v0.7: single-op bundles imply
-            // 21,771-21,872 (with a 15,000 intrinsic gas). TODO(verify): v0.6 is provisional, the
-            // same +2,400 over its pre-Glamsterdam value, until measured on EntryPoint v0.6.
-            per_user_op_v0_6_gas: 20_700,
+            // 21,771-21,872 (with a 15,000 intrinsic gas). Measured on Sepolia with EntryPoint
+            // v0.6: 20,700 left single-op bundles 1,319-1,393 short across payers and deploy
+            // paths, so 22,100 covers all of them.
+            per_user_op_v0_6_gas: 22_100,
             per_user_op_v0_7_gas: 21_900,
             // Unchanged on glamsterdam-devnet-8 with EntryPoint v0.7: the deploy overhead, and the
             // deposit charge and refill, which cancel inside the metered validation span.
@@ -1088,7 +1089,7 @@ mod tests {
         assert_eq!(post.eip7623_calldata_floor_non_zero_byte_gas, 64);
         assert_eq!(post.eip7702_authorization_gas, 235_606);
         assert_eq!(post.calldata_zero_byte_gas, pre.calldata_zero_byte_gas);
-        assert_eq!(post.per_user_op_v0_6_gas, 20_700);
+        assert_eq!(post.per_user_op_v0_6_gas, 22_100);
         assert_eq!(post.per_user_op_v0_7_gas, 21_900);
         assert_eq!(
             post.per_user_op_deploy_overhead_gas,
@@ -1158,7 +1159,7 @@ mod tests {
         assert_eq!(post.zero_deposit_refund_gas(), 97_920);
         assert_eq!(post.eip7702_authorization_new_account_gas(), 183_600);
         assert_eq!(post.eip7702_authorization_delegation_gas(), 35_190);
-        assert_eq!(post.per_user_op_v0_6_gas(), 20_700);
+        assert_eq!(post.per_user_op_v0_6_gas(), 22_100);
         assert_eq!(post.per_user_op_v0_7_gas(), 21_900);
         // Measured authorization costs: missing, existing without code, already delegated.
         let auth = post.eip7702_authorization_gas();

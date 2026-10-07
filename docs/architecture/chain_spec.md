@@ -104,8 +104,8 @@ The preset also sets measured values for existing fields:
 | --- | --- | --- |
 | `transaction_intrinsic_gas` | 15,000 | intrinsic gas of a bundle tx (EIP-2780 base + cold EntryPoint) |
 | `per_user_op_v0_7_gas` | 21,900 | per-op unmetered EntryPoint overhead, v0.7 |
-| `per_user_op_v0_6_gas` | 20,700 | per-op overhead, v0.6 (provisional, not yet measured) |
+| `per_user_op_v0_6_gas` | 22,100 | per-op overhead, v0.6 (measured on Sepolia) |
 | `eip7623_calldata_floor_*_byte_gas` | 64 | EIP-7976 floor gas per calldata byte |
 | `eip7702_authorization_gas` | 235,606 | per EIP-7702 authorization whose authority does not exist (52,006 if it exists, 16,816 if it already has code) |
 
-The values were measured on glamsterdam-devnet-8 with EntryPoint v0.7 using the calibration harness in [#1345](https://github.com/alchemyplatform/rundler/pull/1345) ([`test/pvg-calibration/README.md`](https://github.com/alchemyplatform/rundler/blob/rado/calibrate-pvg/test/pvg-calibration/README.md)). `ethereum_glamsterdam_devnet` is the hardcoded spec for that devnet (`glamsterdam_activation = "genesis"`). See [Glamsterdam pre-verification gas](./glamsterdam_pvg.md) for how the state-dependent terms are applied.
+The values were measured on glamsterdam-devnet-8 with EntryPoint v0.7, and `per_user_op_v0_6_gas` on Sepolia with EntryPoint v0.6, using the calibration harness in [#1345](https://github.com/alchemyplatform/rundler/pull/1345) ([`test/pvg-calibration/README.md`](https://github.com/alchemyplatform/rundler/blob/rado/calibrate-pvg/test/pvg-calibration/README.md)). `ethereum_glamsterdam_devnet` is the hardcoded spec for that devnet (`glamsterdam_activation = "genesis"`). See [Glamsterdam pre-verification gas](./glamsterdam_pvg.md) for how the state-dependent terms are applied.

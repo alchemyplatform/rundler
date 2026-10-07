@@ -3954,10 +3954,10 @@ mod tests {
         let glamsterdam = glamsterdam_spec().at_timestamp(0).into_owned();
         let op = UserOperationBuilder::new(&before, required).build();
         let context = single_op_context(op, 0);
-        // Shared intrinsic gas drops by 6,000; the op's per-op overhead rises by 2,400.
+        // Shared intrinsic gas drops by 6,000; the v0.6 op's per-op overhead rises by 3,800.
         let delta =
             context.get_bundle_gas_limit(&before) - context.get_bundle_gas_limit(&glamsterdam);
-        assert_eq!(delta, (21_000 - 15_000) - (21_900 - 19_500));
+        assert_eq!(delta, (21_000 - 15_000) - (22_100 - 18_300));
     }
 
     type TestProposer = BundleProposerImpl<
