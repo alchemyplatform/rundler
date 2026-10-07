@@ -46,6 +46,9 @@ const GAS_LIMIT_HEADROOM_PERCENT: u64 = 20;
 /// bundles on ETH mainnet and Sepolia, and makes every state charge visible to the EntryPoint.
 pub const TX_GAS_CAP: u64 = 1 << 24;
 
+/// Priority fee of every probe op, in wei. Op fees only scale prefund and payment, not gas.
+pub const OP_PRIORITY_FEE: u128 = 1_000;
+
 /// Identity of the chain the experiment ran against.
 #[derive(Debug, Clone, Serialize)]
 pub struct ChainInfo {
@@ -175,6 +178,18 @@ impl Harness {
             block_gas_limit: block.header.gas_limit,
             base_fee_per_gas: block.header.base_fee_per_gas,
         })
+    }
+
+    /// `maxFeePerGas` probe ops get when their spec does not pin one: twice the base fee plus
+    /// [`OP_PRIORITY_FEE`].
+    pub async fn default_max_fee(&self) -> anyhow::Result<u128> {
+        let base_fee = self
+            .provider
+            .get_block(BlockId::latest())
+            .await?
+            .and_then(|b| b.header.base_fee_per_gas)
+            .unwrap_or(1) as u128;
+        Ok(base_fee * 2 + OP_PRIORITY_FEE)
     }
 
     /// Estimates, sends and waits for `tx`, then reconciles the receipt against the

@@ -11,19 +11,19 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-//! E2: shared and per-op unmetered overhead (EntryPoint v0.7).
+//! E2: shared and per-op unmetered overhead (EntryPoint v0.6 or v0.7).
 //!
 //! For each (payer, deploy-in-op) configuration, bundles of N identical ops from distinct
 //! senders are measured and `unmetered(N) = shared + N * per_op` is fitted. `shared` is
 //! compared with `transaction_intrinsic_gas` and `per_op` with rundler's static PVG for the
-//! op (`calldata_gas_cost + per_user_op_v0_7_gas`).
+//! op (`calldata_gas_cost + per_user_op_v0_6_gas` or `per_user_op_v0_7_gas`).
 
 use serde::Serialize;
 
 use crate::{
     bundle::{BeneficiaryKind, BundleRun, BundleRunner, DEFAULT_POST_OP_GAS_LIMIT, OpSpec, Payer},
     fit::{self, LineFit},
-    fixtures::Fixtures,
+    fixtures::{EpVersion, Fixtures},
 };
 
 const BUNDLE_SIZES: [usize; 4] = [1, 2, 3, 5];
@@ -132,11 +132,13 @@ pub async fn run(runner: &BundleRunner<'_>, only: Option<&str>) -> anyhow::Resul
         }
     }
 
-    let penalty_check = if selected("penalty-check") {
-        Some(penalty_check(runner).await?)
-    } else {
-        None
-    };
+    // v0.6 has no unused-gas penalty to check.
+    let penalty_check =
+        if runner.fixtures.entry_point_version == EpVersion::V0_7 && selected("penalty-check") {
+            Some(penalty_check(runner).await?)
+        } else {
+            None
+        };
 
     let per_op = |payer, deploy| {
         configs

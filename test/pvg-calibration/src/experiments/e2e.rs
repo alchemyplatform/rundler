@@ -13,10 +13,11 @@
 
 //! E6: end to end through a running rundler.
 //!
-//! The harness acts as a wallet. It builds user operations for real account implementations
-//! (LightAccount v2, MultiOwnerLightAccount v2, ModularAccount v2, and EIP-7702 delegation to
-//! SemiModularAccount7702), takes every gas field from rundler's `eth_estimateUserOperationGas`,
-//! signs, and submits with `eth_sendUserOperation`. Rundler builds and sends the bundles. For each
+//! The harness acts as a wallet. It builds user operations for real account implementations,
+//! takes every gas field from rundler's `eth_estimateUserOperationGas`, signs, and submits with
+//! `eth_sendUserOperation`. Against EntryPoint v0.7: LightAccount v2, MultiOwnerLightAccount v2,
+//! ModularAccount v2, and EIP-7702 delegation to SemiModularAccount7702. Against v0.6:
+//! LightAccount v1.1, SimpleAccount v0.6 and MultiOwnerModularAccount v1. Rundler builds and sends the bundles. For each
 //! mined bundle the experiment compares what the EntryPoint charged the ops (paid to the
 //! bundler's beneficiary) with what the bundler paid for the transaction:
 //!
@@ -44,16 +45,14 @@ use alloy_sol_types::{SolCall, SolEvent};
 use anyhow::{Context, bail};
 use rundler_contracts::v0_7::IEntryPoint;
 use rundler_types::{
-    EntryPointVersion, UserOperation as _,
-    authorization::Eip7702Auth,
-    chain::ChainSpec,
-    v0_7::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
+    EntryPointVersion, UserOperation as _, UserOperationVariant, authorization::Eip7702Auth,
+    chain::ChainSpec, v0_6 as uo_v0_6, v0_7 as uo_v0_7,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::{
-    fixtures::{self, Fixtures},
+    fixtures::{self, EpVersion, Fixtures},
     harness::Harness,
 };
 
@@ -70,6 +69,10 @@ sol! {
         function getAddressSemiModular(address owner, uint256 salt) external view returns (address);
         function createSemiModularAccount(address owner, uint256 salt) external returns (address);
     }
+    interface IMultiOwnerModularAccountFactory {
+        function getAddress(uint256 salt, address[] owners) external view returns (address);
+        function createAccount(uint256 salt, address[] owners) external returns (address);
+    }
     interface IAccountExecute {
         function execute(address dest, uint256 value, bytes data) external;
     }
@@ -80,6 +83,12 @@ const MULTI_OWNER_LIGHT_ACCOUNT_FACTORY: Address =
     address!("000000000019d2Ee9F2729A65AfE20bb0020AefC");
 const MODULAR_ACCOUNT_FACTORY: Address = address!("00000000000017c61b5bEe81050EC8eFc9c6fecd");
 const SEMI_MODULAR_ACCOUNT_7702: Address = address!("69007702764179f14F51cdce752f4f775d74E139");
+/// EntryPoint v0.6 account factories. LightAccountFactory v1.1.0 and SimpleAccountFactory share
+/// the `(owner, salt)` interface of `ILightAccountFactory`.
+const LIGHT_ACCOUNT_V1_1_FACTORY: Address = address!("00004EC70002a32400f8ae005A26081065620D20");
+const SIMPLE_ACCOUNT_V0_6_FACTORY: Address = address!("9406Cc6185a346906296840746125a0E44976454");
+const MULTI_OWNER_MODULAR_ACCOUNT_FACTORY: Address =
+    address!("000000e92D78D90000007F0082006FDA09BD5f11");
 
 /// ECDSA-shaped dummy signature for estimation (as aa-sdk uses).
 const DUMMY_ECDSA: [u8; 65] = hex!(
@@ -88,10 +97,12 @@ const DUMMY_ECDSA: [u8; 65] = hex!(
 /// ModularAccount v2 nonce key: fallback validation (entity 0), global validation flag.
 const MODULAR_ACCOUNT_GLOBAL_FALLBACK_NONCE_KEY: u64 = 1;
 
-/// ETH sent to a self-paying sender before its first op; covers the prefund with headroom.
-const SELF_PAY_FUNDING_WEI: u128 = 50_000_000_000_000_000;
-/// Paymaster deposit kept for the sponsored scenarios.
-const PAYMASTER_DEPOSIT_WEI: u128 = 300_000_000_000_000_000;
+/// A self-paying sender is funded with this much gas at the op's `maxFeePerGas` before its first
+/// op; covers the prefund with headroom. Funding and deposits scale with the fee because the
+/// harness cannot recover them (owners are throwaway keys, probe paymasters cannot withdraw).
+const SELF_PAY_FUNDING_GAS: u128 = 10_000_000;
+/// The paymaster deposit kept for the sponsored scenarios, in gas at the current fee.
+const PAYMASTER_DEPOSIT_GAS: u128 = 100_000_000;
 /// How long to wait for rundler to mine a submitted op.
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(180);
 
@@ -103,6 +114,12 @@ enum Kind {
     ModularAccountV2,
     /// EOA delegated (EIP-7702) to SemiModularAccount7702
     Sma7702,
+    /// LightAccount v1.1.0 (EntryPoint v0.6)
+    LightAccountV1_1,
+    /// eth-infinitism SimpleAccount (EntryPoint v0.6)
+    SimpleAccountV0_6,
+    /// MultiOwnerModularAccount v1 (EntryPoint v0.6)
+    MultiOwnerModularAccount,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -202,8 +219,35 @@ pub async fn run(
     client.ensure_paymaster_deposit().await?;
 
     let mut ops = Vec::new();
+    match fixtures.entry_point_version {
+        EpVersion::V0_6 => run_v0_6(&client, &mut ops).await?,
+        EpVersion::V0_7 => run_v0_7(&client, &mut ops).await?,
+    }
 
-    // Single-op bundles: submit one op and wait for it to mine before the next.
+    let bundles = client.bundles(&ops).await?;
+    for b in &bundles {
+        eprintln!(
+            "bundle {} ops={} gas_used={} margin_gas={} margin_wei={} [{}]",
+            b.tx_hash,
+            b.ops,
+            b.gas_used,
+            b.margin_gas,
+            b.margin_wei,
+            b.scenarios.join(", ")
+        );
+    }
+
+    Ok(Report {
+        experiment: "e6-end-to-end",
+        bundler_rpc_url: bundler_rpc_url.to_string(),
+        fixtures: fixtures.clone(),
+        ops,
+        bundles,
+    })
+}
+
+/// Single-op bundles (one op mined before the next is sent), then one multi-op bundle.
+async fn run_v0_7(client: &Client<'_>, ops: &mut Vec<OpResult>) -> anyhow::Result<()> {
     for (name, kind, payer) in [
         (
             "light-account/deploy/self-pay",
@@ -231,24 +275,11 @@ pub async fn run(
             Payer::Paymaster,
         ),
     ] {
-        let account = client.new_account(kind).await?;
-        if payer == Payer::SelfPay {
-            client.fund(account.sender).await?;
-        }
-        let mut account = account;
-        let result = client
-            .submit_and_wait(name, &mut account, payer, None)
-            .await;
-        ops.push(result);
-
-        // A second op from the same, now deployed, account (its deposit is no longer zero).
-        if name == "light-account/deploy/self-pay" {
-            ops.push(
-                client
-                    .submit_and_wait("light-account/deployed/self-pay", &mut account, payer, None)
-                    .await,
-            );
-        }
+        let follow_up =
+            (name == "light-account/deploy/self-pay").then_some("light-account/deployed/self-pay");
+        client
+            .submit_scenario(ops, name, kind, payer, follow_up)
+            .await?;
     }
 
     // EIP-7702: an EOA that does not exist yet (sponsored), and a funded EOA paying for itself.
@@ -276,37 +307,92 @@ pub async fn run(
         }
     }
 
-    // One multi-op bundle: submit several ops before waiting, so rundler bundles them together.
-    ops.extend(client.submit_batch().await?);
+    ops.extend(
+        client
+            .submit_batch("batch/light-account/deploy/self-pay", Kind::LightAccount)
+            .await?,
+    );
+    Ok(())
+}
 
-    let bundles = client.bundles(&ops).await?;
-    for b in &bundles {
-        eprintln!(
-            "bundle {} ops={} gas_used={} margin_gas={} margin_wei={} [{}]",
-            b.tx_hash,
-            b.ops,
-            b.gas_used,
-            b.margin_gas,
-            b.margin_wei,
-            b.scenarios.join(", ")
-        );
+/// As [`run_v0_7`], with v0.6 accounts and no EIP-7702 scenarios.
+async fn run_v0_6(client: &Client<'_>, ops: &mut Vec<OpResult>) -> anyhow::Result<()> {
+    for (name, kind, payer) in [
+        (
+            "light-account-v1.1/deploy/self-pay",
+            Kind::LightAccountV1_1,
+            Payer::SelfPay,
+        ),
+        (
+            "light-account-v1.1/deploy/paymaster",
+            Kind::LightAccountV1_1,
+            Payer::Paymaster,
+        ),
+        (
+            "simple-account/deploy/self-pay",
+            Kind::SimpleAccountV0_6,
+            Payer::SelfPay,
+        ),
+        (
+            "simple-account/deploy/paymaster",
+            Kind::SimpleAccountV0_6,
+            Payer::Paymaster,
+        ),
+        (
+            "multi-owner-modular-account/deploy/self-pay",
+            Kind::MultiOwnerModularAccount,
+            Payer::SelfPay,
+        ),
+    ] {
+        let follow_up = (name == "light-account-v1.1/deploy/self-pay")
+            .then_some("light-account-v1.1/deployed/self-pay");
+        client
+            .submit_scenario(ops, name, kind, payer, follow_up)
+            .await?;
     }
 
-    Ok(Report {
-        experiment: "e6-end-to-end",
-        bundler_rpc_url: bundler_rpc_url.to_string(),
-        fixtures: fixtures.clone(),
-        ops,
-        bundles,
-    })
+    ops.extend(
+        client
+            .submit_batch(
+                "batch/light-account-v1.1/deploy/self-pay",
+                Kind::LightAccountV1_1,
+            )
+            .await?,
+    );
+    Ok(())
 }
 
 impl Client<'_> {
+    /// One op from a new account (funded first when it pays for itself). With `follow_up`, a
+    /// second op from the same, now deployed, account (its deposit is no longer zero).
+    async fn submit_scenario(
+        &self,
+        ops: &mut Vec<OpResult>,
+        name: &str,
+        kind: Kind,
+        payer: Payer,
+        follow_up: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let mut account = self.new_account(kind).await?;
+        if payer == Payer::SelfPay {
+            self.fund(account.sender).await?;
+        }
+        ops.push(self.submit_and_wait(name, &mut account, payer, None).await);
+        if let Some(follow_up) = follow_up {
+            ops.push(
+                self.submit_and_wait(follow_up, &mut account, payer, None)
+                    .await,
+            );
+        }
+        Ok(())
+    }
+
     async fn ensure_paymaster_deposit(&self) -> anyhow::Result<()> {
         let ep = self.fixtures.entry_point;
         let pm = self.fixtures.paymaster;
         let deposit = fixtures::deposit_of(self.harness, ep, pm).await?;
-        let target = U256::from(PAYMASTER_DEPOSIT_WEI);
+        let (max_fee, _) = self.fees().await?;
+        let target = U256::from(PAYMASTER_DEPOSIT_GAS * max_fee);
         if deposit < target {
             fixtures::deposit_to(self.harness, ep, pm, target - deposit).await?;
         }
@@ -314,12 +400,13 @@ impl Client<'_> {
     }
 
     async fn fund(&self, address: Address) -> anyhow::Result<()> {
+        let (max_fee, _) = self.fees().await?;
         let outcome = self
             .harness
             .send(
                 TransactionRequest::default()
                     .with_to(address)
-                    .with_value(U256::from(SELF_PAY_FUNDING_WEI)),
+                    .with_value(U256::from(SELF_PAY_FUNDING_GAS * max_fee)),
             )
             .await?;
         anyhow::ensure!(outcome.success, "funding {address} reverted");
@@ -389,6 +476,40 @@ impl Client<'_> {
                 )
             }
             Kind::Sma7702 => (o, None, MODULAR_ACCOUNT_GLOBAL_FALLBACK_NONCE_KEY),
+            Kind::LightAccountV1_1 | Kind::SimpleAccountV0_6 => {
+                let factory = if kind == Kind::LightAccountV1_1 {
+                    LIGHT_ACCOUNT_V1_1_FACTORY
+                } else {
+                    SIMPLE_ACCOUNT_V0_6_FACTORY
+                };
+                let sender = self
+                    .eth_call(
+                        factory,
+                        ILightAccountFactory::getAddressCall { owner: o, salt },
+                    )
+                    .await?;
+                let data = ILightAccountFactory::createAccountCall { owner: o, salt }.abi_encode();
+                (sender, Some((factory, data.into())), 0)
+            }
+            Kind::MultiOwnerModularAccount => {
+                let owners = vec![o];
+                let sender = self
+                    .eth_call(
+                        MULTI_OWNER_MODULAR_ACCOUNT_FACTORY,
+                        IMultiOwnerModularAccountFactory::getAddressCall {
+                            salt,
+                            owners: owners.clone(),
+                        },
+                    )
+                    .await?;
+                let data = IMultiOwnerModularAccountFactory::createAccountCall { salt, owners }
+                    .abi_encode();
+                (
+                    sender,
+                    Some((MULTI_OWNER_MODULAR_ACCOUNT_FACTORY, data.into())),
+                    0,
+                )
+            }
         };
         Ok(Account {
             kind,
@@ -436,6 +557,10 @@ impl Client<'_> {
             Kind::LightAccount | Kind::MultiOwnerLightAccount => &[0x00],
             // ModularAccount v2: final signature segment marker, then the EOA signature type
             Kind::ModularAccountV2 | Kind::Sma7702 => &[0xFF, 0x00],
+            // v0.6 accounts take the bare ECDSA signature
+            Kind::LightAccountV1_1 | Kind::SimpleAccountV0_6 | Kind::MultiOwnerModularAccount => {
+                &[]
+            }
         }
     }
 
@@ -468,7 +593,7 @@ impl Client<'_> {
         account: &Account,
         payer: Payer,
         auth: Option<&Eip7702Auth>,
-    ) -> anyhow::Result<(UserOperation, Estimate)> {
+    ) -> anyhow::Result<(UserOperationVariant, Estimate)> {
         let nonce = self.nonce(account).await?;
         let (max_fee, priority) = self.fees().await?;
         let call_data: Bytes = IAccountExecute::executeCall {
@@ -478,6 +603,8 @@ impl Client<'_> {
         }
         .abi_encode()
         .into();
+        let version = self.fixtures.entry_point_version;
+        let paymaster = self.fixtures.paymaster;
 
         let mut request = json!({
             "sender": account.sender,
@@ -487,14 +614,26 @@ impl Client<'_> {
             "maxPriorityFeePerGas": U128::from(priority),
             "signature": Self::dummy_signature(account.kind),
         });
-        if let Some((factory, data)) = &account.factory {
-            request["factory"] = json!(factory);
-            request["factoryData"] = json!(data);
-        }
-        if payer == Payer::Paymaster {
-            request["paymaster"] = json!(self.fixtures.paymaster);
-            request["paymasterData"] = json!(Bytes::new());
-            request["paymasterPostOpGasLimit"] = json!(U128::ZERO);
+        match version {
+            EpVersion::V0_6 => {
+                request["initCode"] = json!(Self::init_code(account));
+                request["paymasterAndData"] = json!(if payer == Payer::Paymaster {
+                    Bytes::copy_from_slice(paymaster.as_slice())
+                } else {
+                    Bytes::new()
+                });
+            }
+            EpVersion::V0_7 => {
+                if let Some((factory, data)) = &account.factory {
+                    request["factory"] = json!(factory);
+                    request["factoryData"] = json!(data);
+                }
+                if payer == Payer::Paymaster {
+                    request["paymaster"] = json!(paymaster);
+                    request["paymasterData"] = json!(Bytes::new());
+                    request["paymasterPostOpGasLimit"] = json!(U128::ZERO);
+                }
+            }
         }
         if let Some(auth) = auth {
             request["eip7702Auth"] = serde_json::to_value(auth)?;
@@ -523,43 +662,73 @@ impl Client<'_> {
                 .transpose()?,
         };
 
-        let assemble = |signature: Bytes| {
-            let mut builder = UserOperationBuilder::new(
-                &self.spec,
-                EntryPointVersion::V0_7,
-                UserOperationRequiredFields {
-                    sender: account.sender,
-                    nonce,
-                    call_data: call_data.clone(),
-                    call_gas_limit: estimate.call_gas_limit,
-                    verification_gas_limit: estimate.verification_gas_limit,
-                    pre_verification_gas: estimate.pre_verification_gas,
-                    max_priority_fee_per_gas: priority,
-                    max_fee_per_gas: max_fee,
-                    signature,
-                },
-            );
-            if let Some((factory, data)) = &account.factory {
-                builder = builder.factory(*factory, data.clone());
+        let assemble = |signature: Bytes| -> UserOperationVariant {
+            match version {
+                EpVersion::V0_6 => {
+                    let mut builder = uo_v0_6::UserOperationBuilder::new(
+                        &self.spec,
+                        uo_v0_6::UserOperationRequiredFields {
+                            sender: account.sender,
+                            nonce,
+                            init_code: Self::init_code(account),
+                            call_data: call_data.clone(),
+                            call_gas_limit: estimate.call_gas_limit,
+                            verification_gas_limit: estimate.verification_gas_limit,
+                            pre_verification_gas: estimate.pre_verification_gas,
+                            max_fee_per_gas: max_fee,
+                            max_priority_fee_per_gas: priority,
+                            paymaster_and_data: if payer == Payer::Paymaster {
+                                Bytes::copy_from_slice(paymaster.as_slice())
+                            } else {
+                                Bytes::new()
+                            },
+                            signature,
+                        },
+                    );
+                    if let Some(auth) = auth {
+                        builder = builder.authorization_tuple(auth.clone());
+                    }
+                    builder.build().into()
+                }
+                EpVersion::V0_7 => {
+                    let mut builder = uo_v0_7::UserOperationBuilder::new(
+                        &self.spec,
+                        EntryPointVersion::V0_7,
+                        uo_v0_7::UserOperationRequiredFields {
+                            sender: account.sender,
+                            nonce,
+                            call_data: call_data.clone(),
+                            call_gas_limit: estimate.call_gas_limit,
+                            verification_gas_limit: estimate.verification_gas_limit,
+                            pre_verification_gas: estimate.pre_verification_gas,
+                            max_priority_fee_per_gas: priority,
+                            max_fee_per_gas: max_fee,
+                            signature,
+                        },
+                    );
+                    if let Some((factory, data)) = &account.factory {
+                        builder = builder.factory(*factory, data.clone());
+                    }
+                    if payer == Payer::Paymaster {
+                        builder = builder.paymaster(
+                            paymaster,
+                            estimate
+                                .paymaster_verification_gas_limit
+                                .unwrap_or_default(),
+                            0,
+                            Bytes::new(),
+                        );
+                    }
+                    if let Some(auth) = auth {
+                        builder = builder.authorization_tuple(auth.clone());
+                    }
+                    builder.build().into()
+                }
             }
-            if payer == Payer::Paymaster {
-                builder = builder.paymaster(
-                    self.fixtures.paymaster,
-                    estimate
-                        .paymaster_verification_gas_limit
-                        .unwrap_or_default(),
-                    0,
-                    Bytes::new(),
-                );
-            }
-            if let Some(auth) = auth {
-                builder = builder.authorization_tuple(auth.clone());
-            }
-            builder.build()
         };
 
-        // The signature is not part of the hash. Both account families sign the EIP-191 hash of
-        // the userOpHash.
+        // The signature is not part of the hash. Every account here signs the EIP-191 hash of the
+        // userOpHash.
         let hash = assemble(Bytes::new()).hash();
         let ecdsa = account.owner.sign_hash_sync(&eip191_hash_message(hash))?;
         let mut signature = Self::signature_prefix(account.kind).to_vec();
@@ -567,7 +736,16 @@ impl Client<'_> {
         Ok((assemble(signature.into()), estimate))
     }
 
-    fn rpc_op(op: &UserOperation, payer: Payer) -> anyhow::Result<Value> {
+    /// v0.6 `initCode`: factory address followed by the factory call, or empty once deployed.
+    fn init_code(account: &Account) -> Bytes {
+        account
+            .factory
+            .as_ref()
+            .map(|(factory, data)| [factory.as_slice(), data.as_ref()].concat().into())
+            .unwrap_or_default()
+    }
+
+    fn rpc_op(op: &UserOperationVariant) -> anyhow::Result<Value> {
         let mut v = json!({
             "sender": op.sender(),
             "nonce": op.nonce(),
@@ -579,16 +757,25 @@ impl Client<'_> {
             "maxPriorityFeePerGas": U128::from(op.max_priority_fee_per_gas()),
             "signature": op.signature(),
         });
-        if let Some(factory) = op.factory() {
-            v["factory"] = json!(factory);
-            v["factoryData"] = json!(op.factory_data());
-        }
-        if payer == Payer::Paymaster {
-            v["paymaster"] = json!(op.paymaster());
-            v["paymasterVerificationGasLimit"] =
-                json!(U128::from(op.paymaster_verification_gas_limit()));
-            v["paymasterPostOpGasLimit"] = json!(U128::from(op.paymaster_post_op_gas_limit()));
-            v["paymasterData"] = json!(op.paymaster_data());
+        match op {
+            UserOperationVariant::V0_6(op) => {
+                v["initCode"] = json!(op.init_code());
+                v["paymasterAndData"] = json!(op.paymaster_and_data());
+            }
+            UserOperationVariant::V0_7(op) => {
+                if let Some(factory) = op.factory() {
+                    v["factory"] = json!(factory);
+                    v["factoryData"] = json!(op.factory_data());
+                }
+                if let Some(paymaster) = op.paymaster() {
+                    v["paymaster"] = json!(paymaster);
+                    v["paymasterVerificationGasLimit"] =
+                        json!(U128::from(op.paymaster_verification_gas_limit()));
+                    v["paymasterPostOpGasLimit"] =
+                        json!(U128::from(op.paymaster_post_op_gas_limit()));
+                    v["paymasterData"] = json!(op.paymaster_data());
+                }
+            }
         }
         if let Some(auth) = op.authorization_tuple() {
             v["eip7702Auth"] = serde_json::to_value(auth)?;
@@ -596,12 +783,12 @@ impl Client<'_> {
         Ok(v)
     }
 
-    async fn send(&self, op: &UserOperation, payer: Payer) -> anyhow::Result<B256> {
+    async fn send(&self, op: &UserOperationVariant) -> anyhow::Result<B256> {
         let hash: B256 = self
             .bundler
             .request(
                 "eth_sendUserOperation",
-                (Self::rpc_op(op, payer)?, self.fixtures.entry_point),
+                (Self::rpc_op(op)?, self.fixtures.entry_point),
             )
             .await
             .context("eth_sendUserOperation")?;
@@ -673,7 +860,7 @@ impl Client<'_> {
         let outcome: anyhow::Result<()> = async {
             let (op, estimate) = self.build(account, payer, auth.as_ref()).await?;
             result.estimate = Some(estimate);
-            let hash = self.send(&op, payer).await?;
+            let hash = self.send(&op).await?;
             result.user_op_hash = Some(hash);
             let receipt = self.wait_receipt(hash).await?;
             Self::fill_receipt(&mut result, &receipt)?;
@@ -700,13 +887,12 @@ impl Client<'_> {
         result
     }
 
-    /// Several self-paying LightAccount deployments submitted together, for one multi-op bundle.
-    async fn submit_batch(&self) -> anyhow::Result<Vec<OpResult>> {
+    /// Several self-paying deployments of `kind` submitted together, for one multi-op bundle.
+    async fn submit_batch(&self, name: &str, kind: Kind) -> anyhow::Result<Vec<OpResult>> {
         const BATCH: usize = 3;
-        let name = "batch/light-account/deploy/self-pay";
         let mut accounts = Vec::new();
         for _ in 0..BATCH {
-            let account = self.new_account(Kind::LightAccount).await?;
+            let account = self.new_account(kind).await?;
             self.fund(account.sender).await?;
             accounts.push(account);
         }
@@ -726,7 +912,7 @@ impl Client<'_> {
         // Send all before waiting so they land in the same bundle.
         let mut hashes = Vec::new();
         for (i, op) in &pending {
-            match self.send(op, Payer::SelfPay).await {
+            match self.send(op).await {
                 Ok(hash) => {
                     results[*i].user_op_hash = Some(hash);
                     hashes.push((*i, hash));

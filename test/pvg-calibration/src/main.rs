@@ -34,6 +34,7 @@ mod fixtures;
 mod harness;
 
 use bundle::BundleRunner;
+use fixtures::EpVersion;
 use harness::Harness;
 use rundler_types::chain::{ChainSpec, ForkActivation};
 
@@ -68,6 +69,10 @@ struct Cli {
     #[arg(long, global = true)]
     glamsterdam_prediction: bool,
 
+    /// EntryPoint version the probe experiments (E2, E3, E5) and E6 run against. E4 needs v0.7.
+    #[arg(long, global = true, value_enum, default_value = "v0.7")]
+    entry_point: EpVersion,
+
     /// Label for the report file name, e.g. `anvil-prague` or `devnet`
     #[arg(long, global = true, default_value = "run")]
     label: String,
@@ -82,13 +87,13 @@ enum Command {
     CalibrateChain,
     /// E1: deploy (or find) the EntryPoint and probe fixtures, and print their addresses
     Fixtures,
-    /// E2: shared and per-op unmetered overhead by payer and deploy path (EntryPoint v0.7)
+    /// E2: shared and per-op unmetered overhead by payer and deploy path
     Overhead,
-    /// E3: unmetered gas per byte of callData and signature (EntryPoint v0.7)
+    /// E3: unmetered gas per byte of callData and signature
     Calldata,
-    /// E4: unmetered cost of EIP-7702 authorizations by authority state (EntryPoint v0.7)
+    /// E4: unmetered cost of EIP-7702 authorizations by authority state (EntryPoint v0.7 only)
     Authorization,
-    /// E5: storage shapes that move gas between metered and unmetered (EntryPoint v0.7)
+    /// E5: storage shapes that move gas between metered and unmetered
     Hazards,
     /// E6: end to end through a running rundler, with real account implementations; measures
     /// the bundler's margin on each bundle rundler sends
@@ -112,6 +117,9 @@ async fn main() -> anyhow::Result<()> {
         .as_deref()
         .context("PVG_PRIVATE_KEY (or --private-key) is required")?;
     let harness = Harness::connect(&cli.rpc_url, private_key).await?;
+    let ep = cli.entry_point;
+    // Report names carry the EntryPoint version for every experiment that runs against one.
+    let experiment = |id: &str| format!("{id}-{}", ep.as_str());
 
     match cli.command {
         Command::CalibrateChain => {
@@ -122,19 +130,28 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::EndToEnd { bundler_rpc_url } => {
             let chain_id = harness.chain_info().await?.chain_id;
-            let fixtures = fixtures::ensure(&harness).await?;
+            let fixtures = fixtures::ensure(&harness, ep).await?;
             let report =
                 experiments::e2e::run(&harness, &fixtures, chain_id, &bundler_rpc_url).await?;
-            let path = write_report(&cli.out_dir, &cli.label, "e6", chain_id, &report)?;
+            let path = write_report(
+                &cli.out_dir,
+                &cli.label,
+                &experiment("e6"),
+                chain_id,
+                &report,
+            )?;
             eprintln!("report written to {}", path.display());
         }
         Command::Fixtures => {
-            let fixtures = fixtures::ensure(&harness).await?;
+            let fixtures = fixtures::ensure(&harness, ep).await?;
             println!("{}", serde_json::to_string_pretty(&fixtures)?);
         }
         Command::Overhead | Command::Calldata | Command::Authorization | Command::Hazards => {
+            if matches!(cli.command, Command::Authorization) && ep != EpVersion::V0_7 {
+                anyhow::bail!("E4 (authorization) runs against EntryPoint v0.7 only");
+            }
             let chain_id = harness.chain_info().await?.chain_id;
-            let fixtures = fixtures::ensure(&harness).await?;
+            let fixtures = fixtures::ensure(&harness, ep).await?;
             let spec = prediction_spec(chain_id, cli.glamsterdam_prediction);
             let runner = BundleRunner {
                 harness: &harness,
@@ -145,19 +162,19 @@ async fn main() -> anyhow::Result<()> {
             let path = match cli.command {
                 Command::Overhead => {
                     let report = experiments::overhead::run(&runner, cli.only.as_deref()).await?;
-                    write_report(&cli.out_dir, label, "e2", id, &report)?
+                    write_report(&cli.out_dir, label, &experiment("e2"), id, &report)?
                 }
                 Command::Calldata => {
                     let report = experiments::calldata::run(&runner).await?;
-                    write_report(&cli.out_dir, label, "e3", id, &report)?
+                    write_report(&cli.out_dir, label, &experiment("e3"), id, &report)?
                 }
                 Command::Authorization => {
                     let report = experiments::authorization::run(&runner, chain_id).await?;
-                    write_report(&cli.out_dir, label, "e4", id, &report)?
+                    write_report(&cli.out_dir, label, &experiment("e4"), id, &report)?
                 }
                 Command::Hazards => {
                     let report = experiments::hazards::run(&runner).await?;
-                    write_report(&cli.out_dir, label, "e5", id, &report)?
+                    write_report(&cli.out_dir, label, &experiment("e5"), id, &report)?
                 }
                 Command::CalibrateChain | Command::Fixtures | Command::EndToEnd { .. } => {
                     unreachable!()
