@@ -28,6 +28,5 @@ All reads go through `rundler_sim::gas::load_pvg_state`. The state is read as so
 
 ## Limits
 
-- The v0.6 per-op value is provisional until it is measured on a v0.6 EntryPoint.
 - Bundles must stay at or below the EIP-7825 cap (`transaction_gas_limit = 16777216`). Above it the EIP-8037 state-gas reservoir is non-empty, and the EntryPoint no longer sees all state gas. Gas estimation must stay at or below it too (`--max_gas_estimation_gas`).
 - Clearing a slot that another op allocated earlier in the same bundle credits the refill to the `handleOps` frame, inside the clearing op's validation span. That lowers the clearing op's measured gas, and can make the EntryPoint's `gasleft()` subtraction underflow when the refill exceeds the span's own gas. Pricing does not address this.
