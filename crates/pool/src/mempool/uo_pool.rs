@@ -37,7 +37,7 @@ use rundler_types::{
 use rundler_utils::{emit::WithEntryPoint, guard_timer::CustomTimerGuard};
 use tokio::sync::broadcast;
 use tonic::async_trait;
-use tracing::{info, instrument};
+use tracing::{Level, info, instrument};
 
 use super::{
     Mempool, MempoolResult, OperationOrigin, PoolConfig, gas_metrics, paymaster::PaymasterTracker,
@@ -210,6 +210,7 @@ where
                 return Ok(()); // No call gas limit, not useful, but not a failure here.
             }
 
+            let op_hash = op.hash();
             let sim_result = self
                 .ep_providers
                 .entry_point()
@@ -246,6 +247,11 @@ where
                     if execution_gas_efficiency
                         < self.config.execution_gas_limit_efficiency_reject_threshold
                     {
+                        let pre_op_gas = execution_res.pre_op_gas;
+                        let required = self.config.execution_gas_limit_efficiency_reject_threshold;
+                        tracing::debug!(
+                            "Execution gas limit efficiency too low. Op hash: {op_hash:?} total gas used: {total_gas_used} pre op gas: {pre_op_gas} execution gas used: {execution_gas_used} execution gas limit: {execution_gas_limit} efficiency: {execution_gas_efficiency} required: {required}"
+                        );
                         return Err(MempoolError::ExecutionGasLimitEfficiencyTooLow(
                             self.config.execution_gas_limit_efficiency_reject_threshold,
                             execution_gas_efficiency,
@@ -275,6 +281,294 @@ where
             .write()
             .pool
             .remove_out_of_date_preconfirmed_uos(block_number);
+    }
+
+    async fn add_operation_inner(
+        &self,
+        origin: OperationOrigin,
+        mut op: UserOperationVariant,
+        perms: UserOperationPermissions,
+    ) -> MempoolResult<B256> {
+        // Initial state checks
+        let to_replace = {
+            let state = self.state.read();
+
+            // Check if op violates the STO-040 spec rule
+            state.pool.check_multiple_roles_violation(&op)?;
+
+            // Check if op is already known or replacing another, and if so, ensure its fees are high enough
+            state
+                .pool
+                .check_replacement(&op)?
+                .and_then(|r| self.state.read().pool.get_operation_by_hash(r))
+        };
+
+        // Check reputation of entities in involved in the operation
+        // If throttled, entity can have THROTTLED_ENTITY_MEMPOOL_COUNT inflight operation at a time, else reject
+        // If banned, reject
+        let mut entity_summary = EntitySummary::default();
+        let mut throttled = false;
+
+        for entity in op.entities() {
+            let address = entity.address;
+            let reputation = match self.reputation.status(address) {
+                ReputationStatus::Ok => EntityReputation::Ok,
+                ReputationStatus::Throttled => {
+                    if self.state.read().pool.address_count(&address)
+                        >= self.config.throttled_entity_mempool_count as usize
+                    {
+                        return Err(MempoolError::EntityThrottled(entity));
+                    } else {
+                        throttled = true;
+                        EntityReputation::ThrottledButOk
+                    }
+                }
+                ReputationStatus::Banned => {
+                    return Err(MempoolError::EntityThrottled(entity));
+                }
+            };
+
+            entity_summary.set_status(
+                entity.kind,
+                EntityStatus {
+                    address,
+                    reputation,
+                },
+            );
+        }
+
+        // NOTE: We get the latest block from the provider here to avoid a race condition
+        // where the pool is still processing the previous block, but the user may have been
+        // notified of a new block.
+        //
+        // This doesn't clear all race conditions, as the pool may need to update its state before
+        // a UO can be valid, i.e. for replacement.
+        let (block_hash, block_number, block_timestamp) = self
+            .ep_providers
+            .evm()
+            .get_latest_block_hash_number_and_timestamp()
+            .await
+            .map_err(anyhow::Error::from)?;
+
+        // check if paymaster is present and exists in pool
+        // this is optimistic and could potentially lead to
+        // multiple user operations call this before they are
+        // added to the pool and can lead to an overdraft
+        self.paymaster.check_operation_cost(&op).await?;
+
+        // If using an aggregator, transform with calculated signature
+        if let Some(aggregator) = op.aggregator() {
+            let Some(agg) = self.config.chain_spec.get_signature_aggregator(&aggregator) else {
+                return Err(MempoolError::AggregatorError(format!(
+                    "Unsupported aggregator {:?}",
+                    aggregator
+                )));
+            };
+
+            let signature = match agg.validate_user_op_signature(&op).await {
+                Ok(sig) => sig,
+                Err(e) => {
+                    return Err(MempoolError::AggregatorError(format!(
+                        "Error validating signature: {:?}",
+                        e
+                    )));
+                }
+            };
+
+            op = op.transform_for_aggregator(aggregator, agg.costs().clone(), signature);
+        }
+
+        let versioned_op: UP::UO = op.clone().into();
+
+        // Prechecks
+        let precheck_ret = self
+            .pool_providers
+            .prechecker()
+            .check(&versioned_op, &perms, block_hash, block_timestamp)
+            .await?;
+
+        // Only let ops with successful simulations through
+        // Run simulation and call gas limit efficiency check in parallel
+        let sim_fut = self
+            .pool_providers
+            .simulator()
+            .simulate_validation(versioned_op, perms.trusted, block_hash, None)
+            .map_err(|error| {
+                if let Some(code) = error.aa_error_code() {
+                    entry_point_metrics::record_aa_error(
+                        AaErrorStage::PoolAdmission,
+                        self.config.entry_point,
+                        code,
+                    );
+                }
+                MempoolError::from(error)
+            });
+        let execution_gas_check_future =
+            self.check_execution_gas_limit_efficiency(op.clone(), block_hash);
+        let (sim_result, _) = tokio::try_join!(sim_fut, execution_gas_check_future)?;
+
+        // Check if op has more than the maximum allowed expected storage slots
+        let expected_slots = sim_result.expected_storage.num_slots();
+        if expected_slots > self.config.max_expected_storage_slots {
+            return Err(MempoolError::TooManyExpectedStorageSlots(
+                self.config.max_expected_storage_slots,
+                expected_slots,
+            ));
+        }
+
+        // Check if op violates the STO-041 spec rule
+        self.state
+            .read()
+            .pool
+            .check_associated_storage(&sim_result.associated_addresses, &op)?;
+
+        let verification_gas_efficiency =
+            gas_metrics::verification_gas_efficiency(&op, sim_result.pre_op_gas);
+        if let Some(verification_gas_efficiency) = verification_gas_efficiency {
+            gas_metrics::record_admission_verification_gas_efficiency(
+                self.config.entry_point,
+                &op,
+                verification_gas_efficiency,
+            );
+        }
+
+        // Check pre op gas limit efficiency, an op without a verification gas limit is not checked
+        if self
+            .config
+            .verification_gas_limit_efficiency_reject_threshold
+            > 0.0
+            && let Some(verification_gas_efficiency) = verification_gas_efficiency
+        {
+            let effective_verification_gas_limit_efficiency_reject_threshold = op
+                .effective_verification_gas_limit_efficiency_reject_threshold(
+                    self.config
+                        .verification_gas_limit_efficiency_reject_threshold,
+                );
+            if verification_gas_efficiency
+                < effective_verification_gas_limit_efficiency_reject_threshold
+            {
+                let op_hash = op.hash();
+                let pre_op_gas = sim_result.pre_op_gas;
+                let pre_verification_gas = op.pre_verification_gas();
+                let verification_gas_used = pre_op_gas.saturating_sub(pre_verification_gas);
+                let total_verification_gas_limit = op.total_verification_gas_limit();
+                tracing::debug!(
+                    "Verification gas limit efficiency too low. Op hash: {op_hash:?} pre op gas: {pre_op_gas} preVerificationGas: {pre_verification_gas} verification gas used: {verification_gas_used} total verification gas limit: {total_verification_gas_limit} efficiency: {verification_gas_efficiency} required: {effective_verification_gas_limit_efficiency_reject_threshold}"
+                );
+                return Err(MempoolError::VerificationGasLimitEfficiencyTooLow(
+                    effective_verification_gas_limit_efficiency_reject_threshold,
+                    verification_gas_efficiency,
+                ));
+            }
+        }
+
+        let filter_id = self.mempool_config.match_filter(&op);
+        let valid_time_range = sim_result.valid_time_range;
+        let pool_op = PoolOperation {
+            uo: op,
+            entry_point: self.config.entry_point,
+            aggregator: None,
+            valid_time_range,
+            expected_code_hash: sim_result.code_hash,
+            sim_block_hash: block_hash,
+            sim_block_number: block_number,
+            account_is_staked: sim_result.account_is_staked,
+            entity_infos: sim_result.entity_infos,
+            da_gas_data: precheck_ret.da_gas_data,
+            filter_id,
+            perms,
+            sender_is_7702: precheck_ret.sender_is_7702,
+        };
+
+        // Check sender count in mempool. If sender has too many operations, must be staked
+        {
+            let sender_allowed_count = pool_op
+                .perms
+                .max_allowed_in_pool_for_sender
+                .unwrap_or(self.config.same_sender_mempool_count);
+
+            let state = self.state.read();
+            if !pool_op.account_is_staked
+                && to_replace.is_none()
+                && state.pool.address_count(&pool_op.uo.sender()) >= sender_allowed_count
+            {
+                return Err(MempoolError::MaxOperationsReached(
+                    sender_allowed_count,
+                    Entity::account(pool_op.uo.sender()),
+                ));
+            }
+
+            // Check unstaked non-sender entity counts in the mempool
+            for entity in pool_op
+                .unstaked_entities()
+                .unique()
+                .filter(|e| e.address != pool_op.entity_infos.sender.address())
+            {
+                let mut ops_allowed = self.reputation.get_ops_allowed(entity.address);
+                if let Some(to_replace) = &to_replace
+                    && to_replace.entities().contains(&entity)
+                {
+                    ops_allowed += 1;
+                }
+
+                if state.pool.address_count(&entity.address) >= ops_allowed as usize {
+                    return Err(MempoolError::MaxOperationsReached(
+                        ops_allowed as usize,
+                        entity,
+                    ));
+                }
+            }
+        }
+
+        // Add op to pool
+        let hash = {
+            let mut state = self.state.write();
+            let base_fee = state.base_fee;
+            let hash = state.pool.add_operation_with_pvg_state(
+                pool_op.clone(),
+                base_fee,
+                precheck_ret.required_pre_verification_gas,
+                precheck_ret.pvg_state,
+            )?;
+
+            if throttled {
+                state.throttled_ops.insert(hash);
+            }
+            hash
+        };
+
+        // Add op cost to pending paymaster balance
+        // once the operation has been added to the pool
+        self.paymaster.add_or_update_balance(&pool_op).await?;
+
+        // Update reputation, handling replacement if needed
+        if let Some(to_replace) = to_replace {
+            to_replace.entities().unique().for_each(|e| {
+                self.reputation.dec_seen(e.address);
+            });
+        }
+        pool_op.entities().unique().for_each(|e| {
+            self.reputation.add_seen(e.address);
+            if self.reputation.status(e.address) == ReputationStatus::Throttled {
+                self.throttle_entity(e);
+            } else if self.reputation.status(e.address) == ReputationStatus::Banned {
+                self.remove_entity(e);
+            }
+        });
+
+        // Emit event
+        let op_hash = pool_op.uo.hash();
+        self.emit(OpPoolEvent::ReceivedOp {
+            op_hash,
+            op: pool_op.uo,
+            block_number: pool_op.sim_block_number,
+            origin,
+            valid_after: pool_op.valid_time_range.valid_after,
+            valid_until: pool_op.valid_time_range.valid_until,
+            entities: entity_summary,
+        });
+
+        Ok(hash)
     }
 }
 
@@ -554,281 +848,25 @@ where
     async fn add_operation(
         &self,
         origin: OperationOrigin,
-        mut op: UserOperationVariant,
+        op: UserOperationVariant,
         perms: UserOperationPermissions,
     ) -> MempoolResult<B256> {
-        // Initial state checks
-        let to_replace = {
-            let state = self.state.read();
-
-            // Check if op violates the STO-040 spec rule
-            state.pool.check_multiple_roles_violation(&op)?;
-
-            // Check if op is already known or replacing another, and if so, ensure its fees are high enough
-            state
-                .pool
-                .check_replacement(&op)?
-                .and_then(|r| self.state.read().pool.get_operation_by_hash(r))
-        };
-
-        // Check reputation of entities in involved in the operation
-        // If throttled, entity can have THROTTLED_ENTITY_MEMPOOL_COUNT inflight operation at a time, else reject
-        // If banned, reject
-        let mut entity_summary = EntitySummary::default();
-        let mut throttled = false;
-
-        for entity in op.entities() {
-            let address = entity.address;
-            let reputation = match self.reputation.status(address) {
-                ReputationStatus::Ok => EntityReputation::Ok,
-                ReputationStatus::Throttled => {
-                    if self.state.read().pool.address_count(&address)
-                        >= self.config.throttled_entity_mempool_count as usize
-                    {
-                        return Err(MempoolError::EntityThrottled(entity));
-                    } else {
-                        throttled = true;
-                        EntityReputation::ThrottledButOk
-                    }
-                }
-                ReputationStatus::Banned => {
-                    return Err(MempoolError::EntityThrottled(entity));
-                }
-            };
-
-            entity_summary.set_status(
-                entity.kind,
-                EntityStatus {
-                    address,
-                    reputation,
-                },
+        // Only clone the op for the rejection log when debug logging is enabled
+        let logged_op = tracing::enabled!(Level::DEBUG).then(|| op.clone());
+        let result = self.add_operation_inner(origin, op, perms).await;
+        if let (Err(error), Some(op)) = (&result, logged_op) {
+            let op_hash = op.hash();
+            let sender = op.sender();
+            let factory = op.factory();
+            let paymaster = op.paymaster();
+            let pre_verification_gas = op.pre_verification_gas();
+            let total_verification_gas_limit = op.total_verification_gas_limit();
+            let entry_point = self.config.entry_point;
+            tracing::debug!(
+                "Pool rejected op. Op hash: {op_hash:?} Sender: {sender:?} Factory: {factory:?} Paymaster: {paymaster:?} preVerificationGas: {pre_verification_gas} total verification gas limit: {total_verification_gas_limit} Entrypoint: {entry_point:?} Error: {error} Op: {op:?}"
             );
         }
-
-        // NOTE: We get the latest block from the provider here to avoid a race condition
-        // where the pool is still processing the previous block, but the user may have been
-        // notified of a new block.
-        //
-        // This doesn't clear all race conditions, as the pool may need to update its state before
-        // a UO can be valid, i.e. for replacement.
-        let (block_hash, block_number, block_timestamp) = self
-            .ep_providers
-            .evm()
-            .get_latest_block_hash_number_and_timestamp()
-            .await
-            .map_err(anyhow::Error::from)?;
-
-        // check if paymaster is present and exists in pool
-        // this is optimistic and could potentially lead to
-        // multiple user operations call this before they are
-        // added to the pool and can lead to an overdraft
-        self.paymaster.check_operation_cost(&op).await?;
-
-        // If using an aggregator, transform with calculated signature
-        if let Some(aggregator) = op.aggregator() {
-            let Some(agg) = self.config.chain_spec.get_signature_aggregator(&aggregator) else {
-                return Err(MempoolError::AggregatorError(format!(
-                    "Unsupported aggregator {:?}",
-                    aggregator
-                )));
-            };
-
-            let signature = match agg.validate_user_op_signature(&op).await {
-                Ok(sig) => sig,
-                Err(e) => {
-                    return Err(MempoolError::AggregatorError(format!(
-                        "Error validating signature: {:?}",
-                        e
-                    )));
-                }
-            };
-
-            op = op.transform_for_aggregator(aggregator, agg.costs().clone(), signature);
-        }
-
-        let versioned_op: UP::UO = op.clone().into();
-
-        // Prechecks
-        let precheck_ret = self
-            .pool_providers
-            .prechecker()
-            .check(&versioned_op, &perms, block_hash, block_timestamp)
-            .await?;
-
-        // Only let ops with successful simulations through
-        // Run simulation and call gas limit efficiency check in parallel
-        let sim_fut = self
-            .pool_providers
-            .simulator()
-            .simulate_validation(versioned_op, perms.trusted, block_hash, None)
-            .map_err(|error| {
-                if let Some(code) = error.aa_error_code() {
-                    entry_point_metrics::record_aa_error(
-                        AaErrorStage::PoolAdmission,
-                        self.config.entry_point,
-                        code,
-                    );
-                }
-                MempoolError::from(error)
-            });
-        let execution_gas_check_future =
-            self.check_execution_gas_limit_efficiency(op.clone(), block_hash);
-        let (sim_result, _) = tokio::try_join!(sim_fut, execution_gas_check_future)?;
-
-        // Check if op has more than the maximum allowed expected storage slots
-        let expected_slots = sim_result.expected_storage.num_slots();
-        if expected_slots > self.config.max_expected_storage_slots {
-            return Err(MempoolError::TooManyExpectedStorageSlots(
-                self.config.max_expected_storage_slots,
-                expected_slots,
-            ));
-        }
-
-        // Check if op violates the STO-041 spec rule
-        self.state
-            .read()
-            .pool
-            .check_associated_storage(&sim_result.associated_addresses, &op)?;
-
-        let verification_gas_efficiency =
-            gas_metrics::verification_gas_efficiency(&op, sim_result.pre_op_gas);
-        if let Some(verification_gas_efficiency) = verification_gas_efficiency {
-            gas_metrics::record_admission_verification_gas_efficiency(
-                self.config.entry_point,
-                &op,
-                verification_gas_efficiency,
-            );
-        }
-
-        // Check pre op gas limit efficiency, an op without a verification gas limit is not checked
-        if self
-            .config
-            .verification_gas_limit_efficiency_reject_threshold
-            > 0.0
-            && let Some(verification_gas_efficiency) = verification_gas_efficiency
-        {
-            let effective_verification_gas_limit_efficiency_reject_threshold = op
-                .effective_verification_gas_limit_efficiency_reject_threshold(
-                    self.config
-                        .verification_gas_limit_efficiency_reject_threshold,
-                );
-            if verification_gas_efficiency
-                < effective_verification_gas_limit_efficiency_reject_threshold
-            {
-                return Err(MempoolError::VerificationGasLimitEfficiencyTooLow(
-                    effective_verification_gas_limit_efficiency_reject_threshold,
-                    verification_gas_efficiency,
-                ));
-            }
-        }
-
-        let filter_id = self.mempool_config.match_filter(&op);
-        let valid_time_range = sim_result.valid_time_range;
-        let pool_op = PoolOperation {
-            uo: op,
-            entry_point: self.config.entry_point,
-            aggregator: None,
-            valid_time_range,
-            expected_code_hash: sim_result.code_hash,
-            sim_block_hash: block_hash,
-            sim_block_number: block_number,
-            account_is_staked: sim_result.account_is_staked,
-            entity_infos: sim_result.entity_infos,
-            da_gas_data: precheck_ret.da_gas_data,
-            filter_id,
-            perms,
-            sender_is_7702: precheck_ret.sender_is_7702,
-        };
-
-        // Check sender count in mempool. If sender has too many operations, must be staked
-        {
-            let sender_allowed_count = pool_op
-                .perms
-                .max_allowed_in_pool_for_sender
-                .unwrap_or(self.config.same_sender_mempool_count);
-
-            let state = self.state.read();
-            if !pool_op.account_is_staked
-                && to_replace.is_none()
-                && state.pool.address_count(&pool_op.uo.sender()) >= sender_allowed_count
-            {
-                return Err(MempoolError::MaxOperationsReached(
-                    sender_allowed_count,
-                    Entity::account(pool_op.uo.sender()),
-                ));
-            }
-
-            // Check unstaked non-sender entity counts in the mempool
-            for entity in pool_op
-                .unstaked_entities()
-                .unique()
-                .filter(|e| e.address != pool_op.entity_infos.sender.address())
-            {
-                let mut ops_allowed = self.reputation.get_ops_allowed(entity.address);
-                if let Some(to_replace) = &to_replace
-                    && to_replace.entities().contains(&entity)
-                {
-                    ops_allowed += 1;
-                }
-
-                if state.pool.address_count(&entity.address) >= ops_allowed as usize {
-                    return Err(MempoolError::MaxOperationsReached(
-                        ops_allowed as usize,
-                        entity,
-                    ));
-                }
-            }
-        }
-
-        // Add op to pool
-        let hash = {
-            let mut state = self.state.write();
-            let base_fee = state.base_fee;
-            let hash = state.pool.add_operation_with_pvg_state(
-                pool_op.clone(),
-                base_fee,
-                precheck_ret.required_pre_verification_gas,
-                precheck_ret.pvg_state,
-            )?;
-
-            if throttled {
-                state.throttled_ops.insert(hash);
-            }
-            hash
-        };
-
-        // Add op cost to pending paymaster balance
-        // once the operation has been added to the pool
-        self.paymaster.add_or_update_balance(&pool_op).await?;
-
-        // Update reputation, handling replacement if needed
-        if let Some(to_replace) = to_replace {
-            to_replace.entities().unique().for_each(|e| {
-                self.reputation.dec_seen(e.address);
-            });
-        }
-        pool_op.entities().unique().for_each(|e| {
-            self.reputation.add_seen(e.address);
-            if self.reputation.status(e.address) == ReputationStatus::Throttled {
-                self.throttle_entity(e);
-            } else if self.reputation.status(e.address) == ReputationStatus::Banned {
-                self.remove_entity(e);
-            }
-        });
-
-        // Emit event
-        let op_hash = pool_op.uo.hash();
-        self.emit(OpPoolEvent::ReceivedOp {
-            op_hash,
-            op: pool_op.uo,
-            block_number: pool_op.sim_block_number,
-            origin,
-            valid_after: pool_op.valid_time_range.valid_after,
-            valid_until: pool_op.valid_time_range.valid_until,
-            entities: entity_summary,
-        });
-
-        Ok(hash)
+        result
     }
 
     fn remove_operations(&self, hashes: &[B256]) {
@@ -1105,7 +1143,7 @@ struct UoPoolMetrics {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, str::FromStr, time::Duration, vec};
+    use std::{collections::HashMap, fmt, str::FromStr, sync::Arc, time::Duration, vec};
 
     use alloy_primitives::{Address, Bytes, Log as PrimitiveLog, LogData, address, bytes, uint};
     use alloy_rpc_types_eth::TransactionReceipt as AlloyTransactionReceipt;
@@ -1113,6 +1151,7 @@ mod tests {
     use alloy_sol_types::SolEvent;
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
     use mockall::Sequence;
+    use parking_lot::Mutex;
     use rundler_contracts::v0_6::IEntryPoint::UserOperationEvent as UserOperationEventV06;
     use rundler_provider::{
         AnyReceiptEnvelope, DepositInfo, EntryPoint, ExecutionResult, Log, MockDAGasOracleSync,
@@ -1133,6 +1172,11 @@ mod tests {
         da::DAGasData,
         pool::{PrecheckViolation, SimulationViolation},
         v0_6::{UserOperationBuilder, UserOperationRequiredFields},
+    };
+    use tracing::{
+        Event, Metadata, Subscriber,
+        field::{Field, Visit},
+        span,
     };
 
     use super::*;
@@ -2347,6 +2391,99 @@ mod tests {
             // the simulator reports 100K pre-op gas: 50K PVG + 50K of 500K verification gas
             assert_eq!(samples, vec![DebugValue::Histogram(vec![0.1.into()])]);
         }
+    }
+
+    /// Collects the message of every event.
+    struct MessageCollector(Arc<Mutex<Vec<String>>>);
+
+    impl Visit for MessageCollector {
+        fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+            if field.name() == "message" {
+                self.0.lock().push(format!("{value:?}"));
+            }
+        }
+    }
+
+    impl Subscriber for MessageCollector {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &span::Attributes<'_>) -> span::Id {
+            span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &span::Id, _values: &span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &span::Id, _follows: &span::Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            event.record(&mut MessageCollector(self.0.clone()));
+        }
+
+        fn enter(&self, _span: &span::Id) {}
+
+        fn exit(&self, _span: &span::Id) {}
+    }
+
+    #[tokio::test]
+    async fn test_rejected_op_debug_logs() {
+        let mut config = default_config();
+        config.verification_gas_limit_efficiency_reject_threshold = 0.25;
+
+        let op = create_op_from_op_v0_6(UserOperationRequiredFields {
+            call_gas_limit: 10_000,
+            verification_gas_limit: 500_000,
+            pre_verification_gas: 50_000,
+            max_fee_per_gas: 1,
+            max_priority_fee_per_gas: 1,
+            ..Default::default()
+        });
+
+        let mut ep = MockEntryPointV0_6::new();
+        ep.expect_simulate_handle_op().returning(|_, _, _, _, _| {
+            Ok(Ok(ExecutionResult {
+                pre_op_gas: 100_000,
+                paid: uint!(110_000_U256),
+                target_success: true,
+                ..Default::default()
+            }))
+        });
+
+        let pool = create_pool_with_entry_point_config(
+            config,
+            vec![op.clone()],
+            ep,
+            MempoolConfig::default(),
+        );
+
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let _guard = tracing::subscriber::set_default(MessageCollector(messages.clone()));
+
+        let ret = pool
+            .add_operation(OperationOrigin::Local, op.op, default_perms())
+            .await;
+        assert!(matches!(
+            ret,
+            Err(MempoolError::VerificationGasLimitEfficiencyTooLow(_, _))
+        ));
+
+        let messages = messages.lock();
+        // the simulator reports 100K pre-op gas: 50K PVG + 50K of 500K verification gas
+        assert!(
+            messages.iter().any(|m| m.starts_with(
+                "Verification gas limit efficiency too low. Op hash:"
+            ) && m.contains(
+                "pre op gas: 100000 preVerificationGas: 50000 verification gas used: 50000 total verification gas limit: 500000 efficiency: 0.1 required: 0.25"
+            )),
+            "missing efficiency detail log: {messages:?}"
+        );
+        assert!(
+            messages.iter().any(|m| m.starts_with("Pool rejected op.")
+                && m.contains("preVerificationGas: 50000 total verification gas limit: 500000")
+                && m.contains("Error: Verification gas limit efficiency too low")),
+            "missing rejection log: {messages:?}"
+        );
     }
 
     #[tokio::test]
