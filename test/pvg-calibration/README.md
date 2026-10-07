@@ -25,11 +25,18 @@ gas is small, deterministic and independent of calldata:
 | `ProbeAccount`   | v0.7 account (also a 7702 delegate); accepts any signature, pays exactly `missingAccountFunds` |
 | `ProbeFactory`   | CREATE2 factory for `ProbeAccount` (deploy-in-op path)                     |
 | `ProbePaymaster` | sponsors everything; `paymasterData[0]` selects no-postOp / postOp mode    |
+| `*V06`           | the same three for EntryPoint v0.6 (v0.6 `UserOperation`; the paymaster mode byte is `paymasterAndData[20]` and postOp does not burn gas, since v0.6 has no penalty) |
 | `Burner`         | burns a fixed amount of gas, never reads calldata (E0 standard pricing)    |
 | `Scratch`        | slots that the account (signature-driven) and paymaster (mode 2) set/clear |
 
 Fixtures deploy through the CREATE2 deployer `0x4e59…956C` and are skipped if they
 already have code. Every run therefore rebuilds its own fixtures after a devnet reset.
+There is one set per EntryPoint version; the v0.7 contracts are unchanged from the devnet-8
+runs, so their results stay comparable.
+
+The probe paymasters cannot withdraw their EntryPoint deposit, and E6's account owners are
+throwaway keys. Deposits and funding are therefore sized in gas at the current fee rather than
+in fixed ETH amounts, so a run on a cheap chain locks up little.
 
 ## Running
 
@@ -42,6 +49,33 @@ export PVG_RPC_URL=https://rpc.plataberget.ethpandaops.io
 export PVG_PRIVATE_KEY=...        # funded EOA; never commit it
 cargo run -- --label devnet calibrate-chain
 ```
+
+`--entry-point v0.6|v0.7` (default v0.7) selects the EntryPoint for E1, E2, E3, E5 and E6.
+v0.6 needs the canonical EntryPoint `0x5FF1…2789` on the chain. E4 is v0.7 only. Report names
+carry the version, e.g. `e2-v0.6-sepolia-11155111-<ts>.json`.
+
+### Sepolia
+
+Sepolia activated Glamsterdam at timestamp 1,791,294,816 (block 11,856,337, the first with a
+block access list). Run the harness straight against an Alchemy Sepolia RPC with a dedicated,
+funded key. A local Sepolia node would add nothing: the harness's transactions go to the public
+chain either way, and the RPC serves the archive balances the receipt cross-check reads.
+
+```sh
+export PVG_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/<key>
+export PVG_PRIVATE_KEY=...        # dedicated Sepolia EOA
+cargo run -- --label sepolia calibrate-chain                     # E0: re-check prices first
+for ep in v0.7 v0.6; do
+  for e in overhead calldata hazards; do
+    cargo run -- --label sepolia --glamsterdam-prediction --entry-point $ep $e
+  done
+done
+cargo run -- --label sepolia --glamsterdam-prediction authorization   # E4, v0.7
+```
+
+Do not use `anvil --fork-url <sepolia>` for measurements: anvil does not implement Glamsterdam
+pricing faithfully (see the baseline section). It is still useful as a free smoke test of new
+experiment code.
 
 Baseline on a pre-Glamsterdam fork, using anvil's first dev account:
 
@@ -78,14 +112,14 @@ moves the sender's balance in the same block.
 | ID | Command           | Measures                                                                            |
 | -- | ----------------- | ----------------------------------------------------------------------------------- |
 | E0 | `calibrate-chain` | base tx gas, value/new-account cost, standard calldata and floor per byte, and whether `receipt.gasUsed` equals the charged gas |
-| E1 | `fixtures`        | deploys (or finds) EntryPoint v0.7 and the probes; prints addresses and EntryPoint code hash |
-| E2 | `overhead`        | shared and per-op unmetered gas by payer × deploy path, beneficiary cost, penalty check |
+| E1 | `fixtures`        | deploys (or finds) the EntryPoint and the probes; prints addresses and EntryPoint code hash |
+| E2 | `overhead`        | shared and per-op unmetered gas by payer × deploy path, beneficiary cost, penalty check (v0.7) |
 | E3 | `calldata`        | unmetered gas per byte of `callData` and of `signature`, zero vs non-zero, floor-bound cases |
-| E4 | `authorization`   | unmetered cost per EIP-7702 authorization by authority state (empty, funded, re-delegation), vs rundler's `authorization_gas_limit` |
+| E4 | `authorization`   | unmetered cost per EIP-7702 authorization by authority state (empty, funded, re-delegation), vs rundler's `authorization_gas_limit` (v0.7 only) |
 | E5 | `hazards`         | storage shapes that move gas across metering spans: same-sender zero-deposit ops, exact paymaster drain, cross-op and cross-span slot clears |
-| E6 | `end-to-end`      | through a running rundler: LightAccount v2, MultiOwnerLightAccount v2, ModularAccount v2 and 7702 (SemiModularAccount7702) ops estimated, signed, sent and bundled by rundler; bundler margin per bundle |
+| E6 | `end-to-end`      | through a running rundler: real accounts estimated, signed, sent and bundled by rundler; bundler margin per bundle. v0.7: LightAccount v2, MultiOwnerLightAccount v2, ModularAccount v2 and 7702 (SemiModularAccount7702). v0.6: LightAccount v1.1, SimpleAccount v0.6, MultiOwnerModularAccount v1 |
 
-Planned: E7 v0.6.
+E2, E3 and E5 with `--entry-point v0.6` (formerly "planned E7") calibrate `per_user_op_v0_6_gas`.
 
 ### E6 — end to end through rundler
 
@@ -100,6 +134,10 @@ SIGNER_PRIVATE_KEYS=<builder key> cargo run --release -p rundler -- node \
 
 PVG_RPC_URL=http://127.0.0.1:8547 cargo run -- --label devnet end-to-end   # from this directory
 ```
+
+On Sepolia, use `--network ethereum_sepolia --node_http $PVG_RPC_URL`, and
+`--enabled_entry_points v0.6,v0.7` to run E6 for both versions against one rundler
+(`cargo run -- --label sepolia --entry-point v0.6 end-to-end`).
 
 The harness acts as the wallet: it funds self-paying senders, takes every gas field from
 `eth_estimateUserOperationGas`, signs with the account owner, submits with

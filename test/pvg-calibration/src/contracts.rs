@@ -26,6 +26,18 @@ sol!(
     "contracts/out/Probes.sol/ProbePaymaster.json"
 );
 sol!(Scratch, "contracts/out/Probes.sol/Scratch.json");
+sol!(
+    ProbeAccountV06,
+    "contracts/out/Probes.sol/ProbeAccountV06.json"
+);
+sol!(
+    ProbeFactoryV06,
+    "contracts/out/Probes.sol/ProbeFactoryV06.json"
+);
+sol!(
+    ProbePaymasterV06,
+    "contracts/out/Probes.sol/ProbePaymasterV06.json"
+);
 
 sol! {
     interface IStakeManagerLite {

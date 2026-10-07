@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-//! E3: size sweep (EntryPoint v0.7).
+//! E3: size sweep (EntryPoint v0.6 or v0.7).
 //!
 //! Single-op bundles on a deployed account with a prefunded deposit, growing one field at
 //! a time. The two fields cost different unmetered gas:
