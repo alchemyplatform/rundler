@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-//! Builds v0.7 user operations for the probe fixtures, submits them in a `handleOps`
+//! Builds v0.6 or v0.7 user operations for the probe fixtures, submits them in a `handleOps`
 //! bundle from the harness EOA (acting as the bundler), and measures the unmetered gas.
 //!
 //! # Measurement
@@ -20,8 +20,9 @@
 //! `callData`. The EntryPoint still ABI-encodes and copies the callData for the inner call,
 //! and the account call then fails immediately for lack of gas. With `callGasLimit = 0`
 //! (and a `paymasterPostOpGasLimit` no larger than the execution gas used) the v0.7
-//! unused-gas penalty is zero, so `UserOperationEvent.actualGasUsed` is exactly the gas the
-//! EntryPoint metered for the op. The unmetered gas of the bundle, which PVG must cover, is
+//! unused-gas penalty is zero; v0.6 has no penalty at all. So `UserOperationEvent.actualGasUsed`
+//! is exactly the gas the EntryPoint metered for the op. The unmetered gas of the bundle, which
+//! PVG must cover, is
 //!
 //! ```text
 //! unmetered = receipt.gasUsed - Σ actualGasUsed
@@ -36,19 +37,18 @@ use alloy_provider::Provider;
 use alloy_rpc_types_eth::TransactionRequest;
 use alloy_sol_types::{SolCall, SolEvent};
 use anyhow::{Context, bail};
-use rundler_contracts::v0_7::{IEntryPoint, PackedUserOperation};
+// v0.6 and v0.7 emit the same UserOperationEvent, so the v0.7 binding decodes both.
+use rundler_contracts::{v0_6, v0_7::IEntryPoint};
 use rundler_types::{
-    AuthorityState, EntryPointVersion, PvgState, UserOperation as _,
-    authorization::Eip7702Auth,
-    chain::ChainSpec,
-    v0_7::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
+    AuthorityState, EntryPointVersion, PvgState, UserOperation as _, UserOperationVariant,
+    authorization::Eip7702Auth, chain::ChainSpec, v0_6 as uo_v0_6, v0_7 as uo_v0_7,
 };
 use serde::Serialize;
 
 use crate::{
     contracts::{ProbeFactory, ProbePaymaster},
-    fixtures::{self, Fixtures},
-    harness::{Harness, TxOutcome},
+    fixtures::{self, EpVersion, Fixtures},
+    harness::{Harness, OP_PRIORITY_FEE, TxOutcome},
 };
 
 /// Verification gas limit for an op on an already-deployed account. A consumption check
@@ -57,16 +57,16 @@ const VERIFICATION_GAS_LIMIT: u128 = 300_000;
 /// Verification gas limit for an op that deploys its account. Sized for EIP-8037 state-gas
 /// (new account + code deposit at 1,530 gas per byte).
 const VERIFICATION_GAS_LIMIT_DEPLOY: u128 = 2_000_000;
-/// Paymaster verification gas limit (consumption check, AA36).
+/// Paymaster verification gas limit (consumption check, AA36). v0.7 only: v0.6 gives the
+/// paymaster the op's `verificationGasLimit`.
 const PAYMASTER_VERIFICATION_GAS_LIMIT: u128 = 100_000;
 /// Default `paymasterPostOpGasLimit` for [`Payer::PaymasterPostOp`]. Must be enough for
 /// `ProbePaymaster.postOp` and no more than the execution gas used, or the penalty applies.
+/// v0.7 only: v0.6 gives postOp the op's `verificationGasLimit`.
 pub const DEFAULT_POST_OP_GAS_LIMIT: u128 = 10_000;
 /// `verification_gas_limit_efficiency_reject_threshold` used for the floor-aware prediction
 /// (rundler's CLI default).
 const VERIFICATION_EFFICIENCY_THRESHOLD: f64 = 0.0;
-/// Priority fee of every op, in wei. Op fees only scale prefund and payment, not gas.
-const OP_PRIORITY_FEE: u128 = 1_000;
 
 /// Who pays for an op.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -156,19 +156,25 @@ impl OpSpec {
 
     /// The prefund the EntryPoint requires for this op at `max_fee`
     /// (`callGasLimit` and `preVerificationGas` are 0).
-    pub fn prefund(&self, max_fee: u128) -> U256 {
-        let mut gas = if self.deploy_in_op {
+    pub fn prefund(&self, version: EpVersion, max_fee: u128) -> U256 {
+        let vgl = if self.deploy_in_op {
             VERIFICATION_GAS_LIMIT_DEPLOY
         } else {
             VERIFICATION_GAS_LIMIT
         };
-        match self.payer {
-            Payer::Paymaster => gas += PAYMASTER_VERIFICATION_GAS_LIMIT,
-            Payer::PaymasterPostOp => {
-                gas += PAYMASTER_VERIFICATION_GAS_LIMIT + self.post_op_gas_limit
-            }
-            Payer::SelfZeroDeposit | Payer::SelfPrefunded => {}
-        }
+        let has_paymaster = matches!(self.payer, Payer::Paymaster | Payer::PaymasterPostOp);
+        let gas = match version {
+            // The verification gas limit also bounds paymaster validation and postOp.
+            EpVersion::V0_6 if has_paymaster => vgl * 3,
+            EpVersion::V0_6 => vgl,
+            EpVersion::V0_7 => match self.payer {
+                Payer::Paymaster => vgl + PAYMASTER_VERIFICATION_GAS_LIMIT,
+                Payer::PaymasterPostOp => {
+                    vgl + PAYMASTER_VERIFICATION_GAS_LIMIT + self.post_op_gas_limit
+                }
+                Payer::SelfZeroDeposit | Payer::SelfPrefunded => vgl,
+            },
+        };
         U256::from(gas * max_fee)
     }
 }
@@ -283,8 +289,7 @@ pub struct BundleRunner<'a> {
 
 struct PreparedOp {
     spec: OpSpec,
-    uo: UserOperation,
-    packed: PackedUserOperation,
+    uo: UserOperationVariant,
 }
 
 impl BundleRunner<'_> {
@@ -303,12 +308,7 @@ impl BundleRunner<'_> {
         }
         let beneficiary_address = self.beneficiary_address(beneficiary).await?;
 
-        let input: Bytes = IEntryPoint::handleOpsCall {
-            ops: ops.iter().map(|op| op.packed.clone()).collect(),
-            beneficiary: beneficiary_address,
-        }
-        .abi_encode()
-        .into();
+        let input = handle_ops_input(&ops, beneficiary_address);
         let floor_input = input.clone();
         let mut request = TransactionRequest::default()
             .with_to(self.fixtures.entry_point)
@@ -414,6 +414,12 @@ impl BundleRunner<'_> {
         })
     }
 
+    /// The prefund the EntryPoint requires for `spec` at `max_fee`, for this runner's
+    /// EntryPoint.
+    pub fn prefund(&self, spec: &OpSpec, max_fee: u128) -> U256 {
+        spec.prefund(self.fixtures.entry_point_version, max_fee)
+    }
+
     /// Builds the ops with fresh senders and funds/deploys them as their payer requires,
     /// batching the preparation into one `ProbeFactory.setup` transaction per group.
     async fn prepare(&self, specs: &[OpSpec]) -> anyhow::Result<Vec<PreparedOp>> {
@@ -439,49 +445,10 @@ impl BundleRunner<'_> {
                 VERIFICATION_GAS_LIMIT
             };
 
-            let mut builder = UserOperationBuilder::new(
-                self.spec,
-                EntryPointVersion::V0_7,
-                UserOperationRequiredFields {
-                    sender,
-                    nonce: spec.nonce,
-                    call_data: spec.call_data.clone(),
-                    call_gas_limit: 0,
-                    verification_gas_limit: vgl,
-                    pre_verification_gas: 0,
-                    max_priority_fee_per_gas: OP_PRIORITY_FEE,
-                    max_fee_per_gas: max_fee,
-                    signature: spec.signature.clone(),
-                },
-            );
-            if spec.deploy_in_op {
-                builder = builder.factory(self.fixtures.factory, Fixtures::factory_data(salt));
-            }
-            let paymaster = spec.paymaster.unwrap_or(self.fixtures.paymaster);
-            builder = match spec.payer {
-                Payer::Paymaster => builder.paymaster(
-                    paymaster,
-                    PAYMASTER_VERIFICATION_GAS_LIMIT,
-                    0,
-                    spec.paymaster_data.clone().unwrap_or_default(),
-                ),
-                Payer::PaymasterPostOp => builder.paymaster(
-                    paymaster,
-                    PAYMASTER_VERIFICATION_GAS_LIMIT,
-                    spec.post_op_gas_limit,
-                    spec.paymaster_data
-                        .clone()
-                        .unwrap_or(Bytes::from_static(&[0x01])),
-                ),
-                Payer::SelfZeroDeposit | Payer::SelfPrefunded => builder,
-            };
-            if let Some(auth) = &spec.authorization {
-                builder = builder.authorization_tuple(Eip7702Auth::from(auth.clone()));
-            }
-            let uo = builder.build();
+            let uo = self.build_op(spec, sender, salt, vgl, max_fee);
 
-            let prefund = U256::from(uo.total_gas_limit() * max_fee);
-            debug_assert_eq!(prefund, spec.prefund(max_fee));
+            let prefund = uo.max_gas_cost();
+            debug_assert_eq!(prefund, self.prefund(spec, max_fee));
             let (account_value, deposit_value) = match spec.payer {
                 // Exactly the prefund: the account pays it all as missingAccountFunds.
                 Payer::SelfZeroDeposit => (prefund, U256::ZERO),
@@ -497,11 +464,9 @@ impl BundleRunner<'_> {
                     .push(salt);
             }
 
-            let packed = uo.clone().pack();
             ops.push(PreparedOp {
                 spec: spec.clone(),
                 uo,
-                packed,
             });
         }
 
@@ -516,7 +481,7 @@ impl BundleRunner<'_> {
         let fixture_prefunds: U256 = ops
             .iter()
             .filter(|op| op.uo.paymaster() == Some(self.fixtures.paymaster))
-            .map(|op| U256::from(op.uo.total_gas_limit() * op.uo.max_fee_per_gas()))
+            .map(|op| op.uo.max_gas_cost())
             .sum();
         if fixture_prefunds > U256::ZERO {
             let ep = self.fixtures.entry_point;
@@ -530,10 +495,104 @@ impl BundleRunner<'_> {
         Ok(ops)
     }
 
+    /// The op for `spec`, with PVG and `callGasLimit` 0, for this runner's EntryPoint.
+    fn build_op(
+        &self,
+        spec: &OpSpec,
+        sender: Address,
+        salt: U256,
+        vgl: u128,
+        max_fee: u128,
+    ) -> UserOperationVariant {
+        let factory_data = Fixtures::factory_data(salt);
+        let paymaster = spec.paymaster.unwrap_or(self.fixtures.paymaster);
+        let paymaster_data = match spec.payer {
+            Payer::Paymaster => Some(spec.paymaster_data.clone().unwrap_or_default()),
+            Payer::PaymasterPostOp => Some(
+                spec.paymaster_data
+                    .clone()
+                    .unwrap_or(Bytes::from_static(&[0x01])),
+            ),
+            Payer::SelfZeroDeposit | Payer::SelfPrefunded => None,
+        };
+        let authorization = spec.authorization.clone().map(Eip7702Auth::from);
+
+        match self.fixtures.entry_point_version {
+            EpVersion::V0_6 => {
+                let concat = |address: Address, data: &Bytes| -> Bytes {
+                    [address.as_slice(), data.as_ref()].concat().into()
+                };
+                let mut builder = uo_v0_6::UserOperationBuilder::new(
+                    self.spec,
+                    uo_v0_6::UserOperationRequiredFields {
+                        sender,
+                        nonce: spec.nonce,
+                        init_code: if spec.deploy_in_op {
+                            concat(self.fixtures.factory, &factory_data)
+                        } else {
+                            Bytes::new()
+                        },
+                        call_data: spec.call_data.clone(),
+                        call_gas_limit: 0,
+                        verification_gas_limit: vgl,
+                        pre_verification_gas: 0,
+                        max_fee_per_gas: max_fee,
+                        max_priority_fee_per_gas: OP_PRIORITY_FEE,
+                        paymaster_and_data: paymaster_data
+                            .map(|data| concat(paymaster, &data))
+                            .unwrap_or_default(),
+                        signature: spec.signature.clone(),
+                    },
+                );
+                if let Some(auth) = authorization {
+                    builder = builder.authorization_tuple(auth);
+                }
+                builder.build().into()
+            }
+            EpVersion::V0_7 => {
+                let mut builder = uo_v0_7::UserOperationBuilder::new(
+                    self.spec,
+                    EntryPointVersion::V0_7,
+                    uo_v0_7::UserOperationRequiredFields {
+                        sender,
+                        nonce: spec.nonce,
+                        call_data: spec.call_data.clone(),
+                        call_gas_limit: 0,
+                        verification_gas_limit: vgl,
+                        pre_verification_gas: 0,
+                        max_priority_fee_per_gas: OP_PRIORITY_FEE,
+                        max_fee_per_gas: max_fee,
+                        signature: spec.signature.clone(),
+                    },
+                );
+                if spec.deploy_in_op {
+                    builder = builder.factory(self.fixtures.factory, factory_data);
+                }
+                if let Some(data) = paymaster_data {
+                    let post_op_gas_limit = if spec.payer == Payer::PaymasterPostOp {
+                        spec.post_op_gas_limit
+                    } else {
+                        0
+                    };
+                    builder = builder.paymaster(
+                        paymaster,
+                        PAYMASTER_VERIFICATION_GAS_LIMIT,
+                        post_op_gas_limit,
+                        data,
+                    );
+                }
+                if let Some(auth) = authorization {
+                    builder = builder.authorization_tuple(auth);
+                }
+                builder.build().into()
+            }
+        }
+    }
+
     /// Reads the state rundler prices the op with, the same way `rundler_sim::gas::load_pvg_state`
     /// does: the sender's EntryPoint deposit without a paymaster, and the authority account for
     /// an op with an authorization.
-    async fn pvg_state(&self, uo: &UserOperation) -> anyhow::Result<PvgState> {
+    async fn pvg_state(&self, uo: &UserOperationVariant) -> anyhow::Result<PvgState> {
         let sender = uo.sender();
         let sender_deposit_is_zero = if uo.paymaster().is_none() {
             let deposit =
@@ -559,14 +618,7 @@ impl BundleRunner<'_> {
 
     /// `maxFeePerGas` ops get when their spec does not pin one.
     pub async fn default_max_fee(&self) -> anyhow::Result<u128> {
-        let base_fee = self
-            .harness
-            .provider
-            .get_block(alloy_rpc_types_eth::BlockId::latest())
-            .await?
-            .and_then(|b| b.header.base_fee_per_gas)
-            .unwrap_or(1) as u128;
-        Ok(base_fee * 2 + OP_PRIORITY_FEE)
+        self.harness.default_max_fee().await
     }
 
     /// Deploys (if `predeploy`) and funds the `ProbeAccount`s with these salts in one
@@ -676,6 +728,29 @@ impl BundleRunner<'_> {
             floor_gas,
             floor_bound: gas_used == floor_gas,
         }
+    }
+}
+
+/// `handleOps(ops, beneficiary)` calldata for the ops' EntryPoint version.
+fn handle_ops_input(ops: &[PreparedOp], beneficiary: Address) -> Bytes {
+    let uos = ops.iter().map(|op| op.uo.clone());
+    match ops.first().map(|op| op.uo.entry_point_version()) {
+        Some(EntryPointVersion::V0_6) => v0_6::IEntryPoint::handleOpsCall {
+            ops: uos
+                .map(|uo| uo_v0_6::UserOperation::from(uo).into())
+                .collect(),
+            beneficiary,
+        }
+        .abi_encode()
+        .into(),
+        _ => IEntryPoint::handleOpsCall {
+            ops: uos
+                .map(|uo| uo_v0_7::UserOperation::from(uo).pack())
+                .collect(),
+            beneficiary,
+        }
+        .abi_encode()
+        .into(),
     }
 }
 

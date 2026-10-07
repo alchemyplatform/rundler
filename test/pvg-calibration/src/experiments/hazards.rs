@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-//! E5: storage shapes whose cost moves between metered and unmetered gas (EntryPoint v0.7).
+//! E5: storage shapes whose cost moves between metered and unmetered gas (EntryPoint v0.6 or v0.7).
 //!
 //! Under EIP-8037 a slot that is zero at transaction start costs state-gas when written.
 //! Clearing it again in the same transaction refills that gas directly into `gas_left`,
@@ -40,7 +40,8 @@ use crate::{
 };
 
 /// `paymasterPostOpGasLimit` for the cross-span group: enough for `Scratch.clear`
-/// (`ProbePaymaster.postOp` burns the rest, so there is no penalty).
+/// (`ProbePaymaster.postOp` burns the rest, so there is no penalty). v0.7 only: v0.6 gives
+/// postOp the op's `verificationGasLimit`.
 const CROSS_SPAN_POST_OP_GAS_LIMIT: u128 = 60_000;
 
 #[derive(Debug, Serialize)]
@@ -203,7 +204,7 @@ async fn deposit_group(
 
         // Two ops (nonces 0 and 1) from one prepared account, funded for both.
         let salt = U256::from_be_bytes(B256::random().0);
-        let prefund = spec.prefund(max_fee);
+        let prefund = runner.prefund(&spec, max_fee);
         let (account_value, deposit_value) = match payer {
             Payer::SelfZeroDeposit => (prefund * U256::from(4), U256::ZERO),
             _ => (U256::ZERO, prefund * U256::from(4)),
@@ -231,14 +232,18 @@ async fn deposit_group(
     let mut spec = OpSpec::typical(Payer::Paymaster, false);
     spec.max_fee = Some(max_fee);
     record(runner, cases, GROUP, "paymaster-funded", &[spec.clone()]).await;
-    let paymaster =
-        fixtures::ensure_paymaster(runner.harness, runner.fixtures.entry_point, B256::random())
-            .await?;
+    let paymaster = fixtures::ensure_paymaster(
+        runner.harness,
+        runner.fixtures.entry_point_version,
+        runner.fixtures.entry_point,
+        B256::random(),
+    )
+    .await?;
     fixtures::deposit_to(
         runner.harness,
         runner.fixtures.entry_point,
         paymaster,
-        spec.prefund(max_fee),
+        runner.prefund(&spec, max_fee),
     )
     .await?;
     spec.paymaster = Some(paymaster);

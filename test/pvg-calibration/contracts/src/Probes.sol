@@ -19,6 +19,21 @@ struct PackedUserOperation {
     bytes signature;
 }
 
+/// Same layout as EntryPoint v0.6 `UserOperation`.
+struct UserOperationV06 {
+    address sender;
+    uint256 nonce;
+    bytes initCode;
+    bytes callData;
+    uint256 callGasLimit;
+    uint256 verificationGasLimit;
+    uint256 preVerificationGas;
+    uint256 maxFeePerGas;
+    uint256 maxPriorityFeePerGas;
+    bytes paymasterAndData;
+    bytes signature;
+}
+
 /// Storage slots that probe accounts and the probe paymaster allocate and clear, to create
 /// state-gas charges and refills in chosen EntryPoint metering spans.
 contract Scratch {
@@ -190,6 +205,126 @@ contract ProbePaymaster {
 
     /// Gas postOp leaves unburned, enough to return.
     uint256 private constant POST_OP_GAS_RESERVE = 600;
+
+    receive() external payable {}
+}
+
+/// v0.6 counterpart of `ProbeAccount`: same behaviour, v0.6 `validateUserOp`. Separate from
+/// `ProbeAccount` so the v0.7 fixtures keep their bytecode (and their deploy cost).
+contract ProbeAccountV06 {
+    address public immutable entryPoint;
+
+    constructor(address _entryPoint) {
+        entryPoint = _entryPoint;
+    }
+
+    function validateUserOp(UserOperationV06 calldata userOp, bytes32, uint256 missingAccountFunds)
+        external
+        returns (uint256)
+    {
+        require(msg.sender == entryPoint, "not from entry point");
+        ScratchAction.perform(userOp.signature);
+        if (missingAccountFunds != 0) {
+            (bool ok,) = payable(msg.sender).call{value: missingAccountFunds}("");
+            (ok);
+        }
+        return 0;
+    }
+
+    fallback() external payable {}
+
+    receive() external payable {}
+}
+
+/// `ProbeFactory` for `ProbeAccountV06`.
+contract ProbeFactoryV06 {
+    address public immutable entryPoint;
+
+    constructor(address _entryPoint) {
+        entryPoint = _entryPoint;
+    }
+
+    function createAccount(uint256 salt) public returns (address account) {
+        account = getAddress(salt);
+        if (account.code.length > 0) {
+            return account;
+        }
+        account = address(new ProbeAccountV06{salt: bytes32(salt)}(entryPoint));
+    }
+
+    /// See `ProbeFactory.setup`.
+    function setup(uint256[] calldata salts, bool predeploy, uint256 accountValue, uint256 depositValue)
+        external
+        payable
+    {
+        for (uint256 i = 0; i < salts.length; i++) {
+            address account = predeploy ? createAccount(salts[i]) : getAddress(salts[i]);
+            if (accountValue != 0) {
+                (bool ok,) = payable(account).call{value: accountValue}("");
+                require(ok, "fund failed");
+            }
+            if (depositValue != 0) {
+                IEntryPointDeposit(entryPoint).depositTo{value: depositValue}(account);
+            }
+        }
+    }
+
+    function getAddress(uint256 salt) public view returns (address) {
+        bytes32 hash = keccak256(
+            abi.encodePacked(
+                bytes1(0xff),
+                address(this),
+                bytes32(salt),
+                keccak256(abi.encodePacked(type(ProbeAccountV06).creationCode, abi.encode(entryPoint)))
+            )
+        );
+        return address(uint160(uint256(hash)));
+    }
+}
+
+/// v0.6 counterpart of `ProbePaymaster`, with the same modes in `paymasterAndData[20]` (v0.6 has
+/// no paymaster gas limits in `paymasterAndData`):
+///   0 (or empty) - no context, so postOp is never called
+///   1            - non-empty context, so postOp is called
+///   2            - postOp is called and clears a Scratch slot; the data is
+///                  `0x02 | key(32) | scratch(20)`
+///
+/// postOp does not burn gas: v0.6 has no unused-gas penalty, and its postOp limit is the op's
+/// whole `verificationGasLimit`.
+contract ProbePaymasterV06 {
+    address public immutable entryPoint;
+
+    /// Same signature as `ProbePaymaster.ProbePostOp`, so one decoder serves both. v0.6 passes
+    /// no fee per gas, so `actualUserOpFeePerGas` is always 0.
+    event ProbePostOp(uint256 actualGasCost, uint256 actualUserOpFeePerGas);
+
+    constructor(address _entryPoint) {
+        entryPoint = _entryPoint;
+    }
+
+    function validatePaymasterUserOp(UserOperationV06 calldata userOp, bytes32, uint256)
+        external
+        view
+        returns (bytes memory context, uint256 validationData)
+    {
+        require(msg.sender == entryPoint, "not from entry point");
+        bytes calldata pmd = userOp.paymasterAndData;
+        if (pmd.length > 20 && pmd[20] == 0x01) {
+            context = hex"01";
+        } else if (pmd.length >= 73 && pmd[20] == 0x02) {
+            context = abi.encode(bytes32(pmd[21:53]), address(bytes20(pmd[53:73])));
+        }
+        return (context, 0);
+    }
+
+    function postOp(uint8, bytes calldata context, uint256 actualGasCost) external {
+        require(msg.sender == entryPoint, "not from entry point");
+        if (context.length == 64) {
+            (bytes32 key, address scratch) = abi.decode(context, (bytes32, address));
+            Scratch(scratch).clear(key);
+        }
+        emit ProbePostOp(actualGasCost, 0);
+    }
 
     receive() external payable {}
 }
