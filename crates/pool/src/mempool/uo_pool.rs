@@ -37,7 +37,7 @@ use rundler_types::{
 use rundler_utils::{emit::WithEntryPoint, guard_timer::CustomTimerGuard};
 use tokio::sync::broadcast;
 use tonic::async_trait;
-use tracing::{Level, info, instrument};
+use tracing::{info, instrument};
 
 use super::{
     Mempool, MempoolResult, OperationOrigin, PoolConfig, gas_metrics, paymaster::PaymasterTracker,
@@ -282,8 +282,282 @@ where
             .pool
             .remove_out_of_date_preconfirmed_uos(block_number);
     }
+}
 
-    async fn add_operation_inner(
+#[async_trait]
+impl<UP, EP> Mempool for UoPool<UP, EP>
+where
+    EP: ProvidersWithEntryPointT,
+    UP: UoPoolProvidersT,
+{
+    #[instrument(skip_all)]
+    async fn on_chain_update(&self, update: &ChainUpdate) {
+        let _timer = CustomTimerGuard::new(self.metrics.update_process_time_ms.clone());
+
+        let preconfirmed_txns = update.preconfirmed_txns.clone();
+        self.update_preconfirmed_uos(preconfirmed_txns, update.preconfirmed_block_number);
+        if update.update_type == UpdateType::Preconfirmed {
+            return;
+        }
+
+        let latest_block_number = update.latest_block_number;
+        self.remove_out_of_date_preconfirmed_uos(latest_block_number);
+        let deduped_ops = update.deduped_ops();
+        let mined_ops = deduped_ops
+            .mined_ops
+            .iter()
+            .filter(|op| op.entry_point == self.config.entry_point);
+
+        let entity_balance_updates = update.entity_balance_updates.iter().filter_map(|u| {
+            if u.entrypoint == self.config.entry_point {
+                Some(u.address)
+            } else {
+                None
+            }
+        });
+
+        let unmined_entity_balance_updates = update
+            .unmined_entity_balance_updates
+            .iter()
+            .filter_map(|u| {
+                if u.entrypoint == self.config.entry_point {
+                    Some(u.address)
+                } else {
+                    None
+                }
+            });
+
+        let unmined_ops = deduped_ops
+            .unmined_ops
+            .iter()
+            .filter(|op| op.entry_point == self.config.entry_point);
+        let mut mined_op_count = 0;
+        let mut unmined_op_count = 0;
+
+        for op in mined_ops {
+            if op.entry_point != self.config.entry_point {
+                continue;
+            }
+            self.paymaster.update_paymaster_balance_from_mined_op(op);
+
+            // Remove throttled ops that were included in the block
+            self.state.write().throttled_ops.remove(&op.hash);
+
+            if let Some(pool_op) = self
+                .state
+                .write()
+                .pool
+                .mine_operation(op, update.latest_block_number)
+            {
+                // Only account for an entity once
+                for entity_addr in pool_op.entities().map(|e| e.address).unique() {
+                    self.reputation.add_included(entity_addr);
+                }
+                // The pool copy can be a replacement with different limits, see Pool::mine_operation
+                if pool_op.uo.hash() == op.hash {
+                    gas_metrics::record_mined_op_gas_efficiency(
+                        self.config.entry_point,
+                        &pool_op.uo,
+                        op.success,
+                        op.actual_gas_used,
+                    );
+                }
+                mined_op_count += 1;
+            }
+        }
+
+        for op in unmined_ops {
+            if op.entry_point != self.config.entry_point {
+                continue;
+            }
+
+            if let Some(paymaster) = op.paymaster {
+                self.paymaster
+                    .unmine_actual_cost(&paymaster, op.actual_gas_cost);
+            }
+
+            let pool_op = self.state.write().pool.unmine_operation(op);
+
+            if let Some(po) = pool_op {
+                for entity_addr in po.entities().map(|e| e.address).unique() {
+                    self.reputation.dec_included(entity_addr);
+                }
+
+                unmined_op_count += 1;
+                let _ = self.paymaster.add_or_update_balance(&po).await;
+            }
+        }
+
+        // Update paymaster balances AFTER updating the pool to reset confirmed balances if needed.
+        if update.reorg_larger_than_history {
+            if let Err(e) = self.reset_confirmed_paymaster_balances().await {
+                tracing::error!("Failed to reset confirmed paymaster balances: {:?}", e);
+            }
+        } else {
+            let addresses = entity_balance_updates
+                .chain(unmined_entity_balance_updates)
+                .unique()
+                .collect::<Vec<_>>();
+            if !addresses.is_empty()
+                && let Err(e) = self
+                    .paymaster
+                    .reset_confirmed_balances_for(&addresses)
+                    .await
+            {
+                tracing::error!("Failed to reset confirmed paymaster balances: {:?}", e);
+            }
+        }
+
+        if mined_op_count > 0 {
+            info!(
+                "{mined_op_count} op(s) mined on entry point {:?} when advancing to block with number {}, hash {:?}.",
+                self.config.entry_point, update.latest_block_number, update.latest_block_hash,
+            );
+        }
+        if unmined_op_count > 0 {
+            info!(
+                "{unmined_op_count} op(s) unmined in reorg on entry point {:?} when advancing to block with number {}, hash {:?}.",
+                self.config.entry_point, update.latest_block_number, update.latest_block_hash,
+            );
+        }
+        let ops_seen: f64 = (mined_op_count as isize - unmined_op_count as isize) as f64;
+        self.ep_specific_metrics.ops_seen.increment(ops_seen as u64);
+        self.ep_specific_metrics
+            .unmined_operations
+            .increment(unmined_op_count);
+
+        // update required bundle fees and update metrics
+        match self
+            .ep_providers
+            .fee_estimator()
+            .required_bundle_fees(update.latest_block_hash, None)
+            .await
+        {
+            Ok((bundle_fees, base_fee)) => {
+                let uo_fees = self
+                    .ep_providers
+                    .fee_estimator()
+                    .required_op_fees(bundle_fees);
+                let max_fee = match format_units(bundle_fees.max_fee_per_gas, "gwei") {
+                    Ok(s) => s.parse::<f64>().unwrap_or_default(),
+                    Err(_) => 0.0,
+                };
+                self.metrics.current_max_fee_gwei.set(max_fee);
+
+                let max_priority_fee =
+                    match format_units(bundle_fees.max_priority_fee_per_gas, "gwei") {
+                        Ok(s) => s.parse::<f64>().unwrap_or_default(),
+                        Err(_) => 0.0,
+                    };
+                self.metrics
+                    .current_max_priority_fee_gwei
+                    .set(max_priority_fee);
+
+                let base_fee_f64 = match format_units(base_fee, "gwei") {
+                    Ok(s) => s.parse::<f64>().unwrap_or_default(),
+                    Err(_) => 0.0,
+                };
+                self.metrics.current_base_fee.set(base_fee_f64);
+
+                // cache for the next update
+                {
+                    let mut state = self.state.write();
+                    state.block_number = update.latest_block_number;
+                    state.block_hash = update.latest_block_hash;
+                    state.bundle_fees = bundle_fees;
+                    state.uo_fees = uo_fees;
+                    state.base_fee = base_fee;
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to update fees: {:?}", e);
+                {
+                    let mut state = self.state.write();
+                    state.block_number = update.latest_block_number;
+                }
+            }
+        }
+
+        let da_block_data = if self.config.da_gas_tracking_enabled
+            && self.ep_providers.da_gas_oracle_sync().is_some()
+        {
+            let da_gas_oracle = self.ep_providers.da_gas_oracle_sync().as_ref().unwrap();
+            match da_gas_oracle
+                .da_block_data(update.latest_block_hash.into())
+                .await
+            {
+                Ok(da_block_data) => Some(da_block_data),
+                Err(e) => {
+                    tracing::error!("Failed to get da block data, skipping da tracking: {:?}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        {
+            let mut state = self.state.write();
+            state
+                .pool
+                .forget_mined_operations_before_block(update.earliest_remembered_block_number);
+
+            // Clear pending bundles for mined transactions
+            let mined_tx_hashes: Vec<B256> = update
+                .address_updates
+                .iter()
+                .flat_map(|u| u.mined_tx_hashes.iter().copied())
+                .collect();
+            if !mined_tx_hashes.is_empty() {
+                state
+                    .pool
+                    .clear_pending_bundles_for_mined_txs(&mined_tx_hashes);
+            }
+
+            // Remove throttled ops that are too old
+            let mut to_remove = HashSet::new();
+            for hash in state.throttled_ops.iter() {
+                let block_seen = state
+                    .pool
+                    .get_operation_by_hash(*hash)
+                    .map(|po| po.sim_block_number);
+                if let Some(block) = block_seen
+                    && update.latest_block_number - block > self.config.throttled_entity_live_blocks
+                {
+                    to_remove.insert((*hash, block));
+                }
+            }
+
+            for (hash, added_at_block) in to_remove {
+                state.pool.remove_operation_by_hash(hash);
+                state.throttled_ops.remove(&hash);
+                self.emit(OpPoolEvent::RemovedOp {
+                    op_hash: hash,
+                    reason: OpRemovalReason::ThrottledAndOld {
+                        added_at_block_number: added_at_block,
+                        current_block_number: update.latest_block_number,
+                    },
+                })
+            }
+
+            // pool maintenance
+            let uo_fees = state.uo_fees;
+            let base_fee = state.base_fee;
+            state.pool.do_maintenance(
+                update.latest_block_number,
+                update.latest_block_timestamp,
+                da_block_data.as_ref(),
+                uo_fees,
+                base_fee,
+            );
+        }
+    }
+
+    fn entry_point_version(&self) -> EntryPointVersion {
+        self.config.entry_point_version
+    }
+
+    #[instrument(skip_all)]
+    async fn add_operation(
         &self,
         origin: OperationOrigin,
         mut op: UserOperationVariant,
@@ -570,304 +844,6 @@ where
 
         Ok(hash)
     }
-}
-
-#[async_trait]
-impl<UP, EP> Mempool for UoPool<UP, EP>
-where
-    EP: ProvidersWithEntryPointT,
-    UP: UoPoolProvidersT,
-{
-    #[instrument(skip_all)]
-    async fn on_chain_update(&self, update: &ChainUpdate) {
-        let _timer = CustomTimerGuard::new(self.metrics.update_process_time_ms.clone());
-
-        let preconfirmed_txns = update.preconfirmed_txns.clone();
-        self.update_preconfirmed_uos(preconfirmed_txns, update.preconfirmed_block_number);
-        if update.update_type == UpdateType::Preconfirmed {
-            return;
-        }
-
-        let latest_block_number = update.latest_block_number;
-        self.remove_out_of_date_preconfirmed_uos(latest_block_number);
-        let deduped_ops = update.deduped_ops();
-        let mined_ops = deduped_ops
-            .mined_ops
-            .iter()
-            .filter(|op| op.entry_point == self.config.entry_point);
-
-        let entity_balance_updates = update.entity_balance_updates.iter().filter_map(|u| {
-            if u.entrypoint == self.config.entry_point {
-                Some(u.address)
-            } else {
-                None
-            }
-        });
-
-        let unmined_entity_balance_updates = update
-            .unmined_entity_balance_updates
-            .iter()
-            .filter_map(|u| {
-                if u.entrypoint == self.config.entry_point {
-                    Some(u.address)
-                } else {
-                    None
-                }
-            });
-
-        let unmined_ops = deduped_ops
-            .unmined_ops
-            .iter()
-            .filter(|op| op.entry_point == self.config.entry_point);
-        let mut mined_op_count = 0;
-        let mut unmined_op_count = 0;
-
-        for op in mined_ops {
-            if op.entry_point != self.config.entry_point {
-                continue;
-            }
-            self.paymaster.update_paymaster_balance_from_mined_op(op);
-
-            // Remove throttled ops that were included in the block
-            self.state.write().throttled_ops.remove(&op.hash);
-
-            if let Some(pool_op) = self
-                .state
-                .write()
-                .pool
-                .mine_operation(op, update.latest_block_number)
-            {
-                // Only account for an entity once
-                for entity_addr in pool_op.entities().map(|e| e.address).unique() {
-                    self.reputation.add_included(entity_addr);
-                }
-                // The pool copy can be a replacement with different limits, see Pool::mine_operation
-                if pool_op.uo.hash() == op.hash {
-                    gas_metrics::record_mined_op_gas_efficiency(
-                        self.config.entry_point,
-                        &pool_op.uo,
-                        op.success,
-                        op.actual_gas_used,
-                    );
-                }
-                mined_op_count += 1;
-            }
-        }
-
-        for op in unmined_ops {
-            if op.entry_point != self.config.entry_point {
-                continue;
-            }
-
-            if let Some(paymaster) = op.paymaster {
-                self.paymaster
-                    .unmine_actual_cost(&paymaster, op.actual_gas_cost);
-            }
-
-            let pool_op = self.state.write().pool.unmine_operation(op);
-
-            if let Some(po) = pool_op {
-                for entity_addr in po.entities().map(|e| e.address).unique() {
-                    self.reputation.dec_included(entity_addr);
-                }
-
-                unmined_op_count += 1;
-                let _ = self.paymaster.add_or_update_balance(&po).await;
-            }
-        }
-
-        // Update paymaster balances AFTER updating the pool to reset confirmed balances if needed.
-        if update.reorg_larger_than_history {
-            if let Err(e) = self.reset_confirmed_paymaster_balances().await {
-                tracing::error!("Failed to reset confirmed paymaster balances: {:?}", e);
-            }
-        } else {
-            let addresses = entity_balance_updates
-                .chain(unmined_entity_balance_updates)
-                .unique()
-                .collect::<Vec<_>>();
-            if !addresses.is_empty()
-                && let Err(e) = self
-                    .paymaster
-                    .reset_confirmed_balances_for(&addresses)
-                    .await
-            {
-                tracing::error!("Failed to reset confirmed paymaster balances: {:?}", e);
-            }
-        }
-
-        if mined_op_count > 0 {
-            info!(
-                "{mined_op_count} op(s) mined on entry point {:?} when advancing to block with number {}, hash {:?}.",
-                self.config.entry_point, update.latest_block_number, update.latest_block_hash,
-            );
-        }
-        if unmined_op_count > 0 {
-            info!(
-                "{unmined_op_count} op(s) unmined in reorg on entry point {:?} when advancing to block with number {}, hash {:?}.",
-                self.config.entry_point, update.latest_block_number, update.latest_block_hash,
-            );
-        }
-        let ops_seen: f64 = (mined_op_count as isize - unmined_op_count as isize) as f64;
-        self.ep_specific_metrics.ops_seen.increment(ops_seen as u64);
-        self.ep_specific_metrics
-            .unmined_operations
-            .increment(unmined_op_count);
-
-        // update required bundle fees and update metrics
-        match self
-            .ep_providers
-            .fee_estimator()
-            .required_bundle_fees(update.latest_block_hash, None)
-            .await
-        {
-            Ok((bundle_fees, base_fee)) => {
-                let uo_fees = self
-                    .ep_providers
-                    .fee_estimator()
-                    .required_op_fees(bundle_fees);
-                let max_fee = match format_units(bundle_fees.max_fee_per_gas, "gwei") {
-                    Ok(s) => s.parse::<f64>().unwrap_or_default(),
-                    Err(_) => 0.0,
-                };
-                self.metrics.current_max_fee_gwei.set(max_fee);
-
-                let max_priority_fee =
-                    match format_units(bundle_fees.max_priority_fee_per_gas, "gwei") {
-                        Ok(s) => s.parse::<f64>().unwrap_or_default(),
-                        Err(_) => 0.0,
-                    };
-                self.metrics
-                    .current_max_priority_fee_gwei
-                    .set(max_priority_fee);
-
-                let base_fee_f64 = match format_units(base_fee, "gwei") {
-                    Ok(s) => s.parse::<f64>().unwrap_or_default(),
-                    Err(_) => 0.0,
-                };
-                self.metrics.current_base_fee.set(base_fee_f64);
-
-                // cache for the next update
-                {
-                    let mut state = self.state.write();
-                    state.block_number = update.latest_block_number;
-                    state.block_hash = update.latest_block_hash;
-                    state.bundle_fees = bundle_fees;
-                    state.uo_fees = uo_fees;
-                    state.base_fee = base_fee;
-                }
-            }
-            Err(e) => {
-                tracing::error!("Failed to update fees: {:?}", e);
-                {
-                    let mut state = self.state.write();
-                    state.block_number = update.latest_block_number;
-                }
-            }
-        }
-
-        let da_block_data = if self.config.da_gas_tracking_enabled
-            && self.ep_providers.da_gas_oracle_sync().is_some()
-        {
-            let da_gas_oracle = self.ep_providers.da_gas_oracle_sync().as_ref().unwrap();
-            match da_gas_oracle
-                .da_block_data(update.latest_block_hash.into())
-                .await
-            {
-                Ok(da_block_data) => Some(da_block_data),
-                Err(e) => {
-                    tracing::error!("Failed to get da block data, skipping da tracking: {:?}", e);
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        {
-            let mut state = self.state.write();
-            state
-                .pool
-                .forget_mined_operations_before_block(update.earliest_remembered_block_number);
-
-            // Clear pending bundles for mined transactions
-            let mined_tx_hashes: Vec<B256> = update
-                .address_updates
-                .iter()
-                .flat_map(|u| u.mined_tx_hashes.iter().copied())
-                .collect();
-            if !mined_tx_hashes.is_empty() {
-                state
-                    .pool
-                    .clear_pending_bundles_for_mined_txs(&mined_tx_hashes);
-            }
-
-            // Remove throttled ops that are too old
-            let mut to_remove = HashSet::new();
-            for hash in state.throttled_ops.iter() {
-                let block_seen = state
-                    .pool
-                    .get_operation_by_hash(*hash)
-                    .map(|po| po.sim_block_number);
-                if let Some(block) = block_seen
-                    && update.latest_block_number - block > self.config.throttled_entity_live_blocks
-                {
-                    to_remove.insert((*hash, block));
-                }
-            }
-
-            for (hash, added_at_block) in to_remove {
-                state.pool.remove_operation_by_hash(hash);
-                state.throttled_ops.remove(&hash);
-                self.emit(OpPoolEvent::RemovedOp {
-                    op_hash: hash,
-                    reason: OpRemovalReason::ThrottledAndOld {
-                        added_at_block_number: added_at_block,
-                        current_block_number: update.latest_block_number,
-                    },
-                })
-            }
-
-            // pool maintenance
-            let uo_fees = state.uo_fees;
-            let base_fee = state.base_fee;
-            state.pool.do_maintenance(
-                update.latest_block_number,
-                update.latest_block_timestamp,
-                da_block_data.as_ref(),
-                uo_fees,
-                base_fee,
-            );
-        }
-    }
-
-    fn entry_point_version(&self) -> EntryPointVersion {
-        self.config.entry_point_version
-    }
-
-    #[instrument(skip_all)]
-    async fn add_operation(
-        &self,
-        origin: OperationOrigin,
-        op: UserOperationVariant,
-        perms: UserOperationPermissions,
-    ) -> MempoolResult<B256> {
-        // Only clone the op for the rejection log when debug logging is enabled
-        let logged_op = tracing::enabled!(Level::DEBUG).then(|| op.clone());
-        let result = self.add_operation_inner(origin, op, perms).await;
-        if let (Err(error), Some(op)) = (&result, logged_op) {
-            let op_hash = op.hash();
-            let sender = op.sender();
-            let factory = op.factory();
-            let paymaster = op.paymaster();
-            let pre_verification_gas = op.pre_verification_gas();
-            let total_verification_gas_limit = op.total_verification_gas_limit();
-            let entry_point = self.config.entry_point;
-            tracing::debug!(
-                "Pool rejected op. Op hash: {op_hash:?} Sender: {sender:?} Factory: {factory:?} Paymaster: {paymaster:?} preVerificationGas: {pre_verification_gas} total verification gas limit: {total_verification_gas_limit} Entrypoint: {entry_point:?} Error: {error} Op: {op:?}"
-            );
-        }
-        result
-    }
 
     fn remove_operations(&self, hashes: &[B256]) {
         self.remove_operations_with_reason(hashes, OpRemovalReason::Requested);
@@ -1143,7 +1119,7 @@ struct UoPoolMetrics {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, fmt, str::FromStr, sync::Arc, time::Duration, vec};
+    use std::{collections::HashMap, str::FromStr, time::Duration, vec};
 
     use alloy_primitives::{Address, Bytes, Log as PrimitiveLog, LogData, address, bytes, uint};
     use alloy_rpc_types_eth::TransactionReceipt as AlloyTransactionReceipt;
@@ -1151,7 +1127,6 @@ mod tests {
     use alloy_sol_types::SolEvent;
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
     use mockall::Sequence;
-    use parking_lot::Mutex;
     use rundler_contracts::v0_6::IEntryPoint::UserOperationEvent as UserOperationEventV06;
     use rundler_provider::{
         AnyReceiptEnvelope, DepositInfo, EntryPoint, ExecutionResult, Log, MockDAGasOracleSync,
@@ -1173,16 +1148,12 @@ mod tests {
         pool::{PrecheckViolation, SimulationViolation},
         v0_6::{UserOperationBuilder, UserOperationRequiredFields},
     };
-    use tracing::{
-        Event, Metadata, Subscriber,
-        field::{Field, Visit},
-        span,
-    };
 
     use super::*;
     use crate::{
         chain::{BalanceUpdate, MinedOp},
         mempool::{PaymasterConfig, ReputationParams},
+        test_utils::MessageCollector,
     };
     const THROTTLE_SLACK: u64 = 5;
     const BAN_SLACK: u64 = 10;
@@ -2393,41 +2364,8 @@ mod tests {
         }
     }
 
-    /// Collects the message of every event.
-    struct MessageCollector(Arc<Mutex<Vec<String>>>);
-
-    impl Visit for MessageCollector {
-        fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-            if field.name() == "message" {
-                self.0.lock().push(format!("{value:?}"));
-            }
-        }
-    }
-
-    impl Subscriber for MessageCollector {
-        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
-            true
-        }
-
-        fn new_span(&self, _span: &span::Attributes<'_>) -> span::Id {
-            span::Id::from_u64(1)
-        }
-
-        fn record(&self, _span: &span::Id, _values: &span::Record<'_>) {}
-
-        fn record_follows_from(&self, _span: &span::Id, _follows: &span::Id) {}
-
-        fn event(&self, event: &Event<'_>) {
-            event.record(&mut MessageCollector(self.0.clone()));
-        }
-
-        fn enter(&self, _span: &span::Id) {}
-
-        fn exit(&self, _span: &span::Id) {}
-    }
-
     #[tokio::test]
-    async fn test_rejected_op_debug_logs() {
+    async fn test_verification_gas_efficiency_debug_log() {
         let mut config = default_config();
         config.verification_gas_limit_efficiency_reject_threshold = 0.25;
 
@@ -2457,8 +2395,8 @@ mod tests {
             MempoolConfig::default(),
         );
 
-        let messages = Arc::new(Mutex::new(Vec::new()));
-        let _guard = tracing::subscriber::set_default(MessageCollector(messages.clone()));
+        let collector = MessageCollector::default();
+        let _guard = tracing::subscriber::set_default(collector.clone());
 
         let ret = pool
             .add_operation(OperationOrigin::Local, op.op, default_perms())
@@ -2468,8 +2406,8 @@ mod tests {
             Err(MempoolError::VerificationGasLimitEfficiencyTooLow(_, _))
         ));
 
-        let messages = messages.lock();
         // the simulator reports 100K pre-op gas: 50K PVG + 50K of 500K verification gas
+        let messages = collector.messages();
         assert!(
             messages.iter().any(|m| m.starts_with(
                 "Verification gas limit efficiency too low. Op hash:"
@@ -2477,12 +2415,6 @@ mod tests {
                 "pre op gas: 100000 preVerificationGas: 50000 verification gas used: 50000 total verification gas limit: 500000 efficiency: 0.1 required: 0.25"
             )),
             "missing efficiency detail log: {messages:?}"
-        );
-        assert!(
-            messages.iter().any(|m| m.starts_with("Pool rejected op.")
-                && m.contains("preVerificationGas: 50000 total verification gas limit: 500000")
-                && m.contains("Error: Verification gas limit efficiency too low")),
-            "missing rejection log: {messages:?}"
         );
     }
 
