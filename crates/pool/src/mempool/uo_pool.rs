@@ -210,6 +210,7 @@ where
                 return Ok(()); // No call gas limit, not useful, but not a failure here.
             }
 
+            let op_hash = op.hash();
             let sim_result = self
                 .ep_providers
                 .entry_point()
@@ -246,6 +247,11 @@ where
                     if execution_gas_efficiency
                         < self.config.execution_gas_limit_efficiency_reject_threshold
                     {
+                        let pre_op_gas = execution_res.pre_op_gas;
+                        let required = self.config.execution_gas_limit_efficiency_reject_threshold;
+                        tracing::debug!(
+                            "Execution gas limit efficiency too low. Op hash: {op_hash:?} total gas used: {total_gas_used} pre op gas: {pre_op_gas} execution gas used: {execution_gas_used} execution gas limit: {execution_gas_limit} efficiency: {execution_gas_efficiency} required: {required}"
+                        );
                         return Err(MempoolError::ExecutionGasLimitEfficiencyTooLow(
                             self.config.execution_gas_limit_efficiency_reject_threshold,
                             execution_gas_efficiency,
@@ -715,6 +721,14 @@ where
             if verification_gas_efficiency
                 < effective_verification_gas_limit_efficiency_reject_threshold
             {
+                let op_hash = op.hash();
+                let pre_op_gas = sim_result.pre_op_gas;
+                let pre_verification_gas = op.pre_verification_gas();
+                let verification_gas_used = pre_op_gas.saturating_sub(pre_verification_gas);
+                let total_verification_gas_limit = op.total_verification_gas_limit();
+                tracing::debug!(
+                    "Verification gas limit efficiency too low. Op hash: {op_hash:?} pre op gas: {pre_op_gas} preVerificationGas: {pre_verification_gas} verification gas used: {verification_gas_used} total verification gas limit: {total_verification_gas_limit} efficiency: {verification_gas_efficiency} required: {effective_verification_gas_limit_efficiency_reject_threshold}"
+                );
                 return Err(MempoolError::VerificationGasLimitEfficiencyTooLow(
                     effective_verification_gas_limit_efficiency_reject_threshold,
                     verification_gas_efficiency,
@@ -1139,6 +1153,7 @@ mod tests {
     use crate::{
         chain::{BalanceUpdate, MinedOp},
         mempool::{PaymasterConfig, ReputationParams},
+        test_utils::MessageCollector,
     };
     const THROTTLE_SLACK: u64 = 5;
     const BAN_SLACK: u64 = 10;
@@ -2347,6 +2362,60 @@ mod tests {
             // the simulator reports 100K pre-op gas: 50K PVG + 50K of 500K verification gas
             assert_eq!(samples, vec![DebugValue::Histogram(vec![0.1.into()])]);
         }
+    }
+
+    #[tokio::test]
+    async fn test_verification_gas_efficiency_debug_log() {
+        let mut config = default_config();
+        config.verification_gas_limit_efficiency_reject_threshold = 0.25;
+
+        let op = create_op_from_op_v0_6(UserOperationRequiredFields {
+            call_gas_limit: 10_000,
+            verification_gas_limit: 500_000,
+            pre_verification_gas: 50_000,
+            max_fee_per_gas: 1,
+            max_priority_fee_per_gas: 1,
+            ..Default::default()
+        });
+
+        let mut ep = MockEntryPointV0_6::new();
+        ep.expect_simulate_handle_op().returning(|_, _, _, _, _| {
+            Ok(Ok(ExecutionResult {
+                pre_op_gas: 100_000,
+                paid: uint!(110_000_U256),
+                target_success: true,
+                ..Default::default()
+            }))
+        });
+
+        let pool = create_pool_with_entry_point_config(
+            config,
+            vec![op.clone()],
+            ep,
+            MempoolConfig::default(),
+        );
+
+        let collector = MessageCollector::default();
+        let _guard = tracing::subscriber::set_default(collector.clone());
+
+        let ret = pool
+            .add_operation(OperationOrigin::Local, op.op, default_perms())
+            .await;
+        assert!(matches!(
+            ret,
+            Err(MempoolError::VerificationGasLimitEfficiencyTooLow(_, _))
+        ));
+
+        // the simulator reports 100K pre-op gas: 50K PVG + 50K of 500K verification gas
+        let messages = collector.messages();
+        assert!(
+            messages.iter().any(|m| m.starts_with(
+                "Verification gas limit efficiency too low. Op hash:"
+            ) && m.contains(
+                "pre op gas: 100000 preVerificationGas: 50000 verification gas used: 50000 total verification gas limit: 500000 efficiency: 0.1 required: 0.25"
+            )),
+            "missing efficiency detail log: {messages:?}"
+        );
     }
 
     #[tokio::test]
