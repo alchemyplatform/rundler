@@ -98,15 +98,16 @@ where
             })
             .transpose()?;
 
-        let (block_hash, _) = provider
-            .get_latest_block_hash_and_number()
+        let (block_hash, _, block_timestamp) = provider
+            .get_latest_block_hash_number_and_timestamp()
             .await
             .map_err(anyhow::Error::from)?;
+        let chain_spec = self.chain_spec.for_bundle_inclusion_after(block_timestamp);
 
         let mut full_op = op
             .clone()
             .into_user_operation_builder(
-                &self.chain_spec,
+                &chain_spec,
                 settings.max_bundle_execution_gas,
                 settings.max_verification_gas,
                 settings.max_paymaster_verification_gas,
@@ -115,16 +116,15 @@ where
             .build();
         if let Some(agg) = agg {
             full_op = full_op.transform_for_aggregator(
-                &self.chain_spec,
                 agg.address(),
                 agg.costs().clone(),
                 agg.dummy_uo_signature().clone(),
             );
         }
 
-        let random_op = op.random_fill(&self.chain_spec);
+        let random_op = op.random_fill(&chain_spec);
         let da_gas_future = gas::estimate_da_gas_with_fees(
-            &self.chain_spec,
+            &chain_spec,
             &self.entry_point,
             &self.fee_estimator,
             &random_op,
@@ -134,8 +134,13 @@ where
             self.metrics.pvg_estimate_ms.clone(),
         );
 
-        let verification_gas_future =
-            self.estimate_verification_gas(&op, &full_op, block_hash, state_override.clone());
+        let verification_gas_future = self.estimate_verification_gas(
+            &op,
+            &full_op,
+            block_hash,
+            &chain_spec,
+            state_override.clone(),
+        );
 
         let paymaster_verification_gas_future = self.estimate_paymaster_verification_gas(
             &op,
@@ -145,6 +150,13 @@ where
         );
         let call_gas_future =
             self.estimate_call_gas(&op, full_op.clone(), block_hash, state_override);
+        let pvg_state_future = gas::load_pvg_state(
+            &chain_spec,
+            provider,
+            &self.entry_point,
+            &full_op,
+            Some(block_hash.into()),
+        );
 
         // Not try_join! because then the output is nondeterministic if multiple calls fail.
         let (
@@ -152,14 +164,17 @@ where
             verification_gas_limit_result,
             paymaster_verification_gas_limit_result,
             call_gas_limit_result,
+            pvg_state_result,
         ) = join!(
             da_gas_future,
             verification_gas_future,
             paymaster_verification_gas_future,
-            call_gas_future
+            call_gas_future,
+            pvg_state_future
         );
 
         let da_gas = da_gas_result.map_err(GasEstimationError::from)?;
+        let pvg_state = pvg_state_result.map_err(anyhow::Error::from)?;
         let verification_gas_limit = verification_gas_limit_result?;
         let paymaster_verification_gas_limit = paymaster_verification_gas_limit_result?;
         let call_gas_limit = call_gas_limit_result?;
@@ -170,27 +185,34 @@ where
         } else {
             // TODO(bundle): assuming a bundle size of 1
             let bundle_size = 1;
-            let base_op = op.max_fill(&self.chain_spec);
-            if self.chain_spec.charge_gas_limit_via_pvg {
-                let op_with_limits = UserOperationBuilder::from_uo(base_op, &self.chain_spec)
+            let base_op = op.max_fill(&chain_spec);
+            if chain_spec.charge_gas_limit_via_pvg {
+                let op_with_limits = UserOperationBuilder::from_uo(base_op, &chain_spec)
                     .verification_gas_limit(verification_gas_limit)
                     .paymaster_verification_gas_limit(paymaster_verification_gas_limit)
                     .call_gas_limit(call_gas_limit)
                     .paymaster_post_op_gas_limit(op.paymaster_post_op_gas_limit.unwrap_or(0))
                     .build();
                 op_with_limits.required_pre_verification_gas(
-                    &self.chain_spec,
+                    &chain_spec,
                     bundle_size,
                     da_gas,
                     None,
+                    &pvg_state,
                 )
             } else {
-                base_op.required_pre_verification_gas(&self.chain_spec, bundle_size, da_gas, None)
+                base_op.required_pre_verification_gas(
+                    &chain_spec,
+                    bundle_size,
+                    da_gas,
+                    None,
+                    &pvg_state,
+                )
             }
         };
 
         // check the total gas limit
-        let op_with_gas = UserOperationBuilder::from_uo(full_op, &self.chain_spec)
+        let op_with_gas = UserOperationBuilder::from_uo(full_op, &chain_spec)
             .pre_verification_gas(pre_verification_gas)
             .call_gas_limit(call_gas_limit)
             .verification_gas_limit(verification_gas_limit)
@@ -198,15 +220,17 @@ where
             .build();
 
         // require that this can fit in a bundle of size 1
-        let gas_limit = op_with_gas.bundle_computation_gas_limit(&self.chain_spec, Some(1));
+        let gas_limit = op_with_gas.bundle_computation_gas_limit(&chain_spec, Some(1));
         if gas_limit > self.settings.max_bundle_execution_gas {
             return Err(GasEstimationError::GasTotalTooLarge(
                 gas_limit,
                 self.settings.max_bundle_execution_gas,
             ));
-        } else if op_with_gas.calldata_floor_gas_limit() > self.settings.max_bundle_execution_gas {
+        } else if op_with_gas.calldata_floor_gas_limit(&chain_spec)
+            > self.settings.max_bundle_execution_gas
+        {
             return Err(GasEstimationError::GasTotalTooLarge(
-                op_with_gas.calldata_floor_gas_limit(),
+                op_with_gas.calldata_floor_gas_limit(&chain_spec),
                 self.settings.max_bundle_execution_gas,
             ));
         }
@@ -219,7 +243,8 @@ where
                 &op_with_gas,
                 pre_verification_gas - da_gas,
                 da_gas,
-                op.max_fill(&self.chain_spec).calldata_floor_gas_limit(),
+                op.max_fill(&chain_spec)
+                    .calldata_floor_gas_limit(&chain_spec),
                 self.settings
                     .verification_gas_limit_efficiency_reject_threshold,
             )
@@ -266,7 +291,6 @@ where
         }
 
         let verification_gas_estimator = VerificationGasEstimatorImpl::new(
-            chain_spec.clone(),
             settings,
             provider.clone(),
             VerificationGasEstimatorSpecializationV07 {
@@ -275,7 +299,6 @@ where
         );
 
         let paymaster_verification_gas_estimator = VerificationGasEstimatorImpl::new(
-            chain_spec.clone(),
             settings,
             provider.clone(),
             PaymasterVerificationGasEstimatorSpecializationV07 {
@@ -360,6 +383,7 @@ where
         optional_op: &UserOperationOptionalGas,
         full_op: &UserOperation,
         block_hash: B256,
+        chain_spec: &ChainSpec,
         state_override: StateOverride,
     ) -> Result<u128, GasEstimationError> {
         // if set and non-zero, don't estimate
@@ -378,6 +402,11 @@ where
             .verification_gas_estimator
             .estimate_verification_gas(full_op, block_hash, state_override)
             .await?;
+        let verification_gas_limit = if full_op.paymaster().is_none() {
+            verification_gas_limit + chain_spec.deposit_transfer_overhead()
+        } else {
+            verification_gas_limit
+        };
 
         let buffered_verification_gas_limit = math::increase_by_percent(
             verification_gas_limit,
@@ -728,7 +757,7 @@ mod tests {
     use rundler_provider::{
         ExecutionResult, MockEntryPointV0_7, MockEvmProvider, MockFeeEstimator,
     };
-    use rundler_types::{EntryPointVersion, v0_7::UserOperationOptionalGas};
+    use rundler_types::{EntryPointVersion, chain::ForkActivation, v0_7::UserOperationOptionalGas};
 
     use super::*;
     use crate::{
@@ -920,13 +949,73 @@ mod tests {
         ));
     }
 
+    /// Gas estimation with Glamsterdam pricing and a mocked sender deposit: the gas limits are
+    /// provided, PVG is left to the estimator.
+    async fn glamsterdam_estimated_pvg(
+        sender_deposit: U256,
+        charge_gas_limit_via_pvg: bool,
+    ) -> u128 {
+        let (mut entry, mut provider) = create_base_config();
+        provider
+            .expect_get_latest_block_hash_number_and_timestamp()
+            .returning(|| Ok((B256::ZERO, 0, 0)));
+        entry
+            .expect_simulate_handle_op_estimate_gas()
+            .returning(move |_a, _b, _c, _d, _e| {
+                Ok(Ok(ExecutionResult {
+                    target_result: TestCallGasResult {
+                        success: true,
+                        gasUsed: U256::ZERO,
+                        revertData: Bytes::new(),
+                    }
+                    .abi_encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+        entry
+            .expect_balance_of()
+            .returning(move |_, _| Ok(sender_deposit));
+
+        let (base_entry, base_provider) = create_base_config();
+        let (_, settings) = create_estimator(base_entry, base_provider);
+        let chain_spec = ChainSpec {
+            glamsterdam_activation: rundler_types::chain::ForkActivation::Genesis,
+            charge_gas_limit_via_pvg,
+            ..ChainSpec::default()
+        };
+        let estimator = create_custom_estimator(chain_spec, provider, entry, settings);
+
+        let mut optional_op = demo_user_op_optional_gas(None);
+        optional_op.call_gas_limit = Some(10000);
+        optional_op.verification_gas_limit = Some(10000);
+
+        estimator
+            .estimate_op_gas(optional_op, StateOverride::default())
+            .await
+            .unwrap()
+            .pre_verification_gas
+    }
+
+    #[tokio::test]
+    async fn test_glamsterdam_pvg_prices_zero_sender_deposit() {
+        let funded_deposit = U256::from(1_000_000_000_000_000_000_u128);
+        // Also when the gas limits are charged through PVG.
+        for charge_gas_limit_via_pvg in [false, true] {
+            let zero = glamsterdam_estimated_pvg(U256::ZERO, charge_gas_limit_via_pvg).await;
+            let funded = glamsterdam_estimated_pvg(funded_deposit, charge_gas_limit_via_pvg).await;
+            assert_eq!(zero - funded, 97_920);
+        }
+    }
+
     #[tokio::test]
     async fn test_return_provided_limits() {
         let (mut entry, mut provider) = create_base_config();
 
         provider
-            .expect_get_latest_block_hash_and_number()
-            .returning(|| Ok((B256::ZERO, 0)));
+            .expect_get_latest_block_hash_number_and_timestamp()
+            .returning(|| Ok((B256::ZERO, 0, 0)));
 
         entry
             .expect_simulate_handle_op_estimate_gas()
@@ -977,12 +1066,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_pvg_covers_bundle_inclusion_schedule() {
+        const ACTIVATION: u64 = 1_000;
+
+        let estimate_pvg_at = |activation: ForkActivation, block_timestamp: u64| {
+            let (mut entry, mut provider) = create_base_config();
+            provider
+                .expect_get_latest_block_hash_number_and_timestamp()
+                .returning(move || Ok((B256::ZERO, 0, block_timestamp)));
+            entry
+                .expect_simulate_handle_op_estimate_gas()
+                .returning(move |_a, _b, _c, _d, _e| {
+                    Ok(Ok(ExecutionResult {
+                        target_result: TestCallGasResult {
+                            success: true,
+                            gasUsed: U256::ZERO,
+                            revertData: Bytes::new(),
+                        }
+                        .abi_encode()
+                        .into(),
+                        target_success: true,
+                        ..Default::default()
+                    }))
+                });
+            // Read for the zero-deposit term after activation; a funded sender has none.
+            entry
+                .expect_balance_of()
+                .returning(|_, _| Ok(U256::from(1_000_000)));
+            let (_, settings) = {
+                let (entry, provider) = create_base_config();
+                create_estimator(entry, provider)
+            };
+            let chain_spec = ChainSpec {
+                eip7623_enabled: true,
+                glamsterdam_activation: activation,
+                ..Default::default()
+            };
+            let estimator = create_custom_estimator(chain_spec, provider, entry, settings);
+
+            let mut optional_op = demo_user_op_optional_gas(None);
+            optional_op.call_data = Bytes::from(vec![1_u8; 2_000]);
+            optional_op.call_gas_limit = Some(10000);
+            optional_op.verification_gas_limit = Some(10000);
+            async move {
+                estimator
+                    .estimate_op_gas(optional_op, StateOverride::default())
+                    .await
+                    .unwrap()
+                    .pre_verification_gas
+            }
+        };
+
+        let activation = ForkActivation::Timestamp(ACTIVATION);
+        let never = estimate_pvg_at(ForkActivation::Never, ACTIVATION).await;
+        let pre = estimate_pvg_at(activation, ACTIVATION - 1).await;
+        let post = estimate_pvg_at(activation, ACTIVATION).await;
+
+        // before the fork, the estimate covers inclusion on either side of it
+        assert!(
+            pre > never,
+            "pre-fork pvg {pre} should exceed pvg without a fork {never}"
+        );
+        assert!(
+            pre >= post,
+            "pre-fork pvg {pre} should cover post-fork pvg {post}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_provided_reverts() {
         let (mut entry, mut provider) = create_base_config();
 
         provider
-            .expect_get_latest_block_hash_and_number()
-            .returning(|| Ok((B256::ZERO, 0)));
+            .expect_get_latest_block_hash_number_and_timestamp()
+            .returning(|| Ok((B256::ZERO, 0, 0)));
 
         let revert_msg = "test revert".to_string();
         let err = Revert {
@@ -1043,8 +1200,8 @@ mod tests {
                 }))
             });
         provider
-            .expect_get_latest_block_hash_and_number()
-            .returning(|| Ok((B256::ZERO, 0)));
+            .expect_get_latest_block_hash_number_and_timestamp()
+            .returning(|| Ok((B256::ZERO, 0, 0)));
 
         let (estimator, _) = create_estimator(entry, provider);
 

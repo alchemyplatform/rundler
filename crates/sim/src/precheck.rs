@@ -22,7 +22,7 @@ use futures_util::TryFutureExt;
 use mockall::automock;
 use rundler_provider::{DAGasProvider, EntryPoint, EvmProvider, FeeEstimator};
 use rundler_types::{
-    EntryPointVersion, PriorityFeeMode, UserOperation, UserOperationPermissions,
+    EntryPointVersion, PriorityFeeMode, PvgState, UserOperation, UserOperationPermissions,
     chain::ChainSpec,
     da::DAGasData,
     pool::{MempoolError, PrecheckViolation},
@@ -42,6 +42,8 @@ pub struct PrecheckReturn {
     pub da_gas_data: DAGasData,
     /// The required pre-verification gas for the operation
     pub required_pre_verification_gas: u128,
+    /// The on-chain state the required pre-verification gas was priced with
+    pub pvg_state: PvgState,
     /// If the sender is 7702
     pub sender_is_7702: bool,
 }
@@ -55,11 +57,14 @@ pub trait Prechecker: Send + Sync {
     type UO: UserOperation;
 
     /// Run the precheck on the given operation and return an error if it fails.
+    ///
+    /// `block_timestamp` is the timestamp of `block_hash`, and selects its gas schedule.
     async fn check(
         &self,
         op: &Self::UO,
         perms: &UserOperationPermissions,
         block_hash: B256,
+        block_timestamp: u64,
     ) -> Result<PrecheckReturn, PrecheckError>;
 }
 
@@ -147,6 +152,7 @@ struct AsyncData {
     base_fee: u128,
     min_pre_verification_gas: u128,
     da_gas_data: DAGasData,
+    pvg_state: PvgState,
     eip7702_authority_data: Option<Eip7702AuthorityData>,
 }
 
@@ -172,8 +178,12 @@ where
         op: &Self::UO,
         perms: &UserOperationPermissions,
         block_hash: B256,
+        block_timestamp: u64,
     ) -> Result<PrecheckReturn, PrecheckError> {
-        let async_data = self.load_async_data(op, block_hash, perms).await?;
+        let chain_spec = self.chain_spec.for_bundle_inclusion_after(block_timestamp);
+        let async_data = self
+            .load_async_data(op, block_hash, &chain_spec, perms)
+            .await?;
         let mut violations: Vec<PrecheckViolation> = vec![];
 
         if let Some(data) = &async_data.eip7702_authority_data {
@@ -181,7 +191,7 @@ where
         } else {
             violations.extend(self.check_init_code(op, &async_data, perms));
         }
-        violations.extend(self.check_gas(op, &async_data, perms));
+        violations.extend(self.check_gas(op, &chain_spec, &async_data, perms));
         violations.extend(self.check_payer(op, &async_data));
         if !violations.is_empty() {
             Err(violations)?
@@ -189,6 +199,7 @@ where
         Ok(PrecheckReturn {
             da_gas_data: async_data.da_gas_data,
             required_pre_verification_gas: async_data.min_pre_verification_gas,
+            pvg_state: async_data.pvg_state,
             sender_is_7702: op.authorization_tuple().is_some()
                 || authorization_utils::eip7702_delegate_from_code(&async_data.sender_bytecode)
                     .is_some(),
@@ -263,6 +274,7 @@ where
     fn check_gas(
         &self,
         op: &UO,
+        chain_spec: &ChainSpec,
         async_data: &AsyncData,
         perms: &UserOperationPermissions,
     ) -> ArrayVec<PrecheckViolation, 6> {
@@ -288,15 +300,15 @@ where
 
         // Compute the worst case total gas limit by assuming the UO is in its own bundle.
         // This is conservative and potentially may invalidate some very large UOs that would otherwise be valid.
-        let gas_limit = op.bundle_computation_gas_limit(&self.chain_spec, Some(1));
+        let gas_limit = op.bundle_computation_gas_limit(chain_spec, Some(1));
         if gas_limit > max_bundle_execution_gas {
             violations.push(PrecheckViolation::TotalGasLimitTooHigh(
                 gas_limit,
                 max_bundle_execution_gas,
             ))
-        } else if op.calldata_floor_gas_limit() > max_bundle_execution_gas {
+        } else if op.calldata_floor_gas_limit(chain_spec) > max_bundle_execution_gas {
             violations.push(PrecheckViolation::TotalGasLimitTooHigh(
-                op.calldata_floor_gas_limit(),
+                op.calldata_floor_gas_limit(chain_spec),
                 max_bundle_execution_gas,
             ))
         }
@@ -489,6 +501,7 @@ where
         &self,
         op: &UO,
         block_hash: B256,
+        chain_spec: &ChainSpec,
         perms: &UserOperationPermissions,
     ) -> anyhow::Result<AsyncData> {
         let base_fee = self.get_base_fee(block_hash).await?;
@@ -498,14 +511,20 @@ where
             sender_bytecode,
             paymaster_exists,
             payer_funds,
-            (min_pre_verification_gas, da_gas_data),
+            (min_pre_verification_gas, da_gas_data, pvg_state),
             eip7702_authority_data,
         ) = tokio::try_join!(
             self.is_contract(op.factory()),
             self.get_bytecode(op.sender()),
             self.is_contract(op.paymaster()),
             self.get_payer_funds(op),
-            self.get_required_pre_verification_gas(op.clone(), block_hash, base_fee, perms),
+            self.get_required_pre_verification_gas(
+                op.clone(),
+                block_hash,
+                chain_spec,
+                base_fee,
+                perms
+            ),
             self.get_eip7702_authority_data(op)
         )?;
         Ok(AsyncData {
@@ -516,6 +535,7 @@ where
             base_fee,
             min_pre_verification_gas,
             da_gas_data,
+            pvg_state,
             eip7702_authority_data,
         })
     }
@@ -581,23 +601,30 @@ where
         &self,
         op: UO,
         block_hash: B256,
+        chain_spec: &ChainSpec,
         base_fee: u128,
         perms: &UserOperationPermissions,
-    ) -> anyhow::Result<(u128, DAGasData)> {
+    ) -> anyhow::Result<(u128, DAGasData, PvgState)> {
         if perms.bundler_sponsorship.is_some() {
-            return Ok((0, DAGasData::Empty));
+            return Ok((0, DAGasData::Empty, PvgState::unknown()));
         }
 
-        gas::calc_required_pre_verification_gas(
-            &self.chain_spec,
+        let pvg_state =
+            gas::load_pvg_state(chain_spec, &self.provider, &self.entry_point, &op, None)
+                .await
+                .context("precheck should load pre-verification gas state")?;
+        let (required_pvg, da_gas_data) = gas::calc_required_pre_verification_gas(
+            chain_spec,
             &self.entry_point,
             &op,
             block_hash,
             base_fee,
             self.settings
                 .verification_gas_limit_efficiency_reject_threshold,
+            &pvg_state,
         )
-        .await
+        .await?;
+        Ok((required_pvg, da_gas_data, pvg_state))
     }
 
     async fn get_eip7702_authority_data(
@@ -608,7 +635,7 @@ where
             return Ok(None);
         }
         let sender = op.sender();
-        let tx_count_fut = self.provider.get_transaction_count(sender);
+        let tx_count_fut = self.provider.get_transaction_count(sender, None);
 
         let (transaction_count, pending_transaction_count) =
             if self.settings.eip7702_authority_pending_check_enabled {
@@ -636,7 +663,8 @@ mod tests {
     use alloy_primitives::{Bytes, address, bytes};
     use rundler_provider::{MockEntryPointV0_6, MockEvmProvider, MockFeeEstimator};
     use rundler_types::{
-        BundlerSponsorship, UserOperation as _,
+        BundlerSponsorship, GasFees, UserOperation as _,
+        chain::ForkActivation,
         v0_6::{UserOperationBuilder, UserOperationRequiredFields},
     };
 
@@ -664,9 +692,94 @@ mod tests {
             payer_funds: U256::from(5_000_000),
             base_fee: 4_000,
             min_pre_verification_gas: 1_000,
+            pvg_state: PvgState::unknown(),
             da_gas_data: DAGasData::Empty,
             eip7702_authority_data: None,
         }
+    }
+
+    #[tokio::test]
+    async fn test_check_uses_bundle_inclusion_schedule() {
+        const ACTIVATION: u64 = 1_000;
+        let cs = ChainSpec {
+            eip7623_enabled: true,
+            glamsterdam_activation: ForkActivation::Timestamp(ACTIVATION),
+            ..Default::default()
+        };
+
+        let mut provider = MockEvmProvider::new();
+        provider
+            .expect_get_code()
+            .returning(|_, _| Ok(bytes!("abcdef")));
+        provider
+            .expect_get_balance()
+            .returning(|_, _| Ok(U256::from(u64::MAX)));
+        let mut entry_point = MockEntryPointV0_6::new();
+        entry_point
+            .expect_balance_of()
+            .returning(|_, _| Ok(U256::ZERO));
+        let mut fee_estimator = MockFeeEstimator::new();
+        fee_estimator
+            .expect_required_bundle_fees()
+            .returning(|_, _| Ok((GasFees::default(), 0)));
+        let settings = Settings::default();
+        let prechecker = PrecheckerImpl::new(
+            cs.clone(),
+            Arc::new(provider),
+            entry_point,
+            fee_estimator,
+            settings,
+        );
+
+        let op = UserOperationBuilder::new(
+            &cs,
+            UserOperationRequiredFields {
+                call_data: Bytes::from(vec![1_u8; 4_000]),
+                call_gas_limit: MIN_CALL_GAS_LIMIT,
+                verification_gas_limit: 100_000,
+                pre_verification_gas: 1_000_000,
+                ..Default::default()
+            },
+        )
+        .build();
+        let perms = UserOperationPermissions::default();
+
+        let expected_pvg = |timestamp: u64| {
+            op.required_pre_verification_gas(
+                &cs.for_bundle_inclusion_after(timestamp),
+                1,
+                0,
+                Some(settings.verification_gas_limit_efficiency_reject_threshold),
+                &PvgState::unknown(),
+            )
+        };
+
+        let pre = prechecker
+            .check(&op, &perms, B256::ZERO, ACTIVATION - 1)
+            .await
+            .unwrap();
+        let post = prechecker
+            .check(&op, &perms, B256::ZERO, ACTIVATION)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            pre.required_pre_verification_gas,
+            expected_pvg(ACTIVATION - 1)
+        );
+        assert_eq!(post.required_pre_verification_gas, expected_pvg(ACTIVATION));
+        // before the fork, the requirement also covers inclusion after it
+        assert!(pre.required_pre_verification_gas >= post.required_pre_verification_gas);
+        assert!(
+            pre.required_pre_verification_gas
+                > op.required_pre_verification_gas(
+                    &cs.at_timestamp(ACTIVATION - 1),
+                    1,
+                    0,
+                    Some(settings.verification_gas_limit_efficiency_reject_threshold),
+                    &PvgState::unknown(),
+                )
+        );
     }
 
     #[tokio::test]
@@ -798,6 +911,7 @@ mod tests {
 
         let res = prechecker.check_gas(
             &op,
+            &prechecker.chain_spec,
             &get_test_async_data(),
             &UserOperationPermissions::default(),
         );
@@ -894,7 +1008,12 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_gas(&op, &async_data, &UserOperationPermissions::default());
+        let res = prechecker.check_gas(
+            &op,
+            &prechecker.chain_spec,
+            &async_data,
+            &UserOperationPermissions::default(),
+        );
         assert!(res.is_empty());
     }
 
@@ -927,7 +1046,12 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_gas(&op, &async_data, &UserOperationPermissions::default());
+        let res = prechecker.check_gas(
+            &op,
+            &prechecker.chain_spec,
+            &async_data,
+            &UserOperationPermissions::default(),
+        );
         let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
         expected.push(PrecheckViolation::MaxFeePerGasTooLow(
             math::percent(5_000, settings.base_fee_accept_percent - 10),
@@ -972,7 +1096,12 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_gas(&op, &async_data, &UserOperationPermissions::default());
+        let res = prechecker.check_gas(
+            &op,
+            &prechecker.chain_spec,
+            &async_data,
+            &UserOperationPermissions::default(),
+        );
         let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
         expected.push(PrecheckViolation::MaxPriorityFeePerGasTooLow(
             mintip - 1,
@@ -1014,7 +1143,12 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_gas(&op, &async_data, &UserOperationPermissions::default());
+        let res = prechecker.check_gas(
+            &op,
+            &prechecker.chain_spec,
+            &async_data,
+            &UserOperationPermissions::default(),
+        );
         let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
         expected.push(PrecheckViolation::PreVerificationGasTooLow(
             math::percent(1_000, settings.pre_verification_gas_accept_percent - 10),
@@ -1064,7 +1198,7 @@ mod tests {
             ..Default::default()
         };
 
-        let res = prechecker.check_gas(&op, &async_data, &perms);
+        let res = prechecker.check_gas(&op, &prechecker.chain_spec, &async_data, &perms);
         assert!(res.is_empty());
     }
 
@@ -1108,7 +1242,7 @@ mod tests {
             ..Default::default()
         };
 
-        let res = prechecker.check_gas(&op, &async_data, &perms);
+        let res = prechecker.check_gas(&op, &prechecker.chain_spec, &async_data, &perms);
 
         let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
         expected.push(PrecheckViolation::PreVerificationGasTooLow(
@@ -1163,7 +1297,7 @@ mod tests {
             ..Default::default()
         };
 
-        let res = prechecker.check_gas(&op, &async_data, &perms);
+        let res = prechecker.check_gas(&op, &prechecker.chain_spec, &async_data, &perms);
         assert!(res.is_empty());
     }
 
@@ -1196,7 +1330,12 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_gas(&op, &async_data, &UserOperationPermissions::default());
+        let res = prechecker.check_gas(
+            &op,
+            &prechecker.chain_spec,
+            &async_data,
+            &UserOperationPermissions::default(),
+        );
 
         // Calculate expected max gas cost
         let max_gas_cost = op.max_gas_cost();
@@ -1238,7 +1377,12 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_gas(&op, &async_data, &UserOperationPermissions::default());
+        let res = prechecker.check_gas(
+            &op,
+            &prechecker.chain_spec,
+            &async_data,
+            &UserOperationPermissions::default(),
+        );
         assert!(res.is_empty());
     }
 
@@ -1337,6 +1481,48 @@ mod tests {
                     signature: Bytes::default(),
                 },
             )
+        }
+
+        fn glamsterdam_prechecker(deposit: U256) -> (ChainSpec, TestPrechecker) {
+            let cs = ChainSpec {
+                id: 1,
+                eip7702_enabled: true,
+                glamsterdam_activation: rundler_types::chain::ForkActivation::Genesis,
+                ..Default::default()
+            };
+            let mut entry_point = MockEntryPointV0_7::new();
+            entry_point
+                .expect_balance_of()
+                .withf(|address, _| *address == TEST_SENDER)
+                .returning(move |_, _| Ok(deposit));
+            let prechecker = PrecheckerImpl::new(
+                cs.clone(),
+                Arc::new(MockEvmProvider::new()),
+                entry_point,
+                MockFeeEstimator::new(),
+                Settings::default(),
+            );
+            (cs, prechecker)
+        }
+
+        #[tokio::test]
+        async fn test_required_pvg_prices_zero_sender_deposit_with_glamsterdam() {
+            let perms = UserOperationPermissions::default();
+            let (cs, zero) = glamsterdam_prechecker(U256::ZERO);
+            let op = create_uo_builder(&cs, EntryPointVersion::V0_7).build();
+            let cs = cs.at_timestamp(0);
+            let (pvg_zero, _, state) = zero
+                .get_required_pre_verification_gas(op.clone(), B256::ZERO, &cs, 1, &perms)
+                .await
+                .unwrap();
+            assert_eq!(state.sender_deposit_is_zero, Some(true));
+
+            let (_, funded) = glamsterdam_prechecker(U256::from(1_000_000));
+            let (pvg_funded, _, _) = funded
+                .get_required_pre_verification_gas(op, B256::ZERO, &cs, 1, &perms)
+                .await
+                .unwrap();
+            assert_eq!(pvg_zero - pvg_funded, 97_920);
         }
 
         #[tokio::test]

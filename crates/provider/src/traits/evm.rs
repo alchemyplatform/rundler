@@ -120,8 +120,8 @@ pub trait EvmProvider: Send + Sync {
         trace_options: GethDebugTracingCallOptions,
     ) -> ProviderResult<GethTrace>;
 
-    /// Get the latest block hash and number
-    async fn get_latest_block_hash_and_number(&self) -> ProviderResult<(B256, u64)>;
+    /// Get the latest block hash, number and timestamp
+    async fn get_latest_block_hash_number_and_timestamp(&self) -> ProviderResult<(B256, u64, u64)>;
 
     /// Get the pending block hash and number
     async fn get_pending_block_hash_and_number(&self) -> ProviderResult<(B256, u64)>;
@@ -135,8 +135,12 @@ pub trait EvmProvider: Send + Sync {
     /// Get the code at an address
     async fn get_code(&self, address: Address, block: Option<BlockId>) -> ProviderResult<Bytes>;
 
-    /// Get the nonce/transaction count of an address
-    async fn get_transaction_count(&self, address: Address) -> ProviderResult<u64>;
+    /// Get the nonce/transaction count of an address, at `block` or the latest block if `None`
+    async fn get_transaction_count(
+        &self,
+        address: Address,
+        block: Option<BlockId>,
+    ) -> ProviderResult<u64>;
 
     /// Get the pending transaction count for an address
     async fn get_pending_transaction_count(&self, address: Address) -> ProviderResult<u64>;

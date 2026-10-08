@@ -22,7 +22,8 @@ use alloy_primitives::{Address, B256};
 use anyhow::Context;
 use futures_util::StreamExt;
 use rundler_provider::{
-    AlloyNetworkConfig, FeeEstimator, Providers as ProvidersT, ProvidersWithEntryPointT,
+    AlloyNetworkConfig, EvmProvider, FeeEstimator, Providers as ProvidersT,
+    ProvidersWithEntryPointT,
 };
 use rundler_signer::{SignerManager, SigningScheme};
 use rundler_sim::{
@@ -309,6 +310,8 @@ where
                 max_fee_bumps: self.args.max_cancellation_fee_increases,
                 fee_bump_percent: self.args.replacement_fee_percent_increase,
                 max_delegation_gas: self.args.max_bundle_gas as u64,
+                // Delegations aren't tied to a block, so cover every schedule the chain can be on
+                gas_per_auth: self.args.chain_spec.max_eip7702_authorization_gas() as u64,
             },
             heads_tx.clone(),
         );
@@ -477,12 +480,30 @@ where
 
         let (heads_tx, _) = broadcast::channel::<Arc<NewHead>>(16);
         let heads_tx_fwd = heads_tx.clone();
+        let evm = self.providers.evm().clone();
         task_spawner.spawn_critical(
             "new-heads-fanout",
             Box::pin(async move {
                 let mut stream = shared_heads;
-                while let Some(head) = stream.next().await {
+                while let Some(mut head) = stream.next().await {
                     tracing::debug!("new-heads-fanout: block {}", head.block_number);
+                    if head.block_timestamp.is_none() {
+                        // Pools older than the timestamp field don't send it. If this lookup
+                        // fails, bundle senders skip this block rather than guess a gas schedule.
+                        match evm.get_block(head.block_hash.into()).await {
+                            Ok(Some(block)) => head.block_timestamp = Some(block.header.timestamp),
+                            Ok(None) => {
+                                tracing::warn!(
+                                    "new-heads-fanout: block {} not found",
+                                    head.block_hash
+                                )
+                            }
+                            Err(e) => tracing::warn!(
+                                "new-heads-fanout: failed to get block {}: {e:?}",
+                                head.block_hash
+                            ),
+                        }
+                    }
                     if heads_tx_fwd.send(Arc::new(head)).is_err() {
                         // All receivers dropped — senders have shut down.
                         break;

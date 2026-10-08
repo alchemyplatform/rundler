@@ -210,6 +210,7 @@ where
                 return Ok(()); // No call gas limit, not useful, but not a failure here.
             }
 
+            let op_hash = op.hash();
             let sim_result = self
                 .ep_providers
                 .entry_point()
@@ -246,6 +247,11 @@ where
                     if execution_gas_efficiency
                         < self.config.execution_gas_limit_efficiency_reject_threshold
                     {
+                        let pre_op_gas = execution_res.pre_op_gas;
+                        let required = self.config.execution_gas_limit_efficiency_reject_threshold;
+                        tracing::debug!(
+                            "Execution gas limit efficiency too low. Op hash: {op_hash:?} total gas used: {total_gas_used} pre op gas: {pre_op_gas} execution gas used: {execution_gas_used} execution gas limit: {execution_gas_limit} efficiency: {execution_gas_efficiency} required: {required}"
+                        );
                         return Err(MempoolError::ExecutionGasLimitEfficiencyTooLow(
                             self.config.execution_gas_limit_efficiency_reject_threshold,
                             execution_gas_efficiency,
@@ -611,10 +617,10 @@ where
         //
         // This doesn't clear all race conditions, as the pool may need to update its state before
         // a UO can be valid, i.e. for replacement.
-        let (block_hash, block_number) = self
+        let (block_hash, block_number, block_timestamp) = self
             .ep_providers
             .evm()
-            .get_latest_block_hash_and_number()
+            .get_latest_block_hash_number_and_timestamp()
             .await
             .map_err(anyhow::Error::from)?;
 
@@ -643,12 +649,7 @@ where
                 }
             };
 
-            op = op.transform_for_aggregator(
-                &self.config.chain_spec,
-                aggregator,
-                agg.costs().clone(),
-                signature,
-            );
+            op = op.transform_for_aggregator(aggregator, agg.costs().clone(), signature);
         }
 
         let versioned_op: UP::UO = op.clone().into();
@@ -657,7 +658,7 @@ where
         let precheck_ret = self
             .pool_providers
             .prechecker()
-            .check(&versioned_op, &perms, block_hash)
+            .check(&versioned_op, &perms, block_hash, block_timestamp)
             .await?;
 
         // Only let ops with successful simulations through
@@ -720,6 +721,14 @@ where
             if verification_gas_efficiency
                 < effective_verification_gas_limit_efficiency_reject_threshold
             {
+                let op_hash = op.hash();
+                let pre_op_gas = sim_result.pre_op_gas;
+                let pre_verification_gas = op.pre_verification_gas();
+                let verification_gas_used = pre_op_gas.saturating_sub(pre_verification_gas);
+                let total_verification_gas_limit = op.total_verification_gas_limit();
+                tracing::debug!(
+                    "Verification gas limit efficiency too low. Op hash: {op_hash:?} pre op gas: {pre_op_gas} preVerificationGas: {pre_verification_gas} verification gas used: {verification_gas_used} total verification gas limit: {total_verification_gas_limit} efficiency: {verification_gas_efficiency} required: {effective_verification_gas_limit_efficiency_reject_threshold}"
+                );
                 return Err(MempoolError::VerificationGasLimitEfficiencyTooLow(
                     effective_verification_gas_limit_efficiency_reject_threshold,
                     verification_gas_efficiency,
@@ -789,10 +798,11 @@ where
         let hash = {
             let mut state = self.state.write();
             let base_fee = state.base_fee;
-            let hash = state.pool.add_operation(
+            let hash = state.pool.add_operation_with_pvg_state(
                 pool_op.clone(),
                 base_fee,
                 precheck_ret.required_pre_verification_gas,
+                precheck_ret.pvg_state,
             )?;
 
             if throttled {
@@ -1128,7 +1138,7 @@ mod tests {
         SimulationError, SimulationResult, SimulationSettings, ViolationError,
     };
     use rundler_types::{
-        EntityInfo, EntityInfos, EntityType, EntryPointVersion,
+        EntityInfo, EntityInfos, EntityType, EntryPointVersion, PvgState,
         UserOperation as UserOperationTrait, ValidTimeRange,
         aggregator::{
             AggregatorCosts, MockSignatureAggregator, SignatureAggregator, SignatureAggregatorError,
@@ -1143,6 +1153,7 @@ mod tests {
     use crate::{
         chain::{BalanceUpdate, MinedOp},
         mempool::{PaymasterConfig, ReputationParams},
+        test_utils::MessageCollector,
     };
     const THROTTLE_SLACK: u64 = 5;
     const BAN_SLACK: u64 = 10;
@@ -2354,6 +2365,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_verification_gas_efficiency_debug_log() {
+        let mut config = default_config();
+        config.verification_gas_limit_efficiency_reject_threshold = 0.25;
+
+        let op = create_op_from_op_v0_6(UserOperationRequiredFields {
+            call_gas_limit: 10_000,
+            verification_gas_limit: 500_000,
+            pre_verification_gas: 50_000,
+            max_fee_per_gas: 1,
+            max_priority_fee_per_gas: 1,
+            ..Default::default()
+        });
+
+        let mut ep = MockEntryPointV0_6::new();
+        ep.expect_simulate_handle_op().returning(|_, _, _, _, _| {
+            Ok(Ok(ExecutionResult {
+                pre_op_gas: 100_000,
+                paid: uint!(110_000_U256),
+                target_success: true,
+                ..Default::default()
+            }))
+        });
+
+        let pool = create_pool_with_entry_point_config(
+            config,
+            vec![op.clone()],
+            ep,
+            MempoolConfig::default(),
+        );
+
+        let collector = MessageCollector::default();
+        let _guard = tracing::subscriber::set_default(collector.clone());
+
+        let ret = pool
+            .add_operation(OperationOrigin::Local, op.op, default_perms())
+            .await;
+        assert!(matches!(
+            ret,
+            Err(MempoolError::VerificationGasLimitEfficiencyTooLow(_, _))
+        ));
+
+        // the simulator reports 100K pre-op gas: 50K PVG + 50K of 500K verification gas
+        let messages = collector.messages();
+        assert!(
+            messages.iter().any(|m| m.starts_with(
+                "Verification gas limit efficiency too low. Op hash:"
+            ) && m.contains(
+                "pre op gas: 100000 preVerificationGas: 50000 verification gas used: 50000 total verification gas limit: 500000 efficiency: 0.1 required: 0.25"
+            )),
+            "missing efficiency detail log: {messages:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_call_gas_limit_reject() {
         let mut config = default_config();
         config.execution_gas_limit_efficiency_reject_threshold = 0.25;
@@ -2750,8 +2815,8 @@ mod tests {
             .return_const(EntryPointVersion::V0_6);
 
         let mut evm = MockEvmProvider::new();
-        evm.expect_get_latest_block_hash_and_number()
-            .returning(|| Ok((B256::ZERO, 0)));
+        evm.expect_get_latest_block_hash_number_and_timestamp()
+            .returning(|| Ok((B256::ZERO, 0, 0)));
 
         let mut simulator = MockSimulator::new();
         let mut prechecker = MockPrechecker::new();
@@ -2798,13 +2863,14 @@ mod tests {
             });
 
         for op in ops {
-            prechecker.expect_check().returning(move |_, _, _| {
+            prechecker.expect_check().returning(move |_, _, _, _| {
                 if let Some(error) = &op.precheck_error {
                     Err(PrecheckError::Violations(vec![error.clone()]))
                 } else {
                     Ok(PrecheckReturn {
                         da_gas_data: DAGasData::Empty,
                         required_pre_verification_gas: 100_000,
+                        pvg_state: PvgState::unknown(),
                         sender_is_7702: false,
                     })
                 }
