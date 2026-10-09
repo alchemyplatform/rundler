@@ -341,3 +341,100 @@ contract Burner {
         }
     }
 }
+
+/// CREATE2-deploys contracts of a chosen runtime size, to create large EIP-8037 code-deposit
+/// (state-gas) charges. The runtime code is `size` zero bytes, so the deposit cost depends on the
+/// size only.
+contract BlobDeployer {
+    event Deployed(address deployed, uint256 size);
+
+    function deploy(bytes32 salt, uint256 size) public returns (address deployed) {
+        bytes memory initCode = blobInitCode(size);
+        assembly {
+            deployed := create2(0, add(initCode, 32), mload(initCode), salt)
+        }
+        require(deployed != address(0), "deploy failed");
+        emit Deployed(deployed, size);
+    }
+
+    /// Deploys, then reverts the whole call: state is created and rolled back in one frame.
+    function deployThenRevert(bytes32 salt, uint256 size) external {
+        deploy(salt, size);
+        revert("rolled back");
+    }
+
+    /// `PUSH2 size; PUSH0; RETURN`: returns `size` bytes of fresh (zero) memory as the code.
+    function blobInitCode(uint256 size) public pure returns (bytes memory) {
+        require(size <= 0xffff, "size too large");
+        return abi.encodePacked(bytes1(0x61), uint16(size), bytes1(0x5f), bytes1(0xf3));
+    }
+}
+
+/// v0.7 account with an `execute` entry point, so an op's execution phase can create state
+/// (e.g. deploy through `BlobDeployer`). Validation is the same as `ProbeAccount`'s, without the
+/// scratch actions. Separate from `ProbeAccount` so the other experiments' fixtures keep their
+/// bytecode.
+contract ExecAccount {
+    address public immutable entryPoint;
+
+    constructor(address _entryPoint) {
+        entryPoint = _entryPoint;
+    }
+
+    function validateUserOp(PackedUserOperation calldata, bytes32, uint256 missingAccountFunds)
+        external
+        returns (uint256)
+    {
+        require(msg.sender == entryPoint, "not from entry point");
+        if (missingAccountFunds != 0) {
+            (bool ok,) = payable(msg.sender).call{value: missingAccountFunds}("");
+            (ok);
+        }
+        return 0;
+    }
+
+    function execute(address target, uint256 value, bytes calldata data) external {
+        require(msg.sender == entryPoint, "not from entry point");
+        (bool ok, bytes memory ret) = target.call{value: value}(data);
+        if (!ok) {
+            assembly {
+                revert(add(ret, 32), mload(ret))
+            }
+        }
+    }
+
+    receive() external payable {}
+}
+
+/// v0.6 counterpart of `ExecAccount`.
+contract ExecAccountV06 {
+    address public immutable entryPoint;
+
+    constructor(address _entryPoint) {
+        entryPoint = _entryPoint;
+    }
+
+    function validateUserOp(UserOperationV06 calldata, bytes32, uint256 missingAccountFunds)
+        external
+        returns (uint256)
+    {
+        require(msg.sender == entryPoint, "not from entry point");
+        if (missingAccountFunds != 0) {
+            (bool ok,) = payable(msg.sender).call{value: missingAccountFunds}("");
+            (ok);
+        }
+        return 0;
+    }
+
+    function execute(address target, uint256 value, bytes calldata data) external {
+        require(msg.sender == entryPoint, "not from entry point");
+        (bool ok, bytes memory ret) = target.call{value: value}(data);
+        if (!ok) {
+            assembly {
+                revert(add(ret, 32), mload(ret))
+            }
+        }
+    }
+
+    receive() external payable {}
+}

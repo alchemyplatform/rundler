@@ -14,6 +14,8 @@
 //! Connection to the chain under test and the primitives every experiment uses:
 //! send a transaction and record exactly what it cost, and deploy fixtures idempotently.
 
+use std::time::Duration;
+
 use alloy_json_rpc::RpcError;
 use alloy_network::{EthereumWallet, TransactionBuilder};
 use alloy_primitives::{Address, B256, Bytes, I256, U64, U256, address};
@@ -27,6 +29,7 @@ use alloy_transport::{
 };
 use anyhow::{Context, bail};
 use serde::Serialize;
+use serde_json::json;
 
 /// Nick's deterministic CREATE2 deployer. Present on the Glamsterdam devnet and on anvil.
 pub const CREATE2_DEPLOYER: Address = address!("4e59b44847b379578588920ca78fbf26c0b4956c");
@@ -34,6 +37,10 @@ pub const CREATE2_DEPLOYER: Address = address!("4e59b44847b379578588920ca78fbf26
 /// Retries for transient RPC failures, with exponential backoff from the initial delay.
 const RPC_MAX_RETRIES: u32 = 10;
 const RPC_INITIAL_BACKOFF_MS: u64 = 1_000;
+
+/// How long to wait for a sent transaction's receipt before giving up (e.g. when the node
+/// dropped it from its pool).
+const RECEIPT_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Gas limit headroom over `eth_estimateGas`, in percent. Only affects the limit set on
 /// the transaction, never the measured `gasUsed`.
@@ -121,6 +128,18 @@ fn charged_gas(
     u64::try_from(spent.into_raw() / price).ok()
 }
 
+/// Output of reth's `stateGasTracer` for one call.
+#[derive(Debug, Clone, Serialize)]
+pub struct StateGasTrace {
+    pub gas_used: u64,
+    pub execution_gas_used: u64,
+    /// Net EIP-8037 state gas of the whole transaction (charges minus refills).
+    pub state_gas_used: u64,
+    pub gas_refund: u64,
+    /// The tracer's raw result, in case it carries more than the fields above.
+    pub raw: serde_json::Value,
+}
+
 /// A funded EOA on the chain under test.
 pub struct Harness {
     pub provider: DynProvider,
@@ -152,7 +171,10 @@ impl Harness {
             .connect(rpc_url)
             .await
             .with_context(|| format!("failed to connect to {rpc_url}"))?;
+        // Nonces are tracked locally: a load-balanced RPC can answer `pending` nonce queries from
+        // a node that has not seen the previous transaction yet, which reuses its nonce.
         let provider = ProviderBuilder::new()
+            .with_cached_nonce_management()
             .wallet(EthereumWallet::from(signer))
             .connect_client(client)
             .erased();
@@ -199,7 +221,34 @@ impl Harness {
     /// block, which holds as long as the harness EOA is used by one run at a time.
     pub async fn send(&self, tx: TransactionRequest) -> anyhow::Result<TxOutcome> {
         let tx = tx.with_from(self.sender);
-        let value = tx.value.unwrap_or_default();
+        let estimate = self.estimate_gas(&tx).await?;
+        if estimate > TX_GAS_CAP {
+            bail!("estimate {estimate} exceeds the 2^24 transaction gas cap");
+        }
+        let gas_limit = (estimate + estimate * GAS_LIMIT_HEADROOM_PERCENT / 100).min(TX_GAS_CAP);
+        self.send_with_limit(tx, estimate, gas_limit).await
+    }
+
+    /// As [`Harness::send`], but with exactly `gas_limit`, which may exceed [`TX_GAS_CAP`] to give
+    /// the transaction an EIP-8037 state-gas reservoir of `gas_limit - 2^24`. Sent even when
+    /// `eth_estimateGas` fails (e.g. a transaction expected to revert); `estimate` is then 0.
+    pub async fn send_with_gas_limit(
+        &self,
+        tx: TransactionRequest,
+        gas_limit: u64,
+    ) -> anyhow::Result<TxOutcome> {
+        let tx = tx.with_from(self.sender);
+        let estimate = match self.estimate_gas(&tx).await {
+            Ok(estimate) => estimate,
+            Err(e) => {
+                eprintln!("eth_estimateGas failed, sending anyway: {e:#}");
+                0
+            }
+        };
+        self.send_with_limit(tx, estimate, gas_limit).await
+    }
+
+    async fn estimate_gas(&self, tx: &TransactionRequest) -> anyhow::Result<u64> {
         // Only the transaction parameter: Besu behind the devnet's RPC proxy rejects the
         // optional block parameter that `Provider::estimate_gas` sends.
         let estimate: U64 = self
@@ -207,18 +256,26 @@ impl Harness {
             .raw_request("eth_estimateGas".into(), (tx.clone(),))
             .await
             .context("eth_estimateGas failed")?;
-        let estimate = estimate.to::<u64>();
-        if estimate > TX_GAS_CAP {
-            bail!("estimate {estimate} exceeds the 2^24 transaction gas cap");
-        }
-        let gas_limit = (estimate + estimate * GAS_LIMIT_HEADROOM_PERCENT / 100).min(TX_GAS_CAP);
+        Ok(estimate.to::<u64>())
+    }
 
-        let receipt = self
+    async fn send_with_limit(
+        &self,
+        tx: TransactionRequest,
+        estimate: u64,
+        gas_limit: u64,
+    ) -> anyhow::Result<TxOutcome> {
+        let value = tx.value.unwrap_or_default();
+        let pending = self
             .provider
             .send_transaction(tx.with_gas_limit(gas_limit))
-            .await?
-            .get_receipt()
             .await?;
+        let tx_hash = *pending.tx_hash();
+        let receipt = pending
+            .with_timeout(Some(RECEIPT_TIMEOUT))
+            .get_receipt()
+            .await
+            .with_context(|| format!("no receipt for {tx_hash} (dropped?)"))?;
         let block_number = receipt
             .block_number
             .context("receipt has no block number")?;
@@ -242,6 +299,63 @@ impl Harness {
             ),
             logs: receipt.inner.logs().to_vec(),
         })
+    }
+
+    /// `debug_traceCall` with reth's `stateGasTracer` at the latest block: the transaction-level
+    /// split of `gasUsed` into execution and (net) state gas under EIP-8037.
+    pub async fn trace_state_gas(
+        &self,
+        tx: &TransactionRequest,
+        state_overrides: Option<&serde_json::Value>,
+    ) -> anyhow::Result<StateGasTrace> {
+        let raw = self
+            .debug_trace_call(tx, json!({ "tracer": "stateGasTracer" }), state_overrides)
+            .await
+            .context("debug_traceCall with stateGasTracer")?;
+        let field = |name: &str| {
+            raw.get(name)
+                .and_then(serde_json::Value::as_str)
+                .and_then(|h| u64::from_str_radix(h.trim_start_matches("0x"), 16).ok())
+                .with_context(|| format!("stateGasTracer result has no {name}: {raw}"))
+        };
+        Ok(StateGasTrace {
+            gas_used: field("gasUsed")?,
+            execution_gas_used: field("executionGasUsed")?,
+            state_gas_used: field("stateGasUsed")?,
+            gas_refund: field("gasRefund")?,
+            raw,
+        })
+    }
+
+    /// `debug_traceCall` with `callTracer` (with logs) at the latest block.
+    pub async fn trace_calls(
+        &self,
+        tx: &TransactionRequest,
+        state_overrides: Option<&serde_json::Value>,
+    ) -> anyhow::Result<serde_json::Value> {
+        self.debug_trace_call(
+            tx,
+            json!({ "tracer": "callTracer", "tracerConfig": { "withLog": true } }),
+            state_overrides,
+        )
+        .await
+        .context("debug_traceCall with callTracer")
+    }
+
+    async fn debug_trace_call(
+        &self,
+        tx: &TransactionRequest,
+        mut options: serde_json::Value,
+        state_overrides: Option<&serde_json::Value>,
+    ) -> anyhow::Result<serde_json::Value> {
+        if let Some(overrides) = state_overrides {
+            options["stateOverrides"] = overrides.clone();
+        }
+        let tx = tx.clone().with_from(tx.from.unwrap_or(self.sender));
+        Ok(self
+            .provider
+            .raw_request("debug_traceCall".into(), (tx, "latest", options))
+            .await?)
     }
 
     async fn balance_change(&self, block_number: u64) -> Option<I256> {
