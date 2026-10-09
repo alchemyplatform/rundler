@@ -61,7 +61,11 @@ Findings:
    - reth's `callTracer` root frame already carries `executionGasUsed`, `stateGasUsed` and `gasRefund` (inner frames carry none). It also reports the revert error and, with `withLog`, the `UserOperationEvent`.
    - So one trace gives `S`, the top-level revert, and whether the op succeeded.
 7. **`eth_estimateGas` cannot size these bundles.** For the 24 kB bundle it returned 642,333 against 37.9M used: the cheapest run that doesn't revert is one where the op's execution quietly runs out of gas. `tx.gas` must come from the trace.
-8. **`EntryPointSimulations.simulateHandleOp` (v0.7 state override) reports one slot (97,920) more than the real `handleOps`.** A plausible cause is that its storage layout puts a written slot, e.g. the reentrancy guard, where the canonical EntryPoint's storage is empty; I haven't checked. Either way the error is conservative for estimation. Subtract it, or trace a non-overridden path, if exactness matters.
+8. **`EntryPointSimulations.simulateHandleOp` (v0.7 state override) reported one slot (97,920) more than the real `handleOps`. The cause is known and fixed.**
+   - Every simulation calls `initSenderCreator()`, which writes `EntryPointSimulations._senderCreator`. That is storage slot 6 on v0.7 and slot 4 on v0.8/v0.9.
+   - Under a code override, that slot is empty in the real entry point's storage, so the write is charged as a new slot.
+   - The fix: pre-set the slot in the override to the value it is about to receive, the entry point's first CREATE address (`ep.create(1)`). The write then changes nothing.
+   - With the pre-set, the harness measured `sim = S` exactly (6,450,480 at 4 kB). Rundler's `get_state_gas_simulate_handle_op_call` uses the same override.
 9. **BSO works as is.** Fees 0 and PVG 0 give `actualGasCost = 0`, and the bundler pays `S` plus overhead. In a single-op bundle, the receipt's `gasUsed` × price is exactly the op's cost, so offchain billing can use it directly.
 10. **Reservoir-mode estimation works with no hand sizing.**
     - Variants **estimated** and **estimated-deploy**. Reports: `results/e7-v0.7-sepolia-est-11155111-1791548390.json` and `results/e7-v0.6-sepolia-est-11155111-1791548523.json`.

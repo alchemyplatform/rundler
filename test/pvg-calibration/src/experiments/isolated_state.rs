@@ -870,7 +870,7 @@ async fn simulated_pre_op_gas(ctx: &Ctx<'_>, op: &UserOperationVariant) -> anyho
             }
             .abi_encode();
             let overrides = json!({
-                ep.to_string(): { "code": ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE.to_string() }
+                ep.to_string(): simulations_override(ep)
             });
             let ret = ctx
                 .harness
@@ -1105,11 +1105,27 @@ async fn trace_simulate_handle_op(
         .with_input(input)
         .with_gas_limit(ctx.trace_gas);
     let overrides = json!({
-        ctx.fixtures.entry_point.to_string(): { "code": ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE.to_string() }
+        ctx.fixtures.entry_point.to_string(): simulations_override(ctx.fixtures.entry_point)
     });
     ctx.harness
         .trace_state_gas(&request, Some(&overrides))
         .await
+}
+
+/// State override that runs `EntryPointSimulations` (v0.7) at the entry point address.
+///
+/// Every simulation stores the `SenderCreator` address in `_senderCreator` (slot 6). In the real
+/// entry point's storage that slot is empty, so the write would be charged as a new slot (97,920
+/// state gas) that no real `handleOps` creates. Pre-setting it to the value it is about to
+/// receive (the entry point's first CREATE address) makes the simulation's state gas exact, as
+/// rundler's override does.
+fn simulations_override(ep: Address) -> serde_json::Value {
+    let slot = B256::from(U256::from(6));
+    let value = B256::left_padding_from(ep.create(1).as_slice());
+    json!({
+        "code": ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE.to_string(),
+        "stateDiff": { slot.to_string(): value.to_string() },
+    })
 }
 
 async fn account_nonce(ctx: &Ctx<'_>, account: Address) -> anyhow::Result<U256> {
