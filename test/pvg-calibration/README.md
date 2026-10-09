@@ -141,7 +141,10 @@ gas.
 The `estimated` and `estimated-deploy` variants size VGL and CGL as rundler would in isolation mode,
 from simulation of the op with every limit at its maximum and the state split by phase (see
 `estimated_case`). `estimated-deploy` creates the sender through `initCode`, so validation creates
-state too. `--only estimated,estimated-deploy` runs just those variants.
+state too. `estimated-paymaster`, `estimated-paymaster-post-op` and
+`estimated-paymaster-post-op-state` do the same with `StatePaymaster` paying (no postOp, stateless
+postOp, postOp that writes a fresh slot), splitting postOp state off as well.
+`--only estimated,estimated-deploy` runs just those variants.
 
 ### E6 — end to end through rundler
 

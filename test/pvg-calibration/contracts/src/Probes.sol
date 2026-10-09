@@ -472,3 +472,89 @@ contract ExecAccountFactory {
         return abi.encodePacked(code, abi.encode(entryPoint));
     }
 }
+
+/// v0.7 paymaster for E7 that sponsors everything. Unlike `ProbePaymaster`, postOp does not burn
+/// gas, so its execution can be measured. `paymasterData[0]` selects the mode:
+///   0 (or empty) - no context, so postOp is never called
+///   1            - postOp is called and creates no state
+///   2            - postOp writes a fresh slot of this contract (new state); paymasterData is
+///                  `0x02 | key(32)`
+contract StatePaymaster {
+    address public immutable entryPoint;
+    mapping(bytes32 => uint256) public slots;
+
+    event StatePostOp(uint8 mode, uint256 actualGasCost);
+
+    constructor(address _entryPoint) {
+        entryPoint = _entryPoint;
+    }
+
+    function validatePaymasterUserOp(PackedUserOperation calldata userOp, bytes32, uint256)
+        external
+        view
+        returns (bytes memory context, uint256 validationData)
+    {
+        require(msg.sender == entryPoint, "not from entry point");
+        // paymasterAndData = paymaster(20) | pmVerificationGasLimit(16) | postOpGasLimit(16) | data
+        context = StatePaymasterMode.context(userOp.paymasterAndData[52:]);
+        return (context, 0);
+    }
+
+    function postOp(uint8, bytes calldata context, uint256 actualGasCost, uint256) external {
+        require(msg.sender == entryPoint, "not from entry point");
+        emit StatePostOp(StatePaymasterMode.perform(slots, context), actualGasCost);
+    }
+
+    receive() external payable {}
+}
+
+/// v0.6 counterpart of `StatePaymaster`; the mode is `paymasterAndData[20]`.
+contract StatePaymasterV06 {
+    address public immutable entryPoint;
+    mapping(bytes32 => uint256) public slots;
+
+    event StatePostOp(uint8 mode, uint256 actualGasCost);
+
+    constructor(address _entryPoint) {
+        entryPoint = _entryPoint;
+    }
+
+    function validatePaymasterUserOp(UserOperationV06 calldata userOp, bytes32, uint256)
+        external
+        view
+        returns (bytes memory context, uint256 validationData)
+    {
+        require(msg.sender == entryPoint, "not from entry point");
+        context = StatePaymasterMode.context(userOp.paymasterAndData[20:]);
+        return (context, 0);
+    }
+
+    function postOp(uint8, bytes calldata context, uint256 actualGasCost) external {
+        require(msg.sender == entryPoint, "not from entry point");
+        emit StatePostOp(StatePaymasterMode.perform(slots, context), actualGasCost);
+    }
+
+    receive() external payable {}
+}
+
+library StatePaymasterMode {
+    /// Context for paymasterData: empty for mode 0, `0x01` for mode 1, `0x02 | key` for mode 2.
+    function context(bytes calldata data) internal pure returns (bytes memory) {
+        if (data.length >= 33 && data[0] == 0x02) {
+            return abi.encodePacked(bytes1(0x02), bytes32(data[1:33]));
+        }
+        if (data.length > 0 && data[0] == 0x01) {
+            return hex"01";
+        }
+        return "";
+    }
+
+    /// Performs the postOp action for `context` and returns its mode.
+    function perform(mapping(bytes32 => uint256) storage slots, bytes calldata context) internal returns (uint8) {
+        if (context.length == 33) {
+            slots[bytes32(context[1:33])] = 1;
+            return 2;
+        }
+        return 1;
+    }
+}
