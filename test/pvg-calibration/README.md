@@ -118,8 +118,25 @@ moves the sender's balance in the same block.
 | E4 | `authorization`   | unmetered cost per EIP-7702 authorization by authority state (empty, funded, re-delegation), vs rundler's `authorization_gas_limit` (v0.7 only) |
 | E5 | `hazards`         | storage shapes that move gas across metering spans: same-sender zero-deposit ops, exact paymaster drain, cross-op and cross-span slot clears |
 | E6 | `end-to-end`      | through a running rundler: real accounts estimated, signed, sent and bundled by rundler; bundler margin per bundle. v0.7: LightAccount v2, MultiOwnerLightAccount v2, ModularAccount v2 and 7702 (SemiModularAccount7702). v0.6: LightAccount v1.1, SimpleAccount v0.6, MultiOwnerModularAccount v1 |
+| E7 | `isolated-state`  | state-heavy ops (contract deploys of `--sizes` bytes) bundled alone with `tx.gas = 2^24 + S`; `S` from reth's `stateGasTracer`; variants exact / under / over reservoir, bundler-sponsored (fees 0) and capped. See `docs/isolated-state-gas-plan.md` |
 
 E2, E3 and E5 with `--entry-point v0.6` (formerly "planned E7") calibrate `per_user_op_v0_6_gas`.
+
+### E7 — isolated state-heavy ops
+
+```sh
+cargo run -- --label sepolia --entry-point v0.7 isolated-state --sizes 4096,16384,24576
+```
+
+Needs a node with `debug_traceCall` and reth's native `stateGasTracer` (reth ≥ 2.7). For each
+size the op deploys a contract of that size from its execution phase. `S` is the
+transaction-level net state gas of the real `handleOps([op])` from the tracer. The op is sent
+alone with `PVG = base + S` and `tx.gas = 2^24 + R`, which gives a state-gas reservoir of
+exactly `R`. Traces have no reservoir (`debug_traceCall` gives the whole call gas to `gas_left`),
+so `S` is measured on a probe op whose `callGasLimit` covers execution and state. The op that is
+sent gets a `callGasLimit` for execution only. Each size also sends `BlobDeployer.deploy` and
+`deployThenRevert` directly, to check the reservoir and that a top-level revert charges no state
+gas.
 
 ### E6 — end to end through rundler
 

@@ -45,6 +45,7 @@ struct Cli {
     #[arg(
         long,
         env = "PVG_RPC_URL",
+        hide_env_values = true,
         global = true,
         default_value = "http://127.0.0.1:8545"
     )]
@@ -95,6 +96,17 @@ enum Command {
     Authorization,
     /// E5: storage shapes that move gas between metered and unmetered
     Hazards,
+    /// E7: state-heavy ops (large contract deployments) bundled alone with a state-gas
+    /// reservoir above 2^24, measured with reth's `stateGasTracer`. Always compares against the
+    /// Glamsterdam gas schedule.
+    IsolatedState {
+        /// Sizes in bytes of the contracts the ops deploy
+        #[arg(long, value_delimiter = ',', default_value = "4096,16384,24576")]
+        sizes: Vec<usize>,
+        /// Gas limit of the traced calls (default: the latest block's gas limit)
+        #[arg(long)]
+        trace_gas: Option<u64>,
+    },
     /// E6: end to end through a running rundler, with real account implementations; measures
     /// the bundler's margin on each bundle rundler sends
     EndToEnd {
@@ -142,6 +154,25 @@ async fn main() -> anyhow::Result<()> {
             )?;
             eprintln!("report written to {}", path.display());
         }
+        Command::IsolatedState {
+            ref sizes,
+            trace_gas,
+        } => {
+            let chain_id = harness.chain_info().await?.chain_id;
+            let fixtures = fixtures::ensure(&harness, ep).await?;
+            let spec = prediction_spec(chain_id, true);
+            let report =
+                experiments::isolated_state::run(&harness, &fixtures, &spec, sizes, trace_gas)
+                    .await?;
+            let path = write_report(
+                &cli.out_dir,
+                &cli.label,
+                &experiment("e7"),
+                chain_id,
+                &report,
+            )?;
+            eprintln!("report written to {}", path.display());
+        }
         Command::Fixtures => {
             let fixtures = fixtures::ensure(&harness, ep).await?;
             println!("{}", serde_json::to_string_pretty(&fixtures)?);
@@ -176,7 +207,10 @@ async fn main() -> anyhow::Result<()> {
                     let report = experiments::hazards::run(&runner).await?;
                     write_report(&cli.out_dir, label, &experiment("e5"), id, &report)?
                 }
-                Command::CalibrateChain | Command::Fixtures | Command::EndToEnd { .. } => {
+                Command::CalibrateChain
+                | Command::Fixtures
+                | Command::EndToEnd { .. }
+                | Command::IsolatedState { .. } => {
                     unreachable!()
                 }
             };

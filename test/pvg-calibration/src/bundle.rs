@@ -733,8 +733,15 @@ impl BundleRunner<'_> {
 
 /// `handleOps(ops, beneficiary)` calldata for the ops' EntryPoint version.
 fn handle_ops_input(ops: &[PreparedOp], beneficiary: Address) -> Bytes {
-    let uos = ops.iter().map(|op| op.uo.clone());
-    match ops.first().map(|op| op.uo.entry_point_version()) {
+    let uos: Vec<UserOperationVariant> = ops.iter().map(|op| op.uo.clone()).collect();
+    handle_ops_calldata(&uos, beneficiary)
+}
+
+/// `handleOps(uos, beneficiary)` calldata for the ops' EntryPoint version.
+pub fn handle_ops_calldata(uos: &[UserOperationVariant], beneficiary: Address) -> Bytes {
+    let version = uos.first().map(|uo| uo.entry_point_version());
+    let uos = uos.iter().cloned();
+    match version {
         Some(EntryPointVersion::V0_6) => v0_6::IEntryPoint::handleOpsCall {
             ops: uos
                 .map(|uo| uo_v0_6::UserOperation::from(uo).into())

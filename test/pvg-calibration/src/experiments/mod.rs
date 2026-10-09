@@ -18,4 +18,5 @@ pub mod calldata;
 pub mod chain;
 pub mod e2e;
 pub mod hazards;
+pub mod isolated_state;
 pub mod overhead;
