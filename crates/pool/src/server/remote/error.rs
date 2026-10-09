@@ -39,7 +39,7 @@ use super::protos::{
     PreVerificationGasTooLow, PrecheckViolationError as ProtoPrecheckViolationError,
     ReplacementUnderpricedError, SenderAddressUsedAsAlternateEntity, SenderFundsTooLow,
     SenderIsNotContractAndNoInitCode, SimulationViolationError as ProtoSimulationViolationError,
-    TooManyExpectedStorageSlots, TotalGasLimitTooHigh, UnintendedRevert,
+    SponsorshipMaxCostTooLow, TooManyExpectedStorageSlots, TotalGasLimitTooHigh, UnintendedRevert,
     UnintendedRevertWithMessage, UnknownEntryPointError, UnknownRevert, UnstakedPaymasterContext,
     UseUnsupportedEip, UsedForbiddenOpcode, UsedForbiddenPrecompile,
     ValidationRevert as ProtoValidationRevert, VerificationGasLimitBufferTooLow,
@@ -146,6 +146,13 @@ impl TryFrom<ProtoMempoolError> for MempoolError {
             }
             Some(mempool_error::Error::Invalid7702AuthSignature(e)) => {
                 MempoolError::Invalid7702AuthSignature(e.reason)
+            }
+            Some(mempool_error::Error::SponsorshipMaxCostTooLow(e)) => {
+                MempoolError::SponsorshipMaxCostTooLow {
+                    max_cost_wei: from_bytes(&e.max_cost_wei)?,
+                    required_cost_wei: from_bytes(&e.required_cost_wei)?,
+                    block_number: e.block_number,
+                }
             }
             None => bail!("unknown proto mempool error"),
         })
@@ -279,6 +286,19 @@ impl From<MempoolError> for ProtoMempoolError {
             MempoolError::Invalid7702AuthSignature(msg) => ProtoMempoolError {
                 error: Some(mempool_error::Error::Invalid7702AuthSignature(
                     Invalid7702AuthSignature { reason: msg },
+                )),
+            },
+            MempoolError::SponsorshipMaxCostTooLow {
+                max_cost_wei,
+                required_cost_wei,
+                block_number,
+            } => ProtoMempoolError {
+                error: Some(mempool_error::Error::SponsorshipMaxCostTooLow(
+                    SponsorshipMaxCostTooLow {
+                        max_cost_wei: max_cost_wei.to_proto_bytes(),
+                        required_cost_wei: required_cost_wei.to_proto_bytes(),
+                        block_number,
+                    },
                 )),
             },
         }
@@ -1082,6 +1102,29 @@ mod tests {
                 rundler_types::EntityType::Aggregator,
                 None,
             )) => {}
+            _ => panic!("wrong error type"),
+        }
+    }
+
+    #[test]
+    fn test_sponsorship_max_cost_too_low_error() {
+        let error = MempoolError::SponsorshipMaxCostTooLow {
+            max_cost_wei: U256::from(1_000),
+            required_cost_wei: U256::from(2_000_000_000_000_000_000u128),
+            block_number: 42,
+        };
+        let proto_error: ProtoMempoolError = error.into();
+        let error2 = proto_error.try_into().unwrap();
+        match error2 {
+            MempoolError::SponsorshipMaxCostTooLow {
+                max_cost_wei,
+                required_cost_wei,
+                block_number,
+            } => {
+                assert_eq!(max_cost_wei, U256::from(1_000));
+                assert_eq!(required_cost_wei, U256::from(2_000_000_000_000_000_000u128));
+                assert_eq!(block_number, 42);
+            }
             _ => panic!("wrong error type"),
         }
     }

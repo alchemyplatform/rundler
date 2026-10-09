@@ -14,7 +14,7 @@
 use std::fmt::Display;
 
 use alloy_json_rpc::RpcError;
-use alloy_primitives::{Address, Bytes, U32, U128, U256};
+use alloy_primitives::{Address, Bytes, U32, U64, U128, U256};
 use jsonrpsee::types::{
     ErrorObjectOwned,
     error::{CALL_EXECUTION_FAILED_CODE, INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE},
@@ -148,6 +148,11 @@ pub enum EthRpcError {
     ExecutionRevertedWithBytes(ExecutionRevertedWithBytesData),
     #[error("operation rejected by mempool: {0}")]
     OperationRejected(String),
+    #[error(
+        "bundler sponsorship maxCost {} wei is below the current required cost {} wei at block {}",
+        .0.max_cost_wei, .0.required_cost_wei, .0.block_number
+    )]
+    SponsorshipMaxCostTooLow(SponsorshipMaxCostTooLowData),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -266,6 +271,14 @@ impl ReplacementUnderpricedData {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SponsorshipMaxCostTooLowData {
+    pub max_cost_wei: U256,
+    pub required_cost_wei: U256,
+    pub block_number: U64,
+}
+
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct UnsupportedAggregatorData {
     pub aggregator: Address,
@@ -326,6 +339,15 @@ impl From<MempoolError> for EthRpcError {
             | MempoolError::TooManyExpectedStorageSlots(_, _)
             | MempoolError::Invalid7702AuthSignature(_)
             | MempoolError::EIPNotSupported(_) => Self::InvalidParams(value.to_string()),
+            MempoolError::SponsorshipMaxCostTooLow {
+                max_cost_wei,
+                required_cost_wei,
+                block_number,
+            } => Self::SponsorshipMaxCostTooLow(SponsorshipMaxCostTooLowData {
+                max_cost_wei,
+                required_cost_wei,
+                block_number: U64::from(block_number),
+            }),
         }
     }
 }
@@ -454,6 +476,9 @@ impl From<EthRpcError> for ErrorObjectOwned {
                 rpc_err_with_data(ENTRYPOINT_VALIDATION_REJECTED_CODE, msg, data)
             }
             EthRpcError::OperationRejected(_) => rpc_err(INVALID_PARAMS_CODE, msg),
+            EthRpcError::SponsorshipMaxCostTooLow(data) => {
+                rpc_err_with_data(INVALID_PARAMS_CODE, msg, data)
+            }
         }
     }
 }
@@ -582,5 +607,36 @@ impl From<GasEstimationError> for EthRpcError {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sponsorship_max_cost_too_low_exposes_wei_amounts() {
+        let err = EthRpcError::from(MempoolError::SponsorshipMaxCostTooLow {
+            max_cost_wei: U256::from(1_000),
+            required_cost_wei: U256::from(2_000),
+            block_number: 42,
+        });
+        let obj = ErrorObjectOwned::from(err);
+
+        assert_eq!(obj.code(), INVALID_PARAMS_CODE);
+        assert_eq!(
+            obj.message(),
+            "bundler sponsorship maxCost 1000 wei is below the current required cost 2000 wei at block 42"
+        );
+        let data: serde_json::Value =
+            serde_json::from_str(obj.data().expect("data present").get()).unwrap();
+        assert_eq!(
+            data,
+            serde_json::json!({
+                "maxCostWei": "0x3e8",
+                "requiredCostWei": "0x7d0",
+                "blockNumber": "0x2a",
+            })
+        );
     }
 }

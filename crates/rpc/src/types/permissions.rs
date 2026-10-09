@@ -41,6 +41,9 @@ pub(crate) struct RpcPermissions {
     /// Disable EIP-7702
     #[serde(default)]
     pub(crate) eip7702_disabled: Option<bool>,
+    /// Reject a bundler-sponsored operation whose `maxCost` is below the current required cost
+    #[serde(default)]
+    pub(crate) reject_underpriced_sponsorship: bool,
 }
 
 /// Per-request override for the maximum block range used when looking up user operation
@@ -254,6 +257,7 @@ impl FromRpcType<RpcPermissions> for UserOperationPermissions {
                 .bundler_sponsorship
                 .map(|c| c.into_rundler_type(chain_spec, ep_version)),
             eip7702_disabled: rpc.eip7702_disabled.unwrap_or(false),
+            reject_underpriced_sponsorship: rpc.reject_underpriced_sponsorship,
         }
     }
 }
@@ -387,6 +391,33 @@ mod tests {
         let headers = headers_from(&[(headers::SPONSORSHIP_MAX_COST, "0x10")]);
         let err = RpcPermissions::from_headers(&headers).unwrap_err();
         assert_eq!(err.header, headers::SPONSORSHIP_VALID_UNTIL);
+    }
+
+    #[test]
+    fn reject_underpriced_sponsorship_defaults_to_false() {
+        let perms: RpcPermissions = serde_json::from_value(serde_json::json!({
+            "bundlerSponsorship": { "maxCost": "0x10", "validUntil": "0xa" }
+        }))
+        .unwrap();
+        assert!(!perms.reject_underpriced_sponsorship);
+    }
+
+    #[test]
+    fn parses_reject_underpriced_sponsorship() {
+        let perms: RpcPermissions = serde_json::from_value(serde_json::json!({
+            "bundlerSponsorship": { "maxCost": "0x10", "validUntil": "0xa" },
+            "rejectUnderpricedSponsorship": true
+        }))
+        .unwrap();
+        assert!(perms.reject_underpriced_sponsorship);
+
+        let perms = UserOperationPermissions::from_rpc_type(
+            perms,
+            &ChainSpec::default(),
+            EntryPointVersion::V0_7,
+        );
+        assert!(perms.reject_underpriced_sponsorship);
+        assert_eq!(perms.bundler_sponsorship.unwrap().max_cost, U256::from(16));
     }
 
     #[test]
