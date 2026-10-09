@@ -56,7 +56,10 @@ use serde_json::json;
 
 use crate::{
     bundle::{handle_ops_calldata, pseudo_random_bytes},
-    contracts::{BlobDeployer, ExecAccount, ExecAccountFactory, ExecAccountV06, INonceManagerLite},
+    contracts::{
+        BlobDeployer, ExecAccount, ExecAccountFactory, ExecAccountV06, INonceManagerLite,
+        StatePaymaster, StatePaymasterV06,
+    },
     fixtures::{self, EpVersion, Fixtures},
     harness::{Harness, OP_PRIORITY_FEE, StateGasTrace, TX_GAS_CAP, TxOutcome},
 };
@@ -64,6 +67,10 @@ use crate::{
 /// Verification gas limit. The account is deployed and prefunded, so validation is cheap; the
 /// first op's nonce write is state gas and comes from the reservoir.
 const VERIFICATION_GAS_LIMIT: u128 = 300_000;
+/// `paymasterVerificationGasLimit` (v0.7) of the paymaster variants. `StatePaymaster` validation
+/// creates no state; rundler estimates this limit with a binary search, which is not the subject
+/// here.
+const PAYMASTER_VERIFICATION_GAS_LIMIT: u128 = 100_000;
 /// Slack over the execution gas derived from the probe, for validation-phase state that the
 /// derivation subtracts from the execute frame (at most one new nonce slot, 97,920).
 const CALL_GAS_SLACK: u128 = 100_000;
@@ -90,9 +97,15 @@ enum Variant {
     /// As `Estimated`, with the sender deployed by the op's own `initCode`, so validation
     /// creates state too.
     EstimatedDeploy,
+    /// As `Estimated`, paid by `StatePaymaster` without postOp.
+    EstimatedPaymaster,
+    /// As `EstimatedPaymaster`, with a postOp that creates no state.
+    EstimatedPaymasterPostOp,
+    /// As `EstimatedPaymaster`, with a postOp that writes a fresh slot (postOp state).
+    EstimatedPaymasterPostOpState,
 }
 
-const VARIANTS: [Variant; 7] = [
+const VARIANTS: [Variant; 10] = [
     Variant::Exact,
     Variant::Under,
     Variant::Over,
@@ -100,14 +113,21 @@ const VARIANTS: [Variant; 7] = [
     Variant::Capped,
     Variant::Estimated,
     Variant::EstimatedDeploy,
+    Variant::EstimatedPaymaster,
+    Variant::EstimatedPaymasterPostOp,
+    Variant::EstimatedPaymasterPostOpState,
 ];
 
 impl Variant {
     fn reservoir(self, state_gas: u64) -> u64 {
         match self {
-            Variant::Exact | Variant::Bso | Variant::Estimated | Variant::EstimatedDeploy => {
-                state_gas
-            }
+            Variant::Exact
+            | Variant::Bso
+            | Variant::Estimated
+            | Variant::EstimatedDeploy
+            | Variant::EstimatedPaymaster
+            | Variant::EstimatedPaymasterPostOp
+            | Variant::EstimatedPaymasterPostOpState => state_gas,
             Variant::Under => state_gas.saturating_sub(UNDER_SPILL),
             Variant::Over => state_gas + OVER_EXTRA,
             Variant::Capped => 0,
@@ -138,6 +158,8 @@ struct OpCase {
     sender: Address,
     verification_gas_limit: u128,
     call_gas_limit: u128,
+    /// `paymasterPostOpGasLimit` (v0.7 paymaster variants; 0 otherwise).
+    post_op_gas_limit: u128,
     /// How VGL and CGL were derived (estimated variants only).
     estimation: Option<Estimation>,
     /// Rundler's required PVG for this op alone, without state gas (Glamsterdam schedule).
@@ -191,6 +213,16 @@ struct Estimation {
     validation_state_gas: u64,
     /// `S_c = S - S_v`.
     execution_state_gas: u64,
+    /// `StatePaymaster` mode (paymaster variants): 0 no postOp, 1 postOp, 2 postOp with state.
+    paymaster_mode: Option<u8>,
+    /// Gas used by the paymaster's postOp frame on the max-limit op: execution plus postOp state.
+    simulated_post_op_gas: Option<u64>,
+    /// `S_post`: state created by postOp. postOp still runs in the `callGasLimit = 0` trace, so it
+    /// is subtracted from that trace to get `validation_state_gas`.
+    post_op_state_gas: Option<u64>,
+    /// How `S_post` was measured: v0.7 `simulateHandleOp - simulateHandleOpNoPostOp` (as rundler
+    /// could), v0.6 by switching the paymaster to its stateless postOp mode (harness only).
+    post_op_split: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -221,6 +253,8 @@ struct Ctx<'a> {
     account: Address,
     /// `ExecAccountFactory` for this EntryPoint version.
     factory: Address,
+    /// `StatePaymaster` (or `StatePaymasterV06`) for this EntryPoint.
+    paymaster: Address,
     deployer: Address,
     trace_gas: u64,
 }
@@ -256,6 +290,15 @@ pub async fn run(
     let factory = harness
         .ensure_create2(B256::ZERO, &Bytes::from(factory_init))
         .await?;
+    let paymaster_code = match fixtures.entry_point_version {
+        EpVersion::V0_6 => &StatePaymasterV06::BYTECODE,
+        EpVersion::V0_7 => &StatePaymaster::BYTECODE,
+    };
+    let mut paymaster_init = paymaster_code.to_vec();
+    paymaster_init.extend_from_slice(&fixtures.entry_point.abi_encode());
+    let paymaster = harness
+        .ensure_create2(B256::ZERO, &Bytes::from(paymaster_init))
+        .await?;
     let trace_gas = match trace_gas {
         Some(gas) => gas,
         None => harness.chain_info().await?.block_gas_limit,
@@ -268,6 +311,7 @@ pub async fn run(
         spec,
         account,
         factory,
+        paymaster,
         deployer,
         trace_gas,
     };
@@ -284,15 +328,25 @@ pub async fn run(
         }
         for variant in VARIANTS.into_iter().filter(|v| selected(*v)) {
             let case = match variant {
-                Variant::Estimated => estimated_case(&ctx, size, variant, false).await?,
-                Variant::EstimatedDeploy => estimated_case(&ctx, size, variant, true).await?,
+                Variant::Estimated => estimated_case(&ctx, size, variant, false, None).await?,
+                Variant::EstimatedDeploy => estimated_case(&ctx, size, variant, true, None).await?,
+                Variant::EstimatedPaymaster => {
+                    estimated_case(&ctx, size, variant, false, Some(0)).await?
+                }
+                Variant::EstimatedPaymasterPostOp => {
+                    estimated_case(&ctx, size, variant, false, Some(1)).await?
+                }
+                Variant::EstimatedPaymasterPostOpState => {
+                    estimated_case(&ctx, size, variant, false, Some(2)).await?
+                }
                 _ => op_case(&ctx, size, variant).await?,
             };
             eprintln!(
-                "size={size:>6} {:<16} vgl={:>8} cgl={:>8} S={:>9} sim={:>9} composed={:>9} R={:>9} gas_used={:>9} op_ok={:?} deployed={:?} unmetered={:?} gas_margin={:?}{}",
+                "size={size:>6} {:<29} vgl={:>8} cgl={:>8} postop={:>7} S={:>9} sim={:>9} composed={:>9} R={:>9} gas_used={:>9} op_ok={:?} deployed={:?} unmetered={:?} gas_margin={:?}{}",
                 format!("{variant:?}").to_lowercase(),
                 case.verification_gas_limit,
                 case.call_gas_limit,
+                case.post_op_gas_limit,
                 case.handle_ops_trace.state_gas_used,
                 case.simulation_trace
                     .as_ref()
@@ -350,6 +404,7 @@ async fn op_case(ctx: &Ctx<'_>, size: usize, variant: Variant) -> anyhow::Result
                 pre_verification_gas: pvg,
                 max_fee,
                 priority_fee,
+                paymaster: None,
             },
         )
     };
@@ -389,7 +444,7 @@ async fn op_case(ctx: &Ctx<'_>, size: usize, variant: Variant) -> anyhow::Result
     }
     let trace = harness.trace_state_gas(&probe_request, None).await?;
     let simulation_trace = match ctx.fixtures.entry_point_version {
-        EpVersion::V0_7 => Some(trace_simulate_handle_op(ctx, &probe_op).await?),
+        EpVersion::V0_7 => Some(trace_simulate_handle_op(ctx, &probe_op, false).await?),
         EpVersion::V0_6 => None,
     };
 
@@ -423,6 +478,7 @@ async fn op_case(ctx: &Ctx<'_>, size: usize, variant: Variant) -> anyhow::Result
         sender: ctx.account,
         verification_gas_limit: VERIFICATION_GAS_LIMIT,
         call_gas_limit,
+        post_op_gas_limit: 0,
         estimation: None,
         base_pvg: base,
         pre_verification_gas: pvg,
@@ -498,26 +554,32 @@ async fn send_and_measure(
     Ok(case)
 }
 
-/// Derives VGL and CGL the way rundler would in isolation mode, then sends the op with them.
+/// Derives the limits the way rundler would in isolation mode, then sends the op with them.
 ///
 /// Simulation has no reservoir, so a simulated limit covers execution and state together. With
-/// a max-limit op (fees and PVG 0, as rundler estimates):
+/// a max-limit op (PVG 0; fees 0 when self-paying, real fees with a paymaster, like rundler's
+/// constant-fee verification search, so the paymaster's deposit debit is simulated):
 ///
-/// - `S` = state gas of `handleOps([op])`; `S_v` = the same with `callGasLimit = 0` (execution
-///   fails and its state rolls back); `S_c = S - S_v`.
-/// - `VGL = (preOpGas from simulateHandleOp - S_v + deposit_transfer_overhead) * 1.1`
-///   (rundler adds the overhead for self-paying ops, then a 10% buffer).
+/// - `S` = state gas of `handleOps([op])`; `S_cv` = the same with `callGasLimit = 0` (execution
+///   fails and its state rolls back; postOp still runs); `S_c = S - S_cv`.
+/// - `S_post` = postOp state (see [`Estimation::post_op_split`]); `S_v = S_cv - S_post`.
+/// - `VGL = (preOpGas from simulateHandleOp - S_v [+ deposit_transfer_overhead if self-paying])
+///   * 1.1`. On v0.6 postOp runs under VGL too, so VGL is at least the postOp limit below.
 /// - `CGL = (gas used by the execute frame - S_c) * 64/63 + 3,000` (frame gas used, not a binary
 ///   search: a search would also keep the 1/64 of `S` withheld at each nested call; then
 ///   rundler's 3,000 buffer).
+/// - postOp limit = `(gas used by the postOp frame - S_post) * 64/63 + 3,000`. Rundler takes this
+///   limit from the caller; here the harness plays the paymaster and sizes it for execution only.
 /// - `PVG = base + S`, and the op is sent with `tx.gas = 2^24 + S`.
 async fn estimated_case(
     ctx: &Ctx<'_>,
     size: usize,
     variant: Variant,
     deploys_account: bool,
+    paymaster_mode: Option<u8>,
 ) -> anyhow::Result<OpCase> {
     let harness = ctx.harness;
+    let v06 = ctx.fixtures.entry_point_version == EpVersion::V0_6;
     let (sender, nonce, init): (Address, U256, Option<(Address, Bytes)>) = if deploys_account {
         let salt = U256::from_be_bytes(B256::random().0);
         let ret = harness
@@ -538,22 +600,55 @@ async fn estimated_case(
     };
     let call_data = deploy_call_data(ctx.deployer, size);
     let max_fee = harness.default_max_fee().await?;
-    let shape = |vgl: u128, cgl: u128, pvg: u128, fees: bool| OpShape {
+    let pm_key = B256::random();
+    let pm_data = |mode: u8| -> Bytes {
+        match mode {
+            2 => [&[2u8][..], pm_key.as_slice()].concat().into(),
+            mode => vec![mode].into(),
+        }
+    };
+    let shape = |l: Limits| OpShape {
         sender,
         init: init.clone(),
         nonce,
         call_data: call_data.clone(),
-        verification_gas_limit: vgl,
-        call_gas_limit: cgl,
-        pre_verification_gas: pvg,
-        max_fee: if fees { max_fee } else { 0 },
-        priority_fee: if fees { OP_PRIORITY_FEE } else { 0 },
+        verification_gas_limit: l.vgl,
+        call_gas_limit: l.cgl,
+        pre_verification_gas: l.pvg,
+        max_fee: if l.fees { max_fee } else { 0 },
+        priority_fee: if l.fees { OP_PRIORITY_FEE } else { 0 },
+        paymaster: l.paymaster_mode.map(|mode| {
+            (
+                ctx.paymaster,
+                PAYMASTER_VERIFICATION_GAS_LIMIT,
+                l.post_op,
+                pm_data(mode),
+            )
+        }),
     };
 
-    // The max-limit op rundler simulates with: limits far above execution + state, fees 0.
+    // The max-limit op rundler simulates with: limits far above execution + state.
     let max_limit = u128::from(ctx.trace_gas / 4);
-    let full = build_op(ctx, &shape(max_limit, max_limit, 0, false));
-    let no_call = build_op(ctx, &shape(max_limit, 0, 0, false));
+    let has_post_op = paymaster_mode.is_some_and(|m| m >= 1);
+    let full_limits = Limits {
+        vgl: max_limit,
+        cgl: max_limit,
+        post_op: if has_post_op && !v06 { max_limit } else { 0 },
+        pvg: 0,
+        fees: paymaster_mode.is_some(),
+        paymaster_mode,
+    };
+    let full = build_op(ctx, &shape(full_limits));
+    let no_call = build_op(
+        ctx,
+        &shape(Limits {
+            cgl: 0,
+            ..full_limits
+        }),
+    );
+    if paymaster_mode.is_some() {
+        ensure_deposit(ctx, ctx.paymaster, full.max_gas_cost()).await?;
+    }
 
     let full_request = handle_ops_request(ctx, &full, ctx.trace_gas);
     let calls = harness.trace_calls(&full_request, None).await?;
@@ -564,40 +659,106 @@ async fn estimated_case(
     let Some(execute_gas) = probe.execute_gas_used else {
         bail!("max-limit trace has no execute frame: {probe:?}");
     };
+    let post_op_gas = if has_post_op {
+        let Some(gas) = post_op_gas_used(&calls, ctx.paymaster) else {
+            bail!("max-limit trace has no postOp frame");
+        };
+        Some(gas)
+    } else {
+        None
+    };
     let trace = harness.trace_state_gas(&full_request, None).await?;
-    let validation_trace = harness
+    let call_and_validation_trace = harness
         .trace_state_gas(&handle_ops_request(ctx, &no_call, ctx.trace_gas), None)
         .await?;
     let pre_op_gas = simulated_pre_op_gas(ctx, &full).await?;
 
+    // postOp state.
+    let (post_op_state_gas, post_op_split) = if !has_post_op {
+        (None, None)
+    } else if v06 {
+        let stateless = build_op(
+            ctx,
+            &shape(Limits {
+                paymaster_mode: Some(1),
+                ..full_limits
+            }),
+        );
+        let stateless = harness
+            .trace_state_gas(&handle_ops_request(ctx, &stateless, ctx.trace_gas), None)
+            .await?;
+        (
+            Some(
+                trace
+                    .state_gas_used
+                    .saturating_sub(stateless.state_gas_used),
+            ),
+            Some("v0.6: stateful minus stateless paymaster mode (harness only)"),
+        )
+    } else {
+        let with_post_op = trace_simulate_handle_op(ctx, &full, false).await?;
+        let without_post_op = trace_simulate_handle_op(ctx, &full, true).await?;
+        (
+            Some(
+                with_post_op
+                    .state_gas_used
+                    .saturating_sub(without_post_op.state_gas_used),
+            ),
+            Some("v0.7: simulateHandleOp minus simulateHandleOpNoPostOp"),
+        )
+    };
+
     let state_gas = trace.state_gas_used;
-    let validation_state_gas = validation_trace.state_gas_used;
-    let execution_state_gas = state_gas.saturating_sub(validation_state_gas);
-    // Simulated with fees 0, so the EntryPoint skips the deposit debit; rundler adds
-    // `deposit_transfer_overhead` for it on self-paying ops.
-    let verification_gas_limit = (pre_op_gas.saturating_sub(u128::from(validation_state_gas))
-        + ctx.spec.deposit_transfer_overhead())
-        * 11
-        / 10;
+    let execution_state_gas = state_gas.saturating_sub(call_and_validation_trace.state_gas_used);
+    let validation_state_gas = call_and_validation_trace
+        .state_gas_used
+        .saturating_sub(post_op_state_gas.unwrap_or(0));
+    let post_op_gas_limit = post_op_gas
+        .map(|gas| u128::from(gas.saturating_sub(post_op_state_gas.unwrap_or(0))) * 64 / 63 + 3_000)
+        .unwrap_or(0);
+    // Self-paying ops are simulated with fees 0, so the EntryPoint skips the deposit debit;
+    // rundler adds `deposit_transfer_overhead` for it.
+    let deposit_overhead = if paymaster_mode.is_none() {
+        ctx.spec.deposit_transfer_overhead()
+    } else {
+        0
+    };
+    let mut verification_gas_limit =
+        (pre_op_gas.saturating_sub(u128::from(validation_state_gas)) + deposit_overhead) * 11 / 10;
+    if v06 {
+        // v0.6 runs postOp under verificationGasLimit.
+        verification_gas_limit = verification_gas_limit.max(post_op_gas_limit);
+    }
     let call_gas_limit =
         u128::from(execute_gas.saturating_sub(execution_state_gas)) * 64 / 63 + 3_000;
+    let sent_post_op_gas_limit = if v06 { 0 } else { post_op_gas_limit };
 
     let pvg_state = PvgState {
-        sender_deposit_is_zero: Some(false),
+        sender_deposit_is_zero: paymaster_mode.is_none().then_some(false),
         authority: None,
     };
-    let mut op = build_op(ctx, &shape(verification_gas_limit, call_gas_limit, 0, true));
+    let limits = |pvg: u128| Limits {
+        vgl: verification_gas_limit,
+        cgl: call_gas_limit,
+        post_op: sent_post_op_gas_limit,
+        pvg,
+        fees: true,
+        paymaster_mode,
+    };
+    let mut op = build_op(ctx, &shape(limits(0)));
     let mut pvg = 0;
     for _ in 0..2 {
         pvg = op.required_pre_verification_gas(ctx.spec, 1, 0, None, &pvg_state)
             + u128::from(state_gas);
-        op = build_op(
-            ctx,
-            &shape(verification_gas_limit, call_gas_limit, pvg, true),
-        );
+        op = build_op(ctx, &shape(limits(pvg)));
     }
     let base = op.required_pre_verification_gas(ctx.spec, 1, 0, None, &pvg_state);
-    ensure_deposit(ctx, sender, op.max_gas_cost()).await?;
+    let payer = if paymaster_mode.is_some() {
+        ctx.paymaster
+    } else {
+        sender
+    };
+    ensure_deposit(ctx, payer, op.max_gas_cost()).await?;
 
     let case = OpCase {
         size,
@@ -605,6 +766,7 @@ async fn estimated_case(
         sender,
         verification_gas_limit,
         call_gas_limit,
+        post_op_gas_limit: sent_post_op_gas_limit,
         estimation: Some(Estimation {
             deploys_account,
             simulated_pre_op_gas: pre_op_gas,
@@ -612,6 +774,10 @@ async fn estimated_case(
             state_gas,
             validation_state_gas,
             execution_state_gas,
+            paymaster_mode,
+            simulated_post_op_gas: post_op_gas,
+            post_op_state_gas,
+            post_op_split,
         }),
         base_pvg: base,
         pre_verification_gas: pvg,
@@ -633,6 +799,55 @@ async fn estimated_case(
         error: None,
     };
     send_and_measure(ctx, case, &op).await
+}
+
+/// Gas limits and payment of one op of an estimated case.
+#[derive(Clone, Copy)]
+struct Limits {
+    vgl: u128,
+    cgl: u128,
+    /// `paymasterPostOpGasLimit` (v0.7).
+    post_op: u128,
+    pvg: u128,
+    fees: bool,
+    paymaster_mode: Option<u8>,
+}
+
+/// Gas used by the paymaster's `postOp` frame (v0.6 or v0.7), if any.
+fn post_op_gas_used(trace: &serde_json::Value, paymaster: Address) -> Option<u64> {
+    let selectors = [
+        format!(
+            "0x{}",
+            alloy_primitives::hex::encode(StatePaymaster::postOpCall::SELECTOR)
+        ),
+        format!(
+            "0x{}",
+            alloy_primitives::hex::encode(StatePaymasterV06::postOpCall::SELECTOR)
+        ),
+    ];
+    let paymaster = paymaster.to_string().to_lowercase();
+    let mut stack = vec![trace];
+    while let Some(frame) = stack.pop() {
+        let to = frame.get("to").and_then(|v| v.as_str()).unwrap_or_default();
+        let input = frame
+            .get("input")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if to.to_lowercase() == paymaster && selectors.iter().any(|s| input.starts_with(s)) {
+            return frame
+                .get("gasUsed")
+                .and_then(|v| v.as_str())
+                .and_then(|h| u64::from_str_radix(h.trim_start_matches("0x"), 16).ok());
+        }
+        stack.extend(
+            frame
+                .get("calls")
+                .and_then(|c| c.as_array())
+                .into_iter()
+                .flatten(),
+        );
+    }
+    None
 }
 
 /// `preOpGas` of `simulateHandleOp(op)`: v0.7 returns it from `EntryPointSimulations` (state
@@ -789,6 +1004,9 @@ struct OpShape {
     pre_verification_gas: u128,
     max_fee: u128,
     priority_fee: u128,
+    /// `(paymaster, paymasterVerificationGasLimit, paymasterPostOpGasLimit, paymasterData)`;
+    /// v0.6 uses only the address and data.
+    paymaster: Option<(Address, u128, u128, Bytes)>,
 }
 
 fn build_op(ctx: &Ctx<'_>, shape: &OpShape) -> UserOperationVariant {
@@ -810,7 +1028,11 @@ fn build_op(ctx: &Ctx<'_>, shape: &OpShape) -> UserOperationVariant {
                 pre_verification_gas: shape.pre_verification_gas,
                 max_fee_per_gas: shape.max_fee,
                 max_priority_fee_per_gas: shape.priority_fee,
-                paymaster_and_data: Bytes::new(),
+                paymaster_and_data: shape
+                    .paymaster
+                    .as_ref()
+                    .map(|(pm, _, _, data)| [pm.as_slice(), data.as_ref()].concat().into())
+                    .unwrap_or_default(),
                 signature,
             },
         )
@@ -835,6 +1057,9 @@ fn build_op(ctx: &Ctx<'_>, shape: &OpShape) -> UserOperationVariant {
             if let Some((factory, data)) = &shape.init {
                 builder = builder.factory(*factory, data.clone());
             }
+            if let Some((pm, pvgl, ppogl, data)) = &shape.paymaster {
+                builder = builder.paymaster(*pm, *pvgl, *ppogl, data.clone());
+            }
             builder.build().into()
         }
     }
@@ -856,14 +1081,24 @@ fn handle_ops_request(ctx: &Ctx<'_>, op: &UserOperationVariant, gas: u64) -> Tra
 async fn trace_simulate_handle_op(
     ctx: &Ctx<'_>,
     op: &UserOperationVariant,
+    no_post_op: bool,
 ) -> anyhow::Result<StateGasTrace> {
     let packed = uo_v0_7::UserOperation::from(op.clone()).pack();
-    let input = IEntryPointSimulations::simulateHandleOpCall {
-        op: packed,
-        target: Address::ZERO,
-        targetCallData: Bytes::new(),
-    }
-    .abi_encode();
+    let input = if no_post_op {
+        IEntryPointSimulations::simulateHandleOpNoPostOpCall {
+            op: packed,
+            target: Address::ZERO,
+            targetCallData: Bytes::new(),
+        }
+        .abi_encode()
+    } else {
+        IEntryPointSimulations::simulateHandleOpCall {
+            op: packed,
+            target: Address::ZERO,
+            targetCallData: Bytes::new(),
+        }
+        .abi_encode()
+    };
     let request = TransactionRequest::default()
         .with_from(Address::random())
         .with_to(ctx.fixtures.entry_point)
