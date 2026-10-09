@@ -22,6 +22,10 @@ sol!(BlobDeployer, "contracts/out/Probes.sol/BlobDeployer.json");
 sol!(Burner, "contracts/out/Probes.sol/Burner.json");
 sol!(ExecAccount, "contracts/out/Probes.sol/ExecAccount.json");
 sol!(
+    ExecAccountFactory,
+    "contracts/out/Probes.sol/ExecAccountFactory.json"
+);
+sol!(
     ExecAccountV06,
     "contracts/out/Probes.sol/ExecAccountV06.json"
 );
