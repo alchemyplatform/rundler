@@ -47,6 +47,8 @@ pub use alloy_network::{
 };
 pub use alloy_serde::WithOtherFields;
 pub use fees::new_fee_estimator;
+mod state_gas;
+pub use state_gas::{StateGasTrace, trace_call_state_gas};
 mod traits;
 pub mod transaction;
 // re-export alloy RPC types

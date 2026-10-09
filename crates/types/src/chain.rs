@@ -679,6 +679,15 @@ impl ChainSpec {
         }
     }
 
+    /// True if user operations may use [`StateGasMode::Reservoir`](crate::StateGasMode) in a
+    /// block with the given timestamp, i.e. once Glamsterdam (EIP-8037) is active.
+    ///
+    /// False on a spec from [`ChainSpec::for_bundle_inclusion_after`] taken before activation,
+    /// so an op that may be included on either side of the fork stays metered.
+    pub fn reservoir_mode_enabled_at(&self, timestamp: u64) -> bool {
+        self.glamsterdam_activation.is_active_at(timestamp)
+    }
+
     /// The gas schedule that applies to a block with the given timestamp
     pub fn gas_schedule_at(&self, timestamp: u64) -> GasSchedule {
         match self.gas_schedule_id_at(timestamp) {
@@ -1075,6 +1084,36 @@ mod tests {
 
         let genesis = spec_with_activation(ForkActivation::Genesis);
         assert_eq!(genesis.gas_schedule_id_at(0), GasScheduleId::Glamsterdam);
+    }
+
+    #[test]
+    fn reservoir_mode_needs_glamsterdam() {
+        let never = ChainSpec::default();
+        assert!(!never.reservoir_mode_enabled_at(u64::MAX));
+
+        let genesis = ChainSpec {
+            glamsterdam_activation: ForkActivation::Genesis,
+            ..Default::default()
+        };
+        assert!(genesis.reservoir_mode_enabled_at(0));
+
+        let timestamp = ChainSpec {
+            glamsterdam_activation: ForkActivation::Timestamp(1_000),
+            ..Default::default()
+        };
+        assert!(!timestamp.reservoir_mode_enabled_at(999));
+        assert!(timestamp.reservoir_mode_enabled_at(1_000));
+        // A transaction submitted before activation may be included before it: stay metered.
+        assert!(
+            !timestamp
+                .for_bundle_inclusion_after(999)
+                .reservoir_mode_enabled_at(1_000)
+        );
+        assert!(
+            timestamp
+                .for_bundle_inclusion_after(1_000)
+                .reservoir_mode_enabled_at(0)
+        );
     }
 
     #[test]

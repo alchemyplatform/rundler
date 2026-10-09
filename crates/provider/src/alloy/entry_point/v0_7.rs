@@ -13,7 +13,7 @@
 
 use alloy_contract::Error as ContractError;
 use alloy_eips::eip7702::SignedAuthorization;
-use alloy_primitives::{Address, Bytes, U256};
+use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_provider::network::{AnyNetwork, TransactionBuilder7702};
 use alloy_rpc_types_eth::{
     BlockId,
@@ -499,6 +499,40 @@ where
         Ok((call.inner, override_ep))
     }
 
+    fn get_state_gas_simulate_handle_op_call(
+        &self,
+        op: Self::UO,
+        skip_post_op: bool,
+        gas: u64,
+    ) -> ProviderResult<(TransactionRequest, StateOverride)> {
+        let addr = *self.i_entry_point.address();
+        let mut state_override = StateOverride::default();
+        add_simulations_override(
+            self.get_simulations_bytecode().clone(),
+            &mut state_override,
+            addr,
+        );
+        add_sender_creator_override(self.ep_version, &mut state_override, addr);
+        add_authorization_tuple(op.sender(), op.authorization_tuple(), &mut state_override);
+
+        let ep_simulations =
+            IEntryPointSimulationsInstance::new(addr, self.i_entry_point.provider());
+        let call = if skip_post_op {
+            ep_simulations
+                .simulateHandleOpNoPostOp(op.pack(), Address::ZERO, Bytes::new())
+                .gas(gas)
+                .from(SIMULATION_SENDER)
+                .into_transaction_request()
+        } else {
+            ep_simulations
+                .simulateHandleOp(op.pack(), Address::ZERO, Bytes::new())
+                .gas(gas)
+                .from(SIMULATION_SENDER)
+                .into_transaction_request()
+        };
+        Ok((call.inner, state_override))
+    }
+
     #[instrument(skip_all)]
     async fn simulate_validation(
         &self,
@@ -624,6 +658,39 @@ fn add_simulations_override(
             code: Some(simulations_bytecode),
             ..Default::default()
         });
+}
+
+/// Storage slot of `EntryPointSimulations._senderCreator` per version (`forge inspect
+/// EntryPointSimulations storageLayout` in `crates/contracts/contracts/v0_*`).
+fn sender_creator_slot(version: EntryPointVersion) -> Option<U256> {
+    match version {
+        EntryPointVersion::V0_6 => None,
+        EntryPointVersion::V0_7 => Some(U256::from(6)),
+        EntryPointVersion::V0_8 | EntryPointVersion::V0_9 => Some(U256::from(4)),
+    }
+}
+
+/// Pre-sets `EntryPointSimulations._senderCreator` in the entry point's storage.
+///
+/// Every simulation stores the `SenderCreator` address there (`initSenderCreator`). Under a code
+/// override that slot is empty in the real entry point's storage, so the write would be charged
+/// EIP-8037 state gas for a new slot that no real `handleOps` creates. Pre-set to the value it
+/// is about to receive (the address of the entry point's first CREATE), the write is a no-op.
+fn add_sender_creator_override(
+    version: EntryPointVersion,
+    state_override: &mut StateOverride,
+    addr: Address,
+) {
+    let Some(slot) = sender_creator_slot(version) else {
+        return;
+    };
+    let value = B256::left_padding_from(addr.create(1).as_slice());
+    state_override
+        .entry(addr)
+        .or_default()
+        .state_diff
+        .get_or_insert_with(Default::default)
+        .insert(B256::from(slot), value);
 }
 
 /// Build the `handleOps`/`handleAggregatedOps` transaction request.
@@ -928,9 +995,33 @@ fn add_authorization_tuple(
 
 #[cfg(test)]
 mod tests {
+    use alloy_primitives::address;
     use alloy_provider::RootProvider;
 
     use super::*;
+
+    /// The simulation's `SenderCreator` slot is pre-set to the entry point's first CREATE
+    /// address, alongside (not instead of) the simulations code override.
+    #[test]
+    fn test_sender_creator_override() {
+        let ep = address!("0000000071727De22E5E9d8BAf0edAc6f37da032");
+        for (version, slot) in [
+            (EntryPointVersion::V0_7, 6u64),
+            (EntryPointVersion::V0_8, 4),
+            (EntryPointVersion::V0_9, 4),
+        ] {
+            let mut state_override = StateOverride::default();
+            add_simulations_override(Bytes::from_static(&[1]), &mut state_override, ep);
+            add_sender_creator_override(version, &mut state_override, ep);
+
+            let account = &state_override[&ep];
+            assert_eq!(account.code, Some(Bytes::from_static(&[1])));
+            let state_diff = account.state_diff.as_ref().unwrap();
+            assert_eq!(state_diff.len(), 1);
+            let value = state_diff[&B256::from(U256::from(slot))];
+            assert_eq!(Address::from_word(value), ep.create(1));
+        }
+    }
 
     /// The bundle validation call must be able to omit its fee caps, while the
     /// transaction that is actually submitted always carries them. Some chains

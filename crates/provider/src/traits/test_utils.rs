@@ -173,6 +173,12 @@ mockall::mock! {
             &self,
             user_op: v0_6::UserOperation,
         ) -> ProviderResult<(TransactionRequest, StateOverride)>;
+        fn get_state_gas_simulate_handle_op_call(
+            &self,
+            op: v0_6::UserOperation,
+            skip_post_op: bool,
+            gas: u64,
+        ) -> ProviderResult<(TransactionRequest, StateOverride)>;
         async fn simulate_validation(
             &self,
             user_op: v0_6::UserOperation,
@@ -279,6 +285,12 @@ mockall::mock! {
         fn get_tracer_simulate_validation_call(
             &self,
             user_op: v0_7::UserOperation,
+        ) -> ProviderResult<(TransactionRequest, StateOverride)>;
+        fn get_state_gas_simulate_handle_op_call(
+            &self,
+            op: v0_7::UserOperation,
+            skip_post_op: bool,
+            gas: u64,
         ) -> ProviderResult<(TransactionRequest, StateOverride)>;
         async fn simulate_validation(
             &self,

@@ -214,6 +214,23 @@ pub trait SimulationProvider: Send + Sync {
         user_op: Self::UO,
     ) -> ProviderResult<(TransactionRequest, StateOverride)>;
 
+    /// Construct a `simulateHandleOp` call (`simulateHandleOpNoPostOp` if `skip_post_op`) whose
+    /// trace gives the op's EIP-8037 state gas.
+    ///
+    /// `gas` is the call's gas limit. A call gets no state-gas reservoir, so the op's state is
+    /// charged within its own gas limits and within `gas`: size both for execution and state.
+    /// State that the simulation contract itself would create is pre-set in the override, so the
+    /// traced state gas is the op's own.
+    ///
+    /// Errors on entry points without a non-reverting simulation (v0.6), whose state a top-level
+    /// revert would undo.
+    fn get_state_gas_simulate_handle_op_call(
+        &self,
+        op: Self::UO,
+        skip_post_op: bool,
+        gas: u64,
+    ) -> ProviderResult<(TransactionRequest, StateOverride)>;
+
     /// Call the entry point contract's `simulateValidation` function.
     async fn simulate_validation(
         &self,
