@@ -138,6 +138,11 @@ sent gets a `callGasLimit` for execution only. Each size also sends `BlobDeploye
 `deployThenRevert` directly, to check the reservoir and that a top-level revert charges no state
 gas.
 
+The `estimated` and `estimated-deploy` variants size VGL and CGL as rundler would in isolation mode,
+from simulation of the op with every limit at its maximum and the state split by phase (see
+`estimated_case`). `estimated-deploy` creates the sender through `initCode`, so validation creates
+state too. `--only estimated,estimated-deploy` runs just those variants.
+
 ### E6 — end to end through rundler
 
 Run rundler against the same node with the Glamsterdam chain spec, keeping estimation calls under

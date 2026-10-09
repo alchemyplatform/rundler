@@ -60,8 +60,9 @@ struct Cli {
     #[arg(long, global = true, default_value = concat!(env!("CARGO_MANIFEST_DIR"), "/results"))]
     out_dir: PathBuf,
 
-    /// E2 only: comma-separated list; run just the parts whose label contains an entry, e.g.
-    /// `Paymaster/deploy,PaymasterPostOp/deploy,beneficiary,penalty-check`
+    /// E2: comma-separated list; run just the parts whose label contains an entry, e.g.
+    /// `Paymaster/deploy,PaymasterPostOp/deploy,beneficiary,penalty-check`. E7: comma-separated
+    /// variants, e.g. `estimated,estimated-deploy` (skips the direct transactions)
     #[arg(long, global = true)]
     only: Option<String>,
 
@@ -161,9 +162,15 @@ async fn main() -> anyhow::Result<()> {
             let chain_id = harness.chain_info().await?.chain_id;
             let fixtures = fixtures::ensure(&harness, ep).await?;
             let spec = prediction_spec(chain_id, true);
-            let report =
-                experiments::isolated_state::run(&harness, &fixtures, &spec, sizes, trace_gas)
-                    .await?;
+            let report = experiments::isolated_state::run(
+                &harness,
+                &fixtures,
+                &spec,
+                sizes,
+                trace_gas,
+                cli.only.as_deref(),
+            )
+            .await?;
             let path = write_report(
                 &cli.out_dir,
                 &cli.label,

@@ -438,3 +438,37 @@ contract ExecAccountV06 {
 
     receive() external payable {}
 }
+
+/// CREATE2 factory for `ExecAccount` (v0.7) or `ExecAccountV06`, so an op can deploy its own
+/// sender through `initCode` and create validation-phase state.
+contract ExecAccountFactory {
+    address public immutable entryPoint;
+    bool public immutable v06;
+
+    constructor(address _entryPoint, bool _v06) {
+        entryPoint = _entryPoint;
+        v06 = _v06;
+    }
+
+    function createAccount(uint256 salt) public returns (address account) {
+        account = getAddress(salt);
+        if (account.code.length > 0) {
+            return account;
+        }
+        bytes memory initCode = _initCode();
+        assembly {
+            account := create2(0, add(initCode, 32), mload(initCode), salt)
+        }
+        require(account != address(0), "deploy failed");
+    }
+
+    function getAddress(uint256 salt) public view returns (address) {
+        bytes32 hash = keccak256(abi.encodePacked(bytes1(0xff), address(this), bytes32(salt), keccak256(_initCode())));
+        return address(uint160(uint256(hash)));
+    }
+
+    function _initCode() private view returns (bytes memory) {
+        bytes memory code = v06 ? type(ExecAccountV06).creationCode : type(ExecAccount).creationCode;
+        return abi.encodePacked(code, abi.encode(entryPoint));
+    }
+}
