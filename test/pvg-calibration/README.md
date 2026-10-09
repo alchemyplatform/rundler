@@ -118,11 +118,11 @@ moves the sender's balance in the same block.
 | E4 | `authorization`   | unmetered cost per EIP-7702 authorization by authority state (empty, funded, re-delegation), vs rundler's `authorization_gas_limit` (v0.7 only) |
 | E5 | `hazards`         | storage shapes that move gas across metering spans: same-sender zero-deposit ops, exact paymaster drain, cross-op and cross-span slot clears |
 | E6 | `end-to-end`      | through a running rundler: real accounts estimated, signed, sent and bundled by rundler; bundler margin per bundle. v0.7: LightAccount v2, MultiOwnerLightAccount v2, ModularAccount v2 and 7702 (SemiModularAccount7702). v0.6: LightAccount v1.1, SimpleAccount v0.6, MultiOwnerModularAccount v1 |
-| E7 | `isolated-state`  | state-heavy ops (contract deploys of `--sizes` bytes) bundled alone with `tx.gas = 2^24 + S`; `S` from reth's `stateGasTracer`; variants exact / under / over reservoir, bundler-sponsored (fees 0) and capped. See `docs/isolated-state-gas-plan.md` |
+| E7 | `isolated-state`  | state-heavy ops (contract deploys of `--sizes` bytes) bundled alone with `tx.gas = 2^24 + S`; `S` from reth's `stateGasTracer`; variants exact / under / over reservoir, bundler-sponsored (fees 0) and capped. See `docs/reservoir-mode-plan.md` |
 
 E2, E3 and E5 with `--entry-point v0.6` (formerly "planned E7") calibrate `per_user_op_v0_6_gas`.
 
-### E7 — isolated state-heavy ops
+### E7 — state-heavy ops in reservoir mode
 
 ```sh
 cargo run -- --label sepolia --entry-point v0.7 isolated-state --sizes 4096,16384,24576
@@ -138,7 +138,7 @@ sent gets a `callGasLimit` for execution only. Each size also sends `BlobDeploye
 `deployThenRevert` directly, to check the reservoir and that a top-level revert charges no state
 gas.
 
-The `estimated` and `estimated-deploy` variants size VGL and CGL as rundler would in isolation mode,
+The `estimated` and `estimated-deploy` variants size VGL and CGL as rundler would in reservoir mode,
 from simulation of the op with every limit at its maximum and the state split by phase (see
 `estimated_case`). `estimated-deploy` creates the sender through `initCode`, so validation creates
 state too. `estimated-paymaster`, `estimated-paymaster-post-op` and

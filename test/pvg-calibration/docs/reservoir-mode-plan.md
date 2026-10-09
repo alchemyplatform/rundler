@@ -1,9 +1,15 @@
-# Plan: isolated "state-heavy" user ops on Glamsterdam (tx.gas > 2^24)
+# Plan: reservoir mode for state-heavy user ops on Glamsterdam (tx.gas > 2^24)
+
+> **Terminology.** `StateGasMode` has two values:
+> - **`Metered`** (today): `tx.gas ≤ 2^24` and the reservoir is empty, so state gas is charged inside VGL/CGL and the EntryPoint meters it.
+> - **`Reservoir`** (this plan): the op is bundled alone with `tx.gas = 2^24 + S`, so its state gas comes from the EIP-8037 reservoir. The EntryPoint cannot see it, so it is paid through PVG.
+>
+> "Reservoir mode" means the latter. The harness keeps its original names (`isolated-state` command, `isolated_state.rs`). Rundler's existing `is_isolation` builder path is an unrelated feature.
 
 > **Status (2026-10-09):** Phase 0 (harness experiment E7) is done on Sepolia for v0.6 and v0.7; see [Phase 0 results](#phase-0-results-sepolia-2026-10-09). Later phases are a proposal, amended by those results.
 >
 > - **Network:** Sepolia only. It already runs Glamsterdam; the devnet is no longer used.
-> - **Guard (2026-10-09):** for now, only **Glamsterdam active on the chain**. There is no header and no ChainSpec flag; a request header may be added later. The mode is inferred: estimation falls back to isolation only when normal estimation fails, and `eth_sendUserOperation` picks the mode from the op's own PVG / VGL / CGL. See [Mode selection](#mode-selection).
+> - **Guard (2026-10-09):** for now, only **Glamsterdam active on the chain**. There is no header and no ChainSpec flag; a request header may be added later. The mode is inferred: estimation falls back to reservoir mode only when normal estimation fails, and `eth_sendUserOperation` picks the mode from the op's own PVG / VGL / CGL. See [Mode selection](#mode-selection).
 
 ## Phase 0 results (Sepolia, 2026-10-09)
 
@@ -41,7 +47,7 @@ Findings:
    - So rundler should size `R = S` (not more). That caps how much state gas can stay hidden from the EntryPoint.
 4. **A top-level revert charges no state gas.**
    - `deployThenRevert` with `tx.gas = 2^24 + S` used only execution gas: 30,919 at 4 kB, 37,799 at 24 kB.
-   - A reverted isolated bundle therefore costs at most about 2^24 of execution gas.
+   - A reverted reservoir-mode bundle therefore costs at most about 2^24 of execution gas.
    - `stateGasTracer` reports `stateGasUsed = 0` and **no error field** for a reverted call. It cannot tell a revert from "no state".
 5. **Traces and calls have no reservoir (reth 2.7).**
    - `debug_traceCall`, like eth_call, gives the whole call gas to `gas_left`: inside a 200M trace, `innerHandleOp` was forwarded 196.7M. A state charge is therefore metered and bounded by the op's limits.
@@ -49,7 +55,7 @@ Findings:
    - This changes the plan:
      - **Measure `S` on a probe** whose limits cover execution plus state (E7 uses `callGasLimit` = half the trace gas).
      - **Split `S` by phase to get execution-only limits.** Subtract the state each phase charges from what that phase's estimate measured. reth reports state gas only on the root frame, so the split needs a separate trace of validation alone (`simulateValidation`).
-     - **The pre-submit check must use the probe-shaped op.** Calling the real isolated op would show its execution failing.
+     - **The pre-submit check must use the probe-shaped op.** Calling the real reservoir-mode op would show its execution failing.
      - **Drop the "pre-existing bug" in Phase 1.** On reth, a large `max_gas_estimation_gas` does not hide state gas: there is no reservoir in calls. It must still not undercount on clients that do apply the 2^24 split. Check that per client.
 6. **Use `callTracer` rather than `stateGasTracer`.**
    - reth's `callTracer` root frame already carries `executionGasUsed`, `stateGasUsed` and `gasRefund` (inner frames carry none). It also reports the revert error and, with `withLog`, the `UserOperationEvent`.
@@ -57,7 +63,7 @@ Findings:
 7. **`eth_estimateGas` cannot size these bundles.** For the 24 kB bundle it returned 642,333 against 37.9M used: the cheapest run that doesn't revert is one where the op's execution quietly runs out of gas. `tx.gas` must come from the trace.
 8. **`EntryPointSimulations.simulateHandleOp` (v0.7 state override) reports one slot (97,920) more than the real `handleOps`.** A plausible cause is that its storage layout puts a written slot, e.g. the reentrancy guard, where the canonical EntryPoint's storage is empty; I haven't checked. Either way the error is conservative for estimation. Subtract it, or trace a non-overridden path, if exactness matters.
 9. **BSO works as is.** Fees 0 and PVG 0 give `actualGasCost = 0`, and the bundler pays `S` plus overhead. In a single-op bundle, the receipt's `gasUsed` × price is exactly the op's cost, so offchain billing can use it directly.
-10. **Isolation-mode estimation works with no hand sizing.**
+10. **Reservoir-mode estimation works with no hand sizing.**
     - Variants **estimated** and **estimated-deploy**. Reports: `results/e7-v0.7-sepolia-est-11155111-1791548390.json` and `results/e7-v0.6-sepolia-est-11155111-1791548523.json`.
     - VGL and CGL are derived from simulation of the op with every limit at its maximum (fees 0, PVG 0), the way rundler estimates:
       - `S` = state gas of `handleOps([op])`.
@@ -101,28 +107,28 @@ Findings:
 
 ## Mode selection
 
-Isolation mode exists only while Glamsterdam is active at the relevant block timestamp (`chain_spec.for_bundle_inclusion_after(ts)`). Otherwise behaviour is exactly today's.
+Reservoir mode exists only while Glamsterdam is active at the relevant block timestamp (`chain_spec.for_bundle_inclusion_after(ts)`). Otherwise behaviour is exactly today's.
 
 ### Estimation: normal first, then fall back
 
 1. **Run normal (capped) estimation unchanged.**
-2. **If it fails because the op does not fit, retry in isolation mode.** The trigger errors are:
+2. **If it fails because the op does not fit, retry in reservoir mode.** The trigger errors are:
    - `GasTotalTooLarge`
    - a VGL or CGL binary search reaching its max: `EstimateGasRevertAtMax` against `max_verification_gas` or `max_bundle_execution_gas`
    - out of gas inside validation or execution at the max
 
-   Isolation mode works as in Phase 0 finding 10:
+   Reservoir mode works as in Phase 0 finding 10:
    - simulate the op with every limit at its maximum, raised above the capped settings
    - read `S` and `S_v`
    - VGL = searched − `S_v` + `deposit_transfer_overhead`
    - CGL = execute frame `gasUsed` − `S_c`, × 64/63, + 3,000
    - PVG = base + `S`
-3. **Reverts are not retried.** A failure that also happens at the maximum limits (a real revert) is returned as today. Isolation is tried only when the failure is about gas.
+3. **Reverts are not retried.** A failure that also happens at the maximum limits (a real revert) is returned as today. Reservoir mode is tried only when the failure is about gas.
 4. **The response is a normal estimate.** The client cannot tell which mode it got, except through the large PVG. An optional `stateGas` field can come later.
 
 ### Send: decide from the op's PVG, VGL and CGL
 
-An op is **isolated** iff Glamsterdam is active and all three hold:
+An op uses **reservoir mode** iff Glamsterdam is active and all three hold:
 
 1. **Cheap pre-filter, no RPC.** The op's PVG surplus over the capped requirement, `surplus = PVG − required_pvg(capped)`, must be at least the smallest state gas that could not fit under the cap:
 
@@ -143,9 +149,9 @@ Otherwise the op takes the normal path. If it carries state its limits cannot ho
 
 **Edge case.** An op with enough surplus that would still fit capped stays normal. Its PVG just overpays, as it can today.
 
-**Gas-limit checks.** `TotalGasLimitTooHigh` uses the static PVG, not the op's PVG, so it already lets isolated ops through: their VGL and CGL are execution-only. `VerificationGasLimitTooHigh` applies unchanged.
+**Gas-limit checks.** `TotalGasLimitTooHigh` uses the static PVG, not the op's PVG, so it already lets reservoir-mode ops through: their VGL and CGL are execution-only. `VerificationGasLimitTooHigh` applies unchanged.
 
-**BSO** (fees 0, PVG 0) cannot pass the PVG rule, so BSO ops are never isolated. See the [BSO note](#note-bso-out-of-scope-for-now).
+**BSO** (fees 0, PVG 0) cannot pass the PVG rule, so BSO ops never use reservoir mode. See the [BSO note](#note-bso-out-of-scope-for-now).
 
 **Scope (2026-10-09):** onchain payment first: self-paying ops and ops with an onchain paymaster such as Gas Manager. BSO is deferred.
 
@@ -160,12 +166,12 @@ How BSO works today. This is from tracing `txn-engine` on 2026-10-09; it is not 
   - The result goes to Kafka `paymaster-gas-sponsor-usage-event` (`sponsored_gas`).
   - `actualGasCost` is 0 for BSO, so it is not used.
 
-**The problem for isolated BSO ops.** State gas paid from the reservoir is invisible to the EntryPoint, so it is **not in `actualGasUsed`**, and with PVG 0 nothing else carries it. In E7's 24 kB `bso` case, `actualGasUsed` was 60,160 while the bundler paid 37.87M. Billing would miss nearly all of the cost.
+**The problem for reservoir-mode BSO ops.** State gas paid from the reservoir is invisible to the EntryPoint, so it is **not in `actualGasUsed`**, and with PVG 0 nothing else carries it. In E7's 24 kB `bso` case, `actualGasUsed` was 60,160 while the bundler paid 37.87M. Billing would miss nearly all of the cost.
 
 **One possible design (not decided).** Let sponsored ops carry `PVG = S`: only `S`, because billing adds its own overhead and calldata share.
 - At a gas price of 0 this costs nothing onchain: `actualGasCost` stays 0, and the op still counts as BSO.
 - PVG becomes part of `actualGasUsed`, so the existing billing pipeline charges for `S` with no billing changes.
-- It also lets the send-side PVG rule recognise the op as isolated.
+- It also lets the send-side PVG rule recognise the op as a reservoir-mode op.
 - Changes needed:
   - rundler: allow PVG > 0 for sponsored ops, and add `S` to the `max_cost` check
   - wallet-server: keep PVG
@@ -198,7 +204,7 @@ Everything is gated behind a guard (still to be decided), and with the guard off
 - **Bundler loss from hidden state is bounded.**
   - Hidden, unmetered state can never exceed `R`. Sizing `R` = measured `S`, and requiring the payment to cover `S`, means the bundler never under-recovers.
   - An unused reservoir is refunded to the tx sender: `tx_gas_used = tx.gas − gas_left − reservoir`.
-- **A top-level revert or halt restores the state-gas baseline.** A reverted isolated bundle costs only execution gas (≤ 2^24 × price), the same risk class as today.
+- **A top-level revert or halt restores the state-gas baseline.** A reverted reservoir-mode bundle costs only execution gas (≤ 2^24 × price), the same risk class as today.
 - **Putting `S` in PVG avoids the v0.7 10% unused-gas penalty.** That penalty applies only to CGL + postOp.
 - **Single op means no cross-op wrap (shape A from the report).**
   - The cross-phase wrap shapes B and C remain.
@@ -245,8 +251,8 @@ The rest of the plan depends on what E7 shows, so it goes first.
 ### Phase 1: Shared plumbing (flag-guarded)
 
 - **`crates/types/src/chain.rs`:**
-  - Add `glamsterdam_isolated_state_gas_enabled: bool` (default false), `isolated_state_gas_max` (cap on `R`, at most the block state-gas limit minus 2^24), `isolated_state_gas_min` (classification threshold), and `tx_max_gas_limit` (2^24).
-  - Expose them through one accessor, `isolated_state_gas_settings() -> Option<…>`, so call sites never branch on the flag.
+  - Add `reservoir_mode_enabled: bool` (default false), `reservoir_state_gas_max` (cap on `R`, at most the block state-gas limit minus 2^24), `reservoir_state_gas_min` (classification threshold), and `tx_max_gas_limit` (2^24).
+  - Expose them through one accessor, `reservoir_mode_settings() -> Option<…>`, so call sites never branch on the flag.
 - **Provider:**
   - Add `EvmProvider::trace_state_gas(tx, block, overrides) -> StateGasUsage` in `crates/provider/src/traits/evm.rs`, implemented in `alloy/evm.rs`.
   - Per Phase 0 finding 6, prefer `callTracer` (with `withLog`), whose root frame on reth carries `stateGasUsed` as well as the revert error and the op's event. `stateGasTracer` is the fallback; pass it as `GethDebugTracerType::JsTracer("stateGasTracer")` (serializes as the native name). Parse the raw JSON in both cases. `GethTrace` is untagged and could otherwise mis-deserialize.
@@ -259,44 +265,44 @@ The rest of the plan depends on what E7 shows, so it goes first.
 
 ### Phase 2: Estimation (`crates/sim/src/estimation/v0_7.rs`, then `v0_6.rs`)
 
-- **Amended by Phase 0 finding 10.** Run the state-gas trace (`callTracer` root `stateGasUsed`) alongside the normal searches. Decide the mode from `S`: if the capped totals including `S` exceed `max_bundle_execution_gas`, the op is isolated. A binary search hitting its max is ambiguous, so don't decide from that.
-- **Isolated:** derive the limits as in finding 10. `S_v` comes from a `callGasLimit = 0` trace, or from tracing `simulateValidation` on v0.7. VGL is the searched value minus `S_v`, plus `deposit_transfer_overhead`, with the usual buffer. CGL is the execute frame's `gasUsed` minus `S_c`, × 64/63, plus 3,000 (not the binary-search result). PVG = base + `S`.
+- **Amended by Phase 0 finding 10.** Run the state-gas trace (`callTracer` root `stateGasUsed`) alongside the normal searches. Decide the mode from `S`: if the capped totals including `S` exceed `max_bundle_execution_gas`, the op uses reservoir mode. A binary search hitting its max is ambiguous, so don't decide from that.
+- **Reservoir mode:** derive the limits as in finding 10. `S_v` comes from a `callGasLimit = 0` trace, or from tracing `simulateValidation` on v0.7. VGL is the searched value minus `S_v`, plus `deposit_transfer_overhead`, with the usual buffer. CGL is the execute frame's `gasUsed` minus `S_c`, × 64/63, plus 3,000 (not the binary-search result). PVG = base + `S`.
 - Original text, superseded by the above: run the normal capped estimation first.
-- If it fails with `GasTotalTooLarge`, or CGL/VGL hit their max, and the flag is on, re-run in **isolated mode**:
+- If it fails with `GasTotalTooLarge`, or CGL/VGL hit their max, and the flag is on, re-run in **reservoir mode**:
   - VGL/CGL binary searches with `max_gas_estimation_gas = 2^24 + probe_reservoir`. They then measure execution only.
   - In parallel, `trace_state_gas_simulate_handle_op` gives `S`.
   - Return `PVG = required_pvg (existing formula) + S`.
   - Add a non-standard optional field `stateGas: S` to the estimate response (`crates/rpc/src/eth/…` estimate types), so wallet-server can price BSO and size `max_cost`.
-- Reject with a clear error if `S > isolated_state_gas_max`.
+- Reject with a clear error if `S > reservoir_state_gas_max`.
 
 ### Phase 3: Admission and pool
 
 - **Classification:** superseded by [Mode selection](#mode-selection). Original text: an op is a candidate if either:
-  - **BSO:** a new permission `isolated_state_gas: bool`, set by wallet-server through a header in `crates/rpc/src/types/permissions.rs` and plumbed through `permissions.rs`, `op_pool.proto` and `protos.rs`. Or:
-  - **Onchain:** `PVG − capped_required_pvg ≥ isolated_state_gas_min`.
-- **Confirming a candidate.** Trace the real `handleOps` to get `S`. The op is isolated only if `computation + S` would not fit the capped bundle. Then require:
+  - **BSO:** a new permission `reservoir_mode: bool`, set by wallet-server through a header in `crates/rpc/src/types/permissions.rs` and plumbed through `permissions.rs`, `op_pool.proto` and `protos.rs`. Or:
+  - **Onchain:** `PVG − capped_required_pvg ≥ reservoir_state_gas_min`.
+- **Confirming a candidate.** Trace the real `handleOps` to get `S`. The op uses reservoir mode only if `computation + S` would not fit the capped bundle. Then require:
   - **onchain:** `PVG ≥ capped_required_pvg + S`
   - **BSO:** `(bundle_gas_limit + S) × price ≤ max_cost` (extend `precheck.rs:322-325` and `pool.rs:659-668`)
-- **Storage.** Store `isolated_state_gas: Option<u64>` on the pool op (`crates/types/src/pool/traits.rs`, proto).
+- **Storage.** Store `state_gas_mode: StateGasMode` (with `S` for `Reservoir`) on the pool op (`crates/types/src/pool/traits.rs`, proto).
 - **Re-check.** Repeat the coverage check on the pool's PVG/cost re-check (`crates/pool/src/mempool/pool.rs:600-668`).
 - **Limitation (documented):** the ERC-7562 validation simulation still runs capped (`max_verification_gas`). Only state-heavy **execution** is supported at first. A large initCode or factory state is not.
 
 ### Phase 4: Builder
 
-- **Assigner (`crates/builder/src/assigner.rs`):** isolated ops always get a single-op `WorkAssignment`. Reuse the `is_isolation` path (`:506-560`, `:676-695`). Limit isolated bundles to one in flight per builder.
+- **Assigner (`crates/builder/src/assigner.rs`):** reservoir-mode ops always get a single-op `WorkAssignment`. Reuse the `is_isolation` path (`:506-560`, `:676-695`). Limit reservoir-mode bundles to one in flight per builder.
 - **Proposer (`crates/builder/src/bundle_proposer.rs`):**
   - Re-trace the real `handleOps` at bundle time to get `S_b`.
   - Re-check coverage (PVG or `max_cost`); skip the op if it is no longer covered.
   - Set `tx.gas = tx_max_gas_limit + S_b`. Do not apply the 1.05 multiplier to the reservoir part, and assert that computation × 1.05 ≤ 2^24.
   - Feed `S_b` through the existing per-op `state_gas` path (`get_bundle_gas_limit_inner`, `:2195-2258`) instead of a new one.
-  - **Re-enable the pre-submit check** for isolated single-op bundles. It is currently skipped for v0.7 single-op bundles (`:1318-1325`). Use the trace's own error, or `call_handle_ops` with the same `tx.gas`. On v0.6 this is the AA51 wrap guard.
-  - Treat AA51/AA95 from an isolated op as a hard reject, not a retry.
+  - **Re-enable the pre-submit check** for reservoir-mode single-op bundles. It is currently skipped for v0.7 single-op bundles (`:1318-1325`). Use the trace's own error, or `call_handle_ops` with the same `tx.gas`. On v0.6 this is the AA51 wrap guard.
+  - Treat AA51/AA95 from a reservoir-mode op as a hard reject, not a retry.
 - **Tracker:** fee bumps keep the same `tx.gas`. Bundle metrics record `S_b`, receipt `gasUsed` and margin.
 
 ### Phase 5: Docs and metrics
 
 - Update `docs/architecture/glamsterdam_pvg.md`.
-- Add metrics: isolated ops admitted, bundled and reverted; `S_estimate` vs `S_b` vs receipt-derived state gas; bundler margin per isolated bundle.
+- Add metrics: reservoir-mode ops admitted, bundled and reverted; `S_estimate` vs `S_b` vs receipt-derived state gas; bundler margin per reservoir-mode bundle.
 
 ## Recommended order
 
@@ -306,7 +312,7 @@ Phase 0, then 1, then a BSO-only rollout of phases 2–4 (explicit permission, g
 
 - Does reth's `stateGasTracer` report a revert or error, or only `stateGasUsed = 0`? Is there an equivalent on the clients we run elsewhere?
 - What are the node `rpc.gascap` values? Does the transaction submission path accept `tx.gas > 2^24`?
-- Block admission needs `execution_gas_available ≥ 2^24` and `state_gas_available ≥ tx.gas`. How long do large isolated txs wait for inclusion?
+- Block admission needs `execution_gas_available ≥ 2^24` and `state_gas_available ≥ tx.gas`. How long do large reservoir-mode txs wait for inclusion?
 - Net vs peak state: if an op allocates and then refills, a reservoir sized at net can spill at the peak. That spill is metered, so it is safe, but it may push the op over CGL.
 
 ## Verification
