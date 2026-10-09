@@ -39,6 +39,7 @@ message UserOperationPermissions {
   optional uint32 underpriced_bundle_pct = 4;
   BundlerSponsorship bundler_sponsorship = 5;
   bool eip7702_disabled = 6;
+  bool reject_underpriced_sponsorship = 7;
 }
 
 message BundlerSponsorship {
@@ -758,6 +759,7 @@ message MempoolError {
     UseUnsupportedEIP use_unsupported_eip = 20;
     AggregatorError aggregator = 21;
     Invalid7702AuthSignature invalid_7702_auth_signature = 22;
+    SponsorshipMaxCostTooLow sponsorship_max_cost_too_low = 23;
   }
 }
 
@@ -831,6 +833,14 @@ message TooManyExpectedStorageSlots {
 
 message UseUnsupportedEIP {
   string eip_name = 1;
+}
+
+message SponsorshipMaxCostTooLow {
+  // Sponsorship max cost in wei
+  bytes max_cost_wei = 1;
+  // Required cost in wei at block_number
+  bytes required_cost_wei = 2;
+  uint64 block_number = 3;
 }
 
 // PRECHECK VIOLATIONS

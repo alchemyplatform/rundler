@@ -26,8 +26,8 @@ use rundler_provider::{
 };
 use rundler_sim::{MempoolConfig, Prechecker, Simulator};
 use rundler_types::{
-    Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, GasFees, UserOperation,
-    UserOperationId, UserOperationPermissions, UserOperationVariant,
+    BundlerSponsorship, Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, GasFees,
+    UserOperation, UserOperationId, UserOperationPermissions, UserOperationVariant,
     entry_point_metrics::{self, AaErrorStage},
     pool::{
         BundleOutcome, MempoolError, PaymasterMetadata, PoolOperation, PoolOperationStatus,
@@ -180,6 +180,36 @@ where
             .removed_operations
             .increment(count as u64);
         self.ep_specific_metrics.removed_entities.increment(1);
+    }
+
+    /// Rejects a bundler-sponsored op whose `max_cost` is below the cost required for it to be a
+    /// pool candidate at `block_hash` (see the candidate gate in `pool.rs`).
+    async fn check_sponsorship_max_cost(
+        &self,
+        op: &UserOperationVariant,
+        sponsorship: &BundlerSponsorship,
+        block_hash: B256,
+        block_number: u64,
+    ) -> MempoolResult<()> {
+        let fee_estimator = self.ep_providers.fee_estimator();
+        let (bundle_fees, _) = fee_estimator
+            .required_bundle_fees(block_hash, None)
+            .await
+            .context("failed to estimate required fees for bundler sponsorship check")?;
+        let required_op_fees = fee_estimator.required_op_fees(bundle_fees);
+        let required_cost_wei = BundlerSponsorship::required_cost(
+            op.total_gas_limit(),
+            required_op_fees.max_fee_per_gas,
+        );
+
+        if sponsorship.max_cost < required_cost_wei {
+            return Err(MempoolError::SponsorshipMaxCostTooLow {
+                max_cost_wei: sponsorship.max_cost,
+                required_cost_wei,
+                block_number,
+            });
+        }
+        Ok(())
     }
 
     async fn check_execution_gas_limit_efficiency(
@@ -651,6 +681,13 @@ where
             );
         }
 
+        if perms.reject_underpriced_sponsorship
+            && let Some(sponsorship) = perms.bundler_sponsorship.as_ref()
+        {
+            self.check_sponsorship_max_cost(&op, sponsorship, block_hash, block_number)
+                .await?;
+        }
+
         let versioned_op: UP::UO = op.clone().into();
 
         // Prechecks
@@ -1109,7 +1146,13 @@ struct UoPoolMetrics {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, str::FromStr, time::Duration, vec};
+    use std::{
+        collections::HashMap,
+        str::FromStr,
+        sync::atomic::{AtomicU64, Ordering},
+        time::Duration,
+        vec,
+    };
 
     use alloy_primitives::{Address, Bytes, Log as PrimitiveLog, LogData, address, bytes, uint};
     use alloy_rpc_types_eth::TransactionReceipt as AlloyTransactionReceipt;
@@ -2669,6 +2712,217 @@ mod tests {
         trusted: bool,
     }
 
+    fn sponsored_op() -> OpWithErrors {
+        create_op_from_required(UserOperationRequiredFields {
+            sender: Address::random(),
+            call_gas_limit: 100_000,
+            verification_gas_limit: 100_000,
+            pre_verification_gas: 50_000,
+            ..Default::default()
+        })
+    }
+
+    fn sponsored_perms(max_cost: U256, reject_underpriced: bool) -> UserOperationPermissions {
+        UserOperationPermissions {
+            bundler_sponsorship: Some(BundlerSponsorship {
+                max_cost,
+                valid_until: u64::MAX,
+            }),
+            reject_underpriced_sponsorship: reject_underpriced,
+            ..Default::default()
+        }
+    }
+
+    /// A fee estimator whose required `max_fee_per_gas` is read from `max_fee` on every call.
+    fn fee_estimator_with_max_fee(max_fee: Arc<AtomicU64>) -> MockFeeEstimator {
+        let mut fee_estimator = MockFeeEstimator::new();
+        fee_estimator
+            .expect_required_bundle_fees()
+            .returning(move |_, _| {
+                Ok((
+                    GasFees {
+                        max_fee_per_gas: max_fee.load(Ordering::SeqCst) as u128,
+                        max_priority_fee_per_gas: 0,
+                    },
+                    0,
+                ))
+            });
+        fee_estimator
+            .expect_required_op_fees()
+            .returning(|fees| fees);
+        fee_estimator
+    }
+
+    fn create_pool_with_max_fee(
+        ops: Vec<OpWithErrors>,
+        max_fee: u64,
+    ) -> UoPool<impl UoPoolProvidersT, impl ProvidersWithEntryPointT> {
+        create_pool_with_fee_estimator(
+            default_config(),
+            ops,
+            MockEntryPointV0_6::new(),
+            MempoolConfig::default(),
+            fee_estimator_with_max_fee(Arc::new(AtomicU64::new(max_fee))),
+        )
+    }
+
+    const SPONSORSHIP_MAX_FEE: u64 = 10_000_000_000;
+
+    fn sponsorship_required_cost(op: &OpWithErrors) -> U256 {
+        let required =
+            BundlerSponsorship::required_cost(op.op.total_gas_limit(), SPONSORSHIP_MAX_FEE as u128);
+        assert!(required > U256::ZERO);
+        required
+    }
+
+    #[tokio::test]
+    async fn sponsorship_below_required_cost_accepted_without_opt_in() {
+        let op = sponsored_op();
+        let max_cost = sponsorship_required_cost(&op) - U256::from(1);
+        let pool = create_pool_with_max_fee(vec![op.clone()], SPONSORSHIP_MAX_FEE);
+
+        pool.add_operation(
+            OperationOrigin::Local,
+            op.op,
+            sponsored_perms(max_cost, false),
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn sponsorship_below_required_cost_rejected_with_opt_in() {
+        let op = sponsored_op();
+        let required = sponsorship_required_cost(&op);
+        let max_cost = required - U256::from(1);
+        let pool = create_pool_with_max_fee(vec![op.clone()], SPONSORSHIP_MAX_FEE);
+
+        let err = pool
+            .add_operation(
+                OperationOrigin::Local,
+                op.op,
+                sponsored_perms(max_cost, true),
+            )
+            .await
+            .unwrap_err();
+
+        match err {
+            MempoolError::SponsorshipMaxCostTooLow {
+                max_cost_wei,
+                required_cost_wei,
+                block_number,
+            } => {
+                assert_eq!(max_cost_wei, max_cost);
+                assert_eq!(required_cost_wei, required);
+                assert_eq!(block_number, 0);
+            }
+            e => panic!("expected SponsorshipMaxCostTooLow, got {e:?}"),
+        }
+        assert_eq!(pool.best_operations(1, None).unwrap(), vec![]);
+    }
+
+    #[tokio::test]
+    async fn sponsorship_at_or_above_required_cost_accepted_with_opt_in() {
+        for extra in [0, 1] {
+            let op = sponsored_op();
+            let max_cost = sponsorship_required_cost(&op) + U256::from(extra);
+            let pool = create_pool_with_max_fee(vec![op.clone()], SPONSORSHIP_MAX_FEE);
+
+            pool.add_operation(
+                OperationOrigin::Local,
+                op.op,
+                sponsored_perms(max_cost, true),
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn sponsorship_opt_in_ignored_for_unsponsored_op() {
+        let op = sponsored_op();
+        let mut fee_estimator = MockFeeEstimator::new();
+        fee_estimator.expect_required_bundle_fees().never();
+        let pool = create_pool_with_fee_estimator(
+            default_config(),
+            vec![op.clone()],
+            MockEntryPointV0_6::new(),
+            MempoolConfig::default(),
+            fee_estimator,
+        );
+        let perms = UserOperationPermissions {
+            reject_underpriced_sponsorship: true,
+            ..Default::default()
+        };
+
+        pool.add_operation(OperationOrigin::Local, op.op, perms)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn sponsorship_check_fee_estimation_failure_is_not_a_price_rejection() {
+        let op = sponsored_op();
+        let mut fee_estimator = MockFeeEstimator::new();
+        fee_estimator
+            .expect_required_bundle_fees()
+            .returning(|_, _| Err(anyhow::anyhow!("fee oracle unavailable")));
+        let pool = create_pool_with_fee_estimator(
+            default_config(),
+            vec![op.clone()],
+            MockEntryPointV0_6::new(),
+            MempoolConfig::default(),
+            fee_estimator,
+        );
+
+        let err = pool
+            .add_operation(
+                OperationOrigin::Local,
+                op.op,
+                sponsored_perms(U256::MAX, true),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, MempoolError::Other(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn sponsorship_check_tracks_current_required_fees() {
+        let op = sponsored_op();
+        let max_cost = sponsorship_required_cost(&op);
+        let max_fee = Arc::new(AtomicU64::new(SPONSORSHIP_MAX_FEE + 1));
+        let pool = create_pool_with_fee_estimator(
+            default_config(),
+            vec![op.clone()],
+            MockEntryPointV0_6::new(),
+            MempoolConfig::default(),
+            fee_estimator_with_max_fee(max_fee.clone()),
+        );
+
+        let err = pool
+            .add_operation(
+                OperationOrigin::Local,
+                op.op.clone(),
+                sponsored_perms(max_cost, true),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, MempoolError::SponsorshipMaxCostTooLow { .. }),
+            "got {err:?}"
+        );
+
+        max_fee.store(SPONSORSHIP_MAX_FEE, Ordering::SeqCst);
+        pool.add_operation(
+            OperationOrigin::Local,
+            op.op,
+            sponsored_perms(max_cost, true),
+        )
+        .await
+        .unwrap();
+    }
+
     fn default_config() -> PoolConfig {
         PoolConfig {
             chain_spec: ChainSpec::default(),
@@ -2738,8 +2992,28 @@ mod tests {
     fn create_pool_with_entry_point_config(
         args: PoolConfig,
         ops: Vec<OpWithErrors>,
+        entrypoint: MockEntryPointV0_6,
+        mempool_config: MempoolConfig,
+    ) -> UoPool<impl UoPoolProvidersT, impl ProvidersWithEntryPointT> {
+        let mut fee_estimator = MockFeeEstimator::new();
+        fee_estimator
+            .expect_required_bundle_fees()
+            .returning(move |_, _| Ok((GasFees::default(), 0)));
+        fee_estimator
+            .expect_required_op_fees()
+            .returning(move |fees| GasFees {
+                max_fee_per_gas: fees.max_fee_per_gas,
+                max_priority_fee_per_gas: fees.max_priority_fee_per_gas,
+            });
+        create_pool_with_fee_estimator(args, ops, entrypoint, mempool_config, fee_estimator)
+    }
+
+    fn create_pool_with_fee_estimator(
+        args: PoolConfig,
+        ops: Vec<OpWithErrors>,
         mut entrypoint: MockEntryPointV0_6,
         mempool_config: MempoolConfig,
+        fee_estimator: MockFeeEstimator,
     ) -> UoPool<impl UoPoolProvidersT, impl ProvidersWithEntryPointT> {
         entrypoint
             .expect_address()
@@ -2755,7 +3029,6 @@ mod tests {
 
         let mut simulator = MockSimulator::new();
         let mut prechecker = MockPrechecker::new();
-        let mut fee_estimator = MockFeeEstimator::new();
 
         let entry_point = Arc::new(entrypoint);
         let entrypoint_address = *entry_point.address();
@@ -2786,16 +3059,6 @@ mod tests {
             args.blocklist.clone().unwrap_or_default(),
             args.allowlist.clone().unwrap_or_default(),
         ));
-
-        fee_estimator
-            .expect_required_bundle_fees()
-            .returning(move |_, _| Ok((GasFees::default(), 0)));
-        fee_estimator
-            .expect_required_op_fees()
-            .returning(move |fees| GasFees {
-                max_fee_per_gas: fees.max_fee_per_gas,
-                max_priority_fee_per_gas: fees.max_priority_fee_per_gas,
-            });
 
         for op in ops {
             prechecker.expect_check().returning(move |_, _, _| {
