@@ -18,7 +18,13 @@
 use alloy_primitives::{Bytes, hex};
 use alloy_sol_macro::sol;
 
+sol!(BlobDeployer, "contracts/out/Probes.sol/BlobDeployer.json");
 sol!(Burner, "contracts/out/Probes.sol/Burner.json");
+sol!(ExecAccount, "contracts/out/Probes.sol/ExecAccount.json");
+sol!(
+    ExecAccountV06,
+    "contracts/out/Probes.sol/ExecAccountV06.json"
+);
 sol!(ProbeAccount, "contracts/out/Probes.sol/ProbeAccount.json");
 sol!(ProbeFactory, "contracts/out/Probes.sol/ProbeFactory.json");
 sol!(
@@ -43,6 +49,10 @@ sol! {
     interface IStakeManagerLite {
         function depositTo(address account) external payable;
         function balanceOf(address account) external view returns (uint256);
+    }
+
+    interface INonceManagerLite {
+        function getNonce(address sender, uint192 key) external view returns (uint256 nonce);
     }
 }
 
