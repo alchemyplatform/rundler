@@ -37,6 +37,14 @@ sol!(
 );
 sol!(Scratch, "contracts/out/Probes.sol/Scratch.json");
 sol!(
+    StatePaymaster,
+    "contracts/out/Probes.sol/StatePaymaster.json"
+);
+sol!(
+    StatePaymasterV06,
+    "contracts/out/Probes.sol/StatePaymasterV06.json"
+);
+sol!(
     ProbeAccountV06,
     "contracts/out/Probes.sol/ProbeAccountV06.json"
 );

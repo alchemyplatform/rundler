@@ -3,7 +3,7 @@
 > **Status (2026-10-09):** Phase 0 (harness experiment E7) is done on Sepolia for v0.6 and v0.7; see [Phase 0 results](#phase-0-results-sepolia-2026-10-09). Later phases are a proposal, amended by those results.
 >
 > - **Network:** Sepolia only. It already runs Glamsterdam; the devnet is no longer used.
-> - **Guard:** not decided. It could be per request (an HTTP header or param), a ChainSpec flag, or both. Settle this before Phase 1. Below, "the flag" means whichever guard is chosen.
+> - **Guard (2026-10-09):** for now, only **Glamsterdam active on the chain**. There is no header and no ChainSpec flag; a request header may be added later. The mode is inferred: estimation falls back to isolation only when normal estimation fails, and `eth_sendUserOperation` picks the mode from the op's own PVG / VGL / CGL. See [Mode selection](#mode-selection).
 
 ## Phase 0 results (Sepolia, 2026-10-09)
 
@@ -77,7 +77,102 @@ Findings:
     - `S_v` for a fresh sender is account creation + `ExecAccount` code + the first nonce write. It is subtracted from VGL correctly: VGL stays below 90k although validation creates 1.65M of state.
     - The first attempt hit **AA26** because it left out `deposit_transfer_overhead`. The simulation runs at fee 0, so the EntryPoint skips the deposit debit, and rundler adds that overhead for self-paying ops. It is needed here too.
     - CGL from the execute frame's `gasUsed` is tighter than a binary search would be. A binary search keeps the 1/64 of `S` withheld at each nested call, about 1.2M at 24 kB.
-11. **Harness note.** A load-balanced RPC can return a stale pending nonce, which made the harness reuse a nonce: one case failed and an earlier run hung waiting for a receipt. The harness now tracks nonces locally and times out receipts after 3 minutes. A builder lane sending 50M-gas transactions should watch for the same problem.
+11. **Paymaster-paid ops work too, including postOp state.**
+    - Variants: **estimated-paymaster** (no postOp), **-post-op** (postOp creates no state) and **-post-op-state** (postOp writes a fresh slot).
+    - Reports: `results/e7-v0.7-sepolia-pm-11155111-1791557609.json` and `results/e7-v0.6-sepolia-pm-11155111-1791557739.json`.
+    - All 18 cases (3 variants × 4/16/24 kB × v0.6/v0.7) succeeded, with `StatePaymaster` paying PVG = base + `S`, up to 37.9M.
+
+    | | VGL (v0.7 / v0.6) | postOp limit (v0.7) | `S_post` | gas margin (v0.7 / v0.6) |
+    | --- | --- | --- | --- | --- |
+    | no postOp | 45,743 / 44,366 | 0 | – | +366…+377 / −1,324 |
+    | postOp, no state | 45,865 / 44,486 | 4,971 | 0 | +513…+524 / −1,389 |
+    | postOp writes a fresh slot | 46,184 / 44,803 | 17,554 | 97,920 | +451…+462 / −1,463 |
+
+    - **The phase split attributes the postOp slot correctly**, on both versions: `S_post = 97,920`, `S_v = 0`, and `S_c` is unchanged. In simulation the postOp frame uses 112,247 gas including the slot, but the execution-only limit of 17,554 is enough onchain, because the reservoir pays for the slot.
+    - **How `S_post` was measured.**
+      - v0.7: `simulateHandleOp − simulateHandleOpNoPostOp`, which rundler can do as well.
+      - v0.6: there is no NoPostOp simulation, so the harness compares the paymaster's stateful and stateless postOp modes. Rundler can't do that; it would need a v0.6 simulation contract with a NoPostOp entry point (together with `EntryPointSimulationsV06`).
+      - On v0.6, postOp runs under VGL, so VGL = max(validation, postOp limit).
+    - **Fees during simulation.** With a paymaster, the max-limit op is simulated at real fees, mirroring rundler's constant-fee VGL/PVGL search, so the paymaster's deposit debit is measured. No `deposit_transfer_overhead` is added: rundler adds it only for self-paying ops.
+    - **Who sets the postOp limit.** `paymasterPostOpGasLimit` is not estimated by rundler; the paymaster service supplies it. A Gas Manager postOp limit that includes postOp state would still work, at the cost of the v0.7 penalty on the unused part (about 9.8k per slot).
+    - **Margins.** v0.6 is about 1.3–1.5k short, which is the #1349 gap, slightly larger with a paymaster. v0.7 is +366…+524.
+    - Not covered: Gas Manager's real paymaster contract and its policy service.
+12. **Harness note.** A load-balanced RPC can return a stale pending nonce, which made the harness reuse a nonce: one case failed and an earlier run hung waiting for a receipt. The harness now tracks nonces locally and times out receipts after 3 minutes. A builder lane sending 50M-gas transactions should watch for the same problem.
+
+## Mode selection
+
+Isolation mode exists only while Glamsterdam is active at the relevant block timestamp (`chain_spec.for_bundle_inclusion_after(ts)`). Otherwise behaviour is exactly today's.
+
+### Estimation: normal first, then fall back
+
+1. **Run normal (capped) estimation unchanged.**
+2. **If it fails because the op does not fit, retry in isolation mode.** The trigger errors are:
+   - `GasTotalTooLarge`
+   - a VGL or CGL binary search reaching its max: `EstimateGasRevertAtMax` against `max_verification_gas` or `max_bundle_execution_gas`
+   - out of gas inside validation or execution at the max
+
+   Isolation mode works as in Phase 0 finding 10:
+   - simulate the op with every limit at its maximum, raised above the capped settings
+   - read `S` and `S_v`
+   - VGL = searched − `S_v` + `deposit_transfer_overhead`
+   - CGL = execute frame `gasUsed` − `S_c`, × 64/63, + 3,000
+   - PVG = base + `S`
+3. **Reverts are not retried.** A failure that also happens at the maximum limits (a real revert) is returned as today. Isolation is tried only when the failure is about gas.
+4. **The response is a normal estimate.** The client cannot tell which mode it got, except through the large PVG. An optional `stateGas` field can come later.
+
+### Send: decide from the op's PVG, VGL and CGL
+
+An op is **isolated** iff Glamsterdam is active and all three hold:
+
+1. **Cheap pre-filter, no RPC.** The op's PVG surplus over the capped requirement, `surplus = PVG − required_pvg(capped)`, must be at least the smallest state gas that could not fit under the cap:
+
+   ```
+   surplus ≥ min(max_bundle_execution_gas − bundle_computation_gas_limit(op),
+                 max_verification_gas − VGL)
+   ```
+
+   Most ops fail this and take the normal path untouched, with no trace.
+2. **State trace.** Trace the real op (signed, in `handleOps([op])`) with every limit at its maximum, which gives `S`. Then trace it with `callGasLimit = 0`, which gives `S_v`.
+3. **Paid for, and cannot be bundled capped.** Both must hold:
+   - `surplus ≥ S`: PVG covers the state.
+   - `bundle_computation_gas_limit(op) + S > max_bundle_execution_gas`, or `VGL + S_v > max_verification_gas`: the capped path is impossible.
+
+   This is the same condition under which normal estimation fails, so estimation and send agree.
+
+Otherwise the op takes the normal path. If it carries state its limits cannot hold, that path fails as it would today.
+
+**Edge case.** An op with enough surplus that would still fit capped stays normal. Its PVG just overpays, as it can today.
+
+**Gas-limit checks.** `TotalGasLimitTooHigh` uses the static PVG, not the op's PVG, so it already lets isolated ops through: their VGL and CGL are execution-only. `VerificationGasLimitTooHigh` applies unchanged.
+
+**BSO** (fees 0, PVG 0) cannot pass the PVG rule, so BSO ops are never isolated. See the [BSO note](#note-bso-out-of-scope-for-now).
+
+**Scope (2026-10-09):** onchain payment first: self-paying ops and ops with an onchain paymaster such as Gas Manager. BSO is deferred.
+
+## Note: BSO (out of scope for now)
+
+How BSO works today. This is from tracing `txn-engine` on 2026-10-09; it is not verified against production.
+
+- **Before signing.** Wallet-server zeroes the fees, calls rundler's `eth_estimateUserOperationGas`, keeps VGL and CGL, and **sets PVG to 0** (`wallet-server/server/src/uoPreparation/gas.ts:135-140`). `wallet_sendPreparedCalls` rejects any BSO op with PVG > 0 (`:355-371`). Rundler also requires PVG 0 for sponsored ops (`crates/rpc/src/eth/api.rs:79-88`).
+- **`max_cost` is a budget cap, not an estimate.** paymaster-sponsorship-service computes it as the policy's `max_spend_per_uo_usd` / token price; on testnet it is 1 ETH. Rundler skips an op when `(bundle_gas_limit + required_pvg) × gas_price > max_cost`.
+- **Billing happens after inclusion.**
+  - `paymaster-jobs` `BlockIndexer` → `BsoCostCalculatorPipeline` prices each op as `actualGasUsed × effectiveGasPrice`, plus a share of the fixed tx overhead and of calldata/DA, × 1.3 markup.
+  - The result goes to Kafka `paymaster-gas-sponsor-usage-event` (`sponsored_gas`).
+  - `actualGasCost` is 0 for BSO, so it is not used.
+
+**The problem for isolated BSO ops.** State gas paid from the reservoir is invisible to the EntryPoint, so it is **not in `actualGasUsed`**, and with PVG 0 nothing else carries it. In E7's 24 kB `bso` case, `actualGasUsed` was 60,160 while the bundler paid 37.87M. Billing would miss nearly all of the cost.
+
+**One possible design (not decided).** Let sponsored ops carry `PVG = S`: only `S`, because billing adds its own overhead and calldata share.
+- At a gas price of 0 this costs nothing onchain: `actualGasCost` stays 0, and the op still counts as BSO.
+- PVG becomes part of `actualGasUsed`, so the existing billing pipeline charges for `S` with no billing changes.
+- It also lets the send-side PVG rule recognise the op as isolated.
+- Changes needed:
+  - rundler: allow PVG > 0 for sponsored ops, and add `S` to the `max_cost` check
+  - wallet-server: keep PVG
+- Open questions:
+  - Is this how we want state gas to flow into BSO accounting? The alternative is a separate signal, e.g. the header.
+  - Mainnet `max_spend_per_uo_usd` must allow about 38M gas for a 24 kB deploy.
+  - Which confirm path is deployed today, and how Orb consumes the event.
 
 ## Context
 
@@ -176,7 +271,7 @@ The rest of the plan depends on what E7 shows, so it goes first.
 
 ### Phase 3: Admission and pool
 
-- **Classification.** An op is a candidate if either:
+- **Classification:** superseded by [Mode selection](#mode-selection). Original text: an op is a candidate if either:
   - **BSO:** a new permission `isolated_state_gas: bool`, set by wallet-server through a header in `crates/rpc/src/types/permissions.rs` and plumbed through `permissions.rs`, `op_pool.proto` and `protos.rs`. Or:
   - **Onchain:** `PVG − capped_required_pvg ≥ isolated_state_gas_min`.
 - **Confirming a candidate.** Trace the real `handleOps` to get `S`. The op is isolated only if `computation + S` would not fit the capped bundle. Then require:
