@@ -57,7 +57,27 @@ Findings:
 7. **`eth_estimateGas` cannot size these bundles.** For the 24 kB bundle it returned 642,333 against 37.9M used: the cheapest run that doesn't revert is one where the op's execution quietly runs out of gas. `tx.gas` must come from the trace.
 8. **`EntryPointSimulations.simulateHandleOp` (v0.7 state override) reports one slot (97,920) more than the real `handleOps`.** A plausible cause is that its storage layout puts a written slot, e.g. the reentrancy guard, where the canonical EntryPoint's storage is empty; I haven't checked. Either way the error is conservative for estimation. Subtract it, or trace a non-overridden path, if exactness matters.
 9. **BSO works as is.** Fees 0 and PVG 0 give `actualGasCost = 0`, and the bundler pays `S` plus overhead. In a single-op bundle, the receipt's `gasUsed` × price is exactly the op's cost, so offchain billing can use it directly.
-10. **Harness note.** A load-balanced RPC can return a stale pending nonce, which made the harness reuse a nonce: one case failed and an earlier run hung waiting for a receipt. The harness now tracks nonces locally and times out receipts after 3 minutes. A builder lane sending 50M-gas transactions should watch for the same problem.
+10. **Isolation-mode estimation works with no hand sizing.**
+    - Variants **estimated** and **estimated-deploy**. Reports: `results/e7-v0.7-sepolia-est-11155111-1791548390.json` and `results/e7-v0.6-sepolia-est-11155111-1791548523.json`.
+    - VGL and CGL are derived from simulation of the op with every limit at its maximum (fees 0, PVG 0), the way rundler estimates:
+      - `S` = state gas of `handleOps([op])`.
+      - `S_v` = the same with `callGasLimit = 0`: execution fails and its state rolls back, so what remains is the validation and EntryPoint state.
+      - `S_c = S − S_v`.
+      - `VGL = (simulated preOpGas − S_v + deposit_transfer_overhead) × 1.1`.
+      - `CGL = (execute frame gasUsed − S_c) × 64/63 + 3,000`.
+      - `PVG = base + S`, sent with `tx.gas = 2^24 + S`.
+    - All 12 cases (4/16/24 kB × existing or `initCode`-deployed sender × v0.6/v0.7) succeeded.
+
+    | | VGL (v0.7 / v0.6) | CGL | `S_v` | gas margin (v0.7 / v0.6) |
+    | --- | --- | --- | --- | --- |
+    | estimated, 4 / 16 / 24 kB | 59,378 / 59,063 | 22,330 / 26,328 / 29,319 | 0 | +364…+375 / −1,328 |
+    | estimated-deploy, 4 / 16 / 24 kB | 88,387 / 87,771 | same | 1,650,870 | +379…+390 / −1,320 |
+
+    - A v0.7 margin of about +370 means CGL is tight, so the unused-gas penalty is negligible. The v0.6 −1.3k is the #1349 PVG gap again.
+    - `S_v` for a fresh sender is account creation + `ExecAccount` code + the first nonce write. It is subtracted from VGL correctly: VGL stays below 90k although validation creates 1.65M of state.
+    - The first attempt hit **AA26** because it left out `deposit_transfer_overhead`. The simulation runs at fee 0, so the EntryPoint skips the deposit debit, and rundler adds that overhead for self-paying ops. It is needed here too.
+    - CGL from the execute frame's `gasUsed` is tighter than a binary search would be. A binary search keeps the 1/64 of `S` withheld at each nested call, about 1.2M at 24 kB.
+11. **Harness note.** A load-balanced RPC can return a stale pending nonce, which made the harness reuse a nonce: one case failed and an earlier run hung waiting for a receipt. The harness now tracks nonces locally and times out receipts after 3 minutes. A builder lane sending 50M-gas transactions should watch for the same problem.
 
 ## Context
 
@@ -144,7 +164,9 @@ The rest of the plan depends on what E7 shows, so it goes first.
 
 ### Phase 2: Estimation (`crates/sim/src/estimation/v0_7.rs`, then `v0_6.rs`)
 
-- Run the normal capped estimation first.
+- **Amended by Phase 0 finding 10.** Run the state-gas trace (`callTracer` root `stateGasUsed`) alongside the normal searches. Decide the mode from `S`: if the capped totals including `S` exceed `max_bundle_execution_gas`, the op is isolated. A binary search hitting its max is ambiguous, so don't decide from that.
+- **Isolated:** derive the limits as in finding 10. `S_v` comes from a `callGasLimit = 0` trace, or from tracing `simulateValidation` on v0.7. VGL is the searched value minus `S_v`, plus `deposit_transfer_overhead`, with the usual buffer. CGL is the execute frame's `gasUsed` minus `S_c`, × 64/63, plus 3,000 (not the binary-search result). PVG = base + `S`.
+- Original text, superseded by the above: run the normal capped estimation first.
 - If it fails with `GasTotalTooLarge`, or CGL/VGL hit their max, and the flag is on, re-run in **isolated mode**:
   - VGL/CGL binary searches with `max_gas_estimation_gas = 2^24 + probe_reservoir`. They then measure execution only.
   - In parallel, `trace_state_gas_simulate_handle_op` gives `S`.

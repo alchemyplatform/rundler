@@ -327,6 +327,28 @@ impl Harness {
         })
     }
 
+    /// `eth_call` at the latest block with state overrides. `Ok(Err(data))` is a revert with its
+    /// data; transport and other RPC errors are `Err`.
+    pub async fn call_with_overrides(
+        &self,
+        tx: &TransactionRequest,
+        state_overrides: &serde_json::Value,
+    ) -> anyhow::Result<Result<Bytes, Bytes>> {
+        let tx = tx.clone().with_from(tx.from.unwrap_or(self.sender));
+        match self
+            .provider
+            .raw_request::<_, Bytes>("eth_call".into(), (tx, "latest", state_overrides))
+            .await
+        {
+            Ok(ret) => Ok(Ok(ret)),
+            Err(RpcError::ErrorResp(resp)) => match resp.as_revert_data() {
+                Some(data) => Ok(Err(data)),
+                None => bail!("eth_call failed: {resp}"),
+            },
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// `debug_traceCall` with `callTracer` (with logs) at the latest block.
     pub async fn trace_calls(
         &self,
