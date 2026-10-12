@@ -64,8 +64,8 @@ pub use alloy_rpc_types_eth::{
 };
 pub use alloy_rpc_types_trace::geth::{
     CallConfig as GethDebugTracerCallConfig, CallFrame as GethDebugTracerCallFrame,
-    GethDebugBuiltInTracerType, GethDebugTracerType, GethDebugTracingCallOptions,
-    GethDebugTracingOptions, GethTrace,
+    CallLogFrame as GethDebugTracerCallLogFrame, GethDebugBuiltInTracerType, GethDebugTracerType,
+    GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace,
 };
 // re-export contract types
 pub use rundler_contracts::utils::GetGasUsed::GasUsedResult;

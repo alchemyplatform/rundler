@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{future::Future, pin::Pin, sync::Once};
+use std::{future::Future, pin::Pin, sync::Once, time::Duration};
 
 use alloy_primitives::{Address, Bytes};
 use alloy_sol_types::SolInterface;
@@ -34,6 +34,7 @@ pub use estimate_call_gas::{
 };
 
 /// Gas estimation module for Entry Point v0.6
+mod state_gas;
 mod v0_6;
 pub use v0_6::GasEstimator as GasEstimatorV0_6;
 mod v0_7;
@@ -68,6 +69,9 @@ pub enum GasEstimationError {
     /// Supplied gas was too large
     #[error("{0} cannot be larger than {1}")]
     GasFieldTooLarge(&'static str, u128),
+    /// The user operation's EIP-8037 state gas is more than a reservoir-mode bundle may carry
+    #[error("state gas used by the user operation {0} is greater than the allowed limit: {1}")]
+    StateGasTooLarge(u128, u128),
     /// The total amount of gas used by the UO is greater than allowed
     #[error("total gas used by the user operation {0} is greater than the allowed limit: {1}")]
     GasTotalTooLarge(u128, u128),
@@ -92,6 +96,7 @@ impl GasEstimationError {
             Self::GasUsedTooLarge => "gas_used_too_large",
             Self::GasFieldTooLarge(_, _) => "gas_field_too_large",
             Self::GasTotalTooLarge(_, _) => "gas_total_too_large",
+            Self::StateGasTooLarge(_, _) => "state_gas_too_large",
             Self::UnsupportedAggregator(_) => "unsupported_aggregator",
             Self::ProviderError(_) => "provider",
             Self::Other(_) => "other",
@@ -142,6 +147,15 @@ pub struct Settings {
     pub call_gas_allowed_error_pct: u128,
     /// The maximum number of rounds to run for gas estimation
     pub max_gas_estimation_rounds: u32,
+    /// The most EIP-8037 state gas a user operation may carry in reservoir mode, which is also
+    /// the largest state-gas reservoir of a bundle. Estimation's state-gas trace needs a node
+    /// `rpc.gascap` of roughly twice this plus `max_bundle_execution_gas`.
+    pub max_reservoir_gas: u64,
+    /// The most time the reservoir-mode fallback may spend tracing an op's state gas
+    pub reservoir_trace_timeout: Duration,
+    /// The most reservoir-mode fallbacks that may run at once; more fall back to the metered
+    /// estimate's error
+    pub max_concurrent_reservoir_estimations: usize,
 }
 
 impl Settings {
@@ -170,6 +184,16 @@ struct Metrics {
     cgl_estimate_ms: Histogram,
     #[metric(describe = "the distribution of pvgl estimate time.")]
     pvgl_estimate_ms: Histogram,
+    #[metric(describe = "the count of estimates that fell back to reservoir mode.")]
+    reservoir_fallbacks: Counter,
+    #[metric(describe = "the count of reservoir-mode fallbacks that produced an estimate.")]
+    reservoir_estimates: Counter,
+    #[metric(
+        describe = "the count of reservoir-mode fallbacks skipped because too many were running."
+    )]
+    reservoir_fallbacks_busy: Counter,
+    #[metric(describe = "the distribution of reservoir-mode state-gas trace time.")]
+    reservoir_trace_ms: Histogram,
 }
 
 /// Names of the estimation eth_call histograms, without the global metrics prefix.

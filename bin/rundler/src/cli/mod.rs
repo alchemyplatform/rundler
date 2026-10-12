@@ -472,6 +472,37 @@ pub struct CommonArgs {
     )]
     pub max_gas_estimation_rounds: u32,
 
+    /// The most EIP-8037 state gas a user operation may carry in reservoir mode (bundled alone
+    /// above the 2^24 transaction gas cap, on chains with Glamsterdam active)
+    #[arg(
+        long = "max_reservoir_gas",
+        name = "max_reservoir_gas",
+        env = "MAX_RESERVOIR_GAS",
+        default_value = "60000000",
+        global = true
+    )]
+    pub max_reservoir_gas: u64,
+
+    /// The most time estimation's reservoir-mode fallback may spend tracing an op's state gas
+    #[arg(
+        long = "reservoir_trace_timeout_ms",
+        name = "reservoir_trace_timeout_ms",
+        env = "RESERVOIR_TRACE_TIMEOUT_MS",
+        default_value = "10000",
+        global = true
+    )]
+    pub reservoir_trace_timeout_ms: u64,
+
+    /// The most reservoir-mode estimation fallbacks that may run at once
+    #[arg(
+        long = "max_concurrent_reservoir_estimations",
+        name = "max_concurrent_reservoir_estimations",
+        env = "MAX_CONCURRENT_RESERVOIR_ESTIMATIONS",
+        default_value = "4",
+        global = true
+    )]
+    pub max_concurrent_reservoir_estimations: usize,
+
     #[arg(
         long = "mempool_config_path",
         name = "mempool_config_path",
@@ -662,6 +693,9 @@ impl TryFromWithSpec<&CommonArgs> for EstimationSettings {
             verification_gas_allowed_error_pct: value.verification_gas_allowed_error_pct,
             call_gas_allowed_error_pct: value.call_gas_allowed_error_pct,
             max_gas_estimation_rounds: value.max_gas_estimation_rounds,
+            max_reservoir_gas: value.max_reservoir_gas,
+            reservoir_trace_timeout: Duration::from_millis(value.reservoir_trace_timeout_ms),
+            max_concurrent_reservoir_estimations: value.max_concurrent_reservoir_estimations,
         })
     }
 }

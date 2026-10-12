@@ -692,6 +692,9 @@ mod tests {
             verification_gas_allowed_error_pct: 15,
             call_gas_allowed_error_pct: 15,
             max_gas_estimation_rounds: 3,
+            max_reservoir_gas: 60_000_000,
+            reservoir_trace_timeout: std::time::Duration::from_secs(10),
+            max_concurrent_reservoir_estimations: 4,
         };
         let estimator = create_custom_estimator(
             ChainSpec::default(),
@@ -1440,6 +1443,9 @@ mod tests {
             verification_gas_allowed_error_pct: 15,
             call_gas_allowed_error_pct: 15,
             max_gas_estimation_rounds: 3,
+            max_reservoir_gas: 60_000_000,
+            reservoir_trace_timeout: std::time::Duration::from_secs(10),
+            max_concurrent_reservoir_estimations: 4,
         };
 
         create_custom_estimator(

@@ -71,6 +71,9 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
 - `--call_gas_allowed_error_pct`: The allowed error percentage during call gas estimation. (default: 15)
   - env: _CALL_GAS_ALLOWED_ERROR_PCT_
 - `--max_gas_estimation_gas`: The gas limit to use during the call to the gas estimation binary search helper functions. (default: 550M)
+- `--max_reservoir_gas`: The most EIP-8037 state gas a user operation may carry in reservoir mode, where it is bundled alone with `tx.gas = 2^24 + state gas` (Glamsterdam chains only). Estimation falls back to reservoir mode when an op does not fit under the 2^24 cap. Its state-gas trace needs a node `rpc.gascap` of about the verification gas + `max_bundle_execution_gas` + this value, and this value once more if a paymaster pays. (default: 60M)
+- `--reservoir_trace_timeout_ms`: The most time estimation's reservoir-mode fallback may spend tracing an op's state gas. (default: 10000)
+- `--max_concurrent_reservoir_estimations`: The most reservoir-mode estimation fallbacks that may run at once; further ones return the normal estimation error. (default: 4)
   - env: _MAX_GAS_ESTIMATION_GAS_
 - `--max_gas_estimation_rounds`: The maximum amount of remote RPC calls to make during gas estimation while attempting to converge to the error percentage. (default: 3)
   - env: _MAX_GAS_ESTIMATION_ROUNDS_

@@ -95,9 +95,12 @@ pub async fn trace_call_state_gas<P: EvmProvider>(
         "stateOverrides": state_override,
     });
     let block_id = block_id.unwrap_or(BlockNumberOrTag::Latest.into());
-    let raw: RawStateGasFrame = provider
+    // Requested as plain JSON (rather than `RawStateGasFrame`) so callers can mock the trace.
+    let trace: serde_json::Value = provider
         .request("debug_traceCall", (tx, block_id, options))
         .await?;
+    let raw: RawStateGasFrame =
+        serde_json::from_value(trace).context("invalid callTracer result")?;
     Ok(raw.try_into()?)
 }
 
