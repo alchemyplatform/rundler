@@ -278,6 +278,18 @@ pub struct CommonArgs {
     )]
     max_uo_cost: Option<U256>,
 
+    /// Maximum cost (in ETH) of a user operation in reservoir mode, whose preVerificationGas
+    /// carries its EIP-8037 state gas. Replaces `max_uo_cost` for those ops; unset means no cap.
+    /// Must be at least `max_uo_cost` when both are set.
+    #[arg(
+        long = "max_reservoir_uo_cost",
+        name = "max_reservoir_uo_cost",
+        env = "MAX_RESERVOIR_UO_COST",
+        value_parser = alloy_primitives::utils::parse_ether,
+        global = true
+    )]
+    max_reservoir_uo_cost: Option<U256>,
+
     #[arg(
         long = "target_bundle_transaction_gas_limit_ratio",
         name = "target_bundle_transaction_gas_limit_ratio",
@@ -705,11 +717,21 @@ impl TryFromWithSpec<&CommonArgs> for PrecheckSettings {
 
     fn try_from_with_spec(value: &CommonArgs, chain_spec: &ChainSpec) -> Result<Self, Self::Error> {
         let bundle_limits = value.bundle_limits(chain_spec);
+        if let (Some(max_uo_cost), Some(max_reservoir_uo_cost)) =
+            (value.max_uo_cost, value.max_reservoir_uo_cost)
+            && max_reservoir_uo_cost < max_uo_cost
+        {
+            anyhow::bail!(
+                "max_reservoir_uo_cost ({max_reservoir_uo_cost}) must be at least max_uo_cost ({max_uo_cost})"
+            );
+        }
 
         Ok(Self {
             max_verification_gas: value.max_verification_gas as u128,
             max_bundle_execution_gas: bundle_limits.max_bundle_execution_gas_limit,
             max_uo_cost: value.max_uo_cost.unwrap_or(U256::MAX),
+            max_reservoir_uo_cost: value.max_reservoir_uo_cost.unwrap_or(U256::MAX),
+            max_reservoir_gas: u128::from(value.max_reservoir_gas),
             bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
             priority_fee_mode: PriorityFeeMode::try_from(
                 value.priority_fee_mode_kind.as_str(),

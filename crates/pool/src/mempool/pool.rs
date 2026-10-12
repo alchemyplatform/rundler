@@ -623,6 +623,10 @@ where
                 if let Some(pct) = op.po.perms.underpriced_bundle_pct {
                     required_pvg = math::percent_ceil(required_pvg, pct);
                 }
+                // A reservoir-mode op keeps its mode and reservoir: its PVG must still cover both
+                // (the discount above never applies to the reservoir). If not, it is ineligible
+                // until the requirement falls back, never moved to the metered path.
+                required_pvg += op.po.reservoir_gas.unwrap_or(0);
 
                 let actual_pvg = op.uo().pre_verification_gas();
 
@@ -701,6 +705,24 @@ where
         };
 
         0
+    }
+
+    /// Reservoir-mode operations in the pool, and those of `sender`, not counting `exclude`
+    /// (an operation being replaced)
+    pub(crate) fn reservoir_op_counts(
+        &self,
+        sender: Address,
+        exclude: Option<B256>,
+    ) -> (usize, usize) {
+        self.by_hash
+            .iter()
+            .filter(|(hash, op)| op.po.reservoir_gas.is_some() && Some(**hash) != exclude)
+            .fold((0, 0), |(total, by_sender), (_, op)| {
+                (
+                    total + 1,
+                    by_sender + usize::from(op.uo().sender() == sender),
+                )
+            })
     }
 
     pub(crate) fn get_operation_by_hash(&self, hash: B256) -> Option<Arc<PoolOperation>> {
@@ -2014,6 +2036,72 @@ mod tests {
         assert_eq!(pool.best_operations().count(), 1);
     }
 
+    /// The same op with its PVG raised by `reservoir_gas` and that reservoir recorded, as
+    /// admission stores a reservoir-mode op.
+    fn with_reservoir(po: PoolOperation, reservoir_gas: u128) -> PoolOperation {
+        let mut po = create_op_from_required(UserOperationRequiredFields {
+            sender: po.uo.sender(),
+            max_fee_per_gas: 10,
+            max_priority_fee_per_gas: 10,
+            call_data: po.uo.call_data().clone(),
+            pre_verification_gas: po.uo.pre_verification_gas() + reservoir_gas,
+            ..base_required_fields()
+        });
+        po.reservoir_gas = Some(reservoir_gas);
+        po
+    }
+
+    /// A reservoir-mode op stays eligible only while its PVG covers the metered requirement plus
+    /// its reservoir. It is marked ineligible, not dropped or demoted, and recovers.
+    #[test]
+    fn test_reservoir_mode_op_recheck_includes_reservoir() {
+        const RESERVOIR: u128 = 37_784_880;
+        let conf = glamsterdam_conf();
+        let cs = &conf.chain_spec;
+        let po = create_op_with_pvg_between(
+            &conf,
+            Bytes::new(),
+            &cs.at_timestamp(GLAMSTERDAM_ACTIVATION),
+            &cs.for_bundle_inclusion_after(GLAMSTERDAM_ACTIVATION - 1),
+        );
+        let po = with_reservoir(po, RESERVOIR);
+        let mut pool = pool_with_conf(conf);
+        let hash = pool.add_operation(po, 0, 0).unwrap();
+
+        maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION);
+        assert_eq!(pool.best_operations().count(), 1);
+
+        // the metered requirement rises above what the PVG leaves after the reservoir
+        maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION - 1);
+        assert_eq!(pool.best_operations().count(), 0);
+        let kept = pool.get_operation_by_hash(hash).unwrap();
+        assert_eq!(kept.reservoir_gas, Some(RESERVOIR));
+
+        maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION);
+        assert_eq!(pool.best_operations().count(), 1);
+    }
+
+    /// A reservoir its PVG does not cover makes the op ineligible.
+    #[test]
+    fn test_reservoir_mode_op_ineligible_if_reservoir_not_covered() {
+        let conf = glamsterdam_conf();
+        let cs = &conf.chain_spec;
+        let po = create_op_with_pvg_between(
+            &conf,
+            Bytes::new(),
+            &cs.at_timestamp(GLAMSTERDAM_ACTIVATION),
+            &cs.for_bundle_inclusion_after(GLAMSTERDAM_ACTIVATION - 1),
+        );
+        let mut po = with_reservoir(po, 1_000_000);
+        po.reservoir_gas = Some(2_000_000);
+        let mut pool = pool_with_conf(conf);
+        pool.add_operation(po, 0, 0).unwrap();
+
+        maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION);
+        assert_eq!(pool.best_operations().count(), 0);
+        assert_eq!(pool.by_hash.len(), 1);
+    }
+
     #[test]
     fn test_bundler_sponsored_op_skips_pvg_recheck() {
         let conf = glamsterdam_conf();
@@ -3257,6 +3345,7 @@ mod tests {
             filter_id: None,
             perms: UserOperationPermissions::default(),
             sender_is_7702: false,
+            reservoir_gas: None,
         }
     }
 

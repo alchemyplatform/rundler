@@ -4011,6 +4011,7 @@ mod tests {
             filter_id: None,
             perms: UserOperationPermissions::default(),
             sender_is_7702: false,
+            reservoir_gas: None,
         }
     }
 
@@ -5351,6 +5352,7 @@ mod tests {
                 filter_id: None,
                 perms: perms.clone(),
                 sender_is_7702: false,
+                reservoir_gas: None,
             })
             .collect();
 

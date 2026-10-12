@@ -135,6 +135,9 @@ pub enum PrecheckViolation {
     /// See `gas::user_operation_execution_gas_limit` for calculation.
     #[display("total gas limit is {0} but must be at most {1}")]
     TotalGasLimitTooHigh(u128, u128),
+    /// The state-gas reservoir the operation's preVerificationGas asks for is too large.
+    #[display("state-gas reservoir is {0} but must be at most {1}")]
+    ReservoirGasTooHigh(u128, u128),
     /// The verification gas limit of the user operation is too high.
     #[display("verificationGasLimit is {0} but must be at most {1}")]
     VerificationGasLimitTooHigh(u128, u128),
