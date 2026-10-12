@@ -667,6 +667,7 @@ where
                             !self.chain_spec.da_pre_verification_gas
                                 || self.chain_spec.include_da_gas_in_gas_limit,
                             is_success,
+                            gas_limit,
                             gas_used,
                             gas_price,
                             &user_op_events,

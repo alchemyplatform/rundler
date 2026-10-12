@@ -194,6 +194,8 @@ struct Metrics {
     reservoir_fallbacks_busy: Counter,
     #[metric(describe = "the distribution of reservoir-mode state-gas trace time.")]
     reservoir_trace_ms: Histogram,
+    #[metric(describe = "the distribution of the state gas of reservoir-mode estimates.")]
+    reservoir_state_gas: Histogram,
 }
 
 /// Names of the estimation eth_call histograms, without the global metrics prefix.

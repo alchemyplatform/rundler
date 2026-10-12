@@ -259,10 +259,14 @@ where
             pvg_state,
         ));
 
+        let is_reservoir = pool_op.po.reservoir_gas.is_some();
         let hash = self.add_operation_internal(pool_op)?;
         self.metrics.num_ops_added.increment(1);
         if is_7702_uo {
             self.metrics.num_7702_ops_added.increment(1);
+        }
+        if is_reservoir {
+            self.metrics.num_reservoir_ops_added.increment(1);
         }
         Ok(hash)
     }
@@ -592,6 +596,9 @@ where
             if suspect_tracking_enabled && op.is_suspect(suspect_threshold) {
                 counts.suspects += 1;
             }
+            if op.po.reservoir_gas.is_some() {
+                counts.reservoir += 1;
+            }
 
             // TODO(bundle): assuming a bundle size of 1
             let bundle_size = 1;
@@ -693,6 +700,7 @@ where
 
         self.metrics.num_candidates.set(counts.candidates as f64);
         self.metrics.num_suspect_ops.set(counts.suspects as f64);
+        self.metrics.num_reservoir_ops.set(counts.reservoir as f64);
         self.prev_block_number = block_number;
         self.update_metrics();
 
@@ -1130,6 +1138,8 @@ pub(crate) struct MaintenanceCounts {
     pub(crate) candidates: usize,
     /// Ops at or above the suspect failure threshold (0 when tracking is disabled).
     pub(crate) suspects: usize,
+    /// Reservoir-mode ops (bundled alone above the 2^24 transaction gas cap).
+    pub(crate) reservoir: usize,
 }
 
 /// suspect at `rpc_failures_before_suspect` failures and is removed
@@ -1368,6 +1378,14 @@ struct PoolMetrics {
     blocks_to_mine: Histogram,
     #[metric(describe = "the number of ops with 7702 auth added")]
     num_7702_ops_added: Counter,
+    #[metric(
+        describe = "the number of reservoir-mode ops added (bundled alone above the 2^24 transaction gas cap)."
+    )]
+    num_reservoir_ops_added: Counter,
+    #[metric(
+        describe = "the number of reservoir-mode ops currently in the pool, recomputed each block."
+    )]
+    num_reservoir_ops: Gauge,
     #[metric(describe = "the number of ops added")]
     num_ops_added: Counter,
     #[metric(describe = "the number of suspect ops currently in the pool, recomputed each block.")]

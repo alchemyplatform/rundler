@@ -563,6 +563,7 @@ where
                 .verification_gas_limit_efficiency_reject_threshold,
         );
         self.metrics.reservoir_estimates.increment(1);
+        self.metrics.reservoir_state_gas.record(state_gas as f64);
         tracing::debug!(
             "reservoir-mode estimate: state gas {state_gas}, call gas limit {call_gas_limit}"
         );

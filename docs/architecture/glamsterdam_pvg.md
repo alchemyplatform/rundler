@@ -28,5 +28,25 @@ All reads go through `rundler_sim::gas::load_pvg_state`. The state is read as so
 
 ## Limits
 
-- Bundles must stay at or below the EIP-7825 cap (`transaction_gas_limit = 16777216`). Above it the EIP-8037 state-gas reservoir is non-empty, and the EntryPoint no longer sees all state gas. Gas estimation must stay at or below it too (`--max_gas_estimation_gas`).
+- Metered bundles stay at or below the EIP-7825 cap (`transaction_gas_limit = 16777216`). Above it the EIP-8037 state-gas reservoir is non-empty, and the EntryPoint no longer sees the state gas the reservoir pays for. The one exception is a [reservoir-mode](#reservoir-mode) bundle, which goes above the cap on purpose.
+- Calls get no reservoir: `eth_call` and `debug_traceCall` give the whole call gas to `gas_left` (reth 2.7). So a large `--max_gas_estimation_gas` does not hide state gas from estimation there, and no call can simulate a reservoir-mode bundle faithfully.
 - Clearing a slot that another op allocated earlier in the same bundle credits the refill to the `handleOps` frame, inside the clearing op's validation span. That lowers the clearing op's measured gas, and can make the EntryPoint's `gasleft()` subtraction underflow when the refill exceeds the span's own gas. Pricing does not address this.
+
+## Reservoir mode
+
+An op whose execution plus state gas does not fit under `max_bundle_execution_gas` is bundled alone, with `tx.gas = 2^24 + R`. A contract deployment near the EIP-170 limit is the main example: it needs about 38M of state gas. The transaction's state-gas reservoir is then exactly `R`, which pays for the op's state; the EntryPoint does not see that gas, so the op pays for it through PVG. `StateGasMode::{Metered, Reservoir}` names the two modes.
+
+Reservoir mode only applies while Glamsterdam is active (`ChainSpec::reservoir_mode_enabled_at`), on v0.7+ entry points, and not to bundler-sponsored or aggregated ops. Measurements and the design are in `test/pvg-calibration/docs/reservoir-mode-plan.md`.
+
+| Component | What it does |
+| --- | --- |
+| Gas estimation (`sim/src/estimation/v0_7.rs`) | Normal (metered) estimation first. If that fails in a way more gas could fix, the estimator traces the op's state gas `S` on a copy with raised call-gas and postOp limits (`get_state_gas_simulate_handle_op_call` + `trace_call_state_gas`, `callTracer` root `stateGasUsed`). It also traces without call gas, to separate execution's state. The estimate is: VGL metered, CGL execution only (with headroom), PVG = required + `S`. Self-paying ops always include the zero-deposit term, since the deposit may be zero by admission. A copy that also fails returns the metered error. |
+| Precheck (`sim/src/precheck.rs`) | No tracing. An op is in reservoir mode iff its PVG surplus over the metered requirement is at least `gas::reservoir_threshold` (the least state gas that cannot fit next to its computation gas). `R` is that surplus, bounded by `--max_reservoir_gas`. These ops are checked against `--max_reservoir_uo_cost` instead of `--max_uo_cost`. |
+| Pool (`pool/src/mempool`) | Stores `R` (`PoolOperation::reservoir_gas`, also over the remote pool). The re-check requires PVG >= required + `R`, and marks the op ineligible otherwise; it is never moved to a metered bundle. Caps: `--pool.max_reservoir_ops`, `--pool.max_reservoir_ops_per_sender`. |
+| Builder (`builder/src/assigner.rs`, `bundle_proposer.rs`) | Assigns each reservoir-mode op alone (own slots, pinned for fee-bump replacements), and sends it with `tx.gas = TX_MAX_GAS_LIMIT + R`: no overhead multiplier and no `handleOps` pre-check. At bundle time PVG must still cover required + `R`. |
+
+Because `R` comes from what the op paid, the bundler always recovers: state the EntryPoint does not see is at most `R`. State beyond `R` spills into the op's own metered gas, which the user pays. An unused reservoir is refunded to the bundler. A top-level revert charges no state gas.
+
+Requirements: the node must report EIP-8037 gas on the `callTracer` root frame (reth does). Its `rpc.gascap` must allow estimation's trace, which needs about the verification gas + `max_bundle_execution_gas` + `--max_reservoir_gas`, and that reservoir amount again when a paymaster pays.
+
+Metrics: `gas_estimator.reservoir_{fallbacks,estimates,fallbacks_busy}`, `reservoir_trace_ms` and `reservoir_state_gas`; `op_pool.num_reservoir_ops_added` and `op_pool.num_reservoir_ops`; `builder.reservoir_bundles_mined`, `reservoir_bundle_reservoir_gas`, `reservoir_bundle_charged_gas` and `reservoir_bundle_gas_used` (margin = charged - used).
