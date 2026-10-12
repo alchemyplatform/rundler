@@ -13,10 +13,27 @@
 | --- | --- | --- |
 | 0 | Validate the mechanics on Sepolia (harness E7) | Done. See [Phase 0 results](#phase-0-results-sepolia). |
 | 1 | Plumbing: types, state-gas trace, simulation call | Done, #1351 |
-| 2 | Estimation: normal first, then fall back to reservoir mode | Next |
-| 3 | Admission and pool: mode from the PVG surplus | Planned |
-| 4 | Builder: single-op bundle with `tx.gas = 2^24 + R` | Planned |
-| 5 | Metrics, docs, end-to-end test through rundler | Planned |
+| 2 | Estimation: normal first, then fall back to reservoir mode | Done, #1351 |
+| 3 | Admission and pool: mode from the PVG surplus | Done, #1351 |
+| 4 | Builder: single-op bundle with `tx.gas = 2^24 + R` | Done, #1351 |
+| 5 | Metrics, docs, end-to-end test through rundler | Done, #1351. See [End to end](#end-to-end-through-rundler-sepolia-2026-10-12). |
+
+### End to end through rundler (Sepolia, 2026-10-12)
+
+A local rundler (#1351) ran against Sepolia with `CHAIN_TRANSACTION_GAS_LIMIT=16777216` and the harness key as builder. In both cases a 24 kB deploy op was estimated (fallback to reservoir mode), sent, admitted in reservoir mode, assigned alone and bundled with `tx.gas = 2^24 + R`:
+
+| | Self-paying | Paymaster (postOp writes a fresh slot) |
+| --- | --- | --- |
+| `S` (estimate) | 37,784,880 | 37,882,800 (incl. the postOp slot) |
+| PVG / CGL / VGL | 37,925,304 / 127,239 / 60,946 | 37,926,444 / 127,239 / 25,641 (PVGL 22,435, postOp limit 30,000 supplied) |
+| `R` / `tx.gas` | 37,882,944 / 54,660,160 | 37,882,992 / 54,660,208 |
+| Bundle tx | `0x6adb1a7f11e627d5a2843899b0ade774941963bd60569be6922d22d5491302b9` | `0x1d8f701bb6868ae43874231d349ca30a2b48ccab6456bfa90d34001e019d5742` |
+| Op success, deployed | ✓, ✓ | ✓, ✓ (postOp wrote its slot) |
+| Bundler margin | +108,231 gas (the unused refund slot plus CGL headroom penalty) | +11,690 gas |
+
+Notes:
+- In the self-paying case, `R = S + 97,920 + 144`. Estimation always prices the zero-deposit refund slot, and the deposit was nonzero, so the slot went unused.
+- The paymaster run used `--unsafe`. The test paymaster is unstaked, and ERC-7562 rejects an unstaked paymaster that returns a postOp context.
 
 ## Decisions
 
