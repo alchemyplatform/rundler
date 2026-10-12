@@ -29,7 +29,8 @@
 - **EntryPoint versions:** v0.7, v0.8 and v0.9. v0.6 is out of scope until there is a v0.6 simulation contract that returns instead of reverting, which [Estimation](#estimation-phase-2) needs.
 - **The mode and the reservoir come from what the op paid** (2026-10-12):
   - **Mode:** reservoir mode iff `surplus = PVG − required_pvg(metered) ≥ T(op)`, with one shared threshold `T`. It is decided once and stored.
-  - **Reservoir:** `R = surplus + zero-deposit refund term`.
+  - **Reservoir:** `R = surplus`, bounded by `max_reservoir_gas`.
+    - For self-paying ops, estimation always includes the zero-deposit refund term in PVG, whatever the deposit is at estimation time. The deposit can change before admission; see [Zero-deposit refund write](#zero-deposit-refund-write).
   - **Where `S` is measured:** only during estimation. Admission and the builder do no state-gas tracing.
   - Rationale: see [Why R comes from the surplus](#why-r-comes-from-the-surplus).
 - **VGL stays metered** (2026-10-12). It includes validation state, as today.
@@ -37,7 +38,10 @@
   - Onchain, validation state still draws on the reservoir first. The state part of VGL then goes unused, which costs nothing because VGL has no unused-gas penalty.
   - Only CGL is execution-only. The postOp limit comes from the paymaster.
   - Validation state above `max_verification_gas` is a non-goal.
-- **`max_uo_cost`** (2026-10-12): a separate, higher cap for reservoir-mode ops (`max_reservoir_uo_cost`, unset meaning no reservoir-mode ops). Operators opt in, and the cap still means "the most this op can cost".
+- **Cost cap** (2026-10-12): reservoir-mode ops are checked against `max_reservoir_uo_cost` instead of `max_uo_cost`, because their PVG includes `S`.
+  - It behaves like `max_uo_cost`: unset means no cap. It is a limit within reservoir mode, not a switch; the only switch is Glamsterdam.
+  - At startup, require `max_reservoir_uo_cost ≥ max_uo_cost` when both are set. Then an op that passes `max_uo_cost` today also passes in reservoir mode, so the mode adds no new rejection.
+- **Size cap** (2026-10-12): `max_reservoir_gas` bounds `R`. `R` comes from a field the sender chooses and sizes a transaction the bundler signs, so it needs a configured bound, not only the block's state-gas room.
 
 ## Context
 
@@ -80,6 +84,7 @@ This is used only in estimation.
 
 - **The max-limit copy.**
   - In a call, state is charged within the op's limits, so estimation simulates a copy whose CGL and postOp limit are far above execution plus state, with PVG 0.
+  - **VGL is not raised.** It stays at the metered VGL estimate, which already covers validation state. That is what keeps the decision "VGL stays metered" consistent. Raising it as well would also inflate the prefund and invite AA31.
   - It always uses `EntryPointSimulations.simulateHandleOp`, never the real `handleOps`: the copy's signature is invalid, and `simulateHandleOp` does not check it.
   - Rundler builds the call with `SimulationProvider::get_state_gas_simulate_handle_op_call` (#1351). It pre-sets `_senderCreator` (Phase 0 finding 8), so the traced state is exactly what `handleOps` creates.
 - **Tracer:** `trace_call_state_gas` runs `callTracer`, whose root frame carries `executionGasUsed` / `stateGasUsed` / `gasRefund` (Phase 0 finding 6).
@@ -97,7 +102,7 @@ This is used only in estimation.
   - **Paymaster ops are simulated at 1 wei,** so the paymaster's deposit debit is measured. Any larger fee times the max limits can exceed the paymaster's deposit and revert the trace with AA31.
 - **What fee 0 hides from the trace:**
   - the deposit debit (covered by `deposit_transfer_overhead`)
-  - the zero-deposit refund write (priced by `state_pre_verification_gas` and added to `R`)
+  - the zero-deposit refund write (priced by `state_pre_verification_gas`; see [Zero-deposit refund write](#zero-deposit-refund-write))
   - the beneficiary compensation (`simulateHandleOp` does not compensate anyway; near zero for a funded builder EOA)
 - **Signature-dependent paths:**
   - An account checking the dummy signature returns `SIG_VALIDATION_FAILED`; that is expected in estimation.
@@ -119,16 +124,17 @@ This is used only in estimation.
 
    | Field | Value |
    | --- | --- |
-   | VGL | the normal (metered) VGL estimate |
+   | VGL | the metered VGL estimate from step 1 |
    | CGL | `(gas used by the EntryPoint's call into the sender − S_c) × 64/63 + 3,000 + headroom` |
    | postOp limit | supplied by the caller (the paymaster service) |
-   | PVG | normal required PVG + `S` |
+   | PVG | required PVG (for self-paying ops, with the zero-deposit term whatever the deposit) + `S` |
 
    - **CGL comes from the frame's `gasUsed`, not a binary search.** A search keeps the 1/64 of `S` withheld at each nested call: about 1.2M at 24 kB, which the v0.7 penalty would charge at 10% (Phase 0 finding 10).
    - **Headroom:** `max(10% of execution, 97,920)` against state drift between estimation and inclusion. See [Constraints](#constraints).
+   - **VGL is kept from step 1.** The VGL and CGL searches run concurrently, and the totals are checked after both finish, so a `GasTotalTooLarge` or CGL failure still leaves a VGL result. If the VGL search itself failed (validation state above `max_verification_gas`, or a real revert), return that error.
 4. **The estimate must classify as reservoir mode.** Check `S ≥ T(estimated op)` with the same function admission uses. If it fails, return an error rather than an op that admission would put on the metered path, where it would burn its PVG.
 5. **A real revert is not retried.** If the max-limit copy also fails, return the error as today.
-6. **Above the [limits](#limits), return a clear error**, for example "state gas S exceeds the maximum M".
+6. **Above the [limits](#limits)** (`S > max_reservoir_gas`, or more state than the trace gas can hold), **return a clear error**, for example "state gas S exceeds the maximum M".
 7. **Protect the node.** The fallback runs traces of up to the gas cap, and anyone can trigger them through `eth_estimateUserOperationGas`. Add a concurrency cap, a trace timeout, and a metric for fallback traces per second.
 8. **The response is a normal estimate.** Its large PVG is the only sign of the mode. An optional `stateGas` field can come later.
 
@@ -142,10 +148,12 @@ This is used only in estimation.
 - **Checks for reservoir-mode ops:**
   - **No state-gas trace.**
   - **Unchanged:** precheck, the fee checks and the ERC-7562 validation simulation (VGL is metered, so validation state fits).
-  - **Cost cap:** `max_reservoir_uo_cost` replaces `max_uo_cost` (`precheck.rs:329`). If it is unset, reject reservoir-mode ops.
-  - **Size:** `R ≤ max reservoir`; see [Limits](#limits).
+  - **Cost cap:** `max_reservoir_uo_cost` instead of `max_uo_cost` (`precheck.rs:330`). Unset means no cap.
+  - **Size:** `R ≤ max_reservoir_gas`, otherwise reject.
   - **Pool caps:** at most `N` reservoir-mode ops per sender and `M` in the pool.
-- **Re-check.** The pool's periodic re-check (`crates/pool/src/mempool/pool.rs:600-668`) keeps the stored mode. If the op's PVG no longer covers `required_pvg(metered) + R` (for example, the required PVG changed), the op is dropped, not moved to the metered path.
+- **Re-check.** The pool's periodic re-check (`crates/pool/src/mempool/pool.rs:600-668`) keeps the stored mode and `R`.
+  - If the op's PVG no longer covers `required_pvg(metered) + R` (for example, the required PVG rose), the op is marked ineligible (`set_ineligible`), the same reversible path as a fee or DA move.
+  - It becomes eligible again if the requirement falls back. It is never moved to the metered path.
 
 ## Builder (Phase 4)
 
@@ -154,11 +162,11 @@ This is used only in estimation.
   - It has its own cap (one reservoir-mode bundle in flight per builder) and does not take an `isolating_builders` slot.
   - If a reservoir-mode op becomes a suspect, skip isolation (it is already alone) but keep the suspect tracking.
 - **Gas limit:** `tx.gas = TX_MAX_GAS_LIMIT + R`, exactly.
-  - Bypass `get_bundle_gas_limit` and its caller's ×1.05 (`bundle_proposer.rs:1309-1312`) **entirely**. Otherwise the reservoir comes out wrong. Example: `(0.1M + 37.8M) × 1.05 = 39.8M` gives a 23M reservoir instead of 37.8M.
+  - Bypass `get_bundle_gas_limit` and its caller's ×1.05 (`bundle_proposer.rs:1310-1313`) **entirely**. Otherwise the reservoir comes out wrong. Example: `(0.1M + 37.8M) × 1.05 = 39.8M` gives a 23M reservoir instead of 37.8M.
   - Assert that the op's computation gas × 1.05 ≤ 2^24.
   - L1 only: no DA term.
 - **No state-gas trace and no faithful pre-submit check.** The real bundle fails in `eth_call` (no reservoir), so the existing skip of the pre-submit call for single-op v0.7 bundles (`bundle_proposer.rs:1318-1325`) stays.
-- **At bundle time:** re-check the stored mode's conditions (PVG covers `required_pvg(metered) + R`), and drop the op if they fail.
+- **At bundle time:** re-check that PVG still covers `required_pvg(metered) + R`. If not, skip the op this round and leave it in the pool, as for any underpriced op.
 - **Fee bumps keep the same `tx.gas`.**
 - **AA51 / AA95 from a reservoir-mode op** is a hard reject, not a retry.
 - **Use `eth_estimateGas` nowhere in this path.** It cannot size these bundles (Phase 0 finding 7).
@@ -171,14 +179,24 @@ This is used only in estimation.
   - Supported: ops whose peak exceeds net by at most about one slot, which is the headroom.
   - If clients report per-frame state gas (optional in execution-apis#852), measure the peak and size headroom from it.
 
+### Zero-deposit refund write
+
+For a self-paying op, the EntryPoint refunds unused prefund to the sender's deposit after the op. If the deposit is zero by then, that write creates a new slot (97,920). It happens **after** the EntryPoint has measured the op's gas (`_postExecution`: `actualGas` before `_incrementDeposit`), and it is the last state charge. So:
+
+- **Spill target:** when the reservoir is exhausted by then, the write's state comes out of the EntryPoint's own frame. It is unmetered and does not touch CGL. Base PVG pays for it through `state_pre_verification_gas`.
+- **The deposit can flip between estimation and admission,** which moves the term in or out of `required_pvg(metered)`. Estimation therefore always includes the term for self-paying ops in reservoir mode, and `R = surplus` with no term added:
+  - **Deposit zero at admission:** `surplus = S`, so `R = S`. The op's own state is covered, and the refund write is paid by base PVG.
+  - **Deposit nonzero at admission:** `surplus = S + 97,920`, so `R` is one slot larger than needed. The unused reservoir is refunded to the bundler, and the user has overpaid one slot.
+- **The bundler always recovers,** and the op's state never spills into CGL because of the deposit.
+
 ## Limits
 
-- **Largest `R`:** the block's state-gas room minus 2^24, and in estimation also the trace gas minus execution.
+- **Largest `R`:** `max_reservoir_gas`, and at most the block's state-gas room minus 2^24. In estimation it is also bounded by the trace gas minus execution.
   - On Sepolia (200M blocks, 200M trace gas) this is not binding.
   - With a 50M `rpc.gascap` it is about 33M, below a 24 kB deploy.
   - Our nodes' gascap must be checked and raised.
 - **Block admission:** a reservoir-mode transaction needs `execution_gas_available ≥ 2^24` and `state_gas_available ≥ tx.gas`, even if it uses far less execution gas. It may wait longer for inclusion than a normal bundle.
-- **Pool:** per-sender and total caps, plus `max_reservoir_uo_cost`. Each reservoir-mode op occupies a whole bundle.
+- **Pool:** per-sender and total caps, `max_reservoir_gas` per op, and `max_reservoir_uo_cost` if set. Each reservoir-mode op occupies a whole bundle.
 
 ## Open questions
 
@@ -295,7 +313,9 @@ How BSO works today. This is from tracing `txn-engine` on 2026-10-09; it is not 
   - the estimation fallback and the CGL derivation, with mocked state-gas traces
   - the shared threshold `T`, and estimation refusing an op that would not classify as reservoir mode
   - mode selection and its stickiness through the pool re-check
-  - `max_reservoir_uo_cost`
+  - `max_reservoir_uo_cost` (unset means no cap; the startup check against `max_uo_cost`) and `max_reservoir_gas`
+  - the zero-deposit term flipping between estimation and admission, both ways
+  - the pool re-check marking an underpaying reservoir-mode op ineligible and eligible again
   - `tx.gas = 2^24 + R` in the builder, bypassing the ×1.05
   - without Glamsterdam, behaviour identical to today
 - `cargo test -p rundler-sim -p rundler-pool -p rundler-builder -p rundler-types -p rundler-provider`.
