@@ -1741,6 +1741,18 @@ where
         let mut gas_left = self.settings.max_bundle_gas;
         let mut ops_in_bundle = Vec::new();
         for op in ops {
+            // A reservoir-mode op needs its own bundle with `tx.gas = 2^24 + R`; in a metered
+            // bundle its state would be charged inside its execution-only limits and it would
+            // run out of gas onchain. Skip it until the builder builds those bundles.
+            if op.op.reservoir_gas.is_some() {
+                self.emit(BuilderEvent::skipped_op(
+                    self.builder_tag.clone(),
+                    op.op.uo.hash(),
+                    SkipReason::ReservoirMode,
+                ));
+                continue;
+            }
+
             // if the op has an aggregator, check if the aggregator is supported, if not skip
             if let Some(agg) = op.op.uo.aggregator()
                 && self
@@ -2510,6 +2522,7 @@ mod tests {
             op: op.clone(),
             simulation_result: Box::new(|| Ok(SimulationResult::default())),
             perms: UserOperationPermissions::default(),
+            reservoir_gas: None,
         }])
         .await;
 
@@ -2549,6 +2562,7 @@ mod tests {
                 op: op.clone(),
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 perms: UserOperationPermissions::default(),
+                reservoir_gas: None,
             }],
             vec![],
             vec![HandleOpsOut::Success],
@@ -2582,6 +2596,7 @@ mod tests {
                 })
             }),
             perms: UserOperationPermissions::default(),
+            reservoir_gas: None,
         }])
         .await;
         assert!(bundle.ops_per_aggregator.is_empty());
@@ -2600,6 +2615,7 @@ mod tests {
                 })
             }),
             perms: UserOperationPermissions::default(),
+            reservoir_gas: None,
         }])
         .await;
         assert!(bundle.ops_per_aggregator.is_empty());
@@ -2620,6 +2636,7 @@ mod tests {
                 })
             }),
             perms: UserOperationPermissions::default(),
+            reservoir_gas: None,
         }])
         .await;
         assert!(bundle.ops_per_aggregator.is_empty());
@@ -2643,6 +2660,7 @@ mod tests {
                     })
                 }),
                 perms: UserOperationPermissions::default(),
+                reservoir_gas: None,
             }])
             .await;
             assert!(bundle.ops_per_aggregator.is_empty());
@@ -2664,6 +2682,7 @@ mod tests {
                     })
                 }),
                 perms: UserOperationPermissions::default(),
+                reservoir_gas: None,
             },
             MockOp {
                 op: op2.clone(),
@@ -2674,6 +2693,7 @@ mod tests {
                     })
                 }),
                 perms: UserOperationPermissions::default(),
+                reservoir_gas: None,
             },
         ])
         .await;
@@ -2685,6 +2705,51 @@ mod tests {
             }]
         );
         assert!(bundle.rejected_ops.is_empty())
+    }
+
+    /// Until the builder builds reservoir-mode bundles, a reservoir-mode op is skipped (and kept
+    /// in the pool), never put in a metered bundle where it would run out of gas onchain.
+    #[tokio::test]
+    async fn test_skips_reservoir_mode_op() {
+        let op1 = op_with_sender_and_fees(address(1), 2050, 50, DEFAULT_PVG);
+        let op2 = op_with_sender_and_fees(address(2), 2050, 50, DEFAULT_PVG);
+        let bundle = mock_make_bundle(
+            vec![
+                MockOp {
+                    op: op1.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    perms: UserOperationPermissions::default(),
+                    reservoir_gas: Some(37_882_800),
+                },
+                MockOp {
+                    op: op2.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
+                },
+            ],
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![],
+            1000,
+            50,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![],
+            None,
+            U256::MAX,
+            None,
+        )
+        .await;
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op2],
+                ..Default::default()
+            }],
+        );
+        assert!(bundle.rejected_ops.is_empty());
     }
 
     #[tokio::test]
@@ -2701,11 +2766,13 @@ mod tests {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
             ],
             vec![],
@@ -2744,11 +2811,13 @@ mod tests {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
             ],
             vec![],
@@ -2797,11 +2866,13 @@ mod tests {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
             ],
             vec![],
@@ -2860,21 +2931,25 @@ mod tests {
                     op: unaggregated_op.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: aggregated_op_a1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: aggregated_op_a2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: aggregated_op_b.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
             ],
             vec![
@@ -2963,21 +3038,25 @@ mod tests {
                     op: unaggregated_op.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: aggregated_op_a1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: aggregated_op_a2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: aggregated_op_b.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
             ],
             vec![
@@ -3042,31 +3121,37 @@ mod tests {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op3.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op4.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op5.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op6.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
             ],
             vec![],
@@ -3141,6 +3226,7 @@ mod tests {
                     })
                 }),
                 perms: UserOperationPermissions::default(),
+                reservoir_gas: None,
             }],
             vec![],
             vec![],
@@ -3205,6 +3291,7 @@ mod tests {
                     })
                 }),
                 perms: UserOperationPermissions::default(),
+                reservoir_gas: None,
             }],
             vec![],
             vec![],
@@ -3289,6 +3376,7 @@ mod tests {
                         })
                     }),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op_2.clone(),
@@ -3308,6 +3396,7 @@ mod tests {
                         })
                     }),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
             ],
             vec![],
@@ -3352,21 +3441,25 @@ mod tests {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op3.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op4.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
             ],
             vec![],
@@ -3422,16 +3515,19 @@ mod tests {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op3.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
             ],
             vec![],
@@ -3674,6 +3770,7 @@ mod tests {
                         op,
                         simulation_result: Box::new(|| Ok(SimulationResult::default())),
                         perms: UserOperationPermissions::default(),
+                        reservoir_gas: None,
                     }],
                     vec![],
                     vec![HandleOpsOut::Success],
@@ -3755,6 +3852,7 @@ mod tests {
                     op,
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 }],
                 vec![],
                 vec![HandleOpsOut::Success],
@@ -4086,6 +4184,7 @@ mod tests {
                 op: op1.clone(),
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 perms: UserOperationPermissions::default(),
+                reservoir_gas: None,
             }],
             vec![],
             vec![HandleOpsOut::PostOpRevert, HandleOpsOut::PostOpRevert],
@@ -4119,6 +4218,7 @@ mod tests {
                 op: op1.clone(),
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 perms: UserOperationPermissions::default(),
+                reservoir_gas: None,
             }],
             vec![],
             vec![HandleOpsOut::PostOpRevert, HandleOpsOut::Underpriced],
@@ -4152,11 +4252,13 @@ mod tests {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
             ],
             vec![],
@@ -4208,16 +4310,19 @@ mod tests {
                     op: unaggregated_op.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: aggregated_op_a1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: aggregated_op_a2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
             ],
             vec![MockAggregator {
@@ -4274,6 +4379,7 @@ mod tests {
                     })
                 }),
                 perms: UserOperationPermissions::default(),
+                reservoir_gas: None,
             }],
             vec![],
             vec![HandleOpsOut::Success],
@@ -4318,6 +4424,7 @@ mod tests {
                     })
                 }),
                 perms: UserOperationPermissions::default(),
+                reservoir_gas: None,
             }],
             vec![],
             vec![HandleOpsOut::Success],
@@ -4356,6 +4463,7 @@ mod tests {
                     })
                 }),
                 perms: UserOperationPermissions::default(),
+                reservoir_gas: None,
             }],
             vec![],
             vec![HandleOpsOut::Success],
@@ -4397,6 +4505,7 @@ mod tests {
                         })
                     }),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op1.clone(),
@@ -4407,6 +4516,7 @@ mod tests {
                         })
                     }),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
             ],
             vec![],
@@ -4447,6 +4557,7 @@ mod tests {
                 op: op.clone(),
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 perms: UserOperationPermissions::default(),
+                reservoir_gas: None,
             }],
             vec![],
             vec![HandleOpsOut::Success],
@@ -4492,6 +4603,7 @@ mod tests {
                 op: op.clone(),
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 perms: UserOperationPermissions::default(),
+                reservoir_gas: None,
             }],
             vec![],
             vec![HandleOpsOut::Revert(bytes)],
@@ -4523,6 +4635,7 @@ mod tests {
                 op: op.clone(),
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 perms: UserOperationPermissions::default(),
+                reservoir_gas: None,
             }],
             vec![],
             vec![HandleOpsOut::Underpriced],
@@ -4555,6 +4668,7 @@ mod tests {
                 op: op.clone(),
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 perms: UserOperationPermissions::default(),
+                reservoir_gas: None,
             }],
             vec![],
             vec![HandleOpsOut::Revert(bytes(1))],
@@ -4587,11 +4701,13 @@ mod tests {
                     op: op0.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
             ],
             vec![],
@@ -4641,6 +4757,7 @@ mod tests {
                         })
                     }),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op1.clone(),
@@ -4651,6 +4768,7 @@ mod tests {
                         })
                     }),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
             ],
             vec![],
@@ -4693,6 +4811,7 @@ mod tests {
                     trusted: true,
                     ..Default::default()
                 },
+                reservoir_gas: None,
             }],
             vec![],
             vec![HandleOpsOut::Success],
@@ -4731,11 +4850,13 @@ mod tests {
                         trusted: true,
                         ..Default::default()
                     },
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
             ],
             vec![],
@@ -4775,6 +4896,7 @@ mod tests {
                         underpriced_bundle_pct: Some(75),
                         ..Default::default()
                     },
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op1.clone(),
@@ -4783,6 +4905,7 @@ mod tests {
                         underpriced_bundle_pct: Some(75),
                         ..Default::default()
                     },
+                    reservoir_gas: None,
                 },
             ],
             vec![],
@@ -4836,6 +4959,7 @@ mod tests {
                         underpriced_bundle_pct: Some(75),
                         ..Default::default()
                     },
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op1.clone(),
@@ -4844,6 +4968,7 @@ mod tests {
                         underpriced_bundle_pct: Some(75),
                         ..Default::default()
                     },
+                    reservoir_gas: None,
                 },
             ],
             vec![],
@@ -4886,6 +5011,7 @@ mod tests {
                 op: mock_op.clone(),
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 perms,
+                reservoir_gas: None,
             }],
             vec![],
             vec![HandleOpsOut::Success],
@@ -4932,6 +5058,7 @@ mod tests {
                     })
                 }),
                 perms,
+                reservoir_gas: None,
             }],
             vec![],
             vec![HandleOpsOut::Success],
@@ -4972,6 +5099,7 @@ mod tests {
                 op: mock_op.clone(),
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 perms,
+                reservoir_gas: None,
             }],
             vec![],
             vec![HandleOpsOut::Success],
@@ -5023,16 +5151,19 @@ mod tests {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: op3.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
             ],
             vec![],
@@ -5076,11 +5207,13 @@ mod tests {
                     op: poison_op.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
                 MockOp {
                     op: innocent_op.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
                     perms: UserOperationPermissions::default(),
+                    reservoir_gas: None,
                 },
             ],
             vec![(address(1), 1, Bytes::new())],
@@ -5110,6 +5243,7 @@ mod tests {
                 op: op.clone(),
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 perms: UserOperationPermissions::default(),
+                reservoir_gas: None,
             }],
             vec![(address(1), 1, eip7702_delegated_code(address(8)))],
         )
@@ -5132,6 +5266,7 @@ mod tests {
                 op: op.clone(),
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 perms: UserOperationPermissions::default(),
+                reservoir_gas: None,
             }],
             vec![(address(1), 1, eip7702_delegated_code(delegate))],
         )
@@ -5159,6 +5294,7 @@ mod tests {
                 op: op.clone(),
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 perms: UserOperationPermissions::default(),
+                reservoir_gas: None,
             }],
             vec![(address(1), 0, Bytes::new())],
         )
@@ -5178,6 +5314,7 @@ mod tests {
         op: UserOperation,
         simulation_result: Box<dyn Fn() -> Result<SimulationResult, SimulationError> + Send + Sync>,
         perms: UserOperationPermissions,
+        reservoir_gas: Option<u128>,
     }
 
     struct MockAggregator {
@@ -5338,22 +5475,29 @@ mod tests {
         let proxy_address = proxy.as_ref().map(|p| p.address());
         let ops: Vec<_> = mock_ops
             .iter()
-            .map(|MockOp { op, perms, .. }| PoolOperation {
-                uo: op.clone().into(),
-                expected_code_hash,
-                entry_point: chain_spec.entry_point_address_v0_6,
-                sim_block_hash: current_block_hash,
-                sim_block_number: 0,
-                account_is_staked: false,
-                valid_time_range: ValidTimeRange::default(),
-                entity_infos: EntityInfos::default(),
-                aggregator: None,
-                da_gas_data: Default::default(),
-                filter_id: None,
-                perms: perms.clone(),
-                sender_is_7702: false,
-                reservoir_gas: None,
-            })
+            .map(
+                |MockOp {
+                     op,
+                     perms,
+                     reservoir_gas,
+                     ..
+                 }| PoolOperation {
+                    uo: op.clone().into(),
+                    expected_code_hash,
+                    entry_point: chain_spec.entry_point_address_v0_6,
+                    sim_block_hash: current_block_hash,
+                    sim_block_number: 0,
+                    account_is_staked: false,
+                    valid_time_range: ValidTimeRange::default(),
+                    entity_infos: EntityInfos::default(),
+                    aggregator: None,
+                    da_gas_data: Default::default(),
+                    filter_id: None,
+                    perms: perms.clone(),
+                    sender_is_7702: false,
+                    reservoir_gas: *reservoir_gas,
+                },
+            )
             .collect();
 
         let simulations_by_op: Arc<HashMap<B256, MockOp>> = Arc::from(
