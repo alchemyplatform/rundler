@@ -120,6 +120,13 @@ struct State {
     /// happen to be unassignable this cycle can permanently block isolation
     /// slots from reaching suspects on other entrypoints.
     entrypoint_last_isolated: HashMap<ProposerKey, u64>,
+    /// Builders currently holding a reservoir-mode assignment (a single op bundled alone with
+    /// `tx.gas = 2^24 + R`). Bounded like isolation so these cannot starve normal work, but
+    /// separately, so they do not take isolation capacity from suspects.
+    reservoir_builders: HashSet<Address>,
+    /// The reservoir-mode op hash a builder is bundling, if any, so a replacement (e.g. a fee
+    /// bump) re-supplies exactly that op alone. Cleared with `reservoir_builders`.
+    builder_to_reservoir_hash: HashMap<Address, B256>,
 }
 
 /// A candidate entrypoint for assignment, used during priority-based selection.
@@ -181,7 +188,7 @@ impl Assigner {
     ) -> anyhow::Result<AssignmentResult> {
         // If builder has confirmed locks, stay pinned to the same entrypoint.
         // This skips the all-entrypoint pool queries and candidate sorting.
-        let (pinned_target, isolation_hash) = {
+        let (pinned_target, single_op_hash) = {
             let state = self.state.lock().unwrap();
             let pinned_target = state
                 .builder_to_pinned_proposer
@@ -200,18 +207,29 @@ impl Assigner {
                             })
                         })
                 });
-            let isolation_hash = pinned_target.as_ref().and_then(|_| {
+            let single_op_hash = pinned_target.as_ref().and_then(|_| {
                 state
                     .builder_to_isolation_hash
                     .get(&builder_address)
-                    .copied()
+                    .map(|hash| (*hash, true))
+                    .or_else(|| {
+                        state
+                            .builder_to_reservoir_hash
+                            .get(&builder_address)
+                            .map(|hash| (*hash, false))
+                    })
             });
-            (pinned_target, isolation_hash)
+            (pinned_target, single_op_hash)
         };
         if let Some(pinned_proposer) = pinned_target {
-            if let Some(hash) = isolation_hash {
+            if let Some((hash, is_isolation)) = single_op_hash {
                 return self
-                    .assign_isolation_replacement(builder_address, hash, pinned_proposer)
+                    .assign_single_op_replacement(
+                        builder_address,
+                        hash,
+                        pinned_proposer,
+                        is_isolation,
+                    )
                     .await;
             }
             return self
@@ -255,6 +273,7 @@ impl Assigner {
 
         let mut candidates = Vec::new();
         let mut suspect_candidates = Vec::new();
+        let mut reservoir_candidates = Vec::new();
         let mut fee_filtered_candidate_exists = false;
         for (entrypoint_idx, (ep, result)) in self
             .entrypoints
@@ -265,6 +284,13 @@ impl Assigner {
             let (suspects, ops): (Vec<_>, Vec<_>) = result?.into_iter().partition(|op| op.suspect);
             if !suspects.is_empty() {
                 suspect_candidates.push((ep.clone(), suspects));
+            }
+            // Reservoir-mode ops are always bundled alone, never in normal work. (A suspect one
+            // is isolated above, which is single-op too.)
+            let (reservoir_ops, ops): (Vec<_>, Vec<_>) =
+                ops.into_iter().partition(|op| op.reservoir);
+            if !reservoir_ops.is_empty() {
+                reservoir_candidates.push((ep.clone(), reservoir_ops));
             }
             let OpCounts {
                 assignable: assignable_count,
@@ -359,6 +385,45 @@ impl Assigner {
                         self.metrics
                             .isolating_builders
                             .set(state.isolating_builders.len() as f64);
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        if !reservoir_candidates.is_empty() {
+            // Reserve the reservoir slot under the same lock as the capacity check, as for
+            // isolation, and release it if no reservoir-mode op ends up claimable.
+            let reservoir_limit = isolation_limit;
+            let reserved = {
+                let mut state = self.state.lock().unwrap();
+                state.reservoir_builders.len() < reservoir_limit
+                    && state.reservoir_builders.insert(builder_address)
+            };
+            if reserved {
+                match self
+                    .assign_reservoir_work(
+                        builder_address,
+                        reservoir_candidates,
+                        max_sim_block_number,
+                        &required_fees,
+                    )
+                    .await
+                {
+                    Ok(Some(assignment)) => return Ok(AssignmentResult::Assigned(assignment)),
+                    Ok(None) => {
+                        self.state
+                            .lock()
+                            .unwrap()
+                            .reservoir_builders
+                            .remove(&builder_address);
+                    }
+                    Err(e) => {
+                        self.state
+                            .lock()
+                            .unwrap()
+                            .reservoir_builders
+                            .remove(&builder_address);
                         return Err(e);
                     }
                 }
@@ -563,6 +628,60 @@ impl Assigner {
         Ok(None)
     }
 
+    /// Attempts to assign one reservoir-mode op alone. Returns `None` if none is claimable by
+    /// this builder.
+    ///
+    /// The caller must have already reserved `builder_address`'s slot in `reservoir_builders`,
+    /// and releases it if `None` or an error is returned.
+    async fn assign_reservoir_work(
+        &self,
+        builder_address: Address,
+        reservoir_candidates: Vec<(EntrypointInfo, Vec<PoolOperationSummary>)>,
+        max_sim_block_number: u64,
+        required_fees: &GasFees,
+    ) -> anyhow::Result<Option<WorkAssignment>> {
+        for (ep, reservoir_ops) in reservoir_candidates {
+            for op in reservoir_ops {
+                let hash = op.hash;
+                let assigned_ops = self
+                    .assign_ops_internal(
+                        builder_address,
+                        &ep,
+                        vec![op],
+                        max_sim_block_number,
+                        required_fees,
+                    )
+                    .await?;
+                if assigned_ops.is_empty() {
+                    continue;
+                }
+
+                tracing::info!(
+                    "Builder Assigner: reservoir-mode assignment of op {hash:?} to builder {builder_address:?}"
+                );
+                {
+                    let mut state = self.state.lock().unwrap();
+                    state
+                        .builder_to_pinned_proposer
+                        .insert(builder_address, ep.key());
+                    state
+                        .builder_to_reservoir_hash
+                        .insert(builder_address, hash);
+                }
+                ep_metrics_for(&ep).ep_assignments.increment(1);
+
+                return Ok(Some(WorkAssignment {
+                    entry_point: ep.address,
+                    filter_id: ep.filter_id,
+                    operations: assigned_ops,
+                    is_isolation: false,
+                }));
+            }
+        }
+
+        Ok(None)
+    }
+
     /// Assigns work for a specific entrypoint configuration.
     ///
     /// This is used internally for replacement attempts to ensure the entrypoint does not change.
@@ -586,6 +705,8 @@ impl Assigner {
                 filter_id.clone(),
             )
             .await?;
+        // Reservoir-mode ops are only ever bundled alone (`assign_reservoir_work`).
+        let ops: Vec<_> = ops.into_iter().filter(|op| !op.reservoir).collect();
 
         let OpCounts {
             assignable: assignable_count,
@@ -673,15 +794,19 @@ impl Assigner {
     /// isolation hash independently of pool suspect state avoids both: this
     /// always returns the original op alone, or no work if it has left the
     /// pool.
-    async fn assign_isolation_replacement(
+    ///
+    /// A reservoir-mode op (`is_isolation` false) is re-supplied the same way: it must stay alone
+    /// in the replacement too.
+    async fn assign_single_op_replacement(
         &self,
         builder_address: Address,
         hash: B256,
         proposer_key: ProposerKey,
+        is_isolation: bool,
     ) -> anyhow::Result<AssignmentResult> {
         let Some(op) = self.pool.get_op_by_hash(hash).await? else {
             tracing::warn!(
-                "Builder Assigner: isolation op {hash:?} for builder {builder_address:?} no longer in pool, cannot replace"
+                "Builder Assigner: single-op bundle op {hash:?} for builder {builder_address:?} no longer in pool, cannot replace"
             );
             return Ok(AssignmentResult::NoOperations);
         };
@@ -690,9 +815,9 @@ impl Assigner {
             entry_point: proposer_key.0,
             filter_id: proposer_key.1,
             operations: vec![op],
-            is_isolation: true,
+            is_isolation,
         };
-        tracing::info!("Builder Assigner: isolation replacement assignment: {assignment:?}");
+        tracing::info!("Builder Assigner: single-op replacement assignment: {assignment:?}");
 
         Ok(AssignmentResult::Assigned(assignment))
     }
@@ -951,6 +1076,8 @@ impl Assigner {
                 state.builder_to_pinned_proposer.remove(&builder_address);
                 state.isolating_builders.remove(&builder_address);
                 state.builder_to_isolation_hash.remove(&builder_address);
+                state.reservoir_builders.remove(&builder_address);
+                state.builder_to_reservoir_hash.remove(&builder_address);
                 self.metrics
                     .isolating_builders
                     .set(state.isolating_builders.len() as f64);
@@ -981,6 +1108,8 @@ impl Assigner {
         state.builder_to_pinned_proposer.remove(&builder_address);
         state.isolating_builders.remove(&builder_address);
         state.builder_to_isolation_hash.remove(&builder_address);
+        state.reservoir_builders.remove(&builder_address);
+        state.builder_to_reservoir_hash.remove(&builder_address);
         self.metrics
             .isolating_builders
             .set(state.isolating_builders.len() as f64);
@@ -1408,6 +1537,128 @@ mod tests {
                     .collect::<Vec<_>>())
             });
         mock_pool
+    }
+
+    fn mock_pool_with_reservoir(
+        ops: Vec<PoolOperation>,
+        reservoir_senders: Vec<Address>,
+    ) -> MockPool {
+        let mut mock_pool = MockPool::new();
+        let ops_cloned = ops.clone();
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(move |_, _, _, _| {
+                Ok(ops_cloned
+                    .iter()
+                    .map(|op| {
+                        let mut summary: PoolOperationSummary = op.into();
+                        summary.reservoir = reservoir_senders.contains(&op.uo.sender());
+                        summary
+                    })
+                    .collect::<Vec<_>>())
+            });
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .returning(move |_, hashes| {
+                Ok(ops
+                    .iter()
+                    .filter(|op| hashes.contains(&op.uo.hash()))
+                    .cloned()
+                    .collect::<Vec<_>>())
+            });
+        mock_pool
+    }
+
+    #[tokio::test]
+    async fn test_reservoir_op_assigned_alone() {
+        // 1 reservoir-mode op + 2 normal ops with 4 signers
+        let ops = create_test_ops(&[address(1), address(2), address(3)]);
+        let mock_pool = mock_pool_with_reservoir(ops, vec![address(3)]);
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+
+        let reservoir = assign_expect_default(&assigner, address(10)).await;
+        assert!(!reservoir.is_isolation);
+        assert_eq!(reservoir.operations.len(), 1);
+        assert_eq!(reservoir.operations[0].uo.sender(), address(3));
+
+        let normal = assign_expect_default(&assigner, address(11)).await;
+        assert_eq!(normal.operations.len(), 2);
+        assert!(
+            normal
+                .operations
+                .iter()
+                .all(|op| op.uo.sender() != address(3))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reservoir_capped_while_normal_work_eligible() {
+        // 2 reservoir-mode ops + 1 normal op with 2 signers: reservoir limit is 1
+        let ops = create_test_ops(&[address(1), address(2), address(3)]);
+        let mock_pool = mock_pool_with_reservoir(ops, vec![address(2), address(3)]);
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 2, 10, 10, 0.50);
+
+        let first = assign_expect_default(&assigner, address(10)).await;
+        assert_eq!(first.operations.len(), 1);
+        assert_ne!(first.operations[0].uo.sender(), address(1));
+
+        // the second builder gets the normal op, never the other reservoir-mode op
+        let second = assign_expect_default(&assigner, address(11)).await;
+        assert_eq!(second.operations.len(), 1);
+        assert_eq!(second.operations[0].uo.sender(), address(1));
+    }
+
+    #[tokio::test]
+    async fn test_reservoir_replacement_stays_singleton() {
+        let ops = create_test_ops(&[address(1), address(2), address(3)]);
+        let reservoir_op = ops
+            .iter()
+            .find(|op| op.uo.sender() == address(3))
+            .unwrap()
+            .clone();
+        let mut mock_pool = mock_pool_with_reservoir(ops, vec![address(3)]);
+        mock_pool.expect_get_op_by_hash().returning(move |hash| {
+            Ok((hash == reservoir_op.uo.hash()).then(|| reservoir_op.clone()))
+        });
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+
+        let first = assign_expect_default(&assigner, address(10)).await;
+        assert_eq!(first.operations[0].uo.sender(), address(3));
+        assigner
+            .confirm_senders_drop_unused(address(10), &[address(3)])
+            .unwrap();
+
+        // a fee bump for the same builder re-supplies the op alone
+        let replacement = assign_expect_default(&assigner, address(10)).await;
+        assert!(!replacement.is_isolation);
+        assert_eq!(replacement.operations.len(), 1);
+        assert_eq!(replacement.operations[0].uo.sender(), address(3));
+    }
+
+    #[tokio::test]
+    async fn test_reservoir_op_never_joins_pinned_normal_work() {
+        let ops = create_test_ops(&[address(1), address(2), address(3)]);
+        let mock_pool = mock_pool_with_reservoir(ops, vec![address(3)]);
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+
+        // builder 10 takes the reservoir-mode op, builder 11 the normal work
+        let _ = assign_expect_default(&assigner, address(10)).await;
+        let normal = assign_expect_default(&assigner, address(11)).await;
+        assert_eq!(normal.operations.len(), 2);
+        assigner
+            .confirm_senders_drop_unused(address(11), &[address(1)])
+            .unwrap();
+
+        // the reservoir-mode op's sender is free again, but builder 11's pinned replacement
+        // still only gets normal work
+        assigner.release_all(address(10));
+        let replacement = assign_expect_default(&assigner, address(11)).await;
+        assert!(
+            replacement
+                .operations
+                .iter()
+                .all(|op| op.uo.sender() != address(3))
+        );
     }
 
     #[tokio::test]

@@ -38,8 +38,8 @@ use rundler_sim::{SimulationError, SimulationResult, Simulator, ViolationError, 
 use rundler_types::{
     AaErrorCode, BUNDLE_BYTE_OVERHEAD, BundleExpectedStorage, Entity, EntityInfo, EntityInfos,
     EntityType, EntityUpdate, EntityUpdateType, EntryPointAbiVersion, EntryPointVersion,
-    ExpectedStorage, GasFees, PvgState, TIME_RANGE_BUFFER, Timestamp, UserOperation,
-    UserOperationVariant, UserOpsPerAggregator, ValidTimeRange, ValidationRevert,
+    ExpectedStorage, GasFees, PvgState, TIME_RANGE_BUFFER, TX_MAX_GAS_LIMIT, Timestamp,
+    UserOperation, UserOperationVariant, UserOpsPerAggregator, ValidTimeRange, ValidationRevert,
     aggregator::SignatureAggregatorResult,
     authorization::Eip7702Auth,
     chain::{ChainSpec, ForkActivation},
@@ -691,6 +691,7 @@ where
                 ForkActivation::Timestamp(_)
             )
             && !chain_spec.pvg_may_depend_on_state()
+            && op.reservoir_gas.is_none()
         {
             // Admission already checked PVG. With a timestamp fork, a reorg across the activation
             // can raise the required PVG after admission, so check it against this schedule. State
@@ -772,6 +773,9 @@ where
         if let Some(pct) = op.perms.underpriced_bundle_pct {
             required_pvg = math::percent_ceil(required_pvg, pct);
         }
+        // A reservoir-mode op's PVG must still pay for its reservoir as well. The discount above
+        // never applies to the reservoir.
+        let required_pvg = required_pvg + op.reservoir_gas.unwrap_or(0);
 
         if op.uo.pre_verification_gas() < required_pvg && op.perms.bundler_sponsorship.is_none() {
             self.emit(BuilderEvent::skipped_op(
@@ -1028,6 +1032,7 @@ where
                     simulation: simulation.clone(),
                     sponsored_da_gas: po.sponsored_da_gas,
                     state_gas: po.state_gas,
+                    reservoir_gas: po.op.reservoir_gas,
                 });
 
             // Limit by max bundle computation gas (excluding DA gas)
@@ -1140,6 +1145,7 @@ where
                     simulation,
                     sponsored_da_gas: po.sponsored_da_gas,
                     state_gas: po.state_gas,
+                    reservoir_gas: po.op.reservoir_gas,
                 });
         }
 
@@ -1305,6 +1311,23 @@ where
         chain_spec: &ChainSpec,
         bundle_fees: GasFees,
     ) -> BundleProposerResult<Option<u64>> {
+        // A reservoir-mode op alone: `tx.gas = 2^24 + R` exactly, so the transaction's state-gas
+        // reservoir is exactly what the op's PVG pays for. No overhead multiplier (it would
+        // enlarge the reservoir), and no `call_handle_ops`: a call gets no reservoir, so it
+        // cannot simulate this bundle. The op's computation gas fits in the 2^24 execution
+        // budget by `max_bundle_gas`.
+        if let Some(gas_limit) = context.reservoir_tx_gas() {
+            debug_assert!(
+                math::increase_by_percent(
+                    context.get_bundle_computation_gas_limit(chain_spec),
+                    BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT
+                ) <= u128::from(TX_MAX_GAS_LIMIT)
+            );
+            return Ok(Some(gas_limit.try_into().context(
+                "reservoir-mode bundle gas limit is larger than u64::MAX",
+            )?));
+        }
+
         // sum up the gas needed for all the ops in the bundle
         // and apply an overhead multiplier
         let gas = math::increase_by_percent(
@@ -1740,11 +1763,13 @@ where
     ) -> (Vec<PoolOperationWithSponsoredDAGas>, u128) {
         let mut gas_left = self.settings.max_bundle_gas;
         let mut ops_in_bundle = Vec::new();
+        let single_op = ops.len() == 1;
         for op in ops {
-            // A reservoir-mode op needs its own bundle with `tx.gas = 2^24 + R`; in a metered
-            // bundle its state would be charged inside its execution-only limits and it would
-            // run out of gas onchain. Skip it until the builder builds those bundles.
-            if op.op.reservoir_gas.is_some() {
+            // A reservoir-mode op is bundled alone with `tx.gas = 2^24 + R`; in a bundle with
+            // other ops its state would be charged inside its execution-only limits and it
+            // would run out of gas onchain. The assigner gives it a single-op assignment; skip
+            // it if it ever arrives with others.
+            if op.op.reservoir_gas.is_some() && !single_op {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
                     op.op.uo.hash(),
@@ -1851,6 +1876,8 @@ struct OpWithSimulation<UO> {
     sponsored_da_gas: u128,
     /// State-dependent gas the bundle spends for this op (0 without state gas)
     state_gas: u128,
+    /// The op's state-gas reservoir if it is in reservoir mode
+    reservoir_gas: Option<u128>,
 }
 
 /// A struct used internally to represent the current state of a proposed bundle
@@ -2158,9 +2185,24 @@ impl<UO: UserOperation> ProposalContext<UO> {
         self.get_bundle_gas_limit_inner(chain_spec, false)
     }
 
+    /// `tx.gas` of a reservoir-mode bundle (`2^24 + R`), if this context is exactly one
+    /// reservoir-mode op
+    fn reservoir_tx_gas(&self) -> Option<u128> {
+        let mut ops = self.iter_ops_with_simulations();
+        let op = ops.next()?;
+        if ops.next().is_some() {
+            return None;
+        }
+        op.reservoir_gas
+            .map(|reservoir_gas| u128::from(TX_MAX_GAS_LIMIT) + reservoir_gas)
+    }
+
     // Get the total gas in the bundle
     fn get_bundle_cost(&self, chain_spec: &ChainSpec, gas_price: u128) -> U256 {
-        U256::from(self.get_bundle_gas_limit_inner(chain_spec, true)) * U256::from(gas_price)
+        let gas = self
+            .reservoir_tx_gas()
+            .unwrap_or_else(|| self.get_bundle_gas_limit_inner(chain_spec, true));
+        U256::from(gas) * U256::from(gas_price)
     }
 
     // Get the bundle gas limit
@@ -2750,6 +2792,88 @@ mod tests {
             }],
         );
         assert!(bundle.rejected_ops.is_empty());
+    }
+
+    async fn make_reservoir_bundle(
+        op: UserOperation,
+        reservoir_gas: u128,
+    ) -> Bundle<UserOperation> {
+        mock_make_bundle(
+            vec![MockOp {
+                op,
+                simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                perms: UserOperationPermissions::default(),
+                reservoir_gas: Some(reservoir_gas),
+            }],
+            vec![],
+            vec![],
+            vec![],
+            1000,
+            50,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![],
+            None,
+            U256::MAX,
+            None,
+        )
+        .await
+    }
+
+    /// A reservoir-mode op alone gets `tx.gas = 2^24 + R` exactly: no overhead multiplier and
+    /// no `handleOps` call (none is mocked).
+    #[tokio::test]
+    async fn test_reservoir_mode_bundle_gas_limit() {
+        const RESERVOIR: u128 = 37_882_800;
+        let op = op_with_sender_and_fees(address(1), 2050, 50, DEFAULT_PVG + RESERVOIR);
+        let bundle = make_reservoir_bundle(op.clone(), RESERVOIR).await;
+
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op],
+                ..Default::default()
+            }],
+        );
+        assert_eq!(
+            u128::from(bundle.gas_estimate),
+            u128::from(TX_MAX_GAS_LIMIT) + RESERVOIR
+        );
+    }
+
+    /// A reservoir-mode op whose PVG no longer covers its reservoir is skipped, not bundled.
+    #[tokio::test]
+    async fn test_reservoir_mode_op_skipped_if_pvg_does_not_cover_reservoir() {
+        const RESERVOIR: u128 = 37_882_800;
+        // the PVG covers the reservoir but not the metered requirement on top of it
+        let op = op_with_sender_and_fees(address(1), 2050, 50, RESERVOIR);
+        let result = mock_make_bundle_allow_error(
+            vec![MockOp {
+                op,
+                simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                perms: UserOperationPermissions::default(),
+                reservoir_gas: Some(RESERVOIR),
+            }],
+            vec![],
+            vec![],
+            vec![],
+            1000,
+            50,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![],
+            None,
+            U256::MAX,
+            None,
+            vec![],
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(BundleProposerError::NoOperationsAfterFeeFilter)
+        ));
     }
 
     #[tokio::test]
@@ -3588,6 +3712,7 @@ mod tests {
                         },
                         sponsored_da_gas: 100_000,
                         state_gas: 0,
+                        reservoir_gas: None,
                     },
                     OpWithSimulation {
                         op: op2.clone(),
@@ -3597,6 +3722,7 @@ mod tests {
                         },
                         sponsored_da_gas: 0,
                         state_gas: 0,
+                        reservoir_gas: None,
                     },
                 ],
                 signature: Default::default(),
@@ -3640,6 +3766,7 @@ mod tests {
                         },
                         sponsored_da_gas: 0,
                         state_gas: 0,
+                        reservoir_gas: None,
                     },
                     OpWithSimulation {
                         op: op2.clone(),
@@ -3649,6 +3776,7 @@ mod tests {
                         },
                         sponsored_da_gas: 0,
                         state_gas: 0,
+                        reservoir_gas: None,
                     },
                 ],
                 signature: Default::default(),
@@ -3713,6 +3841,7 @@ mod tests {
                     },
                     sponsored_da_gas: 0,
                     state_gas: 0,
+                    reservoir_gas: None,
                 }],
                 signature: Default::default(),
             },
@@ -3910,6 +4039,7 @@ mod tests {
                     simulation: SimulationResult::default(),
                     sponsored_da_gas: 0,
                     state_gas: 0,
+                    reservoir_gas: None,
                 }],
                 signature: Default::default(),
             },
@@ -3932,6 +4062,7 @@ mod tests {
                     simulation: SimulationResult::default(),
                     sponsored_da_gas: 0,
                     state_gas: 0,
+                    reservoir_gas: None,
                 }],
                 signature: Default::default(),
             },
@@ -3965,6 +4096,7 @@ mod tests {
                     simulation: SimulationResult::default(),
                     sponsored_da_gas: 0,
                     state_gas,
+                    reservoir_gas: None,
                 }],
                 signature: Default::default(),
             },

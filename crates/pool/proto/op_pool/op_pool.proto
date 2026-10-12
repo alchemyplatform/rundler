@@ -234,6 +234,8 @@ message PoolOperationSummary {
   // Whether the operation is suspected of poisoning bundles and must only be
   // submitted alone
   bool suspect = 9;
+  // Whether the operation is in reservoir mode and must only be submitted alone
+  bool reservoir = 10;
 }
 
 // Data associated with a user operation for DA gas calculations

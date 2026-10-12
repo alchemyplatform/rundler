@@ -736,6 +736,7 @@ impl From<RundlerPoolOperationSummary> for PoolOperationSummary {
                 .map(|c| c.to_proto_bytes())
                 .unwrap_or_default(),
             suspect: summary.suspect,
+            reservoir: summary.reservoir,
         }
     }
 }
@@ -759,6 +760,7 @@ impl TryFrom<PoolOperationSummary> for RundlerPoolOperationSummary {
             gas_limit: from_bytes(&summary.gas_limit)?,
             bundler_sponsorship_max_cost,
             suspect: summary.suspect,
+            reservoir: summary.reservoir,
         })
     }
 }
@@ -979,6 +981,7 @@ mod tests {
             gas_limit: 100_000,
             bundler_sponsorship_max_cost: Some(U256::from(500_000)),
             suspect: true,
+            reservoir: false,
         };
 
         let proto = PoolOperationSummary::from(summary.clone());
@@ -1013,6 +1016,7 @@ mod tests {
             gas_limit: 100_000,
             bundler_sponsorship_max_cost: None,
             suspect: false,
+            reservoir: false,
         };
 
         let proto = PoolOperationSummary::from(summary.clone());

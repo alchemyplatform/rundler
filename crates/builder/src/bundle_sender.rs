@@ -3773,6 +3773,7 @@ mod tests {
             gas_limit: 0,
             bundler_sponsorship_max_cost: None,
             suspect: false,
+            reservoir: false,
         }
     }
 
