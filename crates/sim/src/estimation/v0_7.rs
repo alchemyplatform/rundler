@@ -545,8 +545,12 @@ where
         }
         // An op whose state fits under the cap next to its computation gas needs no reservoir;
         // admission would put it on the metered path.
-        if state_gas < gas::reservoir_threshold(&op_with_gas, chain_spec, max_bundle_execution_gas)
-        {
+        let threshold =
+            gas::reservoir_threshold(&op_with_gas, chain_spec, max_bundle_execution_gas);
+        if state_gas < threshold {
+            tracing::debug!(
+                "reservoir mode not needed: state gas {state_gas} below threshold {threshold}"
+            );
             return Err(metered_error);
         }
 
@@ -604,13 +608,13 @@ where
                 .pre_verification_gas(0)
                 .build()
         };
-        let trace_gas: u64 = ((args.verification_gas_limit
+        // The entry point calls `innerHandleOp` (keeping 1/64), which then requires
+        // `gasleft() * 63/64` to cover the call and postOp limits (AA95 otherwise).
+        let limits = args.verification_gas_limit
             + args.paymaster_verification_gas_limit
             + call_gas
-            + post_op_gas)
-            * 64
-            / 63
-            + RESERVOIR_TRACE_GAS_OVERHEAD)
+            + post_op_gas;
+        let trace_gas: u64 = (limits * 64 * 64 / (63 * 63) + RESERVOIR_TRACE_GAS_OVERHEAD)
             .try_into()
             .unwrap_or(u64::MAX);
 
@@ -620,13 +624,22 @@ where
         );
         let full = full?;
         let entry_point = *self.entry_point.address();
-        if full.error().is_some()
-            || user_operation_succeeded(&full.frame, entry_point) != Some(true)
-        {
+        if let Some(error) = full.error() {
+            tracing::debug!(
+                "reservoir-mode copy reverted: {error}, reason {:?}, output {:?}",
+                full.frame.revert_reason,
+                full.frame.output
+            );
+            return Ok(None);
+        }
+        let op_success = user_operation_succeeded(&full.frame, entry_point);
+        if op_success != Some(true) {
+            tracing::debug!("reservoir-mode copy did not succeed: {op_success:?}");
             return Ok(None);
         }
         let no_call = no_call?;
-        if no_call.error().is_some() {
+        if let Some(error) = no_call.error() {
+            tracing::debug!("reservoir-mode copy without call gas reverted: {error}");
             return Ok(None);
         }
         let execution_frame = find_execution_frame(&full.frame, entry_point, args.full_op.sender())
@@ -1660,7 +1673,17 @@ mod tests {
         let (mut entry, mut provider) = create_base_config();
         entry
             .expect_get_state_gas_simulate_handle_op_call()
-            .returning(|op, _, _| {
+            .returning(|op, _, gas| {
+                // innerHandleOp needs gasleft() * 63/64 >= the call and postOp limits after the
+                // entry point's own call into it kept 1/64 (AA95 otherwise).
+                let limits = op.verification_gas_limit()
+                    + op.paymaster_verification_gas_limit()
+                    + op.call_gas_limit()
+                    + op.paymaster_post_op_gas_limit();
+                assert!(
+                    u128::from(gas) * 63 * 63 / (64 * 64) > limits,
+                    "trace gas {gas}"
+                );
                 let to = if op.call_gas_limit() == 0 {
                     NO_CALL
                 } else {
