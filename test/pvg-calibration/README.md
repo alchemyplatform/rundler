@@ -146,6 +146,17 @@ state too. `estimated-paymaster`, `estimated-paymaster-post-op` and
 postOp, postOp that writes a fresh slot), splitting postOp state off as well.
 `--only estimated,estimated-deploy` runs just those variants.
 
+`scripts/reservoir-e2e.sh [self|paymaster] [size]` checks reservoir mode end to end against a
+running rundler (#1351), for example a staging deployment. It estimates, sends and waits for a
+large-deploy op through rundler's RPC, then checks the bundle: one op, `tx.gas = 2^24 + R`, op
+success, contract deployed, and the bundler's margin. It uses the harness fixtures already on
+Sepolia and only sends a transaction itself to top up the payer's EntryPoint deposit:
+
+```sh
+BUNDLER_RPC_URL=http://<rundler>:3000 ./scripts/reservoir-e2e.sh self
+BUNDLER_RPC_URL=http://<rundler>:3000 ./scripts/reservoir-e2e.sh paymaster   # needs --unsafe or a staked paymaster
+```
+
 ### E6 — end to end through rundler
 
 Run rundler against the same node with the Glamsterdam chain spec, keeping estimation calls under
