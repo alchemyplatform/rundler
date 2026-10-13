@@ -565,10 +565,11 @@ where
             state.pool.check_multiple_roles_violation(&op)?;
 
             // Check if op is already known or replacing another, and if so, ensure its fees are high enough
+            // Reuse this guard: acquiring another read lock can deadlock if a writer is queued.
             state
                 .pool
                 .check_replacement(&op)?
-                .and_then(|r| self.state.read().pool.get_operation_by_hash(r))
+                .and_then(|r| state.pool.get_operation_by_hash(r))
         };
 
         // Check reputation of entities in involved in the operation
@@ -2051,7 +2052,8 @@ mod tests {
         entrypoint
             .expect_balance_of()
             .returning(|_, _| Ok(U256::from(1000)));
-        let pool = create_pool_with_entry_point(vec![op.clone()], entrypoint);
+        let mut pool = create_pool_with_entry_point(vec![op.clone()], entrypoint);
+        pool.config.same_sender_mempool_count = 1;
 
         let _ = pool
             .add_operation(OperationOrigin::Local, op.op.clone(), default_perms())
@@ -2070,7 +2072,16 @@ mod tests {
             .await
             .unwrap();
 
-        check_ops(pool.best_operations(1, None).unwrap(), vec![replacement]);
+        assert!(pool.get_user_operation_by_hash(op.op.hash()).is_none());
+        assert_eq!(
+            pool.get_op_by_id(&op.op.id()).unwrap().uo.hash(),
+            replacement.hash()
+        );
+        check_ops(
+            pool.best_operations(1, None).unwrap(),
+            vec![replacement.clone()],
+        );
+        check_ops(pool.all_operations(usize::MAX), vec![replacement]);
 
         let paymaster_balance = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
         assert_eq!(paymaster_balance.pending_balance, U256::from(900));
