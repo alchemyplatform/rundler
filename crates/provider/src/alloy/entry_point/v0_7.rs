@@ -504,15 +504,15 @@ where
         op: Self::UO,
         skip_post_op: bool,
         gas: u64,
+        mut state_override: StateOverride,
     ) -> ProviderResult<(TransactionRequest, StateOverride)> {
         let addr = *self.i_entry_point.address();
-        let mut state_override = StateOverride::default();
-        add_simulations_override(
+        add_state_gas_simulation_override(
             self.get_simulations_bytecode().clone(),
+            self.ep_version,
             &mut state_override,
             addr,
         );
-        add_sender_creator_override(self.ep_version, &mut state_override, addr);
         add_authorization_tuple(op.sender(), op.authorization_tuple(), &mut state_override);
 
         let ep_simulations =
@@ -670,27 +670,35 @@ fn sender_creator_slot(version: EntryPointVersion) -> Option<U256> {
     }
 }
 
-/// Pre-sets `EntryPointSimulations._senderCreator` in the entry point's storage.
+/// Merges the state-gas simulation's entry point override into the caller's: the simulations
+/// code, unless the caller overrode the code, and `EntryPointSimulations._senderCreator`. The
+/// caller's other fields for the entry point (balance, storage) are kept.
 ///
-/// Every simulation stores the `SenderCreator` address there (`initSenderCreator`). Under a code
-/// override that slot is empty in the real entry point's storage, so the write would be charged
-/// EIP-8037 state gas for a new slot that no real `handleOps` creates. Pre-set to the value it
-/// is about to receive (the address of the entry point's first CREATE), the write is a no-op.
-fn add_sender_creator_override(
+/// Every simulation stores the `SenderCreator` address in that slot (`initSenderCreator`). Under
+/// a code override the slot is empty in the real entry point's storage, so the write would be
+/// charged EIP-8037 state gas for a new slot that no real `handleOps` creates. Pre-set to the
+/// value it is about to receive (the address of the entry point's first CREATE), the write is a
+/// no-op.
+fn add_state_gas_simulation_override(
+    simulations_bytecode: Bytes,
     version: EntryPointVersion,
     state_override: &mut StateOverride,
     addr: Address,
 ) {
+    let account = state_override.entry(addr).or_default();
+    if account.code.is_none() {
+        account.code = Some(simulations_bytecode);
+    }
     let Some(slot) = sender_creator_slot(version) else {
         return;
     };
     let value = B256::left_padding_from(addr.create(1).as_slice());
-    state_override
-        .entry(addr)
-        .or_default()
-        .state_diff
-        .get_or_insert_with(Default::default)
-        .insert(B256::from(slot), value);
+    // A full `state` replaces the storage, and a node rejects it alongside a `stateDiff`.
+    let storage = match &mut account.state {
+        Some(state) => state,
+        None => account.state_diff.get_or_insert_with(Default::default),
+    };
+    storage.insert(B256::from(slot), value);
 }
 
 /// Build the `handleOps`/`handleAggregatedOps` transaction request.
@@ -1011,8 +1019,12 @@ mod tests {
             (EntryPointVersion::V0_9, 4),
         ] {
             let mut state_override = StateOverride::default();
-            add_simulations_override(Bytes::from_static(&[1]), &mut state_override, ep);
-            add_sender_creator_override(version, &mut state_override, ep);
+            add_state_gas_simulation_override(
+                Bytes::from_static(&[1]),
+                version,
+                &mut state_override,
+                ep,
+            );
 
             let account = &state_override[&ep];
             assert_eq!(account.code, Some(Bytes::from_static(&[1])));
@@ -1021,6 +1033,69 @@ mod tests {
             let value = state_diff[&B256::from(U256::from(slot))];
             assert_eq!(Address::from_word(value), ep.create(1));
         }
+    }
+
+    /// The caller's entry point override is merged with the simulation's, not replaced.
+    #[test]
+    fn test_state_gas_simulation_override_keeps_caller_override() {
+        let ep = address!("0000000071727De22E5E9d8BAf0edAc6f37da032");
+        let user_slot = B256::from(U256::from(100));
+        let sender_creator = B256::from(U256::from(6));
+        let other = address!("fd5d8F31bDd2A41Aca1866a51C6b11DC0C6fA545");
+
+        // balance and stateDiff: both kept, and the simulations code added
+        let mut state_override = StateOverride::default();
+        state_override.insert(
+            ep,
+            AccountOverride {
+                balance: Some(U256::from(7)),
+                state_diff: Some([(user_slot, B256::with_last_byte(1))].into_iter().collect()),
+                ..Default::default()
+            },
+        );
+        state_override.insert(
+            other,
+            AccountOverride {
+                balance: Some(U256::from(9)),
+                ..Default::default()
+            },
+        );
+        add_state_gas_simulation_override(
+            Bytes::from_static(&[1]),
+            EntryPointVersion::V0_7,
+            &mut state_override,
+            ep,
+        );
+        let account = &state_override[&ep];
+        assert_eq!(account.balance, Some(U256::from(7)));
+        assert_eq!(account.code, Some(Bytes::from_static(&[1])));
+        let state_diff = account.state_diff.as_ref().unwrap();
+        assert_eq!(state_diff[&user_slot], B256::with_last_byte(1));
+        assert!(state_diff.contains_key(&sender_creator));
+        assert_eq!(state_override[&other].balance, Some(U256::from(9)));
+
+        // a full `state` gets the slot instead of a `stateDiff`, and the caller's code is kept
+        let mut state_override = StateOverride::default();
+        state_override.insert(
+            ep,
+            AccountOverride {
+                code: Some(Bytes::from_static(&[2])),
+                state: Some([(user_slot, B256::with_last_byte(1))].into_iter().collect()),
+                ..Default::default()
+            },
+        );
+        add_state_gas_simulation_override(
+            Bytes::from_static(&[1]),
+            EntryPointVersion::V0_7,
+            &mut state_override,
+            ep,
+        );
+        let account = &state_override[&ep];
+        assert_eq!(account.code, Some(Bytes::from_static(&[2])));
+        assert!(account.state_diff.is_none());
+        let state = account.state.as_ref().unwrap();
+        assert_eq!(state.len(), 2);
+        assert!(state.contains_key(&sender_creator));
     }
 
     /// The bundle validation call must be able to omit its fee caps, while the

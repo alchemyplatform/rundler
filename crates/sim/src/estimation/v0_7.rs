@@ -42,7 +42,9 @@ use tracing::instrument;
 use super::{
     GasEstimationError, Metrics, Settings,
     estimate_verification_gas::{EstimateGasArgs, VerificationGasEstimatorSpecialization},
-    state_gas::{find_execution_frame, reservoir_call_gas_limit, user_operation_succeeded},
+    state_gas::{
+        find_execution_frame, padded_reservoir, reservoir_call_gas_limit, user_operation_succeeded,
+    },
 };
 use crate::{
     CallGasEstimator, CallGasEstimatorImpl, CallGasEstimatorSpecialization, MIN_CALL_GAS_LIMIT,
@@ -551,15 +553,34 @@ where
         // The metered estimate failed, yet the state may still fit under the cap next to the
         // op's computation gas: the metered call gas limit needs more than the state itself
         // (the binary search's error tolerance, and the 1/64 withheld at each nested call). Such
-        // an op fits neither mode, so its PVG pays for a reservoir of at least the threshold,
-        // and admission classifies it as reservoir mode. The unused part of that reservoir is
+        // an op fits neither mode, so its PVG pays for a reservoir above the threshold, and
+        // admission classifies it as reservoir mode. The unused part of that reservoir is
         // refunded to the bundler.
         let threshold =
             gas::reservoir_threshold(&op_with_gas, chain_spec, max_bundle_execution_gas);
-        let reservoir_gas = state_gas.max(threshold);
+        let base_pvg = rundler_types::increase_required_pvg_with_calldata_floor_gas(
+            &op_with_gas,
+            base_pvg - da_gas,
+            da_gas,
+            op.max_fill(chain_spec).calldata_floor_gas_limit(chain_spec),
+            self.settings
+                .verification_gas_limit_efficiency_reject_threshold,
+        );
+        let mut reservoir_gas = padded_reservoir(state_gas, threshold);
+        // Classify the op as admission will, against its own threshold with the final PVG. A
+        // larger PVG only raises the op's computation gas, which lowers the threshold, so one
+        // adjustment suffices.
+        let final_threshold = gas::reservoir_threshold(
+            &UserOperationBuilder::from_uo(op_with_gas.clone(), chain_spec)
+                .pre_verification_gas(base_pvg + reservoir_gas)
+                .build(),
+            chain_spec,
+            max_bundle_execution_gas,
+        );
+        reservoir_gas = reservoir_gas.max(padded_reservoir(0, final_threshold));
         if reservoir_gas > state_gas {
             tracing::debug!(
-                "reservoir mode: state gas {state_gas} below threshold {threshold}, reservoir padded to the threshold"
+                "reservoir mode: state gas {state_gas}, threshold {final_threshold}, reservoir padded to {reservoir_gas}"
             );
         }
         if reservoir_gas > max_reservoir_gas {
@@ -569,14 +590,6 @@ where
             ));
         }
 
-        let base_pvg = rundler_types::increase_required_pvg_with_calldata_floor_gas(
-            &op_with_gas,
-            base_pvg - da_gas,
-            da_gas,
-            op.max_fill(chain_spec).calldata_floor_gas_limit(chain_spec),
-            self.settings
-                .verification_gas_limit_efficiency_reject_threshold,
-        );
         self.metrics.reservoir_estimates.increment(1);
         self.metrics.reservoir_state_gas.record(state_gas as f64);
         tracing::debug!(
@@ -676,11 +689,12 @@ where
         gas: u64,
         args: &ReservoirArgs<'_>,
     ) -> ProviderResult<StateGasTrace> {
-        let (tx, simulation_override) = self
-            .entry_point
-            .get_state_gas_simulate_handle_op_call(op, false, gas)?;
-        let mut state_override = args.state_override.clone();
-        state_override.extend(simulation_override);
+        let (tx, state_override) = self.entry_point.get_state_gas_simulate_handle_op_call(
+            op,
+            false,
+            gas,
+            args.state_override.clone(),
+        )?;
         trace_call_state_gas(
             &self.provider,
             tx,
@@ -1113,7 +1127,11 @@ mod tests {
 
     use super::*;
     use crate::{
-        GasEstimator as _, estimation::estimate_call_gas::PROXY_IMPLEMENTATION_ADDRESS_MARKER,
+        GasEstimator as _,
+        estimation::{
+            estimate_call_gas::PROXY_IMPLEMENTATION_ADDRESS_MARKER,
+            state_gas::RESERVOIR_THRESHOLD_MARGIN,
+        },
     };
 
     // Alises for complex types (which also satisfy Clippy)
@@ -1689,7 +1707,7 @@ mod tests {
         let (mut entry, mut provider) = create_base_config();
         entry
             .expect_get_state_gas_simulate_handle_op_call()
-            .returning(|op, _, gas| {
+            .returning(|op, _, gas, state_override| {
                 // innerHandleOp needs gasleft() * 63/64 >= the call and postOp limits after the
                 // entry point's own call into it kept 1/64 (AA95 otherwise).
                 let limits = op.verification_gas_limit()
@@ -1705,10 +1723,7 @@ mod tests {
                 } else {
                     FULL
                 };
-                Ok((
-                    TransactionRequest::default().to(to),
-                    StateOverride::default(),
-                ))
+                Ok((TransactionRequest::default().to(to), state_override))
             });
         provider
             .expect_request::<(TransactionRequest, BlockId, serde_json::Value), serde_json::Value>()
@@ -1741,29 +1756,68 @@ mod tests {
         }
     }
 
-    async fn run_reservoir(
-        entry: MockEntryPointV0_7,
-        provider: MockEvmProvider,
-        settings: Settings,
-    ) -> Result<GasEstimate, GasEstimationError> {
-        let chain_spec = ChainSpec {
+    fn reservoir_chain_spec() -> ChainSpec {
+        ChainSpec {
             glamsterdam_activation: ForkActivation::Genesis,
             ..Default::default()
-        };
-        let chain_spec = chain_spec.at_timestamp(0).into_owned();
-        let estimator = create_custom_estimator(chain_spec.clone(), provider, entry, settings);
+        }
+        .at_timestamp(0)
+        .into_owned()
+    }
+
+    fn reservoir_op(
+        chain_spec: &ChainSpec,
+        settings: &Settings,
+    ) -> (UserOperationOptionalGas, UserOperation) {
         let mut op = demo_user_op_optional_gas(None);
         op.sender = RESERVOIR_SENDER;
         let full_op = op
             .clone()
             .into_user_operation_builder(
-                &chain_spec,
+                chain_spec,
                 settings.max_bundle_execution_gas,
                 settings.max_verification_gas,
                 settings.max_paymaster_verification_gas,
             )
             .pre_verification_gas(0)
             .build();
+        (op, full_op)
+    }
+
+    /// Admission's classification of the estimated op: its PVG surplus over the metered
+    /// requirement (with a zero deposit, the larger requirement), if in reservoir mode.
+    fn admitted_reservoir_gas(estimate: &GasEstimate, settings: &Settings) -> Option<u128> {
+        let chain_spec = reservoir_chain_spec();
+        let (_, full_op) = reservoir_op(&chain_spec, settings);
+        let op = UserOperationBuilder::from_uo(full_op, &chain_spec)
+            .pre_verification_gas(estimate.pre_verification_gas)
+            .call_gas_limit(estimate.call_gas_limit)
+            .verification_gas_limit(estimate.verification_gas_limit)
+            .build();
+        let required = op.required_pre_verification_gas(
+            &chain_spec,
+            1,
+            0,
+            Some(settings.verification_gas_limit_efficiency_reject_threshold),
+            &PvgState {
+                sender_deposit_is_zero: Some(true),
+                authority: None,
+            },
+        );
+        let surplus = op.pre_verification_gas().checked_sub(required)?;
+        let threshold =
+            gas::reservoir_threshold(&op, &chain_spec, settings.max_bundle_execution_gas);
+        (surplus >= threshold).then_some(surplus)
+    }
+
+    async fn run_reservoir(
+        entry: MockEntryPointV0_7,
+        provider: MockEvmProvider,
+        settings: Settings,
+    ) -> Result<GasEstimate, GasEstimationError> {
+        let chain_spec = reservoir_chain_spec();
+        let estimator = create_custom_estimator(chain_spec.clone(), provider, entry, settings);
+        let (op, full_op) = reservoir_op(&chain_spec, &settings);
         let args = ReservoirArgs {
             op: &op,
             full_op: &full_op,
@@ -1815,6 +1869,9 @@ mod tests {
             "PVG should be base + S, got {}",
             estimate.pre_verification_gas
         );
+        // admission classifies the estimated op as reservoir mode, with R >= S
+        let reservoir_gas = admitted_reservoir_gas(&estimate, &reservoir_settings()).unwrap();
+        assert!(reservoir_gas >= u128::from(DEPLOY_24KB_STATE_GAS));
     }
 
     /// Validation and postOp state (in the no-call trace) is not subtracted from call gas.
@@ -1905,6 +1962,15 @@ mod tests {
             estimate.call_gas_limit,
             reservoir_call_gas_limit(u128::from(state_gas) + 30_000, u128::from(state_gas))
         );
+        // admission classifies it as reservoir mode, with the margin to spare: a threshold up
+        // to the margin higher (e.g. a lower call gas limit) still classifies it so
+        let reservoir_gas = admitted_reservoir_gas(&estimate, &settings).unwrap();
+        let lower_cgl = GasEstimate {
+            call_gas_limit: estimate.call_gas_limit - RESERVOIR_THRESHOLD_MARGIN / 2,
+            ..estimate
+        };
+        assert!(admitted_reservoir_gas(&lower_cgl, &settings).is_some());
+        assert!(reservoir_gas > u128::from(state_gas));
     }
 
     /// An op without state gas has no use for a reservoir: the metered error is returned.

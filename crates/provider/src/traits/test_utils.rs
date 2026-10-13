@@ -178,6 +178,7 @@ mockall::mock! {
             op: v0_6::UserOperation,
             skip_post_op: bool,
             gas: u64,
+            state_override: StateOverride,
         ) -> ProviderResult<(TransactionRequest, StateOverride)>;
         async fn simulate_validation(
             &self,
@@ -291,6 +292,7 @@ mockall::mock! {
             op: v0_7::UserOperation,
             skip_post_op: bool,
             gas: u64,
+            state_override: StateOverride,
         ) -> ProviderResult<(TransactionRequest, StateOverride)>;
         async fn simulate_validation(
             &self,

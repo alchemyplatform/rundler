@@ -389,6 +389,7 @@ where
         _op: Self::UO,
         _skip_post_op: bool,
         _gas: u64,
+        _state_override: StateOverride,
     ) -> ProviderResult<(TransactionRequest, StateOverride)> {
         Err(anyhow::anyhow!(
             "EntryPoint v0.6 simulateHandleOp always reverts, which undoes the state to trace"

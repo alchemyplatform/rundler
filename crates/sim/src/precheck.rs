@@ -203,6 +203,13 @@ where
         }
         let reservoir_gas =
             self.reservoir_gas(op, &chain_spec, block_timestamp, &async_data, perms);
+        violations.extend(self.check_reservoir_supported(
+            op,
+            &chain_spec,
+            block_timestamp,
+            &async_data,
+            reservoir_gas,
+        ));
         violations.extend(self.check_gas(op, &chain_spec, &async_data, perms, reservoir_gas));
         violations.extend(self.check_payer(op, &async_data));
         if !violations.is_empty() {
@@ -292,6 +299,9 @@ where
     /// The op's state gas is not traced: `R` is what its PVG pays for, so state beyond it spills
     /// into the op's own metered gas and the bundler always recovers. See
     /// `test/pvg-calibration/docs/reservoir-mode-plan.md`.
+    ///
+    /// Aggregated and bundler-sponsored ops are not supported, and are rejected by `check` if
+    /// their PVG surplus reaches the threshold.
     fn reservoir_gas(
         &self,
         op: &UO,
@@ -300,10 +310,41 @@ where
         async_data: &AsyncData,
         perms: &UserOperationPermissions,
     ) -> Option<u128> {
+        if op.aggregator().is_some() || perms.bundler_sponsorship.is_some() {
+            return None;
+        }
+        self.reservoir_surplus(op, chain_spec, block_timestamp, async_data)
+    }
+
+    /// Rejects an op whose PVG surplus asks for a reservoir it cannot get (it is aggregated or
+    /// bundler-sponsored). It would be bundled metered, with an execution-only call gas limit,
+    /// and run out of gas onchain.
+    fn check_reservoir_supported(
+        &self,
+        op: &UO,
+        chain_spec: &ChainSpec,
+        block_timestamp: u64,
+        async_data: &AsyncData,
+        reservoir_gas: Option<u128>,
+    ) -> Option<PrecheckViolation> {
+        if reservoir_gas.is_some() {
+            return None;
+        }
+        self.reservoir_surplus(op, chain_spec, block_timestamp, async_data)
+            .map(|surplus| PrecheckViolation::ReservoirGasTooHigh(surplus, 0))
+    }
+
+    /// The op's PVG surplus over the metered requirement, if Glamsterdam is active, the op is
+    /// v0.7+ and the surplus reaches [`gas::reservoir_threshold`].
+    fn reservoir_surplus(
+        &self,
+        op: &UO,
+        chain_spec: &ChainSpec,
+        block_timestamp: u64,
+        async_data: &AsyncData,
+    ) -> Option<u128> {
         if !chain_spec.reservoir_mode_enabled_at(block_timestamp)
             || op.entry_point_version() < EntryPointVersion::V0_7
-            || op.aggregator().is_some()
-            || perms.bundler_sponsorship.is_some()
         {
             return None;
         }
@@ -1503,6 +1544,30 @@ mod tests {
         };
         assert_eq!(
             prechecker.reservoir_gas(&op, &cs, 0, &async_data, &sponsored),
+            None
+        );
+        // and rejected, rather than bundled metered with an execution-only call gas limit
+        let surplus = op.pre_verification_gas() - async_data.min_pre_verification_gas;
+        assert_eq!(
+            prechecker.check_reservoir_supported(&op, &cs, 0, &async_data, None),
+            Some(PrecheckViolation::ReservoirGasTooHigh(surplus, 0))
+        );
+        let reservoir_gas = prechecker.reservoir_gas(
+            &op,
+            &cs,
+            0,
+            &async_data,
+            &UserOperationPermissions::default(),
+        );
+        assert!(reservoir_gas.is_some());
+        assert_eq!(
+            prechecker.check_reservoir_supported(&op, &cs, 0, &async_data, reservoir_gas),
+            None
+        );
+        // a sponsored op below the threshold is unaffected
+        let metered = v0_7_op(&cs, 1_000 + 10_000);
+        assert_eq!(
+            prechecker.check_reservoir_supported(&metered, &cs, 0, &async_data, None),
             None
         );
     }

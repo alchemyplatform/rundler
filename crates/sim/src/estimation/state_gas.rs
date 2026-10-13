@@ -26,6 +26,19 @@ use crate::MIN_CALL_GAS_LIMIT;
 /// op out of gas.
 const NEW_SLOT_STATE_GAS: u128 = 97_920;
 
+/// How far a reservoir-mode op's PVG surplus is kept above the reservoir threshold, so the op is
+/// still classified as reservoir mode at admission if its threshold rises a little from the
+/// estimate's: e.g. a shorter signature or paymaster data, or a lower limit lowers its
+/// computation gas.
+pub(crate) const RESERVOIR_THRESHOLD_MARGIN: u128 = NEW_SLOT_STATE_GAS;
+
+/// The reservoir a reservoir-mode op's PVG pays for: its state gas, but at least
+/// [`RESERVOIR_THRESHOLD_MARGIN`] above `threshold`, so admission classifies it as reservoir
+/// mode. Any unused part of the reservoir is refunded to the bundler.
+pub(crate) fn padded_reservoir(state_gas: u128, threshold: u128) -> u128 {
+    state_gas.max(threshold + RESERVOIR_THRESHOLD_MARGIN)
+}
+
 /// Percentage of the execution gas a reservoir-mode call gas limit keeps as headroom, if more
 /// than [`NEW_SLOT_STATE_GAS`].
 const CALL_GAS_HEADROOM_PERCENT: u128 = 10;
@@ -168,6 +181,19 @@ mod tests {
             user_operation_succeeded(&frame(CALLER, EP, 0, vec![]), EP),
             None
         );
+    }
+
+    #[test]
+    fn reservoir_keeps_a_margin_above_the_threshold() {
+        // well above the threshold: the state gas itself
+        assert_eq!(padded_reservoir(37_784_880, 1_000_000), 37_784_880);
+        // below it, at it, or just above it: padded to the threshold plus the margin
+        for state_gas in [500_000, 1_000_000, 1_000_001] {
+            assert_eq!(
+                padded_reservoir(state_gas, 1_000_000),
+                1_000_000 + RESERVOIR_THRESHOLD_MARGIN
+            );
+        }
     }
 
     /// Phase 0, 4 kB deploy: the execute frame used 6,469,508 with 6,450,480 of it state.

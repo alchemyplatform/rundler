@@ -222,6 +222,9 @@ pub trait SimulationProvider: Send + Sync {
     /// State that the simulation contract itself would create is pre-set in the override, so the
     /// traced state gas is the op's own.
     ///
+    /// The returned override is `state_override` (the caller's) merged with the simulation's own,
+    /// per account.
+    ///
     /// Errors on entry points without a non-reverting simulation (v0.6), whose state a top-level
     /// revert would undo.
     fn get_state_gas_simulate_handle_op_call(
@@ -229,6 +232,7 @@ pub trait SimulationProvider: Send + Sync {
         op: Self::UO,
         skip_post_op: bool,
         gas: u64,
+        state_override: StateOverride,
     ) -> ProviderResult<(TransactionRequest, StateOverride)>;
 
     /// Call the entry point contract's `simulateValidation` function.
