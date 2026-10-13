@@ -87,7 +87,8 @@ pub(crate) enum TxSenderError {
     /// (Robinhood's unambiguous wording for the same rejection, unlike the
     /// generic "internal error"), and unconditionally for any message containing
     /// `transaction type not supported` (the node cannot decode the transaction
-    /// envelope at all).
+    /// envelope at all), and for `-32100: transaction rejected` on chains with
+    /// `ChainSpec::tx_validation_rejection_is_terminal`.
     #[error("terminal RPC error {code}: {message}")]
     TerminalRpcError {
         /// RPC error code.
@@ -206,6 +207,16 @@ fn is_terminal_rejection(message: &str, code: i64, chain_spec: &ChainSpec) -> bo
         .contains("transaction type not supported")
     {
         return true;
+    }
+
+    // proxyd's tx validation middleware refusing the transaction. The screening
+    // service judges each transaction, so an identical resend is refused
+    // again (observed on Ink for days at a time). proxyd also
+    // returns this when the validation service is down and it fails closed, so
+    // it is terminal only where the chain spec says so.
+    if code == -32100 {
+        return chain_spec.tx_validation_rejection_is_terminal
+            && trimmed.eq_ignore_ascii_case("transaction rejected");
     }
 
     // The remaining rules are specific to this code.
@@ -740,6 +751,71 @@ mod tests {
             )),
         ];
         let chain_spec = ChainSpec::default();
+
+        for error in cases {
+            assert!(!matches!(
+                error.promote_terminal_error(&chain_spec),
+                TxSenderError::TerminalRpcError { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn promotes_tx_validation_rejection_to_terminal_when_flagged() {
+        let chain_spec = ChainSpec {
+            tx_validation_rejection_is_terminal: true,
+            ..Default::default()
+        };
+
+        for message in ["transaction rejected", " Transaction Rejected "] {
+            let error = TxSenderError::UnrecognizedRpc {
+                code: -32100,
+                message: message.to_string(),
+            }
+            .promote_terminal_error(&chain_spec);
+
+            assert!(
+                matches!(error, TxSenderError::TerminalRpcError { code: -32100, .. }),
+                "message: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn does_not_promote_tx_validation_rejection_when_flag_unset() {
+        let error = TxSenderError::UnrecognizedRpc {
+            code: -32100,
+            message: "transaction rejected".to_string(),
+        }
+        .promote_terminal_error(&ChainSpec::default());
+
+        assert!(matches!(error, TxSenderError::UnrecognizedRpc { .. }));
+    }
+
+    #[test]
+    fn does_not_promote_other_errors_as_tx_validation_rejection() {
+        let cases = [
+            TxSenderError::UnrecognizedRpc {
+                code: -32000,
+                message: "transaction rejected".to_string(),
+            },
+            TxSenderError::UnrecognizedRpc {
+                code: -32100,
+                message: "transaction rejected: nonce gap".to_string(),
+            },
+            TxSenderError::UnrecognizedRpc {
+                code: -32100,
+                message: "internal error".to_string(),
+            },
+            TxSenderError::SenderUnavailable(anyhow::anyhow!("transaction rejected")),
+        ];
+        // Flagged so these cases fail on their own shape (wrong code, extra
+        // suffix, wrong message, wrong variant), not the flag.
+        let chain_spec = ChainSpec {
+            tx_validation_rejection_is_terminal: true,
+            internal_rpc_error_is_terminal: true,
+            ..Default::default()
+        };
 
         for error in cases {
             assert!(!matches!(

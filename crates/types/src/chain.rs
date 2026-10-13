@@ -148,6 +148,10 @@ pub struct ChainSpec {
     /// True if this chain's node rejects transactions with `-32000: internal error`
     /// as a terminal, per-transaction rejection rather than a provider outage
     pub internal_rpc_error_is_terminal: bool,
+    /// True if this chain's sequencer proxy screens transactions and refuses them
+    /// with `-32100: transaction rejected` as a terminal, per-transaction rejection
+    /// (proxyd's tx validation middleware) rather than a provider outage
+    pub tx_validation_rejection_is_terminal: bool,
 
     /*
      * Pool
@@ -223,6 +227,7 @@ impl Default for ChainSpec {
             flashbots_relay_url: None,
             bloxroute_enabled: false,
             internal_rpc_error_is_terminal: false,
+            tx_validation_rejection_is_terminal: false,
             chain_history_size: 64,
             signature_aggregators: Arc::new(ContractRegistry::default()),
             submission_proxies: Arc::new(ContractRegistry::default()),
