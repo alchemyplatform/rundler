@@ -543,15 +543,30 @@ where
                 max_bundle_execution_gas,
             ));
         }
-        // An op whose state fits under the cap next to its computation gas needs no reservoir;
-        // admission would put it on the metered path.
+        // An op without state gas that failed the metered estimate has no use for a reservoir.
+        if state_gas == 0 {
+            tracing::debug!("reservoir mode not needed: no state gas");
+            return Err(metered_error);
+        }
+        // The metered estimate failed, yet the state may still fit under the cap next to the
+        // op's computation gas: the metered call gas limit needs more than the state itself
+        // (the binary search's error tolerance, and the 1/64 withheld at each nested call). Such
+        // an op fits neither mode, so its PVG pays for a reservoir of at least the threshold,
+        // and admission classifies it as reservoir mode. The unused part of that reservoir is
+        // refunded to the bundler.
         let threshold =
             gas::reservoir_threshold(&op_with_gas, chain_spec, max_bundle_execution_gas);
-        if state_gas < threshold {
+        let reservoir_gas = state_gas.max(threshold);
+        if reservoir_gas > state_gas {
             tracing::debug!(
-                "reservoir mode not needed: state gas {state_gas} below threshold {threshold}"
+                "reservoir mode: state gas {state_gas} below threshold {threshold}, reservoir padded to the threshold"
             );
-            return Err(metered_error);
+        }
+        if reservoir_gas > max_reservoir_gas {
+            return Err(GasEstimationError::StateGasTooLarge(
+                reservoir_gas,
+                max_reservoir_gas,
+            ));
         }
 
         let base_pvg = rundler_types::increase_required_pvg_with_calldata_floor_gas(
@@ -565,11 +580,11 @@ where
         self.metrics.reservoir_estimates.increment(1);
         self.metrics.reservoir_state_gas.record(state_gas as f64);
         tracing::debug!(
-            "reservoir-mode estimate: state gas {state_gas}, call gas limit {call_gas_limit}"
+            "reservoir-mode estimate: state gas {state_gas}, reservoir {reservoir_gas}, call gas limit {call_gas_limit}"
         );
 
         Ok(GasEstimate {
-            pre_verification_gas: base_pvg + state_gas,
+            pre_verification_gas: base_pvg + reservoir_gas,
             call_gas_limit,
             verification_gas_limit,
             paymaster_verification_gas_limit: op
@@ -1869,10 +1884,33 @@ mod tests {
         ));
     }
 
-    /// State that fits under the cap next to the op's computation gas needs no reservoir.
+    /// State below the threshold after a failed metered estimate (the metered call gas limit
+    /// needs more than the state itself): the reservoir is padded to the threshold, so the op is
+    /// still classified as reservoir mode at admission.
     #[tokio::test]
-    async fn test_reservoir_mode_not_needed() {
-        let full = state_gas_trace(500_000, 530_000, Some(true));
+    async fn test_reservoir_mode_pads_reservoir_to_threshold() {
+        let state_gas = 500_000;
+        let full = state_gas_trace(state_gas, state_gas + 30_000, Some(true));
+        let (entry, provider) = reservoir_mocks(full, state_gas_trace(0, 0, Some(false)));
+        let settings = reservoir_settings();
+
+        let estimate = run_reservoir(entry, provider, settings).await.unwrap();
+
+        // PVG pays for a reservoir of the threshold, not just S: together with the op's
+        // computation gas (VGL 100,000 + CGL + static PVG) it exceeds the cap
+        let computation = 100_000 + estimate.call_gas_limit;
+        assert!(estimate.pre_verification_gas + computation > settings.max_bundle_execution_gas);
+        assert!(estimate.pre_verification_gas > 10 * u128::from(state_gas));
+        assert_eq!(
+            estimate.call_gas_limit,
+            reservoir_call_gas_limit(u128::from(state_gas) + 30_000, u128::from(state_gas))
+        );
+    }
+
+    /// An op without state gas has no use for a reservoir: the metered error is returned.
+    #[tokio::test]
+    async fn test_reservoir_mode_not_for_ops_without_state() {
+        let full = state_gas_trace(0, 30_000, Some(true));
         let (entry, provider) = reservoir_mocks(full, state_gas_trace(0, 0, Some(false)));
 
         let error = run_reservoir(entry, provider, reservoir_settings())
