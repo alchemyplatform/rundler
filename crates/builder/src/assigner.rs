@@ -133,6 +133,10 @@ struct State {
     /// Tracks when each entrypoint was last chosen for a reservoir-mode assignment (by
     /// `reservoir_cycle`), so reservoir-mode ops on one entrypoint cannot starve another's.
     entrypoint_last_reservoir: HashMap<ProposerKey, u64>,
+    /// Whether the last assignment that reached reservoir or normal work was reservoir mode.
+    /// Where the shared capacity is every builder (one signer), reservoir mode and normal work
+    /// then take turns, so a stream of reservoir-mode ops cannot starve normal work.
+    reservoir_took_last_turn: bool,
 }
 
 /// A candidate entrypoint for assignment, used during priority-based selection.
@@ -398,7 +402,11 @@ impl Assigner {
             }
         }
 
-        if !reservoir_candidates.is_empty() {
+        // With one signer the shared capacity is the only builder: take turns with normal work.
+        let reservoir_turn = candidates.is_empty()
+            || isolation_limit < self.num_signers
+            || !self.state.lock().unwrap().reservoir_took_last_turn;
+        if !reservoir_candidates.is_empty() && reservoir_turn {
             // Least-recently-chosen entrypoint first, as for isolation.
             {
                 let state = self.state.lock().unwrap();
@@ -427,7 +435,10 @@ impl Assigner {
                     )
                     .await
                 {
-                    Ok(Some(assignment)) => return Ok(AssignmentResult::Assigned(assignment)),
+                    Ok(Some(assignment)) => {
+                        self.state.lock().unwrap().reservoir_took_last_turn = true;
+                        return Ok(AssignmentResult::Assigned(assignment));
+                    }
                     Ok(None) => {
                         self.state
                             .lock()
@@ -447,6 +458,7 @@ impl Assigner {
             }
         }
 
+        self.state.lock().unwrap().reservoir_took_last_turn = false;
         if candidates.is_empty() {
             return Ok(if fee_filtered_candidate_exists {
                 AssignmentResult::NoOperationsAfterFeeFilter
@@ -1638,6 +1650,22 @@ mod tests {
         let second = assign_expect_default(&assigner, address(11)).await;
         assert_eq!(second.operations.len(), 1);
         assert_eq!(second.operations[0].uo.sender(), address(1));
+    }
+
+    /// With one signer, reservoir mode and normal work take turns: a stream of reservoir-mode
+    /// ops cannot starve normal work.
+    #[tokio::test]
+    async fn reservoir_single_signer_takes_turns_with_normal_work() {
+        let ops = create_test_ops(&[address(1), address(2)]);
+        let mock_pool = mock_pool_with_reservoir(ops, vec![address(2)]);
+        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 1, 10, 10, 0.50);
+        let mut senders = vec![];
+        for _ in 0..4 {
+            let assignment = assign_cycle(&assigner, address(10)).await;
+            assert_eq!(assignment.operations.len(), 1);
+            senders.push(assignment.operations[0].uo.sender());
+        }
+        assert_eq!(senders, [address(2), address(1), address(2), address(1)]);
     }
 
     /// Isolation and reservoir mode share one capacity: with 2 signers, a suspect and a

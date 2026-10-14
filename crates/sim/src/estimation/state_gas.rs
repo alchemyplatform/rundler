@@ -95,19 +95,23 @@ pub(crate) fn user_operation_succeeded(frame: &CallFrame, entry_point: Address) 
         })
 }
 
-/// The call gas limit of a reservoir-mode op, which covers execution only.
-///
-/// `execution_frame_gas` is the gas the sender's execution call used in a simulation, and
-/// `execution_state_gas` the part of it that was state: all of execution's state if calls get no
-/// reservoir, none if they do. The frame's gas used, rather than a binary search, keeps the limit
-/// tight: a search would also keep the 1/64 of the state gas withheld at each nested call.
-pub(crate) fn reservoir_call_gas_limit(
-    execution_frame_gas: u128,
-    execution_state_gas: u128,
-) -> u128 {
-    let execution_gas = execution_frame_gas.saturating_sub(execution_state_gas);
+/// The call gas limit of a reservoir-mode op, which covers execution only: `execution_need`
+/// (see [`frame_gas_need`]) with headroom on `execution_gas`, the gas execution itself used.
+/// The frames' gas used, rather than a binary search, keeps the limit tight: a search would also
+/// keep the 1/64 of the state gas withheld at each nested call.
+pub(crate) fn reservoir_call_gas_limit(execution_need: u128, execution_gas: u128) -> u128 {
     let headroom = (execution_gas * CALL_GAS_HEADROOM_PERCENT / 100).max(NEW_SLOT_STATE_GAS);
-    (execution_gas * 64 / 63 + CALL_GAS_BUFFER_VALUE + headroom).max(MIN_CALL_GAS_LIMIT)
+    (execution_need + CALL_GAS_BUFFER_VALUE + headroom).max(MIN_CALL_GAS_LIMIT)
+}
+
+/// The entry point's postOp call into `paymaster` during the op's execution phase, made from
+/// `innerHandleOp`. `None` if postOp did not run (empty paymaster context).
+pub(crate) fn find_post_op_frame(
+    frame: &CallFrame,
+    entry_point: Address,
+    paymaster: Address,
+) -> Option<&CallFrame> {
+    find_execution_frame(frame, entry_point, paymaster)
 }
 
 /// Whether the node gave the traced `simulateHandleOp` call a state-gas reservoir, read from the
@@ -121,36 +125,92 @@ pub(crate) fn probe_found_reservoir(frame: &CallFrame) -> Option<bool> {
     probeCall::abi_decode_returns(&result.targetResult).ok()
 }
 
-/// The least gas `frame` needs to run as traced, from the gas used by it and its calls: a call
-/// made with all but 1/64 of the caller's gas (EIP-150) needs 64/63 of the callee's own need at
-/// the time of the call. Such a call also shows how much gas the caller had left then (64/63 of
-/// the gas it gave), and so how much it had used before it.
+/// The least gas `frame` needs to run as traced, from the gas used by it and its calls, if
+/// `state_gas` of that gas used were paid by a reservoir instead: a call made with all but 1/64
+/// of the caller's gas (EIP-150) needs 64/63 of the callee's own need at the time of the call.
+/// Such a call also shows how much gas the caller had left then (64/63 of the gas it gave), and
+/// so how much it had used before it.
 ///
-/// Only meaningful where calls get no reservoir, so a frame's gas used includes its net state.
-/// Before a call given less gas, the frame's own gas used is not known and is left out, so this
-/// errs low.
-pub(crate) fn frame_gas_need(frame: &CallFrame) -> u128 {
+/// Only meaningful where the traced frames' gas used includes their state (calls get no
+/// reservoir), or where `state_gas` is 0. The trace does not say which frames charged the state,
+/// so it is taken from the shallowest frames' own gas first: the 64/63 per call compounds least
+/// there, so removing it lowers the need least, and this errs high. Before a call given less
+/// gas, the frame's own gas used is not known and is left out, so the need at net state errs
+/// low.
+pub(crate) fn frame_gas_need(frame: &CallFrame, state_gas: u128) -> u128 {
+    // the state to take from each depth's own gas, shallowest first
+    let mut own_gas = vec![];
+    own_gas_by_depth(frame, 0, &mut own_gas);
+    let mut state_gas = state_gas;
+    let mut removed: Vec<u128> = own_gas
+        .into_iter()
+        .map(|own| {
+            let removed = own.min(state_gas);
+            state_gas -= removed;
+            removed
+        })
+        .collect();
+    frame_gas_need_without(frame, 0, &mut removed).0
+}
+
+/// Adds each frame's own gas used (less its calls') to its depth's total.
+fn own_gas_by_depth(frame: &CallFrame, depth: usize, own_gas: &mut Vec<u128>) {
+    if own_gas.len() <= depth {
+        own_gas.push(0);
+    }
+    own_gas[depth] += own_frame_gas(frame);
+    for call in &frame.calls {
+        own_gas_by_depth(call, depth + 1, own_gas);
+    }
+}
+
+fn own_frame_gas(frame: &CallFrame) -> u128 {
+    let calls_gas_used: u128 = frame
+        .calls
+        .iter()
+        .map(|call| call.gas_used.saturating_to::<u128>())
+        .sum();
+    frame
+        .gas_used
+        .saturating_to::<u128>()
+        .saturating_sub(calls_gas_used)
+}
+
+/// [`frame_gas_need`] of `frame` at `depth`, with up to `removed[depth]` taken from each frame's
+/// own gas used (and from that budget). Also returns the gas taken from `frame` and its calls.
+fn frame_gas_need_without(frame: &CallFrame, depth: usize, removed: &mut [u128]) -> (u128, u128) {
     let gas: u128 = frame.gas.saturating_to();
     let gas_used: u128 = frame.gas_used.saturating_to();
-    // At a call, the frame had at least the gas it had left at its end.
+    // At a call, the frame had at least the gas it had left at its end, as traced.
     let gas_left = gas.saturating_sub(gas_used);
-    let mut need = gas_used;
+    let own_removed = own_frame_gas(frame).min(removed[depth]);
+    removed[depth] -= own_removed;
+    let mut total_removed = own_removed;
+    let mut need = 0;
     let mut used_in_calls = 0u128;
     for call in &frame.calls {
-        let call_need = frame_gas_need(call);
+        let (call_need, call_removed) = frame_gas_need_without(call, depth + 1, removed);
+        total_removed += call_removed;
         let call_gas: u128 = call.gas.saturating_to();
         let gas_at_call = call_gas * 64 / 63;
         let need_at_call = if gas_at_call >= gas_left {
-            // All but 1/64 forwarded: the frame had `gas_at_call` left.
+            // All but 1/64 forwarded: the frame had `gas_at_call` left. The gas it used before
+            // keeps any state it charged, which may have come before the call.
             let used_before = gas.saturating_sub(gas_at_call).max(used_in_calls);
             used_before + (call_need * 64).div_ceil(63)
         } else {
             used_in_calls + call_need
         };
         need = need.max(need_at_call);
-        used_in_calls += call.gas_used.saturating_to::<u128>();
+        used_in_calls += call
+            .gas_used
+            .saturating_to::<u128>()
+            .saturating_sub(call_removed);
     }
-    need
+    (
+        need.max(gas_used.saturating_sub(total_removed)),
+        total_removed,
+    )
 }
 
 /// Guesses tried in parallel per round of a [`least_passing`] search
@@ -299,13 +359,18 @@ mod tests {
     /// Phase 0, 4 kB deploy: the execute frame used 6,469,508 with 6,450,480 of it state.
     #[test]
     fn call_gas_limit_covers_execution_only() {
-        let cgl = reservoir_call_gas_limit(6_469_508, 6_450_480);
-        // 19,028 of execution: ×64/63, the 3,000 buffer and one slot of headroom
-        assert_eq!(cgl, 19_028 * 64 / 63 + 3_000 + 97_920);
+        let execution = frame_with_gas(0, 6_469_508, vec![]);
+        let need = frame_gas_need(&execution, 6_450_480);
+        assert_eq!(need, 19_028);
+        // the 3,000 buffer and one slot of headroom
+        assert_eq!(
+            reservoir_call_gas_limit(need, 19_028),
+            19_028 + 3_000 + 97_920
+        );
 
         // above ~980k of execution, 10% headroom is larger than one slot
-        let cgl = reservoir_call_gas_limit(3_000_000, 1_000_000);
-        assert_eq!(cgl, 2_000_000 * 64 / 63 + 3_000 + 200_000);
+        let cgl = reservoir_call_gas_limit(2_100_000, 2_000_000);
+        assert_eq!(cgl, 2_100_000 + 3_000 + 200_000);
     }
 
     /// Sepolia's 24 kB deploy from the sender: `execute` calls BlobDeployer, which builds the
@@ -323,12 +388,12 @@ mod tests {
         let deployer_need = deployer_used_before + (create_need * 64).div_ceil(63);
         let execution_used_before = 60_000_000 - 59_042_482u128 * 64 / 63;
         assert_eq!(
-            frame_gas_need(&execution),
+            frame_gas_need(&execution, 0),
             execution_used_before + (deployer_need * 64).div_ceil(63)
         );
         // more than the CREATE2's gas used, by the 1/64 kept at each call and the gas used
         // before them
-        assert!(frame_gas_need(&execution) > 37_609_349 + 2 * 37_609_349 / 63 + 180_000);
+        assert!(frame_gas_need(&execution, 0) > 37_609_349 + 2 * 37_609_349 / 63 + 180_000);
     }
 
     /// A call given an explicit gas below all but 1/64 of the caller's gas needs no more than
@@ -341,9 +406,52 @@ mod tests {
         let first_need =
             (75_000_000 - 73_000_000u128 * 64 / 63) + (1_000_000u128 * 64).div_ceil(63);
         assert_eq!(
-            frame_gas_need(&execution),
+            frame_gas_need(&execution, 0),
             first_need.max(1_000_000 + 400_000).max(1_500_000)
         );
+    }
+
+    /// Execution's state is left out of its need, which keeps the 64/63 per call of the
+    /// execution gas left.
+    #[test]
+    fn frame_need_without_state() {
+        let create = frame_with_gas(57_926_880, 37_609_349, vec![]);
+        let deployer = frame_with_gas(59_042_482, 37_806_956, vec![create]);
+        let execution = frame_with_gas(60_000_000, 37_827_456, vec![deployer]);
+        // 20,500 and 197,607 of the frames' own gas are taken first, then the CREATE2's
+        let state = 37_400_000u128;
+        let create_need = 37_609_349 - (state - 20_500 - 197_607);
+        let deployer_need =
+            (59_042_482 - 57_926_880u128 * 64 / 63) + (create_need * 64).div_ceil(63);
+        let need = (60_000_000 - 59_042_482u128 * 64 / 63) + (deployer_need * 64).div_ceil(63);
+        assert_eq!(frame_gas_need(&execution, state), need);
+        // at least the execution gas used, at most the need with state less the state
+        assert!(need >= 37_827_456 - state);
+        assert!(need <= frame_gas_need(&execution, 0) - state);
+    }
+
+    /// 12 nested calls, each forwarding all but 1/64 and using 1,000 before it: the 8M of
+    /// execution at the bottom needs 64/63 at each level, which 10% headroom does not cover.
+    #[test]
+    fn frame_need_of_nested_execution() {
+        const STATE: u128 = 38_000_000;
+        const EXECUTION: u128 = 8_000_000;
+        fn chain(gas: u128, depth: usize) -> CallFrame {
+            let gas_used = STATE + EXECUTION + depth as u128 * 1_000;
+            let calls = if depth == 0 {
+                vec![]
+            } else {
+                vec![chain((gas - 1_000) * 63 / 64, depth - 1)]
+            };
+            frame_with_gas(gas as u64, gas_used as u64, calls)
+        }
+        let execution = chain(75_099_494, 12);
+        let need = (0..12).fold(EXECUTION, |need, _| (need * 64).div_ceil(63) + 1_000);
+        let found = frame_gas_need(&execution, STATE);
+        assert!(found >= need, "{found} < {need}");
+        assert!(found <= need + need / 100, "{found} too far above {need}");
+        let execution_gas = EXECUTION + 12_000;
+        assert!(reservoir_call_gas_limit(found, execution_gas) > need);
     }
 
     #[tokio::test]
