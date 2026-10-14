@@ -566,6 +566,9 @@ where
             self.settings
                 .verification_gas_limit_efficiency_reject_threshold,
         );
+        // State charged to the reservoir that the trace cannot see: a new EIP-7702 authority is
+        // applied by state override, not by processing the authorization.
+        let state_gas = state_gas + op_with_gas.authorization_state_gas(chain_spec, &pvg_state);
         let mut reservoir_gas = padded_reservoir(state_gas, threshold);
         // Classify the op as admission will, against its own threshold with the final PVG. A
         // larger PVG only raises the op's computation gas, which lowers the threshold, so one
@@ -606,8 +609,11 @@ where
         })
     }
 
-    /// Traces the op's state gas on a max-limit copy, twice: as is, and with no call gas, so
-    /// execution's state can be told apart. `None` if the copy fails, i.e. the op fails even
+    /// Traces the op's state gas on a max-limit copy: as is, for `S`, and without postOp, with
+    /// and without call gas, so execution's state can be told apart. postOp is left out of the
+    /// split since it runs in a different mode when the call reverts (`opReverted`), and a
+    /// paymaster's state may differ between modes. A self-paying op has no postOp, so its full
+    /// trace doubles as the one with call gas. `None` if the copy fails, i.e. the op fails even
     /// with room for its state.
     async fn measure_state_gas(
         &self,
@@ -647,9 +653,20 @@ where
             .try_into()
             .unwrap_or(u64::MAX);
 
-        let (full, no_call) = join!(
-            self.trace_reservoir_copy(copy(call_gas), trace_gas, args),
-            self.trace_reservoir_copy(copy(0), trace_gas, args),
+        let split_call = async {
+            if has_paymaster {
+                Some(
+                    self.trace_reservoir_copy(copy(call_gas), true, trace_gas, args)
+                        .await,
+                )
+            } else {
+                None
+            }
+        };
+        let (full, call, no_call) = join!(
+            self.trace_reservoir_copy(copy(call_gas), false, trace_gas, args),
+            split_call,
+            self.trace_reservoir_copy(copy(0), true, trace_gas, args),
         );
         let full = full?;
         let entry_point = *self.entry_point.address();
@@ -666,6 +683,12 @@ where
             tracing::debug!("reservoir-mode copy did not succeed: {op_success:?}");
             return Ok(None);
         }
+        let call = call.transpose()?;
+        let call = call.as_ref().unwrap_or(&full);
+        if let Some(error) = call.error() {
+            tracing::debug!("reservoir-mode copy without postOp reverted: {error}");
+            return Ok(None);
+        }
         let no_call = no_call?;
         if let Some(error) = no_call.error() {
             tracing::debug!("reservoir-mode copy without call gas reverted: {error}");
@@ -677,7 +700,7 @@ where
         Ok(Some(MeasuredStateGas {
             state_gas: u128::from(full.state_gas_used),
             execution_state_gas: u128::from(
-                full.state_gas_used.saturating_sub(no_call.state_gas_used),
+                call.state_gas_used.saturating_sub(no_call.state_gas_used),
             ),
             execution_frame_gas: execution_frame.gas_used.saturating_to(),
         }))
@@ -686,12 +709,13 @@ where
     async fn trace_reservoir_copy(
         &self,
         op: UserOperation,
+        skip_post_op: bool,
         gas: u64,
         args: &ReservoirArgs<'_>,
     ) -> ProviderResult<StateGasTrace> {
         let (tx, state_override) = self.entry_point.get_state_gas_simulate_handle_op_call(
             op,
-            false,
+            skip_post_op,
             gas,
             args.state_override.clone(),
         )?;
@@ -1652,6 +1676,7 @@ mod tests {
     /// The traced copy with call gas (`FULL`) or without (`NO_CALL`), told apart by `to`.
     const FULL: Address = Address::with_last_byte(0xf1);
     const NO_CALL: Address = Address::with_last_byte(0xf0);
+    const CALL_NO_POST_OP: Address = Address::with_last_byte(0xf2);
     const RESERVOIR_SENDER: Address = Address::with_last_byte(0x5e);
 
     /// A `callTracer` result of `simulateHandleOp` with the root frame's EIP-8037 fields.
@@ -1699,15 +1724,25 @@ mod tests {
     }
 
     /// Mocks for one reservoir-mode fallback: the simulation call builder, and traces of the
-    /// copy with call gas (`full`) and without (`no_call`).
+    /// copy with call gas (`full`) and without (`no_call`, without postOp).
     fn reservoir_mocks(
         full: serde_json::Value,
+        no_call: serde_json::Value,
+    ) -> (MockEntryPointV0_7, MockEvmProvider) {
+        reservoir_mocks_with_post_op(full.clone(), full, no_call)
+    }
+
+    /// As [`reservoir_mocks`], with a separate trace of the copy with call gas but without
+    /// postOp (`call`), which a paymaster op's execution state is split with.
+    fn reservoir_mocks_with_post_op(
+        full: serde_json::Value,
+        call: serde_json::Value,
         no_call: serde_json::Value,
     ) -> (MockEntryPointV0_7, MockEvmProvider) {
         let (mut entry, mut provider) = create_base_config();
         entry
             .expect_get_state_gas_simulate_handle_op_call()
-            .returning(|op, _, gas, state_override| {
+            .returning(|op, skip_post_op, gas, state_override| {
                 // innerHandleOp needs gasleft() * 63/64 >= the call and postOp limits after the
                 // entry point's own call into it kept 1/64 (AA95 otherwise).
                 let limits = op.verification_gas_limit()
@@ -1718,10 +1753,11 @@ mod tests {
                     u128::from(gas) * 63 * 63 / (64 * 64) > limits,
                     "trace gas {gas}"
                 );
-                let to = if op.call_gas_limit() == 0 {
-                    NO_CALL
-                } else {
-                    FULL
+                let to = match (op.call_gas_limit() == 0, skip_post_op) {
+                    (true, true) => NO_CALL,
+                    (false, true) => CALL_NO_POST_OP,
+                    (false, false) => FULL,
+                    (true, false) => panic!("the copy without call gas runs postOp"),
                 };
                 Ok((TransactionRequest::default().to(to), state_override))
             });
@@ -1731,6 +1767,8 @@ mod tests {
                 assert_eq!(method, "debug_traceCall");
                 Ok(if tx.to == Some(FULL.into()) {
                     full.clone()
+                } else if tx.to == Some(CALL_NO_POST_OP.into()) {
+                    call.clone()
                 } else {
                     no_call.clone()
                 })
@@ -1771,6 +1809,14 @@ mod tests {
     ) -> (UserOperationOptionalGas, UserOperation) {
         let mut op = demo_user_op_optional_gas(None);
         op.sender = RESERVOIR_SENDER;
+        reservoir_full_op(op, chain_spec, settings)
+    }
+
+    fn reservoir_full_op(
+        op: UserOperationOptionalGas,
+        chain_spec: &ChainSpec,
+        settings: &Settings,
+    ) -> (UserOperationOptionalGas, UserOperation) {
         let full_op = op
             .clone()
             .into_user_operation_builder(
@@ -1815,9 +1861,21 @@ mod tests {
         provider: MockEvmProvider,
         settings: Settings,
     ) -> Result<GasEstimate, GasEstimationError> {
+        let mut op = demo_user_op_optional_gas(None);
+        op.sender = RESERVOIR_SENDER;
+        run_reservoir_op(entry, provider, settings, op, Some(false)).await
+    }
+
+    async fn run_reservoir_op(
+        entry: MockEntryPointV0_7,
+        provider: MockEvmProvider,
+        settings: Settings,
+        op: UserOperationOptionalGas,
+        sender_deposit_is_zero: Option<bool>,
+    ) -> Result<GasEstimate, GasEstimationError> {
         let chain_spec = reservoir_chain_spec();
         let estimator = create_custom_estimator(chain_spec.clone(), provider, entry, settings);
-        let (op, full_op) = reservoir_op(&chain_spec, &settings);
+        let (op, full_op) = reservoir_full_op(op, &chain_spec, &settings);
         let args = ReservoirArgs {
             op: &op,
             full_op: &full_op,
@@ -1826,7 +1884,7 @@ mod tests {
             state_override: &StateOverride::default(),
             da_gas: 0,
             pvg_state: PvgState {
-                sender_deposit_is_zero: Some(false),
+                sender_deposit_is_zero,
                 authority: None,
             },
             verification_gas_limit: 100_000,
@@ -1899,6 +1957,77 @@ mod tests {
         assert!(
             estimate.pre_verification_gas
                 > u128::from(DEPLOY_24KB_STATE_GAS) + u128::from(validation_state)
+        );
+    }
+
+    /// A paymaster whose postOp creates state only when the op succeeds: that state is in `S`,
+    /// but not subtracted from the sender frame's gas, which would leave CGL short.
+    #[tokio::test]
+    async fn test_reservoir_mode_post_op_state_not_in_execution() {
+        let execution_state = 38_000_000;
+        let post_op_state = 1_000_000;
+        let frame_gas = execution_state + 500_000;
+        let full = state_gas_trace(execution_state + post_op_state, frame_gas, Some(true));
+        let call = state_gas_trace(execution_state, frame_gas, Some(true));
+        // the call reverts, so postOp would run as opReverted, without its state
+        let no_call = state_gas_trace(0, 0, Some(false));
+        let (entry, provider) = reservoir_mocks_with_post_op(full, call, no_call);
+        let mut op = demo_user_op_optional_gas(None);
+        op.sender = RESERVOIR_SENDER;
+        op.paymaster = Some(Address::with_last_byte(0xaa));
+        op.paymaster_verification_gas_limit = Some(50_000);
+        op.paymaster_post_op_gas_limit = Some(50_000);
+
+        let estimate = run_reservoir_op(entry, provider, reservoir_settings(), op, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            estimate.call_gas_limit,
+            reservoir_call_gas_limit(u128::from(frame_gas), u128::from(execution_state))
+        );
+        assert!(estimate.call_gas_limit > 500_000);
+        // the reservoir still covers postOp's state
+        assert!(estimate.pre_verification_gas > u128::from(execution_state + post_op_state));
+    }
+
+    /// A new EIP-7702 authority's state is charged to the reservoir before the entry point
+    /// runs, but the trace applies the delegation by state override and does not show it.
+    #[tokio::test]
+    async fn test_reservoir_mode_new_authority_state() {
+        let trace = || {
+            (
+                state_gas_trace(
+                    DEPLOY_24KB_STATE_GAS,
+                    DEPLOY_24KB_STATE_GAS + 25_908,
+                    Some(true),
+                ),
+                state_gas_trace(0, 0, Some(false)),
+            )
+        };
+        let mut op = demo_user_op_optional_gas(None);
+        op.sender = RESERVOIR_SENDER;
+        let (full, no_call) = trace();
+        let (entry, provider) = reservoir_mocks(full, no_call);
+        let without = run_reservoir_op(entry, provider, reservoir_settings(), op.clone(), None)
+            .await
+            .unwrap();
+
+        op.eip7702_auth_address = Some(Address::with_last_byte(0xde));
+        let (full, no_call) = trace();
+        let (entry, provider) = reservoir_mocks(full, no_call);
+        let with = run_reservoir_op(entry, provider, reservoir_settings(), op, None)
+            .await
+            .unwrap();
+
+        let chain_spec = reservoir_chain_spec();
+        let authority_state = chain_spec.eip7702_authorization_new_account_gas()
+            + chain_spec.eip7702_authorization_delegation_gas();
+        assert_eq!(authority_state, 218_790);
+        assert!(
+            with.pre_verification_gas >= without.pre_verification_gas + authority_state,
+            "with {}, without {}",
+            with.pre_verification_gas,
+            without.pre_verification_gas
         );
     }
 

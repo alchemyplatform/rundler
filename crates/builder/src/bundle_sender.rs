@@ -11,7 +11,11 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use alloy_primitives::{Address, B256, hex};
 use anyhow::{Context, bail};
@@ -662,10 +666,15 @@ where
                         self.increment_counter("builder_bundle_gas_used", &pinned, used);
                     }
                     if let Some((entry_point, _)) = &pinned {
+                        let now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
                         bundle_metrics::record_mined_bundle(
                             *entry_point,
                             !self.chain_spec.da_pre_verification_gas
                                 || self.chain_spec.include_da_gas_in_gas_limit,
+                            self.chain_spec.reservoir_mode_enabled_at(now),
                             is_success,
                             gas_limit,
                             gas_used,

@@ -53,7 +53,7 @@ use rundler_sim::{
     EstimationSettings, MIN_CALL_GAS_LIMIT, MempoolConfigs, PrecheckSettings, SimulationSettings,
 };
 use rundler_types::{
-    EntryPointAbiVersion, EntryPointVersion, PriorityFeeMode,
+    EntryPointAbiVersion, EntryPointVersion, PriorityFeeMode, TX_MAX_GAS_LIMIT,
     chain::{ChainSpec, ForkActivation, TryFromWithSpec},
     da::DAGasOracleType,
     v0_6::UserOperation as UserOperationV0_6,
@@ -682,6 +682,19 @@ impl TryFromWithSpec<&CommonArgs> for EstimationSettings {
                 value.max_verification_gas,
                 bundle_limits.max_bundle_execution_gas_limit,
                 SIMULATION_GAS_OVERHEAD
+            );
+        }
+
+        // A reservoir-mode bundle (`tx.gas = 2^24 + R`) has 2^24 of execution gas, which its
+        // op's computation gas (at most `max_bundle_execution_gas`) must fit. Metered bundles
+        // must stay at or below 2^24 too, or the reservoir is not empty.
+        if chain_spec.glamsterdam_activation != ForkActivation::Never
+            && value.max_reservoir_gas > 0
+            && bundle_limits.max_bundle_execution_gas_limit > u128::from(TX_MAX_GAS_LIMIT)
+        {
+            anyhow::bail!(
+                "max_bundle_execution_gas ({}) must be at most {TX_MAX_GAS_LIMIT} on a chain with Glamsterdam, for reservoir mode: set the chain's transaction_gas_limit to {TX_MAX_GAS_LIMIT}, or set max_reservoir_gas to 0",
+                bundle_limits.max_bundle_execution_gas_limit,
             );
         }
 

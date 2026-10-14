@@ -1314,15 +1314,17 @@ where
         // A reservoir-mode op alone: `tx.gas = 2^24 + R` exactly, so the transaction's state-gas
         // reservoir is exactly what the op's PVG pays for. No overhead multiplier (it would
         // enlarge the reservoir), and no `call_handle_ops`: a call gets no reservoir, so it
-        // cannot simulate this bundle. The op's computation gas fits in the 2^24 execution
-        // budget by `max_bundle_gas`.
+        // cannot simulate this bundle. The op's computation gas must fit in the 2^24 execution
+        // budget, which startup ensures through `max_bundle_execution_gas`.
         if let Some(gas_limit) = context.reservoir_tx_gas() {
-            debug_assert!(
-                math::increase_by_percent(
-                    context.get_bundle_computation_gas_limit(chain_spec),
-                    BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT
-                ) <= u128::from(TX_MAX_GAS_LIMIT)
-            );
+            let computation = context.get_bundle_computation_gas_limit(chain_spec);
+            if computation > u128::from(TX_MAX_GAS_LIMIT) {
+                warn!(
+                    "Reservoir-mode op's computation gas {computation} exceeds the {TX_MAX_GAS_LIMIT} execution budget, rejecting it"
+                );
+                self.reject_index(context, 0, false).await;
+                return Ok(None);
+            }
             return Ok(Some(gas_limit.try_into().context(
                 "reservoir-mode bundle gas limit is larger than u64::MAX",
             )?));
@@ -2749,8 +2751,8 @@ mod tests {
         assert!(bundle.rejected_ops.is_empty())
     }
 
-    /// Until the builder builds reservoir-mode bundles, a reservoir-mode op is skipped (and kept
-    /// in the pool), never put in a metered bundle where it would run out of gas onchain.
+    /// A reservoir-mode op offered alongside other ops is skipped (and kept in the pool), never
+    /// put in a metered bundle where it would run out of gas onchain.
     #[tokio::test]
     async fn test_skips_reservoir_mode_op() {
         let op1 = op_with_sender_and_fees(address(1), 2050, 50, DEFAULT_PVG);

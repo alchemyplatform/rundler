@@ -33,8 +33,9 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
 - `--max_verification_gas`: Maximum verification gas. (default: `5000000`).
   - env: _MAX_VERIFICATION_GAS_
 - `--max_uo_cost`: Maximum cost of a UO that the mempool will accept. Optional, defaults to MAX (default: `None`).
-- `--max_reservoir_uo_cost`: Maximum cost (in ETH) of a user operation in reservoir mode, whose preVerificationGas carries its EIP-8037 state gas. It replaces `--max_uo_cost` for those ops, and must be at least `--max_uo_cost` when both are set. (default: no cap)
   - env: _MAX_UO_COST_
+- `--max_reservoir_uo_cost`: Maximum cost (in ETH) of a user operation in reservoir mode, whose preVerificationGas carries its EIP-8037 state gas. It replaces `--max_uo_cost` for those ops, and must be at least `--max_uo_cost` when both are set. (default: no cap)
+  - env: _MAX_RESERVOIR_UO_COST_
 - `--min_stake_value`: Minimum stake value. (default: `1000000000000000000`).
   - env: _MIN_STAKE_VALUE_
 - `--min_unstake_delay`: Minimum unstake delay. (default: `86400`).
@@ -72,10 +73,13 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
 - `--call_gas_allowed_error_pct`: The allowed error percentage during call gas estimation. (default: 15)
   - env: _CALL_GAS_ALLOWED_ERROR_PCT_
 - `--max_gas_estimation_gas`: The gas limit to use during the call to the gas estimation binary search helper functions. (default: 550M)
-- `--max_reservoir_gas`: The most EIP-8037 state gas a user operation may carry in reservoir mode, where it is bundled alone with `tx.gas = 2^24 + state gas` (Glamsterdam chains only). Estimation falls back to reservoir mode when an op does not fit under the 2^24 cap, and admission rejects a reservoir-mode op whose PVG surplus is larger than this. Its state-gas trace needs a node `rpc.gascap` of about the verification gas + `max_bundle_execution_gas` + this value, and this value once more if a paymaster pays. (default: 60M)
-- `--reservoir_trace_timeout_ms`: The most time estimation's reservoir-mode fallback may spend tracing an op's state gas. (default: 10000)
-- `--max_concurrent_reservoir_estimations`: The most reservoir-mode estimation fallbacks that may run at once; further ones return the normal estimation error. (default: 4)
   - env: _MAX_GAS_ESTIMATION_GAS_
+- `--max_reservoir_gas`: The most EIP-8037 state gas a user operation may carry in reservoir mode, where it is bundled alone with `tx.gas = 2^24 + state gas` (Glamsterdam chains only). Estimation falls back to reservoir mode when an op does not fit under the 2^24 cap, and admission rejects a reservoir-mode op whose PVG surplus is larger than this. Its state-gas trace needs a node `rpc.gascap` of about the verification gas + `max_bundle_execution_gas` + this value, and this value once more if a paymaster pays. On a chain with Glamsterdam, a nonzero value requires `max_bundle_execution_gas` of at most 2^24 (the chain's `transaction_gas_limit` of 16777216); 0 turns reservoir mode off. (default: 60M)
+  - env: _MAX_RESERVOIR_GAS_
+- `--reservoir_trace_timeout_ms`: The most time estimation's reservoir-mode fallback may spend tracing an op's state gas. (default: 10000)
+  - env: _RESERVOIR_TRACE_TIMEOUT_MS_
+- `--max_concurrent_reservoir_estimations`: The most reservoir-mode estimation fallbacks that may run at once; further ones return the normal estimation error. (default: 4)
+  - env: _MAX_CONCURRENT_RESERVOIR_ESTIMATIONS_
 - `--max_gas_estimation_rounds`: The maximum amount of remote RPC calls to make during gas estimation while attempting to converge to the error percentage. (default: 3)
   - env: _MAX_GAS_ESTIMATION_ROUNDS_
 - `--aws_region`: AWS region. (default: `us-east-1`).
@@ -188,9 +192,11 @@ List of command line options for configuring the Pool.
 - `--pool.max_size_in_bytes`: Maximum size in bytes for the pool (default: `500000000`, `0.5 GB`)
   - env: _POOL_MAX_SIZE_IN_BYTES_
 - `--pool.same_sender_mempool_count`: Maximum number of user operations for an unstaked sender (default: `4`)
-- `--pool.max_reservoir_ops`: Maximum number of reservoir-mode user operations (bundled alone above the 2^24 transaction gas cap, Glamsterdam chains only) in the mempool. Each one takes a whole bundle and reserves 2^24 of a block's execution gas. (default: `8`)
-- `--pool.max_reservoir_ops_per_sender`: Maximum number of reservoir-mode user operations a sender can have in the mempool. (default: `1`)
   - env: _POOL_SAME_SENDER_MEMPOOL_COUNT_
+- `--pool.max_reservoir_ops`: Maximum number of reservoir-mode user operations (bundled alone above the 2^24 transaction gas cap, Glamsterdam chains only) in the mempool. Each one takes a whole bundle and reserves 2^24 of a block's execution gas. (default: `8`)
+  - env: _POOL_MAX_RESERVOIR_OPS_
+- `--pool.max_reservoir_ops_per_sender`: Maximum number of reservoir-mode user operations a sender can have in the mempool. (default: `1`)
+  - env: _POOL_MAX_RESERVOIR_OPS_PER_SENDER_
 - `--pool.min_replacement_fee_increase_percentage`: Minimum replacement fee increase percentage (default: `10`)
   - env: _POOL_MIN_REPLACEMENT_FEE_INCREASE_PERCENTAGE_
 - `--pool.blocklist_path`: Path to a blocklist file (e.g `blocklist.json`, `s3://my-bucket/blocklist.json`)

@@ -764,24 +764,6 @@ where
 
             let state = self.state.read();
 
-            // Reservoir-mode ops each take a whole bundle and reserve 2^24 of a block's
-            // execution gas: cap them per sender and in total.
-            if pool_op.reservoir_gas.is_some() {
-                let sender = pool_op.uo.sender();
-                let (total, by_sender) = state
-                    .pool
-                    .reservoir_op_counts(sender, to_replace.as_ref().map(|op| op.uo.hash()));
-                if by_sender >= self.config.max_reservoir_ops_per_sender {
-                    return Err(MempoolError::MaxOperationsReached(
-                        self.config.max_reservoir_ops_per_sender,
-                        Entity::account(sender),
-                    ));
-                }
-                if total >= self.config.max_reservoir_ops {
-                    return Err(MempoolError::DiscardedOnInsert);
-                }
-            }
-
             if !pool_op.account_is_staked
                 && to_replace.is_none()
                 && state.pool.address_count(&pool_op.uo.sender()) >= sender_allowed_count
@@ -817,6 +799,24 @@ where
         // Add op to pool
         let hash = {
             let mut state = self.state.write();
+            // Reservoir-mode ops each take a whole bundle and reserve 2^24 of a block's
+            // execution gas: cap them per sender and in total. Checked under the same lock as
+            // the insert, so concurrent submissions cannot both pass a cap.
+            if pool_op.reservoir_gas.is_some() {
+                let sender = pool_op.uo.sender();
+                let (total, by_sender) = state
+                    .pool
+                    .reservoir_op_counts(sender, to_replace.as_ref().map(|op| op.uo.hash()));
+                if by_sender >= self.config.max_reservoir_ops_per_sender {
+                    return Err(MempoolError::MaxOperationsReached(
+                        self.config.max_reservoir_ops_per_sender,
+                        Entity::account(sender),
+                    ));
+                }
+                if total >= self.config.max_reservoir_ops {
+                    return Err(MempoolError::DiscardedOnInsert);
+                }
+            }
             let base_fee = state.base_fee;
             let hash = state.pool.add_operation_with_pvg_state(
                 pool_op.clone(),
@@ -2757,6 +2757,45 @@ mod tests {
             .err()
             .unwrap();
         assert!(matches!(err, MempoolError::DiscardedOnInsert));
+    }
+
+    /// Concurrent submissions near the caps: the cap checks and the insert share one lock, so
+    /// no interleaving lets two ops past a cap.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_reservoir_caps_hold_under_concurrency() {
+        let config = PoolConfig {
+            max_reservoir_ops: 2,
+            ..default_config()
+        };
+        let shared_sender = Address::random();
+        let ops = (0..8)
+            .map(|i| {
+                if i < 4 {
+                    reservoir_op(shared_sender, i + 1)
+                } else {
+                    reservoir_op(Address::random(), 1)
+                }
+            })
+            .collect::<Vec<_>>();
+        let pool = Arc::new(create_pool_with_config(config, ops.clone()));
+        let tasks = ops
+            .into_iter()
+            .map(|op| {
+                let pool = pool.clone();
+                tokio::spawn(async move {
+                    pool.add_operation(OperationOrigin::Local, op.op, Default::default())
+                        .await
+                })
+            })
+            .collect::<Vec<_>>();
+        for task in tasks {
+            let _ = task.await.unwrap();
+        }
+
+        let state = pool.state.read();
+        let (total, by_sender) = state.pool.reservoir_op_counts(shared_sender, None);
+        assert_eq!(total, 2);
+        assert!(by_sender <= 1);
     }
 
     #[tokio::test]

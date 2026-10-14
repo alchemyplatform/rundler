@@ -75,7 +75,8 @@ struct BundleOpCounts {
 }
 
 /// Mined reservoir-mode bundles: a single op with `tx.gas = 2^24 + R`, the only bundles whose gas
-/// limit exceeds `TX_MAX_GAS_LIMIT`. Sums, so the margin (charged minus used gas) and its ratio
+/// limit exceeds `TX_MAX_GAS_LIMIT` once Glamsterdam is active. Only recorded then, since other
+/// chains (e.g. Arbitrum) allow larger gas limits for metered bundles. Sums, so the margin (charged minus used gas) and its ratio
 /// can be derived per entry point.
 #[derive(Metrics)]
 #[metrics(scope = "builder")]
@@ -124,9 +125,11 @@ fn ratio(numerator: U256, denominator: U256) -> Option<f64> {
 /// `da_gas_in_gas_used` is false on chains where ops pay for DA through preVerificationGas but
 /// the receipt gas used leaves it out, such as OP stack chains. The gas compensation ratio is
 /// meaningless there and is not recorded.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn record_mined_bundle(
     entry_point: Address,
     da_gas_in_gas_used: bool,
+    reservoir_mode_enabled: bool,
     is_success: bool,
     gas_limit: Option<u64>,
     gas_used: Option<u64>,
@@ -180,6 +183,7 @@ pub(crate) fn record_mined_bundle(
         .increment(wei_to_gwei(compensation));
 
     if let Some(reservoir_gas) = gas_limit
+        .filter(|_| reservoir_mode_enabled)
         .and_then(|limit| limit.checked_sub(TX_MAX_GAS_LIMIT))
         .filter(|reservoir_gas| *reservoir_gas > 0)
     {
@@ -276,12 +280,34 @@ mod tests {
         gas_price: Option<u128>,
         events: &[MinedUserOpEvent],
     ) -> BTreeMap<String, DebugValue> {
+        record_on_chain_with_reservoir_mode(
+            true,
+            da_gas_in_gas_used,
+            is_success,
+            gas_limit,
+            gas_used,
+            gas_price,
+            events,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_on_chain_with_reservoir_mode(
+        reservoir_mode_enabled: bool,
+        da_gas_in_gas_used: bool,
+        is_success: bool,
+        gas_limit: Option<u64>,
+        gas_used: Option<u64>,
+        gas_price: Option<u128>,
+        events: &[MinedUserOpEvent],
+    ) -> BTreeMap<String, DebugValue> {
         let recorder = DebuggingRecorder::new();
         let snapshotter = recorder.snapshotter();
         metrics::with_local_recorder(&recorder, || {
             record_mined_bundle(
                 ENTRY_POINT,
                 da_gas_in_gas_used,
+                reservoir_mode_enabled,
                 is_success,
                 gas_limit,
                 gas_used,
@@ -500,6 +526,21 @@ mod tests {
             Some(500_000),
             Some(1_000_000_000),
             &[event(ENTRY_POINT, 350_000_000_000_000, 350_000)],
+        );
+        assert!(!metrics.keys().any(|key| key.contains("reservoir")));
+    }
+
+    /// Without Glamsterdam, a gas limit above 2^24 is a metered bundle (e.g. on Arbitrum).
+    #[test]
+    fn test_no_reservoir_counters_without_reservoir_mode() {
+        let metrics = record_on_chain_with_reservoir_mode(
+            false,
+            true,
+            true,
+            Some(30_000_000),
+            Some(20_000_000),
+            Some(1_000_000_000),
+            &[event(ENTRY_POINT, 20_000_000_000_000_000, 20_000_000)],
         );
         assert!(!metrics.keys().any(|key| key.contains("reservoir")));
     }
