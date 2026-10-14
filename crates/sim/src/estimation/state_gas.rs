@@ -13,9 +13,15 @@
 
 //! Reading a reservoir-mode estimate out of state-gas traces of `simulateHandleOp`.
 
+use std::future::Future;
+
 use alloy_primitives::Address;
-use alloy_sol_types::SolEvent;
-use rundler_contracts::v0_7::IEntryPoint::UserOperationEvent;
+use alloy_sol_types::{SolCall, SolEvent};
+use futures_util::future::try_join_all;
+use rundler_contracts::v0_7::{
+    IEntryPoint::UserOperationEvent, IEntryPointSimulations::simulateHandleOpCall,
+    ReservoirProbe::probeCall,
+};
 use rundler_provider::GethDebugTracerCallFrame as CallFrame;
 
 use super::CALL_GAS_BUFFER_VALUE;
@@ -91,10 +97,10 @@ pub(crate) fn user_operation_succeeded(frame: &CallFrame, entry_point: Address) 
 
 /// The call gas limit of a reservoir-mode op, which covers execution only.
 ///
-/// `execution_frame_gas` is the gas the sender's execution call used in a simulation, where calls
-/// have no reservoir, so it includes the state that execution created (`execution_state_gas`).
-/// The frame's gas used, rather than a binary search, keeps the limit tight: a search would also
-/// keep the 1/64 of the state gas withheld at each nested call.
+/// `execution_frame_gas` is the gas the sender's execution call used in a simulation, and
+/// `execution_state_gas` the part of it that was state: all of execution's state if calls get no
+/// reservoir, none if they do. The frame's gas used, rather than a binary search, keeps the limit
+/// tight: a search would also keep the 1/64 of the state gas withheld at each nested call.
 pub(crate) fn reservoir_call_gas_limit(
     execution_frame_gas: u128,
     execution_state_gas: u128,
@@ -102,6 +108,93 @@ pub(crate) fn reservoir_call_gas_limit(
     let execution_gas = execution_frame_gas.saturating_sub(execution_state_gas);
     let headroom = (execution_gas * CALL_GAS_HEADROOM_PERCENT / 100).max(NEW_SLOT_STATE_GAS);
     (execution_gas * 64 / 63 + CALL_GAS_BUFFER_VALUE + headroom).max(MIN_CALL_GAS_LIMIT)
+}
+
+/// Whether the node gave the traced `simulateHandleOp` call a state-gas reservoir, read from the
+/// result of its target, a `ReservoirProbe`. `None` if the call has no such result.
+pub(crate) fn probe_found_reservoir(frame: &CallFrame) -> Option<bool> {
+    let output = frame.output.as_ref()?;
+    let result = simulateHandleOpCall::abi_decode_returns(output).ok()?;
+    if !result.targetSuccess {
+        return None;
+    }
+    probeCall::abi_decode_returns(&result.targetResult).ok()
+}
+
+/// The least gas `frame` needs to run as traced, from the gas used by it and its calls: a call
+/// made with all but 1/64 of the caller's gas (EIP-150) needs 64/63 of the callee's own need at
+/// the time of the call. Such a call also shows how much gas the caller had left then (64/63 of
+/// the gas it gave), and so how much it had used before it.
+///
+/// Only meaningful where calls get no reservoir, so a frame's gas used includes its net state.
+/// Before a call given less gas, the frame's own gas used is not known and is left out, so this
+/// errs low.
+pub(crate) fn frame_gas_need(frame: &CallFrame) -> u128 {
+    let gas: u128 = frame.gas.saturating_to();
+    let gas_used: u128 = frame.gas_used.saturating_to();
+    // At a call, the frame had at least the gas it had left at its end.
+    let gas_left = gas.saturating_sub(gas_used);
+    let mut need = gas_used;
+    let mut used_in_calls = 0u128;
+    for call in &frame.calls {
+        let call_need = frame_gas_need(call);
+        let call_gas: u128 = call.gas.saturating_to();
+        let gas_at_call = call_gas * 64 / 63;
+        let need_at_call = if gas_at_call >= gas_left {
+            // All but 1/64 forwarded: the frame had `gas_at_call` left.
+            let used_before = gas.saturating_sub(gas_at_call).max(used_in_calls);
+            used_before + (call_need * 64).div_ceil(63)
+        } else {
+            used_in_calls + call_need
+        };
+        need = need.max(need_at_call);
+        used_in_calls += call.gas_used.saturating_to::<u128>();
+    }
+    need
+}
+
+/// Guesses tried in parallel per round of a [`least_passing`] search
+const SEARCH_GUESSES: u128 = 3;
+
+/// Rounds a [`least_passing`] search runs at most: each one narrows the range to a quarter.
+const SEARCH_MAX_ROUNDS: usize = 6;
+
+/// How close a [`least_passing`] search gets to the least passing value: 1% of it, but at least
+/// one new slot's state gas.
+fn search_tolerance(value: u128) -> u128 {
+    (value / 100).max(NEW_SLOT_STATE_GAS)
+}
+
+/// A value in `(lo, hi]` that `passes`, at most about [`search_tolerance`] above the least one,
+/// given that `lo` fails and `hi` passes. Tries [`SEARCH_GUESSES`] values per round in parallel.
+pub(crate) async fn least_passing<F, Fut>(
+    mut lo: u128,
+    mut hi: u128,
+    passes: F,
+) -> anyhow::Result<u128>
+where
+    F: Fn(u128) -> Fut,
+    Fut: Future<Output = anyhow::Result<bool>>,
+{
+    for _ in 0..SEARCH_MAX_ROUNDS {
+        if hi.saturating_sub(lo) <= search_tolerance(hi) {
+            break;
+        }
+        let guesses: Vec<u128> = (1..=SEARCH_GUESSES)
+            .map(|i| lo + (hi - lo) * i / (SEARCH_GUESSES + 1))
+            .collect();
+        let results = try_join_all(guesses.iter().map(|&guess| passes(guess))).await?;
+        match results.iter().position(|&passed| passed) {
+            Some(i) => {
+                hi = guesses[i];
+                if i > 0 {
+                    lo = guesses[i - 1];
+                }
+            }
+            None => lo = guesses[guesses.len() - 1],
+        }
+    }
+    Ok(hi)
 }
 
 #[cfg(test)]
@@ -123,6 +216,13 @@ mod tests {
             gas_used: U256::from(gas_used),
             calls,
             ..Default::default()
+        }
+    }
+
+    fn frame_with_gas(gas: u64, gas_used: u64, calls: Vec<CallFrame>) -> CallFrame {
+        GethDebugTracerCallFrame {
+            gas: U256::from(gas),
+            ..frame(EP, SENDER, gas_used, calls)
         }
     }
 
@@ -206,5 +306,89 @@ mod tests {
         // above ~980k of execution, 10% headroom is larger than one slot
         let cgl = reservoir_call_gas_limit(3_000_000, 1_000_000);
         assert_eq!(cgl, 2_000_000 * 64 / 63 + 3_000 + 200_000);
+    }
+
+    /// Sepolia's 24 kB deploy from the sender: `execute` calls BlobDeployer, which builds the
+    /// init code in memory (about 0.19M) before its CREATE2. Each call gets all but 1/64 of the
+    /// caller's gas.
+    #[test]
+    fn frame_need_keeps_a_64th_per_call_and_the_gas_used_before() {
+        let create = frame_with_gas(57_926_880, 37_609_349, vec![]);
+        let deployer = frame_with_gas(59_042_482, 37_806_956, vec![create]);
+        let execution = frame_with_gas(60_000_000, 37_827_456, vec![deployer]);
+
+        let create_need = 37_609_349u128;
+        let deployer_used_before = 59_042_482 - 57_926_880u128 * 64 / 63;
+        assert!((180_000..200_000).contains(&deployer_used_before));
+        let deployer_need = deployer_used_before + (create_need * 64).div_ceil(63);
+        let execution_used_before = 60_000_000 - 59_042_482u128 * 64 / 63;
+        assert_eq!(
+            frame_gas_need(&execution),
+            execution_used_before + (deployer_need * 64).div_ceil(63)
+        );
+        // more than the CREATE2's gas used, by the 1/64 kept at each call and the gas used
+        // before them
+        assert!(frame_gas_need(&execution) > 37_609_349 + 2 * 37_609_349 / 63 + 180_000);
+    }
+
+    /// A call given an explicit gas below all but 1/64 of the caller's gas needs no more than
+    /// its own need; earlier calls' gas used counts before it.
+    #[test]
+    fn frame_need_of_explicit_gas_calls() {
+        let first = frame_with_gas(73_000_000, 1_000_000, vec![]);
+        let explicit = frame_with_gas(500_000, 400_000, vec![]);
+        let execution = frame_with_gas(75_000_000, 1_500_000, vec![first, explicit]);
+        let first_need =
+            (75_000_000 - 73_000_000u128 * 64 / 63) + (1_000_000u128 * 64).div_ceil(63);
+        assert_eq!(
+            frame_gas_need(&execution),
+            first_need.max(1_000_000 + 400_000).max(1_500_000)
+        );
+    }
+
+    #[tokio::test]
+    async fn least_passing_is_within_tolerance() {
+        for least in [1_000_001u128, 25_000_000, 44_168_000, 74_999_999] {
+            let found = least_passing(1_000_000, 75_000_000, |value| async move {
+                anyhow::Ok(value >= least)
+            })
+            .await
+            .unwrap();
+            assert!(found >= least, "{found} < {least}");
+            assert!(
+                found <= least + search_tolerance(found),
+                "{found} too far above {least}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn least_passing_stops_at_errors() {
+        let result = least_passing(0, 75_000_000, |_| async {
+            Err::<bool, _>(anyhow::anyhow!("trace failed"))
+        })
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn reads_probe_result() {
+        let mut root = frame(CALLER, EP, 0, vec![]);
+        assert_eq!(probe_found_reservoir(&root), None);
+        for reservoir in [false, true] {
+            root.output = Some(Bytes::from(simulateHandleOpCall::abi_encode_returns(
+                &rundler_contracts::v0_7::IEntryPointSimulations::ExecutionResult {
+                    targetSuccess: true,
+                    targetResult: reservoir.abi_encode().into(),
+                    ..Default::default()
+                },
+            )));
+            assert_eq!(probe_found_reservoir(&root), Some(reservoir));
+        }
+        // the target call failed
+        root.output = Some(Bytes::from(simulateHandleOpCall::abi_encode_returns(
+            &rundler_contracts::v0_7::IEntryPointSimulations::ExecutionResult::default(),
+        )));
+        assert_eq!(probe_found_reservoir(&root), None);
     }
 }

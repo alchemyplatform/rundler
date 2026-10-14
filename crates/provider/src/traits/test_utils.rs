@@ -177,6 +177,8 @@ mockall::mock! {
             &self,
             op: v0_6::UserOperation,
             skip_post_op: bool,
+            target: Address,
+            target_call_data: Bytes,
             gas: u64,
             state_override: StateOverride,
         ) -> ProviderResult<(TransactionRequest, StateOverride)>;
@@ -291,6 +293,8 @@ mockall::mock! {
             &self,
             op: v0_7::UserOperation,
             skip_post_op: bool,
+            target: Address,
+            target_call_data: Bytes,
             gas: u64,
             state_override: StateOverride,
         ) -> ProviderResult<(TransactionRequest, StateOverride)>;

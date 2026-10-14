@@ -215,10 +215,12 @@ pub trait SimulationProvider: Send + Sync {
     ) -> ProviderResult<(TransactionRequest, StateOverride)>;
 
     /// Construct a `simulateHandleOp` call (`simulateHandleOpNoPostOp` if `skip_post_op`) whose
-    /// trace gives the op's EIP-8037 state gas.
+    /// trace gives the op's EIP-8037 state gas. The entry point calls `target` with
+    /// `target_call_data` after the op, unless `target` is zero.
     ///
-    /// `gas` is the call's gas limit. A call gets no state-gas reservoir, so the op's state is
-    /// charged within its own gas limits and within `gas`: size both for execution and state.
+    /// `gas` is the call's gas limit. Whether a call gets a state-gas reservoir for its gas above
+    /// `TX_MAX_GAS_LIMIT` depends on the client: without one, the op's state is charged within
+    /// its own gas limits and within `gas`, so size both for execution and state.
     /// State that the simulation contract itself would create is pre-set in the override, so the
     /// traced state gas is the op's own.
     ///
@@ -231,6 +233,8 @@ pub trait SimulationProvider: Send + Sync {
         &self,
         op: Self::UO,
         skip_post_op: bool,
+        target: Address,
+        target_call_data: Bytes,
         gas: u64,
         state_override: StateOverride,
     ) -> ProviderResult<(TransactionRequest, StateOverride)>;

@@ -151,7 +151,8 @@ pub struct Settings {
     /// the largest state-gas reservoir of a bundle. Estimation's state-gas trace needs a node
     /// `rpc.gascap` of roughly twice this plus `max_bundle_execution_gas`.
     pub max_reservoir_gas: u64,
-    /// The most time the reservoir-mode fallback may spend tracing an op's state gas
+    /// The most time the reservoir-mode fallback may spend tracing an op's state gas, including
+    /// the search for its state peak
     pub reservoir_trace_timeout: Duration,
     /// The most reservoir-mode fallbacks that may run at once; more fall back to the metered
     /// estimate's error
@@ -196,6 +197,12 @@ struct Metrics {
     reservoir_trace_ms: Histogram,
     #[metric(describe = "the distribution of the state gas of reservoir-mode estimates.")]
     reservoir_state_gas: Histogram,
+    #[metric(
+        describe = "the count of reservoir-mode estimates whose state peaks above its net amount."
+    )]
+    reservoir_peak_searches: Counter,
+    #[metric(describe = "the count of reservoir-mode traces whose node gave calls a reservoir.")]
+    reservoir_in_calls: Counter,
 }
 
 /// Names of the estimation eth_call histograms, without the global metrics prefix.

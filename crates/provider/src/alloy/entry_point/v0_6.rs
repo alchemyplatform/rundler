@@ -388,6 +388,8 @@ where
         &self,
         _op: Self::UO,
         _skip_post_op: bool,
+        _target: Address,
+        _target_call_data: Bytes,
         _gas: u64,
         _state_override: StateOverride,
     ) -> ProviderResult<(TransactionRequest, StateOverride)> {

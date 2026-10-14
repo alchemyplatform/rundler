@@ -503,6 +503,8 @@ where
         &self,
         op: Self::UO,
         skip_post_op: bool,
+        target: Address,
+        target_call_data: Bytes,
         gas: u64,
         mut state_override: StateOverride,
     ) -> ProviderResult<(TransactionRequest, StateOverride)> {
@@ -519,13 +521,13 @@ where
             IEntryPointSimulationsInstance::new(addr, self.i_entry_point.provider());
         let call = if skip_post_op {
             ep_simulations
-                .simulateHandleOpNoPostOp(op.pack(), Address::ZERO, Bytes::new())
+                .simulateHandleOpNoPostOp(op.pack(), target, target_call_data)
                 .gas(gas)
                 .from(SIMULATION_SENDER)
                 .into_transaction_request()
         } else {
             ep_simulations
-                .simulateHandleOp(op.pack(), Address::ZERO, Bytes::new())
+                .simulateHandleOp(op.pack(), target, target_call_data)
                 .gas(gas)
                 .from(SIMULATION_SENDER)
                 .into_transaction_request()

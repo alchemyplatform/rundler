@@ -24,9 +24,11 @@ use crate::{EvmProvider, ProviderResult, TransactionRequest};
 
 /// A call's gas split into execution and EIP-8037 state gas, with its call frames.
 ///
-/// Calls get no state-gas reservoir: the whole call gas is `gas_left`, so state charges in a
-/// trace are metered and bounded by each frame's gas, unlike in a transaction above
-/// [`TX_MAX_GAS_LIMIT`](rundler_types::TX_MAX_GAS_LIMIT).
+/// Clients differ on whether a call's gas above
+/// [`TX_MAX_GAS_LIMIT`](rundler_types::TX_MAX_GAS_LIMIT) goes to a state-gas reservoir, as in a
+/// transaction. Without one (reth v2.7), the whole call gas is `gas_left`, and state charges are
+/// metered and bounded by each frame's gas. With one (besu, geth, later reth), state is charged
+/// to the reservoir first and does not show in the frames' gas used.
 #[derive(Clone, Debug)]
 pub struct StateGasTrace {
     /// Execution gas used by the call.
@@ -36,8 +38,8 @@ pub struct StateGasTrace {
     pub state_gas_used: u64,
     /// Refund counter at the end of the call.
     pub gas_refund: u64,
-    /// The root call frame (with nested calls and logs). Per-frame `gas_used` counts both
-    /// execution and state gas.
+    /// The root call frame (with nested calls and logs). Per-frame `gas_used` counts execution
+    /// gas, and the state gas not charged to a reservoir.
     pub frame: CallFrame,
 }
 
