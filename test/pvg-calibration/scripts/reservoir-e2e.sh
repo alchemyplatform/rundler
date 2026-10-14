@@ -12,9 +12,14 @@
 # Sepolia: ExecAccount (any signature is accepted), BlobDeployer and, in paymaster mode,
 # StatePaymaster (postOp writes a fresh storage slot; needs a staked paymaster or rundler --unsafe).
 #
+# In churn mode the op instead writes ALLOC fresh storage slots and then clears CLEAR of them
+# (SlotChurn), so its state peaks above its net state: it checks that the estimate's reservoir
+# covers the peak (one sized for the net state ran out of gas before rundler 2618e42a).
+#
 # Usage:
 #   BUNDLER_RPC_URL=http://<rundler>:3000 PVG_RPC_URL=<sepolia rpc> \
 #     ./scripts/reservoir-e2e.sh [self|paymaster] [size-in-bytes]
+#   ... ./scripts/reservoir-e2e.sh churn [ALLOC,CLEAR]   (default 400,200)
 #
 # Environment:
 #   BUNDLER_RPC_URL      rundler JSON-RPC (required)
@@ -31,8 +36,11 @@
 set -euo pipefail
 
 MODE=${1:-self}
-SIZE=${2:-24576}
-case $MODE in self | paymaster) ;; *) echo "mode must be self or paymaster" >&2; exit 2 ;; esac
+case $MODE in
+    self | paymaster) SIZE=${2:-24576} ;;
+    churn) CHURN=${2:-400,200}; ALLOC=${CHURN%,*}; CLEAR=${CHURN#*,} ;;
+    *) echo "mode must be self, paymaster or churn" >&2; exit 2 ;;
+esac
 
 DIR=$(cd "$(dirname "$0")/.." && pwd)
 if [[ -f $DIR/.env ]]; then
@@ -51,6 +59,7 @@ EP=0x0000000071727De22E5E9d8BAf0edAc6f37da032 # EntryPoint v0.7
 ACCOUNT=0xfd5d8F31bDd2A41Aca1866a51C6b11DC0C6fA545 # ExecAccount (v0.7)
 DEPLOYER=0xb38d65d1786DE802bE4C481BDdCC9B968A480ff8 # BlobDeployer
 PAYMASTER=0x58273F31B0DBBA1B58b22f86244c8D4A344B28CE # StatePaymaster (v0.7)
+SLOT_CHURN=0xC3aFf3B9f8a7947177D179fdd9Fe436E339Fdfd1 # SlotChurn
 TX_MAX_GAS_LIMIT=16777216
 
 rpc() {
@@ -68,7 +77,11 @@ PAYER=$ACCOUNT
 [[ $MODE == paymaster ]] && PAYER=$PAYMASTER
 BASE_FEE=$(cast base-fee --rpc-url "$PVG_RPC_URL")
 MAX_FEE=$((BASE_FEE * 2 + PRIORITY_FEE_WEI))
-NEEDED=$(echo "($SIZE * 1530 + 2000000) * $MAX_FEE * 2" | bc)
+if [[ $MODE == churn ]]; then
+    NEEDED=$(echo "($ALLOC * 97920 + $ALLOC * 30000 + 2000000) * $MAX_FEE * 2" | bc)
+else
+    NEEDED=$(echo "($SIZE * 1530 + 2000000) * $MAX_FEE * 2" | bc)
+fi
 DEPOSIT=$(cast call $EP "balanceOf(address)(uint256)" $PAYER --rpc-url "$PVG_RPC_URL" | awk '{print $1}')
 if [[ $(echo "$DEPOSIT < $NEEDED" | bc) -eq 1 ]]; then
     : "${PVG_PRIVATE_KEY:?payer deposit $DEPOSIT < $NEEDED wei; set PVG_PRIVATE_KEY to top it up}"
@@ -81,8 +94,13 @@ fi
 # The op: ExecAccount.execute(BlobDeployer.deploy(salt, SIZE)) with a fresh salt
 NONCE=$(cast call $EP "getNonce(address,uint192)(uint256)" $ACCOUNT 0 --rpc-url "$PVG_RPC_URL" | awk '{print $1}')
 SALT=$(cast keccak "reservoir-e2e-$(date +%s)-$RANDOM")
-INNER=$(cast calldata "deploy(bytes32,uint256)" "$SALT" "$SIZE")
-CALL_DATA=$(cast calldata "execute(address,uint256,bytes)" $DEPLOYER 0 "$INNER")
+if [[ $MODE == churn ]]; then
+    INNER=$(cast calldata "churn(uint256,uint256)" "$ALLOC" "$CLEAR")
+    CALL_DATA=$(cast calldata "execute(address,uint256,bytes)" $SLOT_CHURN 0 "$INNER")
+else
+    INNER=$(cast calldata "deploy(bytes32,uint256)" "$SALT" "$SIZE")
+    CALL_DATA=$(cast calldata "execute(address,uint256,bytes)" $DEPLOYER 0 "$INNER")
+fi
 SIGNATURE=0x$(printf 'ab%.0s' $(seq 65))
 OP=$(jq -nc --arg s $ACCOUNT --arg n "$(cast to-hex "$NONCE")" --arg c "$CALL_DATA" --arg sig "$SIGNATURE" \
     --arg mf "$(cast to-hex $MAX_FEE)" --arg pf "$(cast to-hex "$PRIORITY_FEE_WEI")" \
@@ -95,7 +113,7 @@ if [[ $MODE == paymaster ]]; then
         '. + {paymaster:$pm, paymasterData:$d, paymasterPostOpGasLimit:"0x7530"}')
 fi
 
-echo "== estimate ($MODE, $SIZE bytes)"
+echo "== estimate ($MODE, ${SIZE:-$CHURN})"
 EST=$(call eth_estimateUserOperationGas "$(jq -nc --argjson op "$OP" --arg ep $EP '[$op,$ep]')")
 echo "$EST" | jq -c .
 echo "$EST" | jq -e .result >/dev/null || fail "estimation failed"
@@ -127,7 +145,11 @@ GAS_USED=$(echo "$RC" | jq -r .gasUsed | xargs cast to-dec)
 PRICE=$(echo "$RC" | jq -r .effectiveGasPrice | xargs cast to-dec)
 OP_EVENT=$(cast keccak "UserOperationEvent(bytes32,address,address,uint256,bool,uint256,uint256)")
 OPS_IN_BUNDLE=$(echo "$RC" | jq --arg t "$OP_EVENT" '[.logs[] | select(.topics[0]==$t)] | length')
-DEPLOYED=$(echo "$RC" | jq --arg t "$(cast keccak "Deployed(address,uint256)")" '[.logs[] | select(.topics[0]==$t)] | length')
+if [[ $MODE == churn ]]; then
+    DEPLOYED=$(echo "$RC" | jq --arg t "$(cast keccak "Churned(uint256,uint256,uint256)")" '[.logs[] | select(.topics[0]==$t)] | length')
+else
+    DEPLOYED=$(echo "$RC" | jq --arg t "$(cast keccak "Deployed(address,uint256)")" '[.logs[] | select(.topics[0]==$t)] | length')
+fi
 SUCCESS=$(echo "$RECEIPT" | jq -r .success)
 CHARGED=$(echo "$RECEIPT" | jq -r .actualGasUsed | xargs cast to-dec)
 COST=$(echo "$RECEIPT" | jq -r .actualGasCost | xargs cast to-dec)
@@ -139,7 +161,7 @@ echo "tx status        $(echo "$RC" | jq -r .status)"
 echo "ops in bundle    $OPS_IN_BUNDLE"
 echo "tx.gas           $TX_GAS (2^24 + R, R = $RESERVOIR)"
 echo "op success       $SUCCESS"
-echo "contract deployed $DEPLOYED"
+echo "executed         $DEPLOYED (contract deployed, or slots churned)"
 echo "gas: charged $CHARGED, used $GAS_USED, margin $((CHARGED - GAS_USED))"
 echo "wei: op paid $COST, bundle cost $(echo "$GAS_USED * $PRICE" | bc), margin $(echo "$COST - $GAS_USED * $PRICE" | bc)"
 
@@ -147,6 +169,6 @@ echo "wei: op paid $COST, bundle cost $(echo "$GAS_USED * $PRICE" | bc), margin 
 [[ $OPS_IN_BUNDLE == 1 ]] || fail "reservoir-mode op was not bundled alone"
 [[ $RESERVOIR -gt 0 ]] || fail "bundle has no reservoir (tx.gas <= 2^24)"
 [[ $SUCCESS == true ]] || fail "op failed"
-[[ $DEPLOYED == 1 ]] || fail "contract not deployed"
+[[ $DEPLOYED == 1 ]] || fail "execution did not complete (no Deployed/Churned event)"
 [[ $CHARGED -ge $GAS_USED ]] || fail "bundler under-recovered: charged $CHARGED < used $GAS_USED"
 echo "PASS"
