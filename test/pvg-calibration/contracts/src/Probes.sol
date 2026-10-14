@@ -370,6 +370,31 @@ contract BlobDeployer {
     }
 }
 
+/// Creates EIP-8037 state and refills part of it in one call: `churn(alloc, clear)` writes
+/// `alloc` fresh storage slots, then clears the first `clear` of them (0 -> 1 -> 0 in one
+/// transaction, which refills their state gas). The state peak is `alloc` slots and the net is
+/// `alloc - clear`, for checking that the reservoir covers the peak: one sized for the net state
+/// runs out at the peak. Every call uses slots no earlier call touched.
+contract SlotChurn {
+    event Churned(uint256 first, uint256 alloc, uint256 clear);
+
+    uint256 public next = 1;
+    mapping(uint256 => uint256) public slots;
+
+    function churn(uint256 alloc, uint256 clear) external {
+        require(clear <= alloc, "clear > alloc");
+        uint256 first = next;
+        for (uint256 i = 0; i < alloc; i++) {
+            slots[first + i] = 1;
+        }
+        for (uint256 i = 0; i < clear; i++) {
+            slots[first + i] = 0;
+        }
+        next = first + alloc;
+        emit Churned(first, alloc, clear);
+    }
+}
+
 /// v0.7 account with an `execute` entry point, so an op's execution phase can create state
 /// (e.g. deploy through `BlobDeployer`). Validation is the same as `ProbeAccount`'s, without the
 /// scratch actions. Separate from `ProbeAccount` so the other experiments' fixtures keep their
