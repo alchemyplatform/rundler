@@ -562,7 +562,7 @@ where
             .verification_gas_limit(verification_gas_limit)
             .paymaster_verification_gas_limit(paymaster_verification_gas_limit)
             .build();
-        let gas_limit = op_with_gas.bundle_computation_gas_limit(chain_spec, Some(1));
+        let gas_limit = self.reservoir_computation_gas(&args, call_gas_limit);
         if gas_limit > max_bundle_execution_gas {
             return Err(GasEstimationError::GasTotalTooLarge(
                 gas_limit,
@@ -696,18 +696,7 @@ where
     /// call into the sender).
     fn reservoir_max_call_gas(&self, args: &ReservoirArgs<'_>) -> u128 {
         let max_bundle_execution_gas = self.settings.max_bundle_execution_gas;
-        // At a PVG above the estimate's, whose calldata costs at least as much.
-        let pre_verification_gas =
-            max_bundle_execution_gas + u128::from(self.settings.max_reservoir_gas);
-        let computation_gas = |call_gas_limit| {
-            UserOperationBuilder::from_uo(args.full_op.clone(), args.chain_spec)
-                .verification_gas_limit(args.verification_gas_limit)
-                .paymaster_verification_gas_limit(args.paymaster_verification_gas_limit)
-                .call_gas_limit(call_gas_limit)
-                .pre_verification_gas(pre_verification_gas)
-                .build()
-                .bundle_computation_gas_limit(args.chain_spec, Some(1))
-        };
+        let computation_gas = |call_gas_limit| self.reservoir_computation_gas(args, call_gas_limit);
         // The entry point needs 64/63 of the call gas limit before execution (see
         // `required_pre_execution_buffer`), so the computation gas grows a little faster than it.
         let mut in_bundle = max_bundle_execution_gas.saturating_sub(computation_gas(0)) * 63 / 64;
@@ -725,6 +714,20 @@ where
         in_bundle
             .saturating_sub(CALL_GAS_BUFFER_VALUE)
             .min(in_simulation)
+    }
+
+    /// The op's computation gas (`bundle_computation_gas_limit`) at its limits and
+    /// `call_gas_limit`, as admission will compute it for the op as sent. Its call gas limit is at
+    /// the most that fits, so there is no headroom: priced with the worst-case calldata
+    /// (`max_fill`), since the signature, paymaster data and PVG sent are not the estimate's.
+    fn reservoir_computation_gas(&self, args: &ReservoirArgs<'_>, call_gas_limit: u128) -> u128 {
+        UserOperationBuilder::from_uo(args.op.max_fill(args.chain_spec), args.chain_spec)
+            .verification_gas_limit(args.verification_gas_limit)
+            .paymaster_verification_gas_limit(args.paymaster_verification_gas_limit)
+            .paymaster_post_op_gas_limit(args.op.paymaster_post_op_gas_limit.unwrap_or(0))
+            .call_gas_limit(call_gas_limit)
+            .build()
+            .bundle_computation_gas_limit(args.chain_spec, Some(1))
     }
 
     /// The least call gas the op runs with at a reservoir of `reservoir_gas`, by the call gas
@@ -2404,6 +2407,70 @@ mod tests {
             "call gas limit {}",
             estimate.call_gas_limit
         );
+    }
+
+    /// The most call gas is at the cap, so the op as sent must still fit under it when its
+    /// paymaster data, signature and gas fields have more non-zero bytes than the estimate's
+    /// (on Sepolia, a paymaster stub with zero bytes put an op 287 gas over the cap).
+    #[test]
+    fn test_reservoir_max_call_gas_fits_with_sent_calldata() {
+        let paymaster_data: Bytes = [[0xff; 28].as_slice(), &[0; 16], &[0x7a; 32], &[0x1c]]
+            .concat()
+            .into();
+        let mut op = demo_user_op_optional_gas(None);
+        op.sender = RESERVOIR_SENDER;
+        op.paymaster = Some(RESERVOIR_PAYMASTER);
+        op.paymaster_data = paymaster_data.clone();
+        op.paymaster_post_op_gas_limit = Some(0);
+        op.signature = [[0; 64].as_slice(), &[0x1c]].concat().into();
+        let settings = reservoir_settings();
+        let chain_spec = reservoir_chain_spec();
+        let (entry, provider) = create_base_config();
+        let estimator = create_custom_estimator(chain_spec.clone(), provider, entry, settings);
+        let (op, full_op) = reservoir_full_op(op, &chain_spec, &settings);
+        let args = ReservoirArgs {
+            op: &op,
+            full_op: &full_op,
+            chain_spec: &chain_spec,
+            block_hash: B256::ZERO,
+            state_override: &StateOverride::default(),
+            da_gas: 0,
+            pvg_state: PvgState::default(),
+            verification_gas_limit: 40_637,
+            paymaster_verification_gas_limit: 40_637,
+        };
+
+        let call_gas_limit = buffered(estimator.reservoir_max_call_gas(&args));
+
+        let sent = UserOperationBuilder::new(
+            &chain_spec,
+            EntryPointVersion::V0_7,
+            rundler_types::v0_7::UserOperationRequiredFields {
+                sender: RESERVOIR_SENDER,
+                nonce: op.nonce,
+                call_data: Bytes::new(),
+                signature: vec![0xff; 65].into(),
+                call_gas_limit,
+                verification_gas_limit: 40_637,
+                pre_verification_gas: 29_711_157,
+                max_priority_fee_per_gas: u128::from(u64::MAX),
+                max_fee_per_gas: u128::from(u64::MAX),
+            },
+        )
+        .paymaster(
+            RESERVOIR_PAYMASTER,
+            40_637,
+            0,
+            vec![0xff; paymaster_data.len()].into(),
+        )
+        .build();
+        let computation = sent.bundle_computation_gas_limit(&chain_spec, Some(1));
+        assert!(
+            computation <= settings.max_bundle_execution_gas,
+            "computation gas {computation}"
+        );
+        // and the call gas limit is still close to the most that fits
+        assert!(computation + 1_000 > settings.max_bundle_execution_gas);
     }
 
     /// S is measured low (e.g. refunds for cleared slots): the state above it spills into the
