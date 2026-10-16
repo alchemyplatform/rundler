@@ -148,11 +148,11 @@ pub struct Settings {
     /// The maximum number of rounds to run for gas estimation
     pub max_gas_estimation_rounds: u32,
     /// The most EIP-8037 state gas a user operation may carry in reservoir mode, which is also
-    /// the largest state-gas reservoir of a bundle. Estimation's state-gas trace needs a node
-    /// `rpc.gascap` of roughly twice this plus `max_bundle_execution_gas`.
+    /// the largest state-gas reservoir of a bundle. Estimation's simulations need a node
+    /// `rpc.gascap` of at least 2^24 plus this.
     pub max_reservoir_gas: u64,
-    /// The most time the reservoir-mode fallback may spend tracing an op's state gas and
-    /// simulating it for its reservoir and call gas limit
+    /// The most time the reservoir-mode fallback may spend simulating an op for its state gas,
+    /// reservoir and call gas limit
     pub reservoir_trace_timeout: Duration,
     /// The most reservoir-mode fallbacks that may run at once; more fall back to the metered
     /// estimate's error
@@ -193,7 +193,7 @@ struct Metrics {
         describe = "the count of reservoir-mode fallbacks skipped because too many were running."
     )]
     reservoir_fallbacks_busy: Counter,
-    #[metric(describe = "the distribution of reservoir-mode state-gas trace time.")]
+    #[metric(describe = "the distribution of reservoir-mode estimation time.")]
     reservoir_trace_ms: Histogram,
     #[metric(describe = "the distribution of the state gas of reservoir-mode estimates.")]
     reservoir_state_gas: Histogram,

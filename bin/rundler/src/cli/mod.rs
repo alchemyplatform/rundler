@@ -495,8 +495,8 @@ pub struct CommonArgs {
     )]
     pub max_reservoir_gas: u64,
 
-    /// The most time estimation's reservoir-mode fallback may spend tracing an op's state gas
-    /// and simulating it for its reservoir and call gas limit
+    /// The most time estimation's reservoir-mode fallback may spend simulating an op for its
+    /// state gas, reservoir and call gas limit
     #[arg(
         long = "reservoir_trace_timeout_ms",
         name = "reservoir_trace_timeout_ms",

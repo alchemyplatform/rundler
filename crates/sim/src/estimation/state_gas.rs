@@ -11,8 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-//! Helpers for reservoir-mode estimates: reading traces and simulations of `simulateHandleOp`,
-//! and searching for the least reservoir an op runs with.
+//! Helpers for reservoir-mode estimates: reading simulations of `simulateHandleOp`, and searching
+//! for the least reservoir an op runs with.
 
 use std::future::Future;
 
@@ -20,10 +20,15 @@ use alloy_primitives::Address;
 use alloy_sol_types::SolEvent;
 use futures_util::future::try_join_all;
 use rundler_contracts::v0_7::IEntryPoint::UserOperationEvent;
-use rundler_provider::{GethDebugTracerCallFrame as CallFrame, SimulatedLog};
+use rundler_provider::SimulatedLog;
 
 /// EIP-8037 state gas of one new storage slot
 const NEW_SLOT_STATE_GAS: u128 = 97_920;
+
+/// The least state gas a reservoir-mode estimate measures for an op to need a reservoir: one new
+/// slot. The measurement is approximate (see `metered_gas`), so an op without state does not
+/// measure as exactly 0.
+pub(crate) const MIN_RESERVOIR_STATE_GAS: u128 = NEW_SLOT_STATE_GAS;
 
 /// How far a reservoir-mode op's PVG surplus is kept above the reservoir threshold, so the op is
 /// still classified as reservoir mode at admission if its threshold rises a little from the
@@ -38,27 +43,18 @@ pub(crate) fn padded_reservoir(state_gas: u128, threshold: u128) -> u128 {
     state_gas.max(threshold + RESERVOIR_THRESHOLD_MARGIN)
 }
 
-/// `UserOperationEvent.success` of the op, if the entry point emitted the event in the trace.
-pub(crate) fn user_operation_succeeded(frame: &CallFrame, entry_point: Address) -> Option<bool> {
-    frame
-        .logs
-        .iter()
-        .filter(|log| log.address == Some(entry_point))
+/// The op's `UserOperationEvent`, if the entry point emitted it in a simulated call's logs.
+pub(crate) fn user_operation_event(
+    logs: &[SimulatedLog],
+    entry_point: Address,
+) -> Option<UserOperationEvent> {
+    logs.iter()
+        .filter(|log| log.address == entry_point)
         .find_map(|log| {
-            let topics = log.topics.as_ref()?;
-            if topics.first() != Some(&UserOperationEvent::SIGNATURE_HASH) {
+            if log.topics.first() != Some(&UserOperationEvent::SIGNATURE_HASH) {
                 return None;
             }
-            let data = log.data.as_ref()?;
-            UserOperationEvent::decode_raw_log(topics.iter().copied(), data)
-                .ok()
-                .map(|event| event.success)
-        })
-        .or_else(|| {
-            frame
-                .calls
-                .iter()
-                .find_map(|call| user_operation_succeeded(call, entry_point))
+            UserOperationEvent::decode_raw_log(log.topics.iter().copied(), &log.data).ok()
         })
 }
 
@@ -68,16 +64,27 @@ pub(crate) fn user_operation_event_success(
     logs: &[SimulatedLog],
     entry_point: Address,
 ) -> Option<bool> {
-    logs.iter()
-        .filter(|log| log.address == entry_point)
-        .find_map(|log| {
-            if log.topics.first() != Some(&UserOperationEvent::SIGNATURE_HASH) {
-                return None;
-            }
-            UserOperationEvent::decode_raw_log(log.topics.iter().copied(), &log.data)
-                .ok()
-                .map(|event| event.success)
-        })
+    user_operation_event(logs, entry_point).map(|event| event.success)
+}
+
+/// The gas the entry point metered for an op from the `actualGasUsed` it reported, less the
+/// penalty on unused execution gas, given the op's `preOpGas` and its call gas and postOp limits.
+///
+/// This is v0.7's penalty: 10% of the call gas and postOp limits' unused part together. v0.8+
+/// charges it on each limit separately, and only above 40,000 unused, so this can be off by
+/// about that, and 10% of the postOp limit.
+pub(crate) fn metered_gas(
+    actual_gas_used: u128,
+    pre_op_gas: u128,
+    execution_gas_limit: u128,
+) -> u128 {
+    let execution_charged = actual_gas_used.saturating_sub(pre_op_gas);
+    if execution_charged >= execution_gas_limit {
+        return actual_gas_used;
+    }
+    // charged = used + (limit - used) / 10
+    let execution_used = (execution_charged * 10).saturating_sub(execution_gas_limit) / 9;
+    pre_op_gas + execution_used.min(execution_charged)
 }
 
 /// Guesses tried in parallel per round of a [`least_passing`] search
@@ -128,61 +135,11 @@ where
 mod tests {
     use alloy_primitives::{B256, Bytes, U256, address};
     use alloy_sol_types::SolValue;
-    use rundler_provider::GethDebugTracerCallFrame;
 
     use super::*;
 
     const EP: Address = address!("0000000071727De22E5E9d8BAf0edAc6f37da032");
     const SENDER: Address = address!("fd5d8F31bDd2A41Aca1866a51C6b11DC0C6fA545");
-    const CALLER: Address = address!("0643866dA50efE0b055Cd15aF95191968c8411b5");
-
-    fn frame(from: Address, to: Address, gas_used: u64, calls: Vec<CallFrame>) -> CallFrame {
-        GethDebugTracerCallFrame {
-            from,
-            to: Some(to),
-            gas_used: U256::from(gas_used),
-            calls,
-            ..Default::default()
-        }
-    }
-
-    fn user_operation_event(success: bool) -> CallFrame {
-        let mut root = frame(CALLER, EP, 0, vec![]);
-        root.logs
-            .push(rundler_provider::GethDebugTracerCallLogFrame {
-                address: Some(EP),
-                topics: Some(vec![
-                    UserOperationEvent::SIGNATURE_HASH,
-                    B256::ZERO,
-                    B256::ZERO,
-                    B256::ZERO,
-                ]),
-                data: Some(Bytes::from(
-                    (U256::ZERO, success, U256::from(1), U256::from(2)).abi_encode_params(),
-                )),
-                ..Default::default()
-            });
-        root
-    }
-
-    #[test]
-    fn reads_user_operation_event() {
-        assert_eq!(
-            user_operation_succeeded(&user_operation_event(true), EP),
-            Some(true)
-        );
-        assert_eq!(
-            user_operation_succeeded(&user_operation_event(false), EP),
-            Some(false)
-        );
-        // nested in a sub-call
-        let nested = frame(CALLER, EP, 0, vec![user_operation_event(true)]);
-        assert_eq!(user_operation_succeeded(&nested, EP), Some(true));
-        assert_eq!(
-            user_operation_succeeded(&frame(CALLER, EP, 0, vec![]), EP),
-            None
-        );
-    }
 
     #[test]
     fn reads_user_operation_event_from_logs() {
@@ -209,6 +166,28 @@ mod tests {
         // not emitted by the entry point
         assert_eq!(user_operation_event_success(&[log(SENDER, true)], EP), None);
         assert_eq!(user_operation_event_success(&[], EP), None);
+    }
+
+    #[test]
+    fn metered_gas_removes_the_unused_gas_penalty() {
+        // 60,000 of validation, 500,000 of execution under a 15M limit: charged 1,450,000 more
+        let pre_op_gas = 60_000;
+        let limit = 15_000_000;
+        let charged = pre_op_gas + 500_000 + (limit - 500_000) / 10;
+        assert_eq!(
+            metered_gas(charged, pre_op_gas, limit),
+            pre_op_gas + 500_000
+        );
+        // all of the limit used: no penalty
+        assert_eq!(
+            metered_gas(pre_op_gas + limit, pre_op_gas, limit),
+            pre_op_gas + limit
+        );
+        // nothing used
+        assert_eq!(
+            metered_gas(pre_op_gas + limit / 10, pre_op_gas, limit),
+            pre_op_gas
+        );
     }
 
     #[test]
