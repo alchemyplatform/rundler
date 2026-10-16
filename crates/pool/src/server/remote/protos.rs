@@ -671,6 +671,7 @@ impl TryFrom<UserOperationPermissions> for RundlerUserOperationPermissions {
                 .map(|s| s.try_into())
                 .transpose()?,
             eip7702_disabled: permissions.eip7702_disabled,
+            reject_underpriced_sponsorship: permissions.reject_underpriced_sponsorship,
         })
     }
 }
@@ -686,6 +687,7 @@ impl From<RundlerUserOperationPermissions> for UserOperationPermissions {
             underpriced_bundle_pct: permissions.underpriced_bundle_pct,
             bundler_sponsorship: permissions.bundler_sponsorship.map(|s| s.into()),
             eip7702_disabled: permissions.eip7702_disabled,
+            reject_underpriced_sponsorship: permissions.reject_underpriced_sponsorship,
         }
     }
 }
@@ -879,7 +881,27 @@ impl TryUoFromProto<PoolOperationStatus> for RundlerPoolOperationStatus {
 mod tests {
     use alloy_primitives::{Address, B256, U256};
 
-    use super::{PoolOperationSummary, RundlerPoolOperationSummary};
+    use super::{
+        PoolOperationSummary, RundlerBundlerSponsorship, RundlerPoolOperationSummary,
+        RundlerUserOperationPermissions, UserOperationPermissions,
+    };
+
+    #[test]
+    fn permissions_roundtrip_preserves_reject_underpriced_sponsorship() {
+        let perms = RundlerUserOperationPermissions {
+            bundler_sponsorship: Some(RundlerBundlerSponsorship {
+                max_cost: U256::from(500_000),
+                valid_until: 10,
+            }),
+            reject_underpriced_sponsorship: true,
+            ..Default::default()
+        };
+
+        let proto = UserOperationPermissions::from(perms.clone());
+        let converted = RundlerUserOperationPermissions::try_from(proto).unwrap();
+
+        assert_eq!(converted, perms);
+    }
 
     #[test]
     fn pool_operation_summary_roundtrip_preserves_fee_fields() {

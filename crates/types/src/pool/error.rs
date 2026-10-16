@@ -115,6 +115,19 @@ pub enum MempoolError {
     /// Use unsupported EIP
     #[error("{0} is not supported")]
     EIPNotSupported(String),
+    /// A bundler sponsorship's `max_cost` is below the cost currently required for the
+    /// operation to be bundled. Not to be confused with `PrecheckViolation::OverMaxCost`.
+    #[error(
+        "bundler sponsorship maxCost {max_cost_wei} wei is below the current required cost {required_cost_wei} wei at block {block_number}"
+    )]
+    SponsorshipMaxCostTooLow {
+        /// The sponsorship `max_cost` supplied with the operation, in wei
+        max_cost_wei: U256,
+        /// The cost required at `block_number`, in wei
+        required_cost_wei: U256,
+        /// The block whose fee estimate produced `required_cost_wei`
+        block_number: u64,
+    },
 }
 
 /// Precheck violation enumeration

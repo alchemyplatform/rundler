@@ -28,6 +28,9 @@ pub struct UserOperationPermissions {
     pub bundler_sponsorship: Option<BundlerSponsorship>,
     /// Disable EIP-7702
     pub eip7702_disabled: bool,
+    /// Reject a bundler-sponsored operation at admission if its sponsorship `max_cost` is below
+    /// the cost required to be a pool candidate at the current head. No effect on unsponsored ops.
+    pub reject_underpriced_sponsorship: bool,
 }
 
 /// Bundler sponsorship settings
@@ -37,4 +40,20 @@ pub struct BundlerSponsorship {
     pub max_cost: U256,
     /// The valid until timestamp of the sponsorship
     pub valid_until: u64,
+}
+
+impl BundlerSponsorship {
+    /// The cost in wei a sponsorship must cover for an operation with `gas_limit` to be
+    /// bundleable when the required operation `max_fee_per_gas` is `required_max_fee_per_gas`.
+    ///
+    /// Shared by pool admission, the pool candidate gate, and the builder assigner so they
+    /// cannot drift apart.
+    pub fn required_cost(gas_limit: u128, required_max_fee_per_gas: u128) -> U256 {
+        U256::from(gas_limit) * U256::from(required_max_fee_per_gas)
+    }
+
+    /// Whether this sponsorship covers the required cost. Equality passes.
+    pub fn covers(&self, gas_limit: u128, required_max_fee_per_gas: u128) -> bool {
+        Self::required_cost(gas_limit, required_max_fee_per_gas) <= self.max_cost
+    }
 }
