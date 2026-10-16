@@ -76,7 +76,7 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - env: _MAX_GAS_ESTIMATION_GAS_
 - `--max_reservoir_gas`: The most EIP-8037 state gas a user operation may carry in reservoir mode, where it is bundled alone with `tx.gas = 2^24 + state gas` (Glamsterdam chains only). Estimation falls back to reservoir mode when an op does not fit under the 2^24 cap, and admission rejects a reservoir-mode op whose PVG surplus is larger than this. Its state-gas trace needs a node `rpc.gascap` of about the verification gas + `max_bundle_execution_gas` + this value, and this value once more if a paymaster pays. On a chain with Glamsterdam, a nonzero value requires `max_bundle_execution_gas` of at most 2^24 (the chain's `transaction_gas_limit` of 16777216); 0 turns reservoir mode off. (default: 60M)
   - env: _MAX_RESERVOIR_GAS_
-- `--reservoir_trace_timeout_ms`: The most time estimation's reservoir-mode fallback may spend tracing an op's state gas, including the search for its state peak. (default: 10000)
+- `--reservoir_trace_timeout_ms`: The most time estimation's reservoir-mode fallback may spend tracing an op's state gas and simulating it for its reservoir and call gas limit. (default: 10000)
   - env: _RESERVOIR_TRACE_TIMEOUT_MS_
 - `--max_concurrent_reservoir_estimations`: The most reservoir-mode estimation fallbacks that may run at once; further ones return the normal estimation error. (default: 4)
   - env: _MAX_CONCURRENT_RESERVOIR_ESTIMATIONS_

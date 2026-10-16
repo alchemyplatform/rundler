@@ -151,8 +151,8 @@ pub struct Settings {
     /// the largest state-gas reservoir of a bundle. Estimation's state-gas trace needs a node
     /// `rpc.gascap` of roughly twice this plus `max_bundle_execution_gas`.
     pub max_reservoir_gas: u64,
-    /// The most time the reservoir-mode fallback may spend tracing an op's state gas, including
-    /// the search for its state peak
+    /// The most time the reservoir-mode fallback may spend tracing an op's state gas and
+    /// simulating it for its reservoir and call gas limit
     pub reservoir_trace_timeout: Duration,
     /// The most reservoir-mode fallbacks that may run at once; more fall back to the metered
     /// estimate's error
@@ -198,7 +198,7 @@ struct Metrics {
     #[metric(describe = "the distribution of the state gas of reservoir-mode estimates.")]
     reservoir_state_gas: Histogram,
     #[metric(
-        describe = "the count of reservoir-mode estimates whose state peaks above its net amount."
+        describe = "the count of reservoir-mode estimates whose state peaks too far above its net amount for the spill to fit the call gas limit."
     )]
     reservoir_peak_searches: Counter,
     #[metric(describe = "the count of reservoir-mode traces whose node gave calls a reservoir.")]
@@ -307,7 +307,7 @@ enum BinarySearchResult {
     Revert(Bytes),
 }
 
-async fn run_binary_search<F>(
+async fn run_binary_search<'a, F>(
     round_fn: F,
     max_gas: u128,
     max_rounds: u32,
@@ -319,7 +319,7 @@ where
         u128, // min gas
         u128, // max gas
         bool, // is continuation
-    ) -> Pin<Box<dyn Future<Output = Result<Bytes, GasEstimationError>> + Send>>,
+    ) -> Pin<Box<dyn Future<Output = Result<Bytes, GasEstimationError>> + Send + 'a>>,
 {
     let mut eth_calls = 0_u32;
     let result = binary_search(round_fn, max_gas, max_rounds, &mut eth_calls).await;
@@ -337,7 +337,7 @@ where
 /// Runs the binary search, returning `None` if it did not converge within `max_rounds`.
 ///
 /// `eth_calls` counts the rounds started, including one that fails.
-async fn binary_search<F>(
+async fn binary_search<'a, F>(
     round_fn: F,
     max_gas: u128,
     max_rounds: u32,
@@ -348,7 +348,7 @@ where
         u128, // min gas
         u128, // max gas
         bool, // is continuation
-    ) -> Pin<Box<dyn Future<Output = Result<Bytes, GasEstimationError>> + Send>>,
+    ) -> Pin<Box<dyn Future<Output = Result<Bytes, GasEstimationError>> + Send + 'a>>,
 {
     let mut min_gas = 0;
     let mut max_gas = max_gas;
