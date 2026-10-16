@@ -201,8 +201,10 @@ struct Metrics {
         describe = "the count of reservoir-mode estimates whose state peaks too far above its net amount for the spill to fit the call gas limit."
     )]
     reservoir_peak_searches: Counter,
-    #[metric(describe = "the count of reservoir-mode traces whose node gave calls a reservoir.")]
-    reservoir_in_calls: Counter,
+    #[metric(
+        describe = "the count of reservoir-mode estimates that failed because the node's eth_simulateV1 gives calls no state-gas reservoir."
+    )]
+    reservoir_simulation_without_reservoir: Counter,
 }
 
 /// Names of the estimation eth_call histograms, without the global metrics prefix.

@@ -35,12 +35,13 @@ use rundler_contracts::{
 };
 use rundler_provider::{
     AccountOverride, DAGasProvider, EntryPoint, EvmProvider, FeeEstimator, ProviderResult,
-    SimulatedCall, SimulationProvider, StateGasTrace, StateOverride, simulate_call,
-    trace_call_state_gas,
+    SimulatedCall, SimulationProvider, StateGasTrace, StateOverride, TransactionRequest,
+    simulate_call, simulate_calls, trace_call_state_gas,
 };
 use rundler_types::{
     GasEstimate, PvgState, TX_MAX_GAS_LIMIT, UserOperation as _,
     chain::ChainSpec,
+    constants::SIMULATION_SENDER,
     v0_7::{UserOperation, UserOperationBuilder, UserOperationOptionalGas},
 };
 use rundler_utils::{guard_timer::CustomTimerGuard, math};
@@ -51,8 +52,7 @@ use super::{
     BinarySearchResult, CALL_GAS_BUFFER_VALUE, GasEstimationError, Metrics, Settings,
     estimate_verification_gas::{EstimateGasArgs, VerificationGasEstimatorSpecialization},
     state_gas::{
-        least_passing, padded_reservoir, probe_found_reservoir, user_operation_event_success,
-        user_operation_succeeded,
+        least_passing, padded_reservoir, user_operation_event_success, user_operation_succeeded,
     },
 };
 use crate::{
@@ -74,9 +74,6 @@ pub struct GasEstimator<P, E, VGE, PVGE, CGE, F> {
     /// Bounds the reservoir-mode fallbacks running at once (each traces at up to the node's gas
     /// cap)
     reservoir_permits: Arc<Semaphore>,
-    /// Whether reservoir-mode estimates may use a node that gives calls a state-gas reservoir.
-    /// Off until that path is checked against such a node; see `estimate_reservoir_mode`.
-    reservoir_in_calls_enabled: bool,
 }
 
 #[async_trait::async_trait]
@@ -358,7 +355,6 @@ where
             reservoir_permits: Arc::new(Semaphore::new(
                 settings.max_concurrent_reservoir_estimations,
             )),
-            reservoir_in_calls_enabled: false,
         }
     }
 }
@@ -466,9 +462,11 @@ where
     /// reservoir mode.
     ///
     /// The op's net state gas `S` is traced on a copy with call gas and postOp limits far above
-    /// execution plus state, as calls get no state-gas reservoir. The reservoir `R` and call gas
-    /// limit then come from `eth_simulateV1`, which gives a call above `TX_MAX_GAS_LIMIT` a
-    /// reservoir as the bundle transaction gets: the call gas search at `R = S`, with any state
+    /// execution plus state, which holds the state in its frames where calls get no state-gas
+    /// reservoir (reth v2.7; on a node whose calls get one, the copy fails with AA95). The
+    /// reservoir `R` and call gas limit then come from `eth_simulateV1`, which gives a call above
+    /// `TX_MAX_GAS_LIMIT` a reservoir as the bundle transaction gets, checked by a
+    /// `ReservoirProbe`: the call gas search at `R = S`, with any state
     /// the op peaks at above `S` spilling into its call gas, or if that spill does not fit, the
     /// least `R` the op runs with at the most call gas, and the search at that `R`. VGL stays
     /// the metered estimate, and PVG pays for all of `R`, as the bundle's reservoir is the PVG
@@ -489,8 +487,8 @@ where
         let _timer = CustomTimerGuard::new(self.metrics.reservoir_trace_ms.clone());
         let deadline = tokio::time::Instant::now() + self.settings.reservoir_trace_timeout;
         let measured = tokio::time::timeout_at(deadline, self.measure_state_gas(&args)).await;
-        let measured = match measured {
-            Ok(Ok(Some(measured))) => measured,
+        let state_gas = match measured {
+            Ok(Ok(Some(state_gas))) => state_gas,
             // The op fails even with room for its state: a genuine failure.
             Ok(Ok(None)) => return Err(metered_error),
             Ok(Err(error)) => {
@@ -502,18 +500,6 @@ where
                 return Err(metered_error);
             }
         };
-        // Fail closed where the node gives calls a state-gas reservoir (besu, geth, and reth
-        // after v2.7, paradigmxyz/reth#27633): the traced copy's call gas holds the op's state,
-        // as calls without a reservoir need, which such a node rejects as above the gas left
-        // below `TX_MAX_GAS_LIMIT` (AA95). Measuring `S` there needs a copy at the most call gas
-        // instead; enable it once checked against such a node.
-        if measured.reservoir_in_calls && !self.reservoir_in_calls_enabled {
-            tracing::warn!(
-                "reservoir-mode estimation is not supported yet on a node that gives calls a state-gas reservoir"
-            );
-            return Err(metered_error);
-        }
-
         let ReservoirArgs {
             op,
             full_op,
@@ -525,7 +511,6 @@ where
             ..
         } = args;
         let max_bundle_execution_gas = self.settings.max_bundle_execution_gas;
-        let state_gas = measured.state_gas;
         let max_reservoir_gas = u128::from(self.settings.max_reservoir_gas);
         if state_gas > max_reservoir_gas {
             return Err(GasEstimationError::StateGasTooLarge(
@@ -647,13 +632,9 @@ where
         })
     }
 
-    /// Traces the op's state gas on a max-limit copy, which also probes whether the node gives
-    /// calls a reservoir. `None` if the copy fails, i.e. the op fails even with room for its
-    /// state.
-    async fn measure_state_gas(
-        &self,
-        args: &ReservoirArgs<'_>,
-    ) -> anyhow::Result<Option<MeasuredStateGas>> {
+    /// Traces the op's net state gas on a max-limit copy. `None` if the copy fails, i.e. the op
+    /// fails even with room for its state.
+    async fn measure_state_gas(&self, args: &ReservoirArgs<'_>) -> anyhow::Result<Option<u128>> {
         let call_gas = self.reservoir_copy_call_gas();
         let post_op_gas = self.reservoir_copy_post_op_gas(args);
         let trace_gas = reservoir_trace_gas(args, call_gas, post_op_gas);
@@ -664,7 +645,6 @@ where
                 args,
             )
             .await?;
-        let entry_point = *self.entry_point.address();
         if let Some(error) = full.error() {
             tracing::debug!(
                 "reservoir-mode copy reverted: {error}, reason {:?}, output {:?}",
@@ -673,20 +653,12 @@ where
             );
             return Ok(None);
         }
-        let op_success = user_operation_succeeded(&full.frame, entry_point);
+        let op_success = user_operation_succeeded(&full.frame, *self.entry_point.address());
         if op_success != Some(true) {
             tracing::debug!("reservoir-mode copy did not succeed: {op_success:?}");
             return Ok(None);
         }
-        let reservoir_in_calls = probe_found_reservoir(&full.frame)
-            .ok_or_else(|| anyhow::anyhow!("state-gas trace has no reservoir probe result"))?;
-        if reservoir_in_calls {
-            self.metrics.reservoir_in_calls.increment(1);
-        }
-        Ok(Some(MeasuredStateGas {
-            state_gas: u128::from(full.state_gas_used),
-            reservoir_in_calls,
-        }))
+        Ok(Some(u128::from(full.state_gas_used)))
     }
 
     /// The reservoir the op needs and its call gas limit, from simulations with a reservoir, given
@@ -911,7 +883,11 @@ where
     }
 
     /// Whether the op succeeds at a reservoir of `reservoir_gas` and its estimated limits, with
-    /// postOp, in `eth_simulateV1`.
+    /// postOp, in `eth_simulateV1`. A `ReservoirProbe` call in the same request checks that the
+    /// node's `eth_simulateV1` gives calls a state-gas reservoir, which all of the reservoir-mode
+    /// simulations rely on (geth from v1.17.8 gives none): an error if it does not. The probe is
+    /// its own call, not `simulateHandleOp`'s target, which would see what the op left of the
+    /// reservoir.
     async fn reservoir_op_succeeds(
         &self,
         args: &ReservoirArgs<'_>,
@@ -920,17 +896,50 @@ where
     ) -> anyhow::Result<bool> {
         let post_op_gas = args.op.paymaster_post_op_gas_limit.unwrap_or(0);
         let op = self.reservoir_copy(args, call_gas_limit, post_op_gas);
-        let result = self
-            .simulate_reservoir_copy(
-                args,
-                op,
-                false,
-                Address::ZERO,
-                Bytes::new(),
-                args.state_override.clone(),
-                reservoir_gas,
-            )
-            .await?;
+        let mut state_override = args.state_override.clone();
+        // A random address, so a user's override cannot collide with it.
+        let probe = Address::random();
+        state_override.insert(
+            probe,
+            AccountOverride {
+                code: Some(RESERVOIR_PROBE_V0_7_DEPLOYED_BYTECODE.clone()),
+                ..Default::default()
+            },
+        );
+        let gas = (u128::from(TX_MAX_GAS_LIMIT) + reservoir_gas)
+            .try_into()
+            .unwrap_or(u64::MAX);
+        let (tx, state_override) = self.entry_point.get_state_gas_simulate_handle_op_call(
+            op,
+            false,
+            Address::ZERO,
+            Bytes::new(),
+            gas,
+            state_override,
+        )?;
+        let probe_tx = TransactionRequest::default()
+            .from(SIMULATION_SENDER)
+            .to(probe)
+            .input(Bytes::from(probeCall {}.abi_encode()).into())
+            .gas_limit(TX_MAX_GAS_LIMIT + RESERVOIR_PROBE_RESERVOIR_GAS);
+        let results = simulate_calls(
+            &self.provider,
+            vec![probe_tx, tx],
+            Some(args.block_hash.into()),
+            state_override,
+        )
+        .await?;
+        let probe_result = &results[0];
+        let reservoir_in_simulation = probe_result.success
+            && probeCall::abi_decode_returns(&probe_result.return_data)
+                .context("should decode the reservoir probe's result")?;
+        if !reservoir_in_simulation {
+            self.metrics
+                .reservoir_simulation_without_reservoir
+                .increment(1);
+            anyhow::bail!("the node's eth_simulateV1 gives calls no state-gas reservoir");
+        }
+        let result = &results[1];
         let entry_point = *self.entry_point.address();
         Ok(result.success && user_operation_event_success(&result.logs, entry_point) == Some(true))
     }
@@ -1008,30 +1017,20 @@ where
             .build()
     }
 
-    /// Traces `simulateHandleOp` of `op`, with a `ReservoirProbe` as its target.
+    /// Traces `simulateHandleOp` of `op`.
     async fn trace_reservoir_copy(
         &self,
         op: UserOperation,
         gas: u64,
         args: &ReservoirArgs<'_>,
     ) -> ProviderResult<StateGasTrace> {
-        let mut state_override = args.state_override.clone();
-        // A random address, so a user's override cannot collide with it.
-        let probe = Address::random();
-        state_override.insert(
-            probe,
-            AccountOverride {
-                code: Some(RESERVOIR_PROBE_V0_7_DEPLOYED_BYTECODE.clone()),
-                ..Default::default()
-            },
-        );
         let (tx, state_override) = self.entry_point.get_state_gas_simulate_handle_op_call(
             op,
             false,
-            probe,
-            Bytes::from(probeCall {}.abi_encode()),
+            Address::ZERO,
+            Bytes::new(),
             gas,
-            state_override,
+            args.state_override.clone(),
         )?;
         trace_call_state_gas(
             &self.provider,
@@ -1184,9 +1183,12 @@ where
     }
 }
 
-/// Gas a reservoir-mode trace gets on top of the op's limits, for the entry point's own work and
-/// the reservoir probe (which needs one new slot's state gas)
+/// Gas a reservoir-mode trace or simulation gets on top of the op's limits, for the entry point's
+/// own work
 const RESERVOIR_TRACE_GAS_OVERHEAD: u128 = 1_000_000;
+
+/// The reservoir a `ReservoirProbe` call gets: enough for the new slot it writes
+const RESERVOIR_PROBE_RESERVOIR_GAS: u64 = 200_000;
 
 /// The gas of a trace of a copy with the given call and postOp limits
 fn reservoir_trace_gas(args: &ReservoirArgs<'_>, call_gas: u128, post_op_gas: u128) -> u64 {
@@ -1212,14 +1214,6 @@ struct ReservoirArgs<'a> {
     pvg_state: PvgState,
     verification_gas_limit: u128,
     paymaster_verification_gas_limit: u128,
-}
-
-/// An op's state gas, traced on a max-limit copy
-struct MeasuredStateGas {
-    /// `S`: the op's net state gas
-    state_gas: u128,
-    /// Whether the node gives calls a state-gas reservoir, as a transaction gets
-    reservoir_in_calls: bool,
 }
 
 /// True if a metered estimate failed in a way that more gas could fix. A revert with room for
@@ -2002,8 +1996,7 @@ mod tests {
     const RESERVOIR_SENDER: Address = Address::with_last_byte(0x5e);
     const RESERVOIR_PAYMASTER: Address = Address::with_last_byte(0xaa);
 
-    /// A `callTracer` result of `simulateHandleOp` with the root frame's EIP-8037 fields, and a
-    /// probe result of no reservoir in calls.
+    /// A `callTracer` result of `simulateHandleOp` with the root frame's EIP-8037 fields.
     fn state_gas_trace(state_gas: u64, op_success: Option<bool>) -> serde_json::Value {
         let ep = Address::ZERO;
         let logs = match op_success {
@@ -2031,31 +2024,6 @@ mod tests {
             "stateGasUsed": format!("{state_gas:#x}"),
             "gasRefund": "0x0",
         });
-        with_probe_result(trace, Some(false))
-    }
-
-    /// Sets the `ReservoirProbe` result in a trace's `simulateHandleOp` output; `None` for a
-    /// trace without one.
-    fn with_probe_result(
-        mut trace: serde_json::Value,
-        reservoir: Option<bool>,
-    ) -> serde_json::Value {
-        let output = reservoir.map(|reservoir| {
-            Bytes::from(
-                rundler_contracts::v0_7::IEntryPointSimulations::simulateHandleOpCall::abi_encode_returns(
-                    &rundler_contracts::v0_7::IEntryPointSimulations::ExecutionResult {
-                        targetSuccess: true,
-                        targetResult: reservoir.abi_encode().into(),
-                        ..Default::default()
-                    },
-                ),
-            )
-        });
-        let root = trace.as_object_mut().unwrap();
-        match output {
-            Some(output) => root.insert("output".into(), serde_json::json!(output)),
-            None => root.remove("output"),
-        };
         trace
     }
 
@@ -2068,6 +2036,8 @@ mod tests {
         peak_state_gas: u128,
         /// Whether the op, with postOp, succeeds when its call does
         post_op_succeeds: bool,
+        /// Whether the node's `eth_simulateV1` gives calls a reservoir
+        reservoir_in_simulation: bool,
     }
 
     impl OpModel {
@@ -2076,6 +2046,7 @@ mod tests {
                 execution_gas,
                 peak_state_gas,
                 post_op_succeeds: true,
+                reservoir_in_simulation: true,
             }
         }
 
@@ -2137,10 +2108,10 @@ mod tests {
                         + op.call_gas_limit()
                         + op.paymaster_post_op_gas_limit();
                     assert!(u128::from(gas) * 63 * 63 / (64 * 64) > limits, "gas {gas}");
-                    if target_call_data == (probeCall {}).abi_encode() {
-                        assert!(state_override.contains_key(&target), "probe has no code");
-                        assert!(!skip_post_op, "the trace runs postOp");
-                    }
+                    assert!(
+                        target.is_zero() || target_call_data != (probeCall {}).abi_encode(),
+                        "the probe is not simulateHandleOp's target"
+                    );
                     // The call's arguments, for the provider mock.
                     let tx = TransactionRequest::default()
                         .to(Address::with_last_byte(u8::from(skip_post_op)))
@@ -2165,8 +2136,32 @@ mod tests {
                 counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let model = model.expect("no eth_simulateV1 call expected");
                 let block = &payload["blockStateCalls"][0];
+                let calls = block["calls"].as_array().unwrap();
+                // a `ReservoirProbe` call first, with the final check
+                let probe = (calls.len() == 2).then(|| {
+                    let probe: TransactionRequest =
+                        serde_json::from_value(calls[0].clone()).unwrap();
+                    let to = *probe.to.unwrap().to().unwrap();
+                    assert!(
+                        block["stateOverrides"]
+                            .as_object()
+                            .unwrap()
+                            .keys()
+                            .any(|key| key.parse::<Address>().ok() == Some(to)),
+                        "probe has no code"
+                    );
+                    assert_eq!(
+                        probe.input.into_input().unwrap(),
+                        Bytes::from((probeCall {}).abi_encode())
+                    );
+                    serde_json::json!({
+                        "status": "0x1",
+                        "returnData": Bytes::from(model.reservoir_in_simulation.abi_encode()),
+                        "gasUsed": "0x0",
+                    })
+                });
                 let tx: TransactionRequest =
-                    serde_json::from_value(block["calls"][0].clone()).unwrap();
+                    serde_json::from_value(calls[calls.len() - 1].clone()).unwrap();
                 let gas = tx.gas.unwrap();
                 let block_gas_limit: U256 =
                     serde_json::from_value(block["blockOverrides"]["gasLimit"].clone()).unwrap();
@@ -2176,12 +2171,16 @@ mod tests {
                 let skip_post_op = tx.to.unwrap().to().unwrap().0[19] == 1;
                 let input = tx.input.into_input().unwrap_or_default();
                 if input.is_empty() {
-                    // the op as it will run, with postOp
+                    // the op as it will run, with postOp, and the probe
                     assert!(!skip_post_op);
                     let call_gas_limit: u128 = tx.value.unwrap().to();
                     let success = call_gas_limit >= need && model.post_op_succeeds;
-                    return Ok(simulated_call(Bytes::new(), Some(success)));
+                    let mut response = simulated_call(Bytes::new(), Some(success));
+                    let calls = response[0]["calls"].as_array_mut().unwrap();
+                    calls.insert(0, probe.expect("the final check runs the probe"));
+                    return Ok(response);
                 }
+                assert!(probe.is_none(), "only the final check runs the probe");
                 assert!(skip_post_op, "a call gas search skips postOp");
                 let target_result = match CallGasEstimationProxyCalls::abi_decode(&input).unwrap() {
                     CallGasEstimationProxyCalls::estimateCallGas(call) => {
@@ -2584,28 +2583,18 @@ mod tests {
         assert!(matches!(error, GasEstimationError::CallGasLimitTooLow(1)));
     }
 
-    /// Calls get a reservoir, which reservoir mode does not support yet: the metered error,
-    /// without simulations.
+    /// The node's `eth_simulateV1` gives calls no reservoir: the simulations measured nothing
+    /// the bundle will do, so the metered error.
     #[tokio::test]
-    async fn test_reservoir_mode_fails_closed_with_reservoir_in_calls() {
-        let trace = with_probe_result(
+    async fn test_reservoir_mode_fails_without_reservoir_in_simulation() {
+        let model = OpModel {
+            reservoir_in_simulation: false,
+            ..deploy_24kb()
+        };
+        let (entry, provider, _) = reservoir_mocks(
             state_gas_trace(DEPLOY_24KB_STATE_GAS, Some(true)),
-            Some(true),
+            Some(model),
         );
-        let (entry, provider, _) = reservoir_mocks(trace, None);
-
-        let error = run_reservoir(entry, provider, reservoir_settings())
-            .await
-            .unwrap_err();
-        assert!(matches!(error, GasEstimationError::CallGasLimitTooLow(1)));
-    }
-
-    /// Without the probe's result, whether calls get a reservoir is not known: the metered
-    /// error.
-    #[tokio::test]
-    async fn test_reservoir_mode_without_probe_result() {
-        let trace = with_probe_result(state_gas_trace(DEPLOY_24KB_STATE_GAS, Some(true)), None);
-        let (entry, provider, _) = reservoir_mocks(trace, None);
 
         let error = run_reservoir(entry, provider, reservoir_settings())
             .await

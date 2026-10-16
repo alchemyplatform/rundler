@@ -17,12 +17,9 @@
 use std::future::Future;
 
 use alloy_primitives::Address;
-use alloy_sol_types::{SolCall, SolEvent};
+use alloy_sol_types::SolEvent;
 use futures_util::future::try_join_all;
-use rundler_contracts::v0_7::{
-    IEntryPoint::UserOperationEvent, IEntryPointSimulations::simulateHandleOpCall,
-    ReservoirProbe::probeCall,
-};
+use rundler_contracts::v0_7::IEntryPoint::UserOperationEvent;
 use rundler_provider::{GethDebugTracerCallFrame as CallFrame, SimulatedLog};
 
 /// EIP-8037 state gas of one new storage slot
@@ -81,17 +78,6 @@ pub(crate) fn user_operation_event_success(
                 .ok()
                 .map(|event| event.success)
         })
-}
-
-/// Whether the node gave the traced `simulateHandleOp` call a state-gas reservoir, read from the
-/// result of its target, a `ReservoirProbe`. `None` if the call has no such result.
-pub(crate) fn probe_found_reservoir(frame: &CallFrame) -> Option<bool> {
-    let output = frame.output.as_ref()?;
-    let result = simulateHandleOpCall::abi_decode_returns(output).ok()?;
-    if !result.targetSuccess {
-        return None;
-    }
-    probeCall::abi_decode_returns(&result.targetResult).ok()
 }
 
 /// Guesses tried in parallel per round of a [`least_passing`] search
@@ -261,26 +247,5 @@ mod tests {
         })
         .await;
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn reads_probe_result() {
-        let mut root = frame(CALLER, EP, 0, vec![]);
-        assert_eq!(probe_found_reservoir(&root), None);
-        for reservoir in [false, true] {
-            root.output = Some(Bytes::from(simulateHandleOpCall::abi_encode_returns(
-                &rundler_contracts::v0_7::IEntryPointSimulations::ExecutionResult {
-                    targetSuccess: true,
-                    targetResult: reservoir.abi_encode().into(),
-                    ..Default::default()
-                },
-            )));
-            assert_eq!(probe_found_reservoir(&root), Some(reservoir));
-        }
-        // the target call failed
-        root.output = Some(Bytes::from(simulateHandleOpCall::abi_encode_returns(
-            &rundler_contracts::v0_7::IEntryPointSimulations::ExecutionResult::default(),
-        )));
-        assert_eq!(probe_found_reservoir(&root), None);
     }
 }

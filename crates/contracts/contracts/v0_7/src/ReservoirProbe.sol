@@ -6,12 +6,12 @@ pragma solidity ^0.8.12;
  *
  * Clients differ: in some, a call's gas above TX_MAX_GAS_LIMIT goes to the reservoir as in a
  * transaction; in others (reth v2.7), a call gets no reservoir and all state is charged to the
- * frames' gas. Used as `simulateHandleOp`'s target by state override, after the op has run.
+ * frames' gas. Called by state override, in the same `eth_simulateV1` request as reservoir-mode
+ * estimation's simulations, which rely on their calls getting a reservoir.
  *
  * `probe` gives `store` less gas than one new slot's state gas. `store` writes a new slot, so it
  * only gets to its revert if the slot's state gas comes from a reservoir; otherwise it runs out of
- * gas. Either way it reverts, which rolls back its state, so the call's net state gas is
- * unchanged.
+ * gas. Either way it reverts, which rolls back its state.
  */
 contract ReservoirProbe {
     /// Below the state gas of a new slot (97,920), above its execution gas.

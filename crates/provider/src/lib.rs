@@ -49,7 +49,7 @@ pub use alloy_serde::WithOtherFields;
 pub use fees::new_fee_estimator;
 mod state_gas;
 pub use state_gas::{
-    SimulatedCall, SimulatedLog, StateGasTrace, simulate_call, trace_call_state_gas,
+    SimulatedCall, SimulatedLog, StateGasTrace, simulate_call, simulate_calls, trace_call_state_gas,
 };
 mod traits;
 pub mod transaction;

@@ -157,12 +157,29 @@ pub async fn simulate_call<P: EvmProvider>(
     block_id: Option<BlockId>,
     state_override: StateOverride,
 ) -> ProviderResult<SimulatedCall> {
-    let block_gas_limit = tx.gas.unwrap_or_default().saturating_mul(2);
+    let mut calls = simulate_calls(provider, vec![tx], block_id, state_override).await?;
+    Ok(calls.remove(0))
+}
+
+/// As [`simulate_call`], for `txs` run one after the other in one block, in one request (so on
+/// one node).
+pub async fn simulate_calls<P: EvmProvider>(
+    provider: &P,
+    txs: Vec<TransactionRequest>,
+    block_id: Option<BlockId>,
+    state_override: StateOverride,
+) -> ProviderResult<Vec<SimulatedCall>> {
+    let count = txs.len();
+    let block_gas_limit = txs
+        .iter()
+        .map(|tx| tx.gas.unwrap_or_default())
+        .fold(0_u64, u64::saturating_add)
+        .saturating_mul(2);
     let payload = json!({
         "blockStateCalls": [{
             "blockOverrides": { "gasLimit": U64::from(block_gas_limit) },
             "stateOverrides": state_override,
-            "calls": [tx],
+            "calls": txs,
         }],
     });
     let block_id = block_id.unwrap_or(BlockNumberOrTag::Latest.into());
@@ -172,17 +189,26 @@ pub async fn simulate_call<P: EvmProvider>(
         .await?;
     let blocks: Vec<RawSimulatedBlock> =
         serde_json::from_value(blocks).context("invalid eth_simulateV1 result")?;
-    let call = blocks
+    let calls: Vec<SimulatedCall> = blocks
         .into_iter()
         .next()
-        .and_then(|block| block.calls.into_iter().next())
-        .context("eth_simulateV1 result has no call")?;
-    Ok(SimulatedCall {
-        success: call.status == U64::from(1),
-        return_data: call.return_data,
-        gas_used: call.gas_used.to(),
-        logs: call.logs,
-    })
+        .context("eth_simulateV1 result has no block")?
+        .calls
+        .into_iter()
+        .map(|call| SimulatedCall {
+            success: call.status == U64::from(1),
+            return_data: call.return_data,
+            gas_used: call.gas_used.to(),
+            logs: call.logs,
+        })
+        .collect();
+    if calls.len() != count {
+        Err(anyhow::anyhow!(
+            "eth_simulateV1 returned {} calls for {count}",
+            calls.len()
+        ))?;
+    }
+    Ok(calls)
 }
 
 #[cfg(test)]
