@@ -578,6 +578,7 @@ impl TryFrom<NewHead> for PoolNewHead {
         Ok(Self {
             block_hash: from_bytes(&new_head.block_hash)?,
             block_number: new_head.block_number,
+            block_timestamp: new_head.block_timestamp,
             address_updates: new_head
                 .address_updates
                 .into_iter()
@@ -592,6 +593,7 @@ impl From<PoolNewHead> for NewHead {
         Self {
             block_hash: head.block_hash.to_proto_bytes(),
             block_number: head.block_number,
+            block_timestamp: head.block_timestamp,
             address_updates: head
                 .address_updates
                 .into_iter()
@@ -879,7 +881,22 @@ impl TryUoFromProto<PoolOperationStatus> for RundlerPoolOperationStatus {
 mod tests {
     use alloy_primitives::{Address, B256, U256};
 
-    use super::{PoolOperationSummary, RundlerPoolOperationSummary};
+    use super::{NewHead, PoolNewHead, PoolOperationSummary, RundlerPoolOperationSummary};
+
+    #[test]
+    fn new_head_roundtrip_preserves_timestamp() {
+        for block_timestamp in [Some(1791294816), None] {
+            let head = PoolNewHead {
+                block_hash: B256::from([1u8; 32]),
+                block_number: 7,
+                block_timestamp,
+                address_updates: vec![],
+            };
+            let decoded = PoolNewHead::try_from(NewHead::from(head)).unwrap();
+            assert_eq!(decoded.block_timestamp, block_timestamp);
+            assert_eq!(decoded.block_number, 7);
+        }
+    }
 
     #[test]
     fn pool_operation_summary_roundtrip_preserves_fee_fields() {

@@ -63,7 +63,7 @@ pub async fn get_nonce_and_fees(
     priority_fee_mult: f64,
 ) -> anyhow::Result<(u64, u128, u128)> {
     let (nonce, base_fee, priority_fee) = tokio::try_join!(
-        provider.get_transaction_count(address),
+        provider.get_transaction_count(address, None),
         provider.get_pending_base_fee(),
         provider.get_max_priority_fee()
     )?;

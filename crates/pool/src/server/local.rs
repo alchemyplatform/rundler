@@ -40,7 +40,7 @@ use rundler_types::{
     },
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
-use tracing::{error, info};
+use tracing::{Level, error, info};
 
 use crate::{
     chain::{ChainSubscriber, UpdateType},
@@ -780,6 +780,9 @@ impl LocalPoolServerRunner {
                                 let _ = block_sender.send(NewHead {
                                     block_hash: chain_update.latest_block_hash,
                                     block_number: chain_update.latest_block_number,
+                                    block_timestamp: Some(
+                                        chain_update.latest_block_timestamp.seconds_since_epoch(),
+                                    ),
                                     address_updates: chain_update.address_updates.clone(),
                                 });
                             }
@@ -792,6 +795,8 @@ impl LocalPoolServerRunner {
                         // Responses are sent in the spawned task
                         ServerRequestKind::AddOp { entry_point, op, perms, origin } => {
                             let fut = |mempool: Arc<dyn Mempool>, response: oneshot::Sender<Result<ServerResponse, PoolError>>| async move {
+                                // Only clone the op for the failure log when debug logging is enabled
+                                let logged_op = tracing::enabled!(Level::DEBUG).then(|| op.clone());
                                 let resp = 'resp: {
                                     match mempool.entry_point_version().abi_version() {
                                         EntryPointAbiVersion::V0_6 => {
@@ -811,6 +816,10 @@ impl LocalPoolServerRunner {
                                         Err(e) => Err(e.into()),
                                     }
                                 };
+
+                                if let (Err(error), Some(op)) = (&resp, logged_op) {
+                                    log_add_op_failure(entry_point, &op, error);
+                                }
 
                                 if let Err(e) = response.send(resp) {
                                     tracing::error!("Failed to send response: {:?}", e);
@@ -1121,6 +1130,22 @@ enum ServerResponse {
     },
 }
 
+/// Logs a failed add operation request with the op's gas details.
+///
+/// The error is printed with its full cause chain, so a node-side failure (e.g. a provider error)
+/// can be told apart from the pool rejecting the op.
+fn log_add_op_failure(entry_point: Address, op: &UserOperationVariant, error: &PoolError) {
+    let op_hash = op.hash();
+    let sender = op.sender();
+    let factory = op.factory();
+    let paymaster = op.paymaster();
+    let pre_verification_gas = op.pre_verification_gas();
+    let total_verification_gas_limit = op.total_verification_gas_limit();
+    tracing::debug!(
+        "Pool add_operation failed. Op hash: {op_hash:?} Sender: {sender:?} Factory: {factory:?} Paymaster: {paymaster:?} preVerificationGas: {pre_verification_gas} total verification gas limit: {total_verification_gas_limit} Entrypoint: {entry_point:?} Error: {error:#} Op: {op:?}"
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::HashSet, iter::zip, sync::Arc};
@@ -1134,7 +1159,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{chain::ChainUpdate, mempool::MockMempool};
+    use crate::{chain::ChainUpdate, mempool::MockMempool, test_utils::MessageCollector};
 
     #[tokio::test]
     async fn test_add_op() {
@@ -1157,6 +1182,75 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(hash0, hash1);
+    }
+
+    #[tokio::test]
+    async fn test_add_op_failure_debug_log() {
+        let mut mock_pool = MockMempool::new();
+        mock_pool
+            .expect_entry_point_version()
+            .returning(|| EntryPointVersion::V0_6);
+        mock_pool.expect_add_operation().returning(|_, _, _| {
+            Err(MempoolError::Other(
+                anyhow::anyhow!("connection refused").context("failed to get latest block"),
+            ))
+        });
+
+        let ep = ChainSpec::default().entry_point_address_v0_6;
+        let pool: Arc<dyn Mempool> = Arc::new(mock_pool);
+        let state = setup(HashMap::from([(ep, pool)]));
+
+        let collector = MessageCollector::default();
+        let _guard = tracing::subscriber::set_default(collector.clone());
+
+        let ret = state
+            .handle
+            .add_op(mock_op(), UserOperationPermissions::default())
+            .await;
+        assert!(ret.is_err());
+
+        // the full cause chain is logged, not just the outermost context
+        let messages = collector.messages();
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.starts_with("Pool add_operation failed.")
+                    && m.contains(&format!("Entrypoint: {ep:?}"))
+                    && m.contains("Error: failed to get latest block: connection refused")),
+            "missing failure log: {messages:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_op_version_mismatch_debug_log() {
+        // a v0.7 op sent to a v0.6 mempool is rejected before reaching the mempool
+        let op = mock_op_v0_7();
+        let mut mock_pool = MockMempool::new();
+        mock_pool
+            .expect_entry_point_version()
+            .returning(|| EntryPointVersion::V0_6);
+        mock_pool.expect_add_operation().never();
+
+        let pool: Arc<dyn Mempool> = Arc::new(mock_pool);
+        let state = setup(HashMap::from([(op.entry_point(), pool)]));
+
+        let collector = MessageCollector::default();
+        let _guard = tracing::subscriber::set_default(collector.clone());
+
+        let ret = state
+            .handle
+            .add_op(op, UserOperationPermissions::default())
+            .await;
+        assert!(ret.is_err());
+
+        let messages = collector.messages();
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.starts_with("Pool add_operation failed.")
+                    && m.contains("Error: Invalid user operation version for mempool v0.6")),
+            "missing failure log: {messages:?}"
+        );
     }
 
     #[tokio::test]

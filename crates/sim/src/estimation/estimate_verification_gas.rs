@@ -16,7 +16,7 @@ use std::{future::Future, pin::Pin};
 use alloy_primitives::{Address, B256, Bytes, U256};
 use async_trait::async_trait;
 use rundler_provider::{EvmProvider, StateOverride, TransactionBuilder, TransactionRequest};
-use rundler_types::{UserOperation, chain::ChainSpec, constants::SIMULATION_SENDER};
+use rundler_types::{UserOperation, constants::SIMULATION_SENDER};
 use rundler_utils::authorization_utils;
 use tracing::instrument;
 
@@ -77,7 +77,6 @@ pub struct EstimateGasArgs {
 /// Implementation of a verification gas estimator
 #[derive(Clone)]
 pub struct VerificationGasEstimatorImpl<S, P> {
-    chain_spec: ChainSpec,
     settings: Settings,
     specialization: S,
     provider: P,
@@ -136,11 +135,7 @@ where
                     timer.elapsed().as_millis(),
                     num_rounds
                 );
-                if op.paymaster().is_none() {
-                    Ok(estimate + self.chain_spec.deposit_transfer_overhead())
-                } else {
-                    Ok(estimate)
-                }
+                Ok(estimate)
             }
             BinarySearchResult::Revert(revert_data) => {
                 Err(self.specialization.decode_revert(&revert_data))
@@ -155,9 +150,8 @@ where
     P: EvmProvider,
 {
     /// Create a new instance
-    pub fn new(chain_spec: ChainSpec, settings: Settings, provider: P, specialization: S) -> Self {
+    pub fn new(settings: Settings, provider: P, specialization: S) -> Self {
         Self {
-            chain_spec,
             settings,
             provider,
             specialization,

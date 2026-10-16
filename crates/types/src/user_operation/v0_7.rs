@@ -18,7 +18,9 @@ use alloy_sol_types::{SolStruct, SolValue, eip712_domain, sol};
 use rundler_contracts::v0_7::{PackedUserOperation, PackedUserOperationNoSig};
 use rundler_utils::random::{random_bytes, random_bytes_array};
 
-use super::{UserOperation as UserOperationTrait, UserOperationId, UserOperationVariant};
+use super::{
+    CalldataStats, UserOperation as UserOperationTrait, UserOperationId, UserOperationVariant,
+};
 use crate::{
     Entity, EntryPointVersion, aggregator::AggregatorCosts, authorization::Eip7702Auth,
     chain::ChainSpec,
@@ -118,10 +120,8 @@ pub struct UserOperation {
     hash: B256,
     /// The packed user operation
     packed: PackedUserOperation,
-    /// The gas cost of the calldata
-    calldata_gas_cost: u128,
-    /// The EIP-7623 floor gas limit of the calldata
-    calldata_floor_gas_limit: u128,
+    /// Byte counts of the packed user operation
+    calldata_stats: CalldataStats,
 
     /*
      * Signature aggregator fields
@@ -130,10 +130,8 @@ pub struct UserOperation {
     aggregator: Option<Address>,
     /// The full original signature, after the `signature` field is modified post-aggregation
     original_signature: Bytes,
-    /// The original calldata cost
-    original_calldata_cost: u128,
-    /// The original calldata floor limit
-    original_calldata_floor_limit: u128,
+    /// The original calldata byte counts
+    original_calldata_stats: CalldataStats,
     /// The costs associated with the aggregator
     aggregator_costs: AggregatorCosts,
 }
@@ -295,8 +293,9 @@ impl UserOperationTrait for UserOperation {
     }
 
     fn static_pre_verification_gas(&self, chain_spec: &ChainSpec) -> u128 {
-        self.calldata_gas_cost
+        self.calldata_stats.gas_cost(chain_spec)
             + chain_spec.per_user_op_v0_7_gas()
+            + super::call_data_copy_gas(chain_spec, &self.call_data)
             + (if self.factory.is_some() {
                 chain_spec.per_user_op_deploy_overhead_gas()
             } else {
@@ -304,8 +303,8 @@ impl UserOperationTrait for UserOperation {
             })
     }
 
-    fn calldata_floor_gas_limit(&self) -> u128 {
-        self.calldata_floor_gas_limit
+    fn calldata_floor_gas_limit(&self, chain_spec: &ChainSpec) -> u128 {
+        self.calldata_stats.floor_gas_cost(chain_spec)
     }
 
     fn required_pre_execution_buffer(&self) -> u128 {
@@ -333,7 +332,6 @@ impl UserOperationTrait for UserOperation {
 
     fn transform_for_aggregator(
         mut self,
-        chain_spec: &ChainSpec,
         aggregator: Address,
         aggregator_costs: AggregatorCosts,
         new_signature: Bytes,
@@ -341,15 +339,12 @@ impl UserOperationTrait for UserOperation {
         self.aggregator = Some(aggregator);
         self.aggregator_costs = aggregator_costs;
         self.original_signature = self.signature;
-        self.original_calldata_cost = self.calldata_gas_cost;
-        self.original_calldata_floor_limit = self.calldata_floor_gas_limit;
+        self.original_calldata_stats = self.calldata_stats;
         self.signature = new_signature;
 
         // re-pack, hash stays the same as only signature changed
         self.packed = pack_user_operation(self.clone());
-        // recalculate calldata gas cost
-        (self.calldata_gas_cost, self.calldata_floor_gas_limit) =
-            super::calc_calldata_gas_costs(&self.packed, chain_spec);
+        self.calldata_stats = CalldataStats::of(&self.packed);
 
         self
     }
@@ -361,8 +356,7 @@ impl UserOperationTrait for UserOperation {
     fn with_original_signature(mut self) -> Self {
         self.signature = self.original_signature.clone();
         self.packed = pack_user_operation(self.clone());
-        self.calldata_gas_cost = self.original_calldata_cost;
-        self.calldata_floor_gas_limit = self.original_calldata_floor_limit;
+        self.calldata_stats = self.original_calldata_stats;
         self
     }
 
@@ -1066,12 +1060,10 @@ impl<'a> UserOperationBuilder<'a> {
             chain_id: self.chain_spec.id,
             hash: B256::ZERO,
             packed: PackedUserOperation::default(),
-            calldata_gas_cost: 0,
-            calldata_floor_gas_limit: 0,
+            calldata_stats: CalldataStats::default(),
             aggregator: self.aggregator,
             original_signature: Bytes::new(),
-            original_calldata_cost: 0,
-            original_calldata_floor_limit: 0,
+            original_calldata_stats: CalldataStats::default(),
             aggregator_costs: AggregatorCosts::default(),
         };
 
@@ -1086,14 +1078,12 @@ impl<'a> UserOperationBuilder<'a> {
             delegation_address,
         );
 
-        let (calldata_gas_cost, calldata_floor_gas_limit) =
-            super::calc_calldata_gas_costs(&packed, self.chain_spec);
+        let calldata_stats = CalldataStats::of(&packed);
 
         UserOperation {
             hash,
             packed,
-            calldata_gas_cost,
-            calldata_floor_gas_limit,
+            calldata_stats,
             ..uo
         }
     }
@@ -1460,14 +1450,10 @@ mod tests {
         .aggregator(aggregator)
         .build();
 
-        let original_calldata_cost = uo.calldata_gas_cost;
+        let original_calldata_cost = uo.calldata_stats.gas_cost(&cs);
 
-        let uo = uo.transform_for_aggregator(
-            &cs,
-            aggregator,
-            AggregatorCosts::default(),
-            new_sig.clone(),
-        );
+        let uo =
+            uo.transform_for_aggregator(aggregator, AggregatorCosts::default(), new_sig.clone());
 
         assert_eq!(uo.signature, new_sig);
         assert_eq!(uo.original_signature, orig_sig);
@@ -1476,7 +1462,46 @@ mod tests {
         let uo = uo.with_original_signature();
         assert_eq!(uo.signature, orig_sig);
         assert_eq!(uo.packed.signature, orig_sig);
-        assert_eq!(uo.calldata_gas_cost, original_calldata_cost);
+        assert_eq!(uo.calldata_stats.gas_cost(&cs), original_calldata_cost);
+    }
+
+    #[test]
+    fn test_calldata_gas_follows_gas_schedule() {
+        let cs = ChainSpec {
+            eip7623_enabled: true,
+            glamsterdam_activation: crate::chain::ForkActivation::Timestamp(1_000),
+            ..Default::default()
+        };
+        let pre = cs.at_timestamp(999);
+        let post = cs.at_timestamp(1_000);
+
+        let uo = UserOperationBuilder::new(
+            &cs,
+            EntryPointVersion::V0_7,
+            UserOperationRequiredFields {
+                sender: Address::ZERO,
+                nonce: U256::ZERO,
+                call_data: Bytes::from(vec![1_u8; 100]),
+                call_gas_limit: 0,
+                verification_gas_limit: 0,
+                pre_verification_gas: 0,
+                max_priority_fee_per_gas: 0,
+                max_fee_per_gas: 0,
+                signature: Bytes::new(),
+            },
+        )
+        .build();
+
+        let packed = uo.packed.abi_encode();
+        let non_zero = packed.iter().filter(|b| **b != 0).count() as u128;
+        let zero = packed.len() as u128 - non_zero;
+        assert_eq!(uo.calldata_floor_gas_limit(&pre), zero * 10 + non_zero * 40);
+        assert_eq!(uo.calldata_floor_gas_limit(&post), (zero + non_zero) * 64);
+        // standard calldata pricing is unchanged by Glamsterdam
+        assert_eq!(
+            uo.calldata_stats.gas_cost(&pre),
+            uo.calldata_stats.gas_cost(&post)
+        );
     }
 
     #[test]

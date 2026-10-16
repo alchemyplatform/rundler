@@ -53,6 +53,8 @@ pub struct NewHead {
     pub block_hash: B256,
     /// The number of the new head
     pub block_number: u64,
+    /// The timestamp of the new head, `None` if sent by a pool that predates this field
+    pub block_timestamp: Option<u64>,
     /// The updates to the state of the addresses
     pub address_updates: Vec<AddressUpdate>,
 }

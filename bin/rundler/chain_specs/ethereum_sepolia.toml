@@ -8,3 +8,6 @@ flashbots_relay_url = "https://relay-sepolia.flashbots.net"
 min_max_priority_fee_per_gas = 100000000
 calldata_floor_zero_byte_gas = 10
 calldata_floor_non_zero_byte_gas = 40
+
+# TODO(verify): EF Glamsterdam testnet announcement (2026-09-17), epoch 353024
+glamsterdam_activation = 1791294816

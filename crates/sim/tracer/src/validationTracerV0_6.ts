@@ -94,6 +94,7 @@ type StringSet = Record<string, boolean | undefined>;
     "BLOBBASEFEE",
     "BLOBHASH",
     "NUMBER",
+    "SLOTNUM",
     "SELFBALANCE",
     "BALANCE",
     "ORIGIN",

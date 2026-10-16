@@ -26,8 +26,9 @@ use parking_lot::RwLock;
 use rand::Rng;
 use rundler_provider::DAGasOracleSync;
 use rundler_types::{
-    Entity, EntityType, GasFees, Timestamp, UserOperation, UserOperationId, UserOperationVariant,
-    chain::ChainSpec,
+    Entity, EntityType, GasFees, PvgState, Timestamp, UserOperation, UserOperationId,
+    UserOperationVariant,
+    chain::{ChainSpec, ForkActivation, GasScheduleId},
     da::DAGasBlockData,
     pool::{
         BundleOutcome, MempoolError, PendingBundleInfo, PoolOperation, PoolOperationStatus,
@@ -125,6 +126,8 @@ pub(crate) struct PoolInner<D> {
     cache_size: SizeTracker,
     /// The number of the previous block
     prev_block_number: u64,
+    /// The gas schedule of the last maintained block
+    gas_schedule_id: Option<GasScheduleId>,
     /// The metrics of pool.
     metrics: PoolMetrics,
     /// Event sender
@@ -167,6 +170,7 @@ where
             pool_size: SizeTracker::default(),
             cache_size: SizeTracker::default(),
             prev_block_number: 0,
+            gas_schedule_id: None,
             metrics,
             event_sender,
         }
@@ -208,11 +212,24 @@ where
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn add_operation(
         &mut self,
         op: PoolOperation,
         base_fee: u128,
         required_pvg: u128,
+    ) -> MempoolResult<B256> {
+        self.add_operation_with_pvg_state(op, base_fee, required_pvg, PvgState::unknown())
+    }
+
+    /// Adds an operation whose `required_pvg` was priced with `pvg_state`. The state is kept so
+    /// that maintenance re-prices the operation the same way.
+    pub(crate) fn add_operation_with_pvg_state(
+        &mut self,
+        op: PoolOperation,
+        base_fee: u128,
+        required_pvg: u128,
+        pvg_state: PvgState,
     ) -> MempoolResult<B256> {
         // only eligibility criteria is required PVG which is enabled when da_gas_tracking is enabled
         let is_eligible = if self.config.da_gas_tracking_enabled && self.da_gas_oracle.is_some() {
@@ -239,6 +256,7 @@ where
             is_eligible,
             base_fee,
             self.prev_block_number,
+            pvg_state,
         ));
 
         let hash = self.add_operation_internal(pool_op)?;
@@ -488,6 +506,32 @@ where
         let suspect_tracking_enabled = self.config.suspect_tracking_enabled;
         let suspect_threshold = self.config.rpc_failures_before_suspect;
 
+        let timestamp = block_timestamp.seconds_since_epoch();
+        let chain_spec = self.config.chain_spec.for_bundle_inclusion_after(timestamp);
+        let gas_schedule_id = self.config.chain_spec.gas_schedule_id_at(timestamp);
+        let gas_schedule_changed = self
+            .gas_schedule_id
+            .replace(gas_schedule_id)
+            .is_some_and(|prev| prev != gas_schedule_id);
+        if gas_schedule_changed {
+            info!(
+                "Gas schedule changed to {gas_schedule_id} at block {block_number}, rechecking preVerificationGas of pool operations"
+            );
+            self.metrics.gas_schedule_transitions.increment(1);
+        }
+        self.metrics.glamsterdam_gas_schedule_active.set(
+            if gas_schedule_id == GasScheduleId::Glamsterdam {
+                1.0
+            } else {
+                0.0
+            },
+        );
+        // Without a DA oracle, an op's required preVerificationGas only changes with the gas
+        // schedule, which admission already checked. So only chains with a schedule change
+        // need a per-block recheck.
+        let recheck_pvg_without_da =
+            self.config.chain_spec.glamsterdam_activation != ForkActivation::Never;
+
         // clear best operations to update price and resort
         self.best.clear();
 
@@ -549,30 +593,32 @@ where
                 counts.suspects += 1;
             }
 
-            // check for eligibility
-            if let Some(da_gas_oracle) = self.da_gas_oracle.as_ref()
-                && let Some(block_da_data) = block_da_data
-                && op.po.perms.bundler_sponsorship.is_none()
-            // skip if bundler sponsored
-            {
-                // TODO(bundle): assuming a bundle size of 1
-                let bundle_size = 1;
-
-                let required_da_gas = da_gas_oracle.calc_da_gas_sync(
+            // TODO(bundle): assuming a bundle size of 1
+            let bundle_size = 1;
+            // `None` skips the eligibility check
+            let required_da_gas = match (self.da_gas_oracle.as_ref(), block_da_data) {
+                _ if op.po.perms.bundler_sponsorship.is_some() => None,
+                (Some(da_gas_oracle), Some(block_da_data)) => Some(da_gas_oracle.calc_da_gas_sync(
                     &op.po.da_gas_data,
                     block_da_data,
                     op.uo().gas_price(base_fee),
                     op.uo().extra_data_len(bundle_size),
-                );
+                )),
+                (None, _) if recheck_pvg_without_da => Some(0),
+                _ => None,
+            };
 
+            // check for eligibility
+            if let Some(required_da_gas) = required_da_gas {
                 let mut required_pvg = op.uo().required_pre_verification_gas(
-                    &self.config.chain_spec,
+                    &chain_spec,
                     bundle_size,
                     required_da_gas,
                     Some(
                         self.config
                             .verification_gas_limit_efficiency_reject_threshold,
                     ),
+                    &op.pvg_state,
                 );
                 if let Some(pct) = op.po.perms.underpriced_bundle_pct {
                     required_pvg = math::percent_ceil(required_pvg, pct);
@@ -583,6 +629,11 @@ where
                 if actual_pvg < required_pvg {
                     if op.eligible() {
                         op.set_ineligible();
+                        if gas_schedule_changed {
+                            self.metrics
+                                .num_ineligible_after_gas_schedule_change
+                                .increment(1);
+                        }
                         events.push(PoolEvent::UpdatedDAData {
                             op_hash: *hash,
                             eligible: false,
@@ -1081,6 +1132,8 @@ struct OrderedPoolOperation {
     /// The block number at which the operation was added to the pool
     added_at_block: u64,
     suspect_state: RwLock<SuspectState>,
+    /// On-chain state the operation's required pre-verification gas was priced with at precheck
+    pvg_state: PvgState,
 }
 
 impl OrderedPoolOperation {
@@ -1090,6 +1143,7 @@ impl OrderedPoolOperation {
         eligible: bool,
         base_fee: u128,
         current_block_number: u64,
+        pvg_state: PvgState,
     ) -> Self {
         Self {
             gas_price: RwLock::new(po.uo.gas_price(base_fee)),
@@ -1100,6 +1154,7 @@ impl OrderedPoolOperation {
             time_to_mine: RwLock::new(Some(TimeToMineInfo::new(current_block_number))),
             added_at_block: current_block_number,
             suspect_state: RwLock::new(SuspectState::default()),
+            pvg_state,
         }
     }
 
@@ -1311,11 +1366,19 @@ struct PoolMetrics {
         describe = "whether poison user operation suspect tracking is enabled (1) or disabled (0)."
     )]
     suspect_tracking_enabled: Gauge,
+    #[metric(describe = "whether the Glamsterdam gas schedule is active (1) or not (0).")]
+    glamsterdam_gas_schedule_active: Gauge,
+    #[metric(describe = "the number of gas schedule changes seen by pool maintenance.")]
+    gas_schedule_transitions: Counter,
+    #[metric(
+        describe = "the number of ops made ineligible by insufficient preVerificationGas in the block where the gas schedule changed."
+    )]
+    num_ineligible_after_gas_schedule_change: Counter,
 }
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::U256;
+    use alloy_primitives::{Bytes, U256};
     use rundler_provider::MockDAGasOracleSync;
     use rundler_types::{
         BundlerSponsorship, EntityInfo, EntityInfos, GasFees, UserOperation as UserOperationTrait,
@@ -1721,7 +1784,7 @@ mod tests {
         assert_eq!(pool.address_count(&sender), 1);
         assert_eq!(
             pool.pool_size,
-            OrderedPoolOperation::new(Arc::new(po1), 0, true, 0, 0).mem_size(),
+            OrderedPoolOperation::new(Arc::new(po1), 0, true, 0, 0, PvgState::unknown()).mem_size(),
         );
     }
 
@@ -1763,7 +1826,7 @@ mod tests {
         assert_eq!(pool.address_count(&paymaster2), 1);
         assert_eq!(
             pool.pool_size,
-            OrderedPoolOperation::new(Arc::new(po2), 0, true, 0, 0).mem_size()
+            OrderedPoolOperation::new(Arc::new(po2), 0, true, 0, 0, PvgState::unknown()).mem_size()
         );
     }
 
@@ -1830,6 +1893,152 @@ mod tests {
 
         assert!(pool.get_operation_by_hash(hash).is_some());
         assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 0); // UO is ineligible due to pvg
+    }
+
+    const GLAMSTERDAM_ACTIVATION: u64 = 1_000;
+
+    fn glamsterdam_conf() -> PoolInnerConfig {
+        let mut conf = conf();
+        conf.chain_spec.eip7623_enabled = true;
+        conf.chain_spec.glamsterdam_activation = ForkActivation::Timestamp(GLAMSTERDAM_ACTIVATION);
+        conf
+    }
+
+    /// An op whose preVerificationGas covers what `low` requires, but not `high`
+    fn create_op_with_pvg_between(
+        conf: &PoolInnerConfig,
+        call_data: Bytes,
+        low: &ChainSpec,
+        high: &ChainSpec,
+    ) -> PoolOperation {
+        let required_pvg = |po: &PoolOperation, spec: &ChainSpec| {
+            po.uo.required_pre_verification_gas(
+                spec,
+                1,
+                0,
+                Some(conf.verification_gas_limit_efficiency_reject_threshold),
+                &PvgState::unknown(),
+            )
+        };
+        let required = UserOperationRequiredFields {
+            sender: Address::random(),
+            max_fee_per_gas: 10,
+            max_priority_fee_per_gas: 10,
+            call_data,
+            ..base_required_fields()
+        };
+        let probe = create_op_from_required(required.clone());
+        let po = create_op_from_required(UserOperationRequiredFields {
+            pre_verification_gas: (required_pvg(&probe, low) + required_pvg(&probe, high)) / 2,
+            ..required
+        });
+        assert!(required_pvg(&po, low) <= po.uo.pre_verification_gas());
+        assert!(required_pvg(&po, high) > po.uo.pre_verification_gas());
+        po
+    }
+
+    /// An op priced for the block before the activation, ignoring a possible post-fork inclusion
+    fn create_op_priced_for_pre_fork_block(conf: &PoolInnerConfig) -> PoolOperation {
+        let cs = &conf.chain_spec;
+        create_op_with_pvg_between(
+            conf,
+            // large calldata so the calldata floor increase dominates
+            Bytes::from(vec![1_u8; 2_000]),
+            &cs.at_timestamp(GLAMSTERDAM_ACTIVATION - 1),
+            &cs.for_bundle_inclusion_after(GLAMSTERDAM_ACTIVATION - 1),
+        )
+    }
+
+    fn maintain_at(pool: &mut PoolInner<Box<dyn DAGasOracleSync>>, timestamp: u64) {
+        pool.do_maintenance(0, timestamp.into(), None, GasFees::default(), 0);
+    }
+
+    #[test]
+    fn test_pvg_rechecked_against_bundle_inclusion_schedule_before_activation() {
+        let conf = glamsterdam_conf();
+        let po = create_op_priced_for_pre_fork_block(&conf);
+        let mut pool = pool_with_conf(conf);
+        pool.add_operation(po, 0, 0).unwrap();
+
+        // the builder would skip it, so it isn't offered
+        maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION - 1);
+        assert_eq!(pool.best_operations().count(), 0);
+        // still in the pool, just not bundleable
+        assert_eq!(pool.by_hash.len(), 1);
+    }
+
+    #[test]
+    fn test_pvg_rechecked_when_gas_schedule_changes() {
+        let conf = glamsterdam_conf();
+        let cs = &conf.chain_spec;
+        let po = create_op_with_pvg_between(
+            &conf,
+            // small calldata so the pre-fork intrinsic gas dominates
+            Bytes::new(),
+            &cs.at_timestamp(GLAMSTERDAM_ACTIVATION),
+            &cs.for_bundle_inclusion_after(GLAMSTERDAM_ACTIVATION - 1),
+        );
+        let mut pool = pool_with_conf(conf);
+        pool.add_operation(po, 0, 0).unwrap();
+
+        maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION);
+        assert_eq!(pool.best_operations().count(), 1);
+
+        // a reorg back before the activation raises the requirement
+        maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION - 1);
+        assert_eq!(pool.best_operations().count(), 0);
+        assert_eq!(pool.by_hash.len(), 1);
+
+        maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION);
+        assert_eq!(pool.best_operations().count(), 1);
+    }
+
+    #[test]
+    fn test_op_with_enough_pvg_stays_eligible_across_gas_schedule_change() {
+        let conf = glamsterdam_conf();
+        let po = create_op_priced_for_pre_fork_block(&conf);
+        let po = create_op_from_required(UserOperationRequiredFields {
+            sender: po.uo.sender(),
+            max_fee_per_gas: 10,
+            max_priority_fee_per_gas: 10,
+            call_data: po.uo.call_data().clone(),
+            pre_verification_gas: 10_000_000,
+            ..base_required_fields()
+        });
+        let mut pool = pool_with_conf(conf);
+        pool.add_operation(po, 0, 0).unwrap();
+
+        maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION - 1);
+        assert_eq!(pool.best_operations().count(), 1);
+        maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION);
+        assert_eq!(pool.best_operations().count(), 1);
+    }
+
+    #[test]
+    fn test_bundler_sponsored_op_skips_pvg_recheck() {
+        let conf = glamsterdam_conf();
+        let mut po = create_op_priced_for_pre_fork_block(&conf);
+        po.perms.bundler_sponsorship = Some(BundlerSponsorship {
+            max_cost: U256::MAX,
+            valid_until: u64::MAX,
+        });
+        let mut pool = pool_with_conf(conf);
+        pool.add_operation(po, 0, 0).unwrap();
+
+        maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION - 1);
+        assert_eq!(pool.best_operations().count(), 1);
+    }
+
+    #[test]
+    fn test_no_pvg_recheck_without_da_oracle_or_activation() {
+        let conf = conf();
+        let po = create_op_zero_fees(Address::random(), 0);
+        assert_eq!(po.uo.pre_verification_gas(), 0);
+        let mut pool = pool_with_conf(conf);
+        pool.add_operation(po, 0, 0).unwrap();
+
+        maintain_at(&mut pool, GLAMSTERDAM_ACTIVATION);
+        assert_eq!(pool.best_operations().count(), 1);
     }
 
     #[test]
@@ -2981,8 +3190,15 @@ mod tests {
     }
 
     fn mem_size_of_ordered_pool_op() -> usize {
-        OrderedPoolOperation::new(Arc::new(create_op(Address::random(), 1, 1)), 1, true, 0, 0)
-            .mem_size()
+        OrderedPoolOperation::new(
+            Arc::new(create_op(Address::random(), 1, 1)),
+            1,
+            true,
+            0,
+            0,
+            PvgState::unknown(),
+        )
+        .mem_size()
     }
 
     fn base_required_fields() -> UserOperationRequiredFields {
