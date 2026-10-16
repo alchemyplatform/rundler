@@ -38,6 +38,8 @@ The proposer limits the amount of UO gas that it will attempt to put into a sing
 
 The maximum gas usage of each UO is a function of its `preVerificationGas`, `verificationGasLimit`, and `callGasLimit`.
 
+A UO in [reservoir mode](./glamsterdam_pvg.md#reservoir-mode) (Glamsterdam) is always bundled alone, with a gas limit of exactly `2^24 + R`, its state-gas reservoir. Before it is sent, the bundle is simulated with `eth_simulateV1` at that gas limit.
+
 ### 2nd Simulation and Rejection
 
 Once a candidate bundle is constructed, each UO is re-simulated and validation rules are re-checked. UOs that fail are removed from the bundle and removed from the pool.
@@ -97,6 +99,8 @@ The Assigner component is responsible for coordinating work distribution among w
    - Releases assignments when bundles complete
 
 3. **Virtual Entrypoints**: Supports multiple configurations per entry point address via `filter_id`, creating "virtual entrypoints" that workers can build for independently
+
+4. **Single-op bundles**: Suspect operations (isolation) and [reservoir-mode](./glamsterdam_pvg.md#reservoir-mode) operations are assigned alone, from their own bounded sets of workers, and stay alone in fee-bump replacements
 
 ### Proposers
 

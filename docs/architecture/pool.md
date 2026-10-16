@@ -10,6 +10,8 @@ Upon each `add_operation` call the `Pool` will preforms a series of checks.
 
 2. Simulate the UO via a `debug_traceCall` as per the [ERC-4337 spec](https://eips.ethereum.org/EIPS/eip-4337#simulation).
 
+Precheck also decides whether a UO is in [reservoir mode](./glamsterdam_pvg.md#reservoir-mode) (Glamsterdam): bundled alone above the 2^24 transaction gas cap, with a state-gas reservoir equal to its preVerificationGas surplus.
+
 If violations are found, the UO is rejected. Else, the UO is added to the pool. We only accept User Operations into the pool if the `validUntil` field has over 60 seconds to expire from the time of entry or the `validAfter` field is before the time of entry.
 
 ### Tracer

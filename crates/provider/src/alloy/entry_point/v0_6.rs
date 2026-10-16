@@ -384,6 +384,21 @@ where
 {
     type UO = UserOperation;
 
+    fn get_state_gas_simulate_handle_op_call(
+        &self,
+        _op: Self::UO,
+        _skip_post_op: bool,
+        _target: Address,
+        _target_call_data: Bytes,
+        _gas: u64,
+        _state_override: StateOverride,
+    ) -> ProviderResult<(TransactionRequest, StateOverride)> {
+        Err(anyhow::anyhow!(
+            "EntryPoint v0.6 simulateHandleOp always reverts, which undoes the state to trace"
+        )
+        .into())
+    }
+
     fn get_tracer_simulate_validation_call(
         &self,
         user_op: UserOperation,

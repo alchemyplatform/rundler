@@ -455,6 +455,21 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
         }
     }
 
+    /// Returns the EIP-8037 state gas the authorization will be charged before the EntryPoint
+    /// runs: creating the authority account and writing its delegation indicator, less what the
+    /// authority's state shows will not be charged. An unknown authority is priced as missing.
+    /// Under Glamsterdam this comes out of a reservoir, which state overrides in a simulation
+    /// do not show.
+    fn authorization_state_gas(&self, chain_spec: &ChainSpec, state: &PvgState) -> u128 {
+        if self.authorization_tuple().is_none() {
+            return 0;
+        }
+        chain_spec
+            .eip7702_authorization_new_account_gas()
+            .saturating_add(chain_spec.eip7702_authorization_delegation_gas())
+            .saturating_sub(self.authorization_state_discount(chain_spec, state))
+    }
+
     /// Returns extra pre-verification gas that depends on on-chain state: unmetered state gas
     /// the EntryPoint spends for this user operation (EIP-8037). 0 when the gas schedule has
     /// no such term.
