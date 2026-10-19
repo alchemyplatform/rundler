@@ -70,6 +70,25 @@ pub struct PoolArgs {
     )]
     pub same_sender_mempool_count: usize,
 
+    /// The maximum number of reservoir-mode user operations (bundled alone above the 2^24
+    /// transaction gas cap, Glamsterdam chains only) in the mempool
+    #[arg(
+        long = "pool.max_reservoir_ops",
+        name = "pool.max_reservoir_ops",
+        env = "POOL_MAX_RESERVOIR_OPS",
+        default_value = "8"
+    )]
+    pub max_reservoir_ops: usize,
+
+    /// The maximum number of reservoir-mode user operations a sender can have in the mempool
+    #[arg(
+        long = "pool.max_reservoir_ops_per_sender",
+        name = "pool.max_reservoir_ops_per_sender",
+        env = "POOL_MAX_RESERVOIR_OPS_PER_SENDER",
+        default_value = "1"
+    )]
+    pub max_reservoir_ops_per_sender: usize,
+
     #[arg(
         long = "pool.min_replacement_fee_increase_percentage",
         name = "pool.min_replacement_fee_increase_percentage",
@@ -271,6 +290,8 @@ impl PoolArgs {
             // Base config
             chain_spec: chain_spec.clone(),
             same_sender_mempool_count: self.same_sender_mempool_count,
+            max_reservoir_ops: self.max_reservoir_ops,
+            max_reservoir_ops_per_sender: self.max_reservoir_ops_per_sender,
             min_replacement_fee_increase_percentage: self.min_replacement_fee_increase_percentage,
             max_size_of_pool_bytes: self.max_size_in_bytes,
             blocklist: blocklist.clone(),

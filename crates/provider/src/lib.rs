@@ -47,6 +47,8 @@ pub use alloy_network::{
 };
 pub use alloy_serde::WithOtherFields;
 pub use fees::new_fee_estimator;
+mod state_gas;
+pub use state_gas::{SimulatedCall, SimulatedLog, simulate_call, simulate_calls};
 mod traits;
 pub mod transaction;
 // re-export alloy RPC types
@@ -62,8 +64,8 @@ pub use alloy_rpc_types_eth::{
 };
 pub use alloy_rpc_types_trace::geth::{
     CallConfig as GethDebugTracerCallConfig, CallFrame as GethDebugTracerCallFrame,
-    GethDebugBuiltInTracerType, GethDebugTracerType, GethDebugTracingCallOptions,
-    GethDebugTracingOptions, GethTrace,
+    CallLogFrame as GethDebugTracerCallLogFrame, GethDebugBuiltInTracerType, GethDebugTracerType,
+    GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace,
 };
 // re-export contract types
 pub use rundler_contracts::utils::GetGasUsed::GasUsedResult;
