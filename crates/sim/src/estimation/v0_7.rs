@@ -516,11 +516,6 @@ where
                 max_reservoir_gas,
             ));
         }
-        // An op without state gas that failed the metered estimate has no use for a reservoir.
-        if state_gas < MIN_RESERVOIR_STATE_GAS {
-            tracing::debug!("reservoir mode not needed: no state gas");
-            return Err(metered_error);
-        }
         let found =
             tokio::time::timeout_at(deadline, self.reservoir_and_call_gas(&args, state_gas)).await;
         let (op_reservoir_gas, call_gas_limit) = match found {
@@ -634,7 +629,8 @@ where
     /// its net state gas. The least reservoir is the cheapest for the op: PVG pays for all of it,
     /// while state that spills into the call gas limit at a peak is refilled once cleared, and
     /// costs at most the unused-gas penalty. `None` if the op fails even with the most reservoir
-    /// and call gas, or at the limits found.
+    /// and call gas, or at the limits found, or if it has no net state and runs without a
+    /// reservoir.
     async fn reservoir_and_call_gas(
         &self,
         args: &ReservoirArgs<'_>,
@@ -647,6 +643,13 @@ where
             .reservoir_call_gas_search(args, state_gas, max_call_gas)
             .await?
         {
+            // Without net state, an op that runs at R = S has no use for a reservoir: its metered
+            // estimate failed for another reason. One that clears all the state it allocates
+            // still needs a reservoir for its peak, which the search below finds.
+            Some(_) if state_gas < MIN_RESERVOIR_STATE_GAS => {
+                tracing::debug!("reservoir mode not needed: no state gas");
+                return Ok(None);
+            }
             Some(call_gas) => (state_gas, call_gas),
             None => {
                 // The spill does not fit: the least reservoir the op runs with at the most call
@@ -2601,12 +2604,34 @@ mod tests {
     /// metered error is returned.
     #[tokio::test]
     async fn test_reservoir_mode_not_for_ops_without_state() {
-        let (entry, provider, _) = reservoir_mocks(OpModel::new(30_000, 50_000));
+        let (entry, provider, simulations) = reservoir_mocks(OpModel::new(30_000, 50_000));
 
         let error = run_reservoir(entry, provider, reservoir_settings())
             .await
             .unwrap_err();
         assert!(matches!(error, GasEstimationError::CallGasLimitTooLow(1)));
+        // S, and the call gas search at R = S, which passes
+        assert_eq!(simulations.load(std::sync::atomic::Ordering::Relaxed), 2);
+    }
+
+    /// An op that clears all the state it allocates has no net state, but its peak does not fit
+    /// the call gas: the search finds the reservoir for it.
+    #[tokio::test]
+    async fn test_reservoir_mode_zero_net_state_peak() {
+        // 400 slots allocated, then all 400 cleared
+        let model = OpModel {
+            net_state_gas: 0,
+            ..churn()
+        };
+        let settings = reservoir_settings();
+        assert!(model.call_gas_need(0) > settings.max_bundle_execution_gas);
+        let (entry, provider, _) = reservoir_mocks(model);
+
+        let estimate = run_reservoir(entry, provider, settings).await.unwrap();
+
+        let reservoir_gas = admitted_reservoir_gas(&estimate, &settings).unwrap();
+        assert!(estimate.call_gas_limit >= model.call_gas_need(reservoir_gas));
+        assert!(reservoir_gas + estimate.call_gas_limit > CHURN_PEAK_STATE_GAS);
     }
 
     /// The node's `eth_simulateV1` gives calls no reservoir: the simulations would measure
