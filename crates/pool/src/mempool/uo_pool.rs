@@ -210,6 +210,7 @@ where
                 return Ok(()); // No call gas limit, not useful, but not a failure here.
             }
 
+            let op_hash = op.hash();
             let sim_result = self
                 .ep_providers
                 .entry_point()
@@ -246,6 +247,11 @@ where
                     if execution_gas_efficiency
                         < self.config.execution_gas_limit_efficiency_reject_threshold
                     {
+                        let pre_op_gas = execution_res.pre_op_gas;
+                        let required = self.config.execution_gas_limit_efficiency_reject_threshold;
+                        tracing::debug!(
+                            "Execution gas limit efficiency too low. Op hash: {op_hash:?} total gas used: {total_gas_used} pre op gas: {pre_op_gas} execution gas used: {execution_gas_used} execution gas limit: {execution_gas_limit} efficiency: {execution_gas_efficiency} required: {required}"
+                        );
                         return Err(MempoolError::ExecutionGasLimitEfficiencyTooLow(
                             self.config.execution_gas_limit_efficiency_reject_threshold,
                             execution_gas_efficiency,
@@ -612,10 +618,10 @@ where
         //
         // This doesn't clear all race conditions, as the pool may need to update its state before
         // a UO can be valid, i.e. for replacement.
-        let (block_hash, block_number) = self
+        let (block_hash, block_number, block_timestamp) = self
             .ep_providers
             .evm()
-            .get_latest_block_hash_and_number()
+            .get_latest_block_hash_number_and_timestamp()
             .await
             .map_err(anyhow::Error::from)?;
 
@@ -644,12 +650,7 @@ where
                 }
             };
 
-            op = op.transform_for_aggregator(
-                &self.config.chain_spec,
-                aggregator,
-                agg.costs().clone(),
-                signature,
-            );
+            op = op.transform_for_aggregator(aggregator, agg.costs().clone(), signature);
         }
 
         let versioned_op: UP::UO = op.clone().into();
@@ -658,7 +659,7 @@ where
         let precheck_ret = self
             .pool_providers
             .prechecker()
-            .check(&versioned_op, &perms, block_hash)
+            .check(&versioned_op, &perms, block_hash, block_timestamp)
             .await?;
 
         // Only let ops with successful simulations through
@@ -721,6 +722,14 @@ where
             if verification_gas_efficiency
                 < effective_verification_gas_limit_efficiency_reject_threshold
             {
+                let op_hash = op.hash();
+                let pre_op_gas = sim_result.pre_op_gas;
+                let pre_verification_gas = op.pre_verification_gas();
+                let verification_gas_used = pre_op_gas.saturating_sub(pre_verification_gas);
+                let total_verification_gas_limit = op.total_verification_gas_limit();
+                tracing::debug!(
+                    "Verification gas limit efficiency too low. Op hash: {op_hash:?} pre op gas: {pre_op_gas} preVerificationGas: {pre_verification_gas} verification gas used: {verification_gas_used} total verification gas limit: {total_verification_gas_limit} efficiency: {verification_gas_efficiency} required: {effective_verification_gas_limit_efficiency_reject_threshold}"
+                );
                 return Err(MempoolError::VerificationGasLimitEfficiencyTooLow(
                     effective_verification_gas_limit_efficiency_reject_threshold,
                     verification_gas_efficiency,
@@ -744,6 +753,7 @@ where
             filter_id,
             perms,
             sender_is_7702: precheck_ret.sender_is_7702,
+            reservoir_gas: precheck_ret.reservoir_gas,
         };
 
         // Check sender count in mempool. If sender has too many operations, must be staked
@@ -754,6 +764,7 @@ where
                 .unwrap_or(self.config.same_sender_mempool_count);
 
             let state = self.state.read();
+
             if !pool_op.account_is_staked
                 && to_replace.is_none()
                 && state.pool.address_count(&pool_op.uo.sender()) >= sender_allowed_count
@@ -789,11 +800,30 @@ where
         // Add op to pool
         let hash = {
             let mut state = self.state.write();
+            // Reservoir-mode ops each take a whole bundle and reserve 2^24 of a block's
+            // execution gas: cap them per sender and in total. Checked under the same lock as
+            // the insert, so concurrent submissions cannot both pass a cap.
+            if pool_op.reservoir_gas.is_some() {
+                let sender = pool_op.uo.sender();
+                let (total, by_sender) = state
+                    .pool
+                    .reservoir_op_counts(sender, to_replace.as_ref().map(|op| op.uo.hash()));
+                if by_sender >= self.config.max_reservoir_ops_per_sender {
+                    return Err(MempoolError::MaxOperationsReached(
+                        self.config.max_reservoir_ops_per_sender,
+                        Entity::account(sender),
+                    ));
+                }
+                if total >= self.config.max_reservoir_ops {
+                    return Err(MempoolError::DiscardedOnInsert);
+                }
+            }
             let base_fee = state.base_fee;
-            let hash = state.pool.add_operation(
+            let hash = state.pool.add_operation_with_pvg_state(
                 pool_op.clone(),
                 base_fee,
                 precheck_ret.required_pre_verification_gas,
+                precheck_ret.pvg_state,
             )?;
 
             if throttled {
@@ -1129,7 +1159,7 @@ mod tests {
         SimulationError, SimulationResult, SimulationSettings, ViolationError,
     };
     use rundler_types::{
-        EntityInfo, EntityInfos, EntityType, EntryPointVersion,
+        EntityInfo, EntityInfos, EntityType, EntryPointVersion, PvgState,
         UserOperation as UserOperationTrait, ValidTimeRange,
         aggregator::{
             AggregatorCosts, MockSignatureAggregator, SignatureAggregator, SignatureAggregatorError,
@@ -1144,6 +1174,7 @@ mod tests {
     use crate::{
         chain::{BalanceUpdate, MinedOp},
         mempool::{PaymasterConfig, ReputationParams},
+        test_utils::MessageCollector,
     };
     const THROTTLE_SLACK: u64 = 5;
     const BAN_SLACK: u64 = 10;
@@ -2365,6 +2396,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_verification_gas_efficiency_debug_log() {
+        let mut config = default_config();
+        config.verification_gas_limit_efficiency_reject_threshold = 0.25;
+
+        let op = create_op_from_op_v0_6(UserOperationRequiredFields {
+            call_gas_limit: 10_000,
+            verification_gas_limit: 500_000,
+            pre_verification_gas: 50_000,
+            max_fee_per_gas: 1,
+            max_priority_fee_per_gas: 1,
+            ..Default::default()
+        });
+
+        let mut ep = MockEntryPointV0_6::new();
+        ep.expect_simulate_handle_op().returning(|_, _, _, _, _| {
+            Ok(Ok(ExecutionResult {
+                pre_op_gas: 100_000,
+                paid: uint!(110_000_U256),
+                target_success: true,
+                ..Default::default()
+            }))
+        });
+
+        let pool = create_pool_with_entry_point_config(
+            config,
+            vec![op.clone()],
+            ep,
+            MempoolConfig::default(),
+        );
+
+        let collector = MessageCollector::default();
+        let _guard = tracing::subscriber::set_default(collector.clone());
+
+        let ret = pool
+            .add_operation(OperationOrigin::Local, op.op, default_perms())
+            .await;
+        assert!(matches!(
+            ret,
+            Err(MempoolError::VerificationGasLimitEfficiencyTooLow(_, _))
+        ));
+
+        // the simulator reports 100K pre-op gas: 50K PVG + 50K of 500K verification gas
+        let messages = collector.messages();
+        assert!(
+            messages.iter().any(|m| m.starts_with(
+                "Verification gas limit efficiency too low. Op hash:"
+            ) && m.contains(
+                "pre op gas: 100000 preVerificationGas: 50000 verification gas used: 50000 total verification gas limit: 500000 efficiency: 0.1 required: 0.25"
+            )),
+            "missing efficiency detail log: {messages:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_call_gas_limit_reject() {
         let mut config = default_config();
         config.execution_gas_limit_efficiency_reject_threshold = 0.25;
@@ -2641,6 +2726,89 @@ mod tests {
             .unwrap();
     }
 
+    fn reservoir_op(sender: Address, nonce: usize) -> OpWithErrors {
+        OpWithErrors {
+            reservoir_gas: Some(37_882_800),
+            ..create_op(sender, nonce, 100, None)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reservoir_ops_per_sender_cap() {
+        let sender = Address::random();
+        let op1 = reservoir_op(sender, 1);
+        let op2 = reservoir_op(sender, 2);
+        let pool = create_pool_with_config(default_config(), vec![op1.clone(), op2.clone()]);
+        pool.add_operation(OperationOrigin::Local, op1.op, Default::default())
+            .await
+            .unwrap();
+        let err = pool
+            .add_operation(OperationOrigin::Local, op2.op, Default::default())
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(err, MempoolError::MaxOperationsReached(1, _)));
+    }
+
+    #[tokio::test]
+    async fn test_reservoir_ops_pool_cap() {
+        let config = PoolConfig {
+            max_reservoir_ops: 1,
+            ..default_config()
+        };
+        let op1 = reservoir_op(Address::random(), 1);
+        let op2 = reservoir_op(Address::random(), 1);
+        let pool = create_pool_with_config(config, vec![op1.clone(), op2.clone()]);
+        pool.add_operation(OperationOrigin::Local, op1.op, Default::default())
+            .await
+            .unwrap();
+        let err = pool
+            .add_operation(OperationOrigin::Local, op2.op, Default::default())
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(err, MempoolError::DiscardedOnInsert));
+    }
+
+    /// Concurrent submissions near the caps: the cap checks and the insert share one lock, so
+    /// no interleaving lets two ops past a cap.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_reservoir_caps_hold_under_concurrency() {
+        let config = PoolConfig {
+            max_reservoir_ops: 2,
+            ..default_config()
+        };
+        let shared_sender = Address::random();
+        let ops = (0..8)
+            .map(|i| {
+                if i < 4 {
+                    reservoir_op(shared_sender, i + 1)
+                } else {
+                    reservoir_op(Address::random(), 1)
+                }
+            })
+            .collect::<Vec<_>>();
+        let pool = Arc::new(create_pool_with_config(config, ops.clone()));
+        let tasks = ops
+            .into_iter()
+            .map(|op| {
+                let pool = pool.clone();
+                tokio::spawn(async move {
+                    pool.add_operation(OperationOrigin::Local, op.op, Default::default())
+                        .await
+                })
+            })
+            .collect::<Vec<_>>();
+        for task in tasks {
+            let _ = task.await.unwrap();
+        }
+
+        let state = pool.state.read();
+        let (total, by_sender) = state.pool.reservoir_op_counts(shared_sender, None);
+        assert_eq!(total, 2);
+        assert!(by_sender <= 1);
+    }
+
     #[tokio::test]
     async fn test_max_allowed_in_pool_for_sender() {
         let config = default_config();
@@ -2678,6 +2846,7 @@ mod tests {
         simulation_error: Option<SimulationViolation>,
         staked: bool,
         trusted: bool,
+        reservoir_gas: Option<u128>,
     }
 
     fn default_config() -> PoolConfig {
@@ -2693,6 +2862,8 @@ mod tests {
             sim_settings: SimulationSettings::default(),
             mempool_channel_configs: HashMap::new(),
             same_sender_mempool_count: 4,
+            max_reservoir_ops: 8,
+            max_reservoir_ops_per_sender: 1,
             throttled_entity_mempool_count: 4,
             throttled_entity_live_blocks: 10,
             paymaster_tracking_enabled: true,
@@ -2761,8 +2932,8 @@ mod tests {
             .return_const(EntryPointVersion::V0_6);
 
         let mut evm = MockEvmProvider::new();
-        evm.expect_get_latest_block_hash_and_number()
-            .returning(|| Ok((B256::ZERO, 0)));
+        evm.expect_get_latest_block_hash_number_and_timestamp()
+            .returning(|| Ok((B256::ZERO, 0, 0)));
 
         let mut simulator = MockSimulator::new();
         let mut prechecker = MockPrechecker::new();
@@ -2809,14 +2980,16 @@ mod tests {
             });
 
         for op in ops {
-            prechecker.expect_check().returning(move |_, _, _| {
+            prechecker.expect_check().returning(move |_, _, _, _| {
                 if let Some(error) = &op.precheck_error {
                     Err(PrecheckError::Violations(vec![error.clone()]))
                 } else {
                     Ok(PrecheckReturn {
                         da_gas_data: DAGasData::Empty,
                         required_pre_verification_gas: 100_000,
+                        pvg_state: PvgState::unknown(),
                         sender_is_7702: false,
+                        reservoir_gas: op.reservoir_gas,
                     })
                 }
             });
@@ -2933,6 +3106,7 @@ mod tests {
             simulation_error: None,
             staked: false,
             trusted: false,
+            reservoir_gas: None,
         }
     }
 
@@ -2961,6 +3135,7 @@ mod tests {
             simulation_error,
             staked,
             trusted: false,
+            reservoir_gas: None,
         }
     }
 
@@ -2979,6 +3154,7 @@ mod tests {
             simulation_error: None,
             staked: false,
             trusted: false,
+            reservoir_gas: None,
         }
     }
 
@@ -2992,6 +3168,7 @@ mod tests {
             simulation_error: None,
             staked: false,
             trusted: false,
+            reservoir_gas: None,
         }
     }
 

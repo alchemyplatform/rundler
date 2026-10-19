@@ -209,6 +209,9 @@ message MempoolOp {
   UserOperationPermissions permissions = 11;
   // Whether the sender is a 7702 delegation
   bool sender_is_7702 = 12;
+  // The EIP-8037 state-gas reservoir the UO is bundled with in reservoir mode, as big-endian
+  // bytes; empty for a metered UO
+  bytes reservoir_gas = 13;
 }
 
 message PoolOperationSummary {
@@ -231,6 +234,8 @@ message PoolOperationSummary {
   // Whether the operation is suspected of poisoning bundles and must only be
   // submitted alone
   bool suspect = 9;
+  // Whether the operation is in reservoir mode and must only be submitted alone
+  bool reservoir = 10;
 }
 
 // Data associated with a user operation for DA gas calculations
@@ -615,6 +620,8 @@ message NewHead {
   uint64 block_number = 2;
   // Address Updates
   repeated AddressUpdate address_updates = 3;
+  // The block timestamp, unset if sent by an older pool
+  optional uint64 block_timestamp = 4;
 }
 message AddressUpdate {
   // The address
@@ -858,6 +865,7 @@ message PrecheckViolationError {
     Eip7702SenderRecoveredAuthorityMismatch eip_7702_sender_recovered_authority_mismatch = 20;
     Eip7702NonceMismatch eip_7702_nonce_mismatch = 21;
     Eip7702InvalidFactory eip_7702_invalid_factory = 22;
+    ReservoirGasTooHigh reservoir_gas_too_high = 23;
   }
 }
 
@@ -924,6 +932,11 @@ message FactoryMustBeEmpty{
 message OverMaxCost {
   bytes actual_cost = 1;
   bytes max_cost = 2;
+}
+
+message ReservoirGasTooHigh {
+  bytes actual_gas = 1;
+  bytes max_gas = 2;
 }
 
 message Eip7702Disabled {}

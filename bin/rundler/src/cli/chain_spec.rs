@@ -17,6 +17,14 @@ use rundler_types::chain::ChainSpec;
 
 /// Resolve the chain spec from the network flag and a chain spec file
 pub fn resolve_chain_spec(network: &Option<String>, file: &Option<String>) -> ChainSpec {
+    resolve_chain_spec_with_env(network, file, Environment::with_prefix("CHAIN"))
+}
+
+fn resolve_chain_spec_with_env(
+    network: &Option<String>,
+    file: &Option<String>,
+    env: Environment,
+) -> ChainSpec {
     // get sources
     let file_source = file.as_ref().map(|f| File::with_name(f.as_str()));
     let network_source = network.as_ref().map(|n| {
@@ -38,7 +46,7 @@ pub fn resolve_chain_spec(network: &Option<String>, file: &Option<String>) -> Ch
         base_getter = base_getter.add_source(file_source.clone());
     }
     let base_config = base_getter
-        .add_source(Environment::with_prefix("CHAIN"))
+        .add_source(env.clone())
         .build()
         .expect("should build config");
     let base = base_config.get::<String>("base").ok();
@@ -72,7 +80,7 @@ pub fn resolve_chain_spec(network: &Option<String>, file: &Option<String>) -> Ch
         config_builder = config_builder.add_source(file_source);
     }
     let c = config_builder
-        .add_source(Environment::with_prefix("CHAIN"))
+        .add_source(env)
         .build()
         .expect("should build config");
 
@@ -85,7 +93,11 @@ pub fn resolve_chain_spec(network: &Option<String>, file: &Option<String>) -> Ch
         panic!("chain id must be defined");
     }
 
-    c.try_deserialize().expect("should deserialize config")
+    let chain_spec: ChainSpec = c.try_deserialize().expect("should deserialize config");
+    if let Err(e) = chain_spec.validate_gas_schedules() {
+        panic!("{e:#}");
+    }
+    chain_spec
 }
 
 macro_rules! define_hardcoded_chain_specs {
@@ -113,6 +125,7 @@ define_hardcoded_chain_specs!(
     dev,
     ethereum,
     ethereum_sepolia,
+    ethereum_glamsterdam_devnet,
     optimism,
     optimism_sepolia,
     base,
@@ -124,3 +137,118 @@ define_hardcoded_chain_specs!(
     avax,
     avax_fuji
 );
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use rundler_types::chain::ForkActivation;
+
+    use super::*;
+
+    fn resolve(network: &str, env: &[(&str, &str)]) -> ChainSpec {
+        let env: HashMap<String, String> = env
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        resolve_chain_spec_with_env(
+            &Some(network.to_string()),
+            &None,
+            Environment::with_prefix("CHAIN").source(Some(env)),
+        )
+    }
+
+    #[test]
+    fn glamsterdam_activation_defaults_to_never() {
+        let spec = resolve("ethereum", &[]);
+        assert_eq!(spec.glamsterdam_activation, ForkActivation::Never);
+        assert_eq!(spec.glamsterdam_per_user_op_v0_7_gas, None);
+    }
+
+    #[test]
+    fn network_sets_glamsterdam_activation() {
+        let spec = resolve("ethereum_sepolia", &[]);
+        assert_eq!(
+            spec.glamsterdam_activation,
+            ForkActivation::Timestamp(1791294816)
+        );
+        // inherited from the ethereum base spec
+        assert!(spec.eip7623_enabled);
+    }
+
+    #[test]
+    fn env_sets_glamsterdam_activation() {
+        let spec = resolve(
+            "ethereum",
+            &[("CHAIN_GLAMSTERDAM_ACTIVATION", "1791294816")],
+        );
+        assert_eq!(
+            spec.glamsterdam_activation,
+            ForkActivation::Timestamp(1791294816)
+        );
+
+        let spec = resolve("ethereum", &[("CHAIN_GLAMSTERDAM_ACTIVATION", "genesis")]);
+        assert_eq!(spec.glamsterdam_activation, ForkActivation::Genesis);
+    }
+
+    #[test]
+    fn env_never_overrides_network_activation() {
+        let spec = resolve(
+            "ethereum_sepolia",
+            &[("CHAIN_GLAMSTERDAM_ACTIVATION", "never")],
+        );
+        assert_eq!(spec.glamsterdam_activation, ForkActivation::Never);
+    }
+
+    #[test]
+    fn env_sets_glamsterdam_override() {
+        let spec = resolve(
+            "ethereum",
+            &[
+                ("CHAIN_GLAMSTERDAM_ACTIVATION", "genesis"),
+                ("CHAIN_GLAMSTERDAM_PER_USER_OP_V0_7_GAS", "40000"),
+            ],
+        );
+        assert_eq!(spec.glamsterdam_per_user_op_v0_7_gas, Some(40_000));
+        assert_eq!(spec.glamsterdam_gas_schedule().per_user_op_v0_7_gas, 40_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "should deserialize config")]
+    fn malformed_activation_is_rejected() {
+        resolve("ethereum", &[("CHAIN_GLAMSTERDAM_ACTIVATION", "soon")]);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid Glamsterdam gas schedule")]
+    fn invalid_glamsterdam_schedule_is_rejected() {
+        resolve(
+            "ethereum",
+            &[
+                ("CHAIN_GLAMSTERDAM_ACTIVATION", "genesis"),
+                (
+                    "CHAIN_GLAMSTERDAM_EIP7623_CALLDATA_FLOOR_ZERO_BYTE_GAS",
+                    "1",
+                ),
+            ],
+        );
+    }
+
+    #[test]
+    fn all_hardcoded_specs_resolve() {
+        for network in HARDCODED_CHAIN_SPECS {
+            resolve(network, &[]);
+        }
+    }
+
+    #[test]
+    fn glamsterdam_devnet_activates_glamsterdam_at_genesis() {
+        let spec = resolve("ethereum_glamsterdam_devnet", &[]);
+        assert_eq!(spec.id, 7091047534);
+        assert_eq!(spec.glamsterdam_activation, ForkActivation::Genesis);
+        assert_eq!(spec.transaction_gas_limit(), 16_777_216);
+        let spec = spec.at_timestamp(0);
+        assert_eq!(spec.transaction_intrinsic_gas(), 15_000);
+        assert_eq!(spec.zero_deposit_refund_gas(), 97_920);
+    }
+}

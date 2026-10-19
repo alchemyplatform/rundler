@@ -646,7 +646,7 @@ where
         };
 
         let addr = signer.address();
-        let nonce_fut = self.provider.get_transaction_count(addr);
+        let nonce_fut = self.provider.get_transaction_count(addr, None);
         let balance_fut = self.provider.get_balance(addr, None);
         let (nonce, balance) =
             tokio::try_join!(nonce_fut, balance_fut).unwrap_or((self.nonce, self.balance));
@@ -846,7 +846,7 @@ mod tests {
         let mut provider = MockEvmProvider::new();
         provider
             .expect_get_transaction_count()
-            .returning(move |_a| Ok(initial_nonce));
+            .returning(move |_a, _| Ok(initial_nonce));
         provider
             .expect_get_balance()
             .returning(move |_a, _b| Ok(U256::ZERO));
@@ -927,7 +927,7 @@ mod tests {
         provider
             .expect_get_transaction_count()
             .times(1)
-            .returning(move |_a| Ok(7));
+            .returning(move |_a, _| Ok(7));
         provider
             .expect_get_balance()
             .times(1)

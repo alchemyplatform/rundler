@@ -455,6 +455,10 @@ impl From<&PoolOperation> for MempoolOp {
             filter_id: op.filter_id.clone().unwrap_or_default(),
             permissions: Some(op.perms.clone().into()),
             sender_is_7702: op.sender_is_7702,
+            reservoir_gas: op
+                .reservoir_gas
+                .map(|gas| gas.to_proto_bytes())
+                .unwrap_or_default(),
         }
     }
 }
@@ -567,6 +571,11 @@ impl TryUoFromProto<MempoolOp> for PoolOperation {
                 .context("Permissions should be set")?
                 .try_into()?,
             sender_is_7702: op.sender_is_7702,
+            reservoir_gas: if op.reservoir_gas.is_empty() {
+                None
+            } else {
+                Some(from_bytes(&op.reservoir_gas)?)
+            },
         })
     }
 }
@@ -578,6 +587,7 @@ impl TryFrom<NewHead> for PoolNewHead {
         Ok(Self {
             block_hash: from_bytes(&new_head.block_hash)?,
             block_number: new_head.block_number,
+            block_timestamp: new_head.block_timestamp,
             address_updates: new_head
                 .address_updates
                 .into_iter()
@@ -592,6 +602,7 @@ impl From<PoolNewHead> for NewHead {
         Self {
             block_hash: head.block_hash.to_proto_bytes(),
             block_number: head.block_number,
+            block_timestamp: head.block_timestamp,
             address_updates: head
                 .address_updates
                 .into_iter()
@@ -725,6 +736,7 @@ impl From<RundlerPoolOperationSummary> for PoolOperationSummary {
                 .map(|c| c.to_proto_bytes())
                 .unwrap_or_default(),
             suspect: summary.suspect,
+            reservoir: summary.reservoir,
         }
     }
 }
@@ -748,6 +760,7 @@ impl TryFrom<PoolOperationSummary> for RundlerPoolOperationSummary {
             gas_limit: from_bytes(&summary.gas_limit)?,
             bundler_sponsorship_max_cost,
             suspect: summary.suspect,
+            reservoir: summary.reservoir,
         })
     }
 }
@@ -879,7 +892,82 @@ impl TryUoFromProto<PoolOperationStatus> for RundlerPoolOperationStatus {
 mod tests {
     use alloy_primitives::{Address, B256, U256};
 
-    use super::{PoolOperationSummary, RundlerPoolOperationSummary};
+    use super::{
+        MempoolOp, NewHead, PoolNewHead, PoolOperationSummary, RundlerPoolOperationSummary,
+        TryUoFromProto,
+    };
+
+    /// `R` survives the trip to a remote builder: a reservoir-mode op stays one.
+    #[test]
+    fn mempool_op_roundtrip_preserves_reservoir_gas() {
+        use alloy_primitives::Bytes;
+        use rundler_types::{
+            EntityInfos, EntryPointVersion, StateGasMode, UserOperationPermissions, ValidTimeRange,
+            chain::ChainSpec, da::DAGasData, pool::PoolOperation, v0_7,
+        };
+
+        let chain_spec = ChainSpec::default();
+        let uo = v0_7::UserOperationBuilder::new(
+            &chain_spec,
+            EntryPointVersion::V0_7,
+            v0_7::UserOperationRequiredFields {
+                sender: Address::from([3u8; 20]),
+                nonce: U256::ZERO,
+                call_data: Bytes::new(),
+                call_gas_limit: 127_239,
+                verification_gas_limit: 60_946,
+                pre_verification_gas: 37_925_304,
+                max_priority_fee_per_gas: 1_000,
+                max_fee_per_gas: 2_000,
+                signature: Bytes::new(),
+            },
+        )
+        .build();
+        for reservoir_gas in [Some(37_882_800_u128), None] {
+            let op = PoolOperation {
+                uo: uo.clone().into(),
+                entry_point: chain_spec.entry_point_address(EntryPointVersion::V0_7),
+                aggregator: None,
+                valid_time_range: ValidTimeRange::all_time(),
+                expected_code_hash: B256::ZERO,
+                sim_block_hash: B256::ZERO,
+                sim_block_number: 0,
+                account_is_staked: false,
+                entity_infos: EntityInfos::default(),
+                da_gas_data: DAGasData::Empty,
+                filter_id: None,
+                perms: UserOperationPermissions::default(),
+                sender_is_7702: false,
+                reservoir_gas,
+            };
+            let decoded =
+                PoolOperation::try_uo_from_proto(MempoolOp::from(&op), &chain_spec).unwrap();
+            assert_eq!(decoded.reservoir_gas, reservoir_gas);
+            assert_eq!(
+                decoded.state_gas_mode(),
+                if reservoir_gas.is_some() {
+                    StateGasMode::Reservoir
+                } else {
+                    StateGasMode::Metered
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn new_head_roundtrip_preserves_timestamp() {
+        for block_timestamp in [Some(1791294816), None] {
+            let head = PoolNewHead {
+                block_hash: B256::from([1u8; 32]),
+                block_number: 7,
+                block_timestamp,
+                address_updates: vec![],
+            };
+            let decoded = PoolNewHead::try_from(NewHead::from(head)).unwrap();
+            assert_eq!(decoded.block_timestamp, block_timestamp);
+            assert_eq!(decoded.block_number, 7);
+        }
+    }
 
     #[test]
     fn pool_operation_summary_roundtrip_preserves_fee_fields() {
@@ -893,6 +981,7 @@ mod tests {
             gas_limit: 100_000,
             bundler_sponsorship_max_cost: Some(U256::from(500_000)),
             suspect: true,
+            reservoir: false,
         };
 
         let proto = PoolOperationSummary::from(summary.clone());
@@ -927,6 +1016,7 @@ mod tests {
             gas_limit: 100_000,
             bundler_sponsorship_max_cost: None,
             suspect: false,
+            reservoir: false,
         };
 
         let proto = PoolOperationSummary::from(summary.clone());

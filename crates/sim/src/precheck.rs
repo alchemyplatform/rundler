@@ -22,7 +22,7 @@ use futures_util::TryFutureExt;
 use mockall::automock;
 use rundler_provider::{DAGasProvider, EntryPoint, EvmProvider, FeeEstimator};
 use rundler_types::{
-    EntryPointVersion, PriorityFeeMode, UserOperation, UserOperationPermissions,
+    EntryPointVersion, PriorityFeeMode, PvgState, UserOperation, UserOperationPermissions,
     chain::ChainSpec,
     da::DAGasData,
     pool::{MempoolError, PrecheckViolation},
@@ -42,8 +42,13 @@ pub struct PrecheckReturn {
     pub da_gas_data: DAGasData,
     /// The required pre-verification gas for the operation
     pub required_pre_verification_gas: u128,
+    /// The on-chain state the required pre-verification gas was priced with
+    pub pvg_state: PvgState,
     /// If the sender is 7702
     pub sender_is_7702: bool,
+    /// The state-gas reservoir `R` if the op is in reservoir mode (its PVG surplus over
+    /// `required_pre_verification_gas`), `None` if metered. See [`gas::reservoir_threshold`].
+    pub reservoir_gas: Option<u128>,
 }
 
 /// Trait for checking if a user operation is valid before simulation
@@ -55,11 +60,14 @@ pub trait Prechecker: Send + Sync {
     type UO: UserOperation;
 
     /// Run the precheck on the given operation and return an error if it fails.
+    ///
+    /// `block_timestamp` is the timestamp of `block_hash`, and selects its gas schedule.
     async fn check(
         &self,
         op: &Self::UO,
         perms: &UserOperationPermissions,
         block_hash: B256,
+        block_timestamp: u64,
     ) -> Result<PrecheckReturn, PrecheckError>;
 }
 
@@ -103,6 +111,11 @@ pub struct Settings {
     pub max_bundle_execution_gas: u128,
     /// Maximum cost of a single user operation
     pub max_uo_cost: U256,
+    /// Maximum cost of a single user operation in reservoir mode, whose PVG carries its state
+    /// gas. Replaces `max_uo_cost` for those ops; `U256::MAX` for no cap.
+    pub max_reservoir_uo_cost: U256,
+    /// Maximum state-gas reservoir of a user operation in reservoir mode
+    pub max_reservoir_gas: u128,
     /// If using a bundle priority fee, the percentage to add to the network/oracle
     /// provided value as a safety margin for fast inclusion.
     pub bundle_priority_fee_overhead_percent: u32,
@@ -128,6 +141,8 @@ impl Default for Settings {
             max_verification_gas: 5_000_000,
             max_bundle_execution_gas: 10_000_000,
             max_uo_cost: U256::MAX,
+            max_reservoir_uo_cost: U256::MAX,
+            max_reservoir_gas: 60_000_000,
             bundle_priority_fee_overhead_percent: 0,
             priority_fee_mode: PriorityFeeMode::BaseFeePercent(0),
             base_fee_accept_percent: 50,
@@ -147,6 +162,7 @@ struct AsyncData {
     base_fee: u128,
     min_pre_verification_gas: u128,
     da_gas_data: DAGasData,
+    pvg_state: PvgState,
     eip7702_authority_data: Option<Eip7702AuthorityData>,
 }
 
@@ -172,8 +188,12 @@ where
         op: &Self::UO,
         perms: &UserOperationPermissions,
         block_hash: B256,
+        block_timestamp: u64,
     ) -> Result<PrecheckReturn, PrecheckError> {
-        let async_data = self.load_async_data(op, block_hash, perms).await?;
+        let chain_spec = self.chain_spec.for_bundle_inclusion_after(block_timestamp);
+        let async_data = self
+            .load_async_data(op, block_hash, &chain_spec, perms)
+            .await?;
         let mut violations: Vec<PrecheckViolation> = vec![];
 
         if let Some(data) = &async_data.eip7702_authority_data {
@@ -181,7 +201,16 @@ where
         } else {
             violations.extend(self.check_init_code(op, &async_data, perms));
         }
-        violations.extend(self.check_gas(op, &async_data, perms));
+        let reservoir_gas =
+            self.reservoir_gas(op, &chain_spec, block_timestamp, &async_data, perms);
+        violations.extend(self.check_reservoir_supported(
+            op,
+            &chain_spec,
+            block_timestamp,
+            &async_data,
+            reservoir_gas,
+        ));
+        violations.extend(self.check_gas(op, &chain_spec, &async_data, perms, reservoir_gas));
         violations.extend(self.check_payer(op, &async_data));
         if !violations.is_empty() {
             Err(violations)?
@@ -189,9 +218,11 @@ where
         Ok(PrecheckReturn {
             da_gas_data: async_data.da_gas_data,
             required_pre_verification_gas: async_data.min_pre_verification_gas,
+            pvg_state: async_data.pvg_state,
             sender_is_7702: op.authorization_tuple().is_some()
                 || authorization_utils::eip7702_delegate_from_code(&async_data.sender_bytecode)
                     .is_some(),
+            reservoir_gas,
         })
     }
 }
@@ -260,16 +291,85 @@ where
         violations
     }
 
+    /// The state-gas reservoir `R` if `op` is in reservoir mode, decided from what its PVG pays
+    /// for: Glamsterdam is active and the op's PVG surplus over the metered requirement is at
+    /// least [`gas::reservoir_threshold`], the least state gas that cannot fit under
+    /// `max_bundle_execution_gas` next to the op's own computation gas. `R` is that surplus.
+    ///
+    /// The op's state gas is not traced: `R` is what its PVG pays for, so state beyond it spills
+    /// into the op's own metered gas and the bundler always recovers. See
+    /// `test/pvg-calibration/docs/reservoir-mode-plan.md`.
+    ///
+    /// Aggregated and bundler-sponsored ops are not supported, and are rejected by `check` if
+    /// their PVG surplus reaches the threshold.
+    fn reservoir_gas(
+        &self,
+        op: &UO,
+        chain_spec: &ChainSpec,
+        block_timestamp: u64,
+        async_data: &AsyncData,
+        perms: &UserOperationPermissions,
+    ) -> Option<u128> {
+        if op.aggregator().is_some() || perms.bundler_sponsorship.is_some() {
+            return None;
+        }
+        self.reservoir_surplus(op, chain_spec, block_timestamp, async_data)
+    }
+
+    /// Rejects an op whose PVG surplus asks for a reservoir it cannot get (it is aggregated or
+    /// bundler-sponsored). It would be bundled metered, with an execution-only call gas limit,
+    /// and run out of gas onchain.
+    fn check_reservoir_supported(
+        &self,
+        op: &UO,
+        chain_spec: &ChainSpec,
+        block_timestamp: u64,
+        async_data: &AsyncData,
+        reservoir_gas: Option<u128>,
+    ) -> Option<PrecheckViolation> {
+        if reservoir_gas.is_some() {
+            return None;
+        }
+        self.reservoir_surplus(op, chain_spec, block_timestamp, async_data)
+            .map(|surplus| PrecheckViolation::ReservoirGasTooHigh(surplus, 0))
+    }
+
+    /// The op's PVG surplus over the metered requirement, if Glamsterdam is active, the op is
+    /// v0.7+ and the surplus reaches [`gas::reservoir_threshold`].
+    fn reservoir_surplus(
+        &self,
+        op: &UO,
+        chain_spec: &ChainSpec,
+        block_timestamp: u64,
+        async_data: &AsyncData,
+    ) -> Option<u128> {
+        if !chain_spec.reservoir_mode_enabled_at(block_timestamp)
+            || op.entry_point_version() < EntryPointVersion::V0_7
+        {
+            return None;
+        }
+        let surplus = op
+            .pre_verification_gas()
+            .checked_sub(async_data.min_pre_verification_gas)?;
+        let threshold =
+            gas::reservoir_threshold(op, chain_spec, self.settings.max_bundle_execution_gas);
+        (surplus >= threshold).then_some(surplus)
+    }
+
     fn check_gas(
         &self,
         op: &UO,
+        chain_spec: &ChainSpec,
         async_data: &AsyncData,
         perms: &UserOperationPermissions,
+        reservoir_gas: Option<u128>,
     ) -> ArrayVec<PrecheckViolation, 6> {
         let Settings {
             max_verification_gas,
             max_bundle_execution_gas,
             max_uo_cost,
+            max_reservoir_uo_cost,
+            max_reservoir_gas,
             ..
         } = self.settings;
         let AsyncData {
@@ -288,15 +388,15 @@ where
 
         // Compute the worst case total gas limit by assuming the UO is in its own bundle.
         // This is conservative and potentially may invalidate some very large UOs that would otherwise be valid.
-        let gas_limit = op.bundle_computation_gas_limit(&self.chain_spec, Some(1));
+        let gas_limit = op.bundle_computation_gas_limit(chain_spec, Some(1));
         if gas_limit > max_bundle_execution_gas {
             violations.push(PrecheckViolation::TotalGasLimitTooHigh(
                 gas_limit,
                 max_bundle_execution_gas,
             ))
-        } else if op.calldata_floor_gas_limit() > max_bundle_execution_gas {
+        } else if op.calldata_floor_gas_limit(chain_spec) > max_bundle_execution_gas {
             violations.push(PrecheckViolation::TotalGasLimitTooHigh(
-                op.calldata_floor_gas_limit(),
+                op.calldata_floor_gas_limit(chain_spec),
                 max_bundle_execution_gas,
             ))
         }
@@ -304,6 +404,14 @@ where
             violations.push(PrecheckViolation::CallGasLimitTooLow(
                 op.call_gas_limit(),
                 MIN_CALL_GAS_LIMIT,
+            ));
+        }
+        if let Some(reservoir_gas) = reservoir_gas
+            && reservoir_gas > max_reservoir_gas
+        {
+            violations.push(PrecheckViolation::ReservoirGasTooHigh(
+                reservoir_gas,
+                max_reservoir_gas,
             ));
         }
 
@@ -314,12 +422,15 @@ where
 
         // NOTE: only fee checks below this short circuit
 
-        // Check if the total gas fee of this op is too high
-        if op.max_gas_cost() > max_uo_cost {
-            violations.push(PrecheckViolation::OverMaxCost(
-                op.max_gas_cost(),
-                max_uo_cost,
-            ));
+        // Check if the total gas fee of this op is too high. A reservoir-mode op's PVG carries
+        // its state gas, so it has its own cap.
+        let max_cost = if reservoir_gas.is_some() {
+            max_reservoir_uo_cost
+        } else {
+            max_uo_cost
+        };
+        if op.max_gas_cost() > max_cost {
+            violations.push(PrecheckViolation::OverMaxCost(op.max_gas_cost(), max_cost));
         }
 
         // if preVerificationGas is dynamic, then allow for the percentage buffer
@@ -489,6 +600,7 @@ where
         &self,
         op: &UO,
         block_hash: B256,
+        chain_spec: &ChainSpec,
         perms: &UserOperationPermissions,
     ) -> anyhow::Result<AsyncData> {
         let base_fee = self.get_base_fee(block_hash).await?;
@@ -498,14 +610,20 @@ where
             sender_bytecode,
             paymaster_exists,
             payer_funds,
-            (min_pre_verification_gas, da_gas_data),
+            (min_pre_verification_gas, da_gas_data, pvg_state),
             eip7702_authority_data,
         ) = tokio::try_join!(
             self.is_contract(op.factory()),
             self.get_bytecode(op.sender()),
             self.is_contract(op.paymaster()),
             self.get_payer_funds(op),
-            self.get_required_pre_verification_gas(op.clone(), block_hash, base_fee, perms),
+            self.get_required_pre_verification_gas(
+                op.clone(),
+                block_hash,
+                chain_spec,
+                base_fee,
+                perms
+            ),
             self.get_eip7702_authority_data(op)
         )?;
         Ok(AsyncData {
@@ -516,6 +634,7 @@ where
             base_fee,
             min_pre_verification_gas,
             da_gas_data,
+            pvg_state,
             eip7702_authority_data,
         })
     }
@@ -581,23 +700,30 @@ where
         &self,
         op: UO,
         block_hash: B256,
+        chain_spec: &ChainSpec,
         base_fee: u128,
         perms: &UserOperationPermissions,
-    ) -> anyhow::Result<(u128, DAGasData)> {
+    ) -> anyhow::Result<(u128, DAGasData, PvgState)> {
         if perms.bundler_sponsorship.is_some() {
-            return Ok((0, DAGasData::Empty));
+            return Ok((0, DAGasData::Empty, PvgState::unknown()));
         }
 
-        gas::calc_required_pre_verification_gas(
-            &self.chain_spec,
+        let pvg_state =
+            gas::load_pvg_state(chain_spec, &self.provider, &self.entry_point, &op, None)
+                .await
+                .context("precheck should load pre-verification gas state")?;
+        let (required_pvg, da_gas_data) = gas::calc_required_pre_verification_gas(
+            chain_spec,
             &self.entry_point,
             &op,
             block_hash,
             base_fee,
             self.settings
                 .verification_gas_limit_efficiency_reject_threshold,
+            &pvg_state,
         )
-        .await
+        .await?;
+        Ok((required_pvg, da_gas_data, pvg_state))
     }
 
     async fn get_eip7702_authority_data(
@@ -608,7 +734,7 @@ where
             return Ok(None);
         }
         let sender = op.sender();
-        let tx_count_fut = self.provider.get_transaction_count(sender);
+        let tx_count_fut = self.provider.get_transaction_count(sender, None);
 
         let (transaction_count, pending_transaction_count) =
             if self.settings.eip7702_authority_pending_check_enabled {
@@ -636,7 +762,8 @@ mod tests {
     use alloy_primitives::{Bytes, address, bytes};
     use rundler_provider::{MockEntryPointV0_6, MockEvmProvider, MockFeeEstimator};
     use rundler_types::{
-        BundlerSponsorship, UserOperation as _,
+        BundlerSponsorship, GasFees, UserOperation as _,
+        chain::ForkActivation,
         v0_6::{UserOperationBuilder, UserOperationRequiredFields},
     };
 
@@ -664,9 +791,94 @@ mod tests {
             payer_funds: U256::from(5_000_000),
             base_fee: 4_000,
             min_pre_verification_gas: 1_000,
+            pvg_state: PvgState::unknown(),
             da_gas_data: DAGasData::Empty,
             eip7702_authority_data: None,
         }
+    }
+
+    #[tokio::test]
+    async fn test_check_uses_bundle_inclusion_schedule() {
+        const ACTIVATION: u64 = 1_000;
+        let cs = ChainSpec {
+            eip7623_enabled: true,
+            glamsterdam_activation: ForkActivation::Timestamp(ACTIVATION),
+            ..Default::default()
+        };
+
+        let mut provider = MockEvmProvider::new();
+        provider
+            .expect_get_code()
+            .returning(|_, _| Ok(bytes!("abcdef")));
+        provider
+            .expect_get_balance()
+            .returning(|_, _| Ok(U256::from(u64::MAX)));
+        let mut entry_point = MockEntryPointV0_6::new();
+        entry_point
+            .expect_balance_of()
+            .returning(|_, _| Ok(U256::ZERO));
+        let mut fee_estimator = MockFeeEstimator::new();
+        fee_estimator
+            .expect_required_bundle_fees()
+            .returning(|_, _| Ok((GasFees::default(), 0)));
+        let settings = Settings::default();
+        let prechecker = PrecheckerImpl::new(
+            cs.clone(),
+            Arc::new(provider),
+            entry_point,
+            fee_estimator,
+            settings,
+        );
+
+        let op = UserOperationBuilder::new(
+            &cs,
+            UserOperationRequiredFields {
+                call_data: Bytes::from(vec![1_u8; 4_000]),
+                call_gas_limit: MIN_CALL_GAS_LIMIT,
+                verification_gas_limit: 100_000,
+                pre_verification_gas: 1_000_000,
+                ..Default::default()
+            },
+        )
+        .build();
+        let perms = UserOperationPermissions::default();
+
+        let expected_pvg = |timestamp: u64| {
+            op.required_pre_verification_gas(
+                &cs.for_bundle_inclusion_after(timestamp),
+                1,
+                0,
+                Some(settings.verification_gas_limit_efficiency_reject_threshold),
+                &PvgState::unknown(),
+            )
+        };
+
+        let pre = prechecker
+            .check(&op, &perms, B256::ZERO, ACTIVATION - 1)
+            .await
+            .unwrap();
+        let post = prechecker
+            .check(&op, &perms, B256::ZERO, ACTIVATION)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            pre.required_pre_verification_gas,
+            expected_pvg(ACTIVATION - 1)
+        );
+        assert_eq!(post.required_pre_verification_gas, expected_pvg(ACTIVATION));
+        // before the fork, the requirement also covers inclusion after it
+        assert!(pre.required_pre_verification_gas >= post.required_pre_verification_gas);
+        assert!(
+            pre.required_pre_verification_gas
+                > op.required_pre_verification_gas(
+                    &cs.at_timestamp(ACTIVATION - 1),
+                    1,
+                    0,
+                    Some(settings.verification_gas_limit_efficiency_reject_threshold),
+                    &PvgState::unknown(),
+                )
+        );
     }
 
     #[tokio::test]
@@ -760,6 +972,8 @@ mod tests {
             max_verification_gas: 5_000_000,
             max_bundle_execution_gas: 10_000_000,
             max_uo_cost: U256::MAX,
+            max_reservoir_uo_cost: U256::MAX,
+            max_reservoir_gas: 60_000_000,
             bundle_priority_fee_overhead_percent: 0,
             priority_fee_mode: PriorityFeeMode::BaseFeePercent(100),
             base_fee_accept_percent: 100,
@@ -798,8 +1012,10 @@ mod tests {
 
         let res = prechecker.check_gas(
             &op,
+            &prechecker.chain_spec,
             &get_test_async_data(),
             &UserOperationPermissions::default(),
+            None,
         );
 
         let total_gas_limit = op.bundle_gas_limit(&cs, Some(1));
@@ -894,7 +1110,13 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_gas(&op, &async_data, &UserOperationPermissions::default());
+        let res = prechecker.check_gas(
+            &op,
+            &prechecker.chain_spec,
+            &async_data,
+            &UserOperationPermissions::default(),
+            None,
+        );
         assert!(res.is_empty());
     }
 
@@ -927,7 +1149,13 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_gas(&op, &async_data, &UserOperationPermissions::default());
+        let res = prechecker.check_gas(
+            &op,
+            &prechecker.chain_spec,
+            &async_data,
+            &UserOperationPermissions::default(),
+            None,
+        );
         let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
         expected.push(PrecheckViolation::MaxFeePerGasTooLow(
             math::percent(5_000, settings.base_fee_accept_percent - 10),
@@ -972,7 +1200,13 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_gas(&op, &async_data, &UserOperationPermissions::default());
+        let res = prechecker.check_gas(
+            &op,
+            &prechecker.chain_spec,
+            &async_data,
+            &UserOperationPermissions::default(),
+            None,
+        );
         let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
         expected.push(PrecheckViolation::MaxPriorityFeePerGasTooLow(
             mintip - 1,
@@ -1014,7 +1248,13 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_gas(&op, &async_data, &UserOperationPermissions::default());
+        let res = prechecker.check_gas(
+            &op,
+            &prechecker.chain_spec,
+            &async_data,
+            &UserOperationPermissions::default(),
+            None,
+        );
         let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
         expected.push(PrecheckViolation::PreVerificationGasTooLow(
             math::percent(1_000, settings.pre_verification_gas_accept_percent - 10),
@@ -1064,7 +1304,7 @@ mod tests {
             ..Default::default()
         };
 
-        let res = prechecker.check_gas(&op, &async_data, &perms);
+        let res = prechecker.check_gas(&op, &prechecker.chain_spec, &async_data, &perms, None);
         assert!(res.is_empty());
     }
 
@@ -1108,7 +1348,7 @@ mod tests {
             ..Default::default()
         };
 
-        let res = prechecker.check_gas(&op, &async_data, &perms);
+        let res = prechecker.check_gas(&op, &prechecker.chain_spec, &async_data, &perms, None);
 
         let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
         expected.push(PrecheckViolation::PreVerificationGasTooLow(
@@ -1163,8 +1403,280 @@ mod tests {
             ..Default::default()
         };
 
-        let res = prechecker.check_gas(&op, &async_data, &perms);
+        let res = prechecker.check_gas(&op, &prechecker.chain_spec, &async_data, &perms, None);
         assert!(res.is_empty());
+    }
+
+    // ---- reservoir mode ----
+
+    fn glamsterdam() -> ChainSpec {
+        ChainSpec {
+            glamsterdam_activation: ForkActivation::Genesis,
+            ..Default::default()
+        }
+        .at_timestamp(0)
+        .into_owned()
+    }
+
+    fn v0_7_prechecker(
+        cs: &ChainSpec,
+        settings: Settings,
+    ) -> PrecheckerImpl<
+        rundler_types::v0_7::UserOperation,
+        Arc<MockEvmProvider>,
+        rundler_provider::MockEntryPointV0_7,
+        MockFeeEstimator,
+    > {
+        PrecheckerImpl::new(
+            cs.clone(),
+            Arc::new(MockEvmProvider::new()),
+            rundler_provider::MockEntryPointV0_7::new(),
+            MockFeeEstimator::new(),
+            settings,
+        )
+    }
+
+    /// A v0.7 op with execution-only limits and the given PVG.
+    fn v0_7_op(cs: &ChainSpec, pre_verification_gas: u128) -> rundler_types::v0_7::UserOperation {
+        rundler_types::v0_7::UserOperationBuilder::new(
+            cs,
+            EntryPointVersion::V0_7,
+            rundler_types::v0_7::UserOperationRequiredFields {
+                sender: Address::ZERO,
+                nonce: U256::ZERO,
+                call_data: Bytes::new(),
+                call_gas_limit: 130_000,
+                verification_gas_limit: 60_000,
+                pre_verification_gas,
+                max_fee_per_gas: 10_000,
+                max_priority_fee_per_gas: 1_000,
+                signature: Bytes::new(),
+            },
+        )
+        .build()
+    }
+
+    /// `async_data.min_pre_verification_gas` (1,000) is the metered requirement.
+    fn threshold(cs: &ChainSpec, settings: &Settings) -> u128 {
+        gas::reservoir_threshold(&v0_7_op(cs, 0), cs, settings.max_bundle_execution_gas)
+    }
+
+    #[test]
+    fn test_reservoir_mode_from_pvg_surplus() {
+        let cs = glamsterdam();
+        let settings = Settings::default();
+        let prechecker = v0_7_prechecker(&cs, settings);
+        let async_data = get_test_async_data();
+        let perms = UserOperationPermissions::default();
+        let t = threshold(&cs, &settings);
+
+        // The threshold depends on the op's own encoding (its PVG bytes are calldata), so each
+        // op is classified against its own: reservoir mode with R = surplus iff surplus >= T(op).
+        for surplus in [t + 10_000, t + 1_000, t - 1_000, t - 10_000, 0] {
+            let op = v0_7_op(&cs, 1_000 + surplus);
+            let t_op = gas::reservoir_threshold(&op, &cs, settings.max_bundle_execution_gas);
+            let expected = (surplus >= t_op).then_some(surplus);
+            assert_eq!(
+                prechecker.reservoir_gas(&op, &cs, 0, &async_data, &perms),
+                expected,
+                "surplus {surplus}, threshold {t_op}"
+            );
+        }
+        assert!(
+            prechecker
+                .reservoir_gas(
+                    &v0_7_op(&cs, 1_000 + t + 10_000),
+                    &cs,
+                    0,
+                    &async_data,
+                    &perms
+                )
+                .is_some()
+        );
+        assert!(
+            prechecker
+                .reservoir_gas(
+                    &v0_7_op(&cs, 1_000 + t - 10_000),
+                    &cs,
+                    0,
+                    &async_data,
+                    &perms
+                )
+                .is_none()
+        );
+        // below the requirement: metered (and rejected by the PVG check)
+        assert!(
+            prechecker
+                .reservoir_gas(&v0_7_op(&cs, 500), &cs, 0, &async_data, &perms)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_reservoir_mode_needs_glamsterdam_and_onchain_payment() {
+        let cs = glamsterdam();
+        let settings = Settings::default();
+        let async_data = get_test_async_data();
+        let op = v0_7_op(&cs, 1_000 + threshold(&cs, &settings));
+
+        // without Glamsterdam the same op is metered
+        let pre_fork = ChainSpec::default();
+        let prechecker = v0_7_prechecker(&pre_fork, settings);
+        assert_eq!(
+            prechecker.reservoir_gas(
+                &op,
+                &pre_fork,
+                0,
+                &async_data,
+                &UserOperationPermissions::default()
+            ),
+            None
+        );
+
+        // bundler-sponsored ops are out of scope
+        let prechecker = v0_7_prechecker(&cs, settings);
+        let sponsored = UserOperationPermissions {
+            bundler_sponsorship: Some(BundlerSponsorship {
+                max_cost: U256::MAX,
+                valid_until: u64::MAX,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            prechecker.reservoir_gas(&op, &cs, 0, &async_data, &sponsored),
+            None
+        );
+        // and rejected, rather than bundled metered with an execution-only call gas limit
+        let surplus = op.pre_verification_gas() - async_data.min_pre_verification_gas;
+        assert_eq!(
+            prechecker.check_reservoir_supported(&op, &cs, 0, &async_data, None),
+            Some(PrecheckViolation::ReservoirGasTooHigh(surplus, 0))
+        );
+        let reservoir_gas = prechecker.reservoir_gas(
+            &op,
+            &cs,
+            0,
+            &async_data,
+            &UserOperationPermissions::default(),
+        );
+        assert!(reservoir_gas.is_some());
+        assert_eq!(
+            prechecker.check_reservoir_supported(&op, &cs, 0, &async_data, reservoir_gas),
+            None
+        );
+        // a sponsored op below the threshold is unaffected
+        let metered = v0_7_op(&cs, 1_000 + 10_000);
+        assert_eq!(
+            prechecker.check_reservoir_supported(&metered, &cs, 0, &async_data, None),
+            None
+        );
+    }
+
+    #[test]
+    fn test_reservoir_mode_not_for_v0_6() {
+        let cs = glamsterdam();
+        let (_, provider, entry_point, fee_estimator) = create_base_config();
+        let prechecker = PrecheckerImpl::new(
+            cs.clone(),
+            Arc::new(provider),
+            entry_point,
+            fee_estimator,
+            Settings::default(),
+        );
+        let op = UserOperationBuilder::new(
+            &cs,
+            UserOperationRequiredFields {
+                call_gas_limit: 130_000,
+                verification_gas_limit: 60_000,
+                pre_verification_gas: 100_000_000,
+                ..Default::default()
+            },
+        )
+        .build();
+        assert_eq!(
+            prechecker.reservoir_gas(
+                &op,
+                &cs,
+                0,
+                &get_test_async_data(),
+                &UserOperationPermissions::default()
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn test_reservoir_gas_too_high() {
+        let cs = glamsterdam();
+        let settings = Settings {
+            max_reservoir_gas: 20_000_000,
+            ..Default::default()
+        };
+        let prechecker = v0_7_prechecker(&cs, settings);
+        let mut async_data = get_test_async_data();
+        async_data.base_fee = 1_000;
+        async_data.payer_funds = U256::MAX;
+        let op = v0_7_op(&cs, 1_000 + 30_000_000);
+
+        let res = prechecker.check_gas(
+            &op,
+            &cs,
+            &async_data,
+            &UserOperationPermissions::default(),
+            Some(30_000_000),
+        );
+        assert!(res.contains(&PrecheckViolation::ReservoirGasTooHigh(
+            30_000_000, 20_000_000
+        )));
+    }
+
+    /// A reservoir-mode op is checked against `max_reservoir_uo_cost`, not `max_uo_cost`.
+    #[test]
+    fn test_reservoir_mode_cost_cap() {
+        let cs = glamsterdam();
+        let op = v0_7_op(&cs, 1_000 + 30_000_000);
+        let mut async_data = get_test_async_data();
+        async_data.base_fee = 1_000;
+        let perms = UserOperationPermissions::default();
+        let over_max_cost = |res: &ArrayVec<PrecheckViolation, 6>| {
+            res.iter()
+                .any(|v| matches!(v, PrecheckViolation::OverMaxCost(_, _)))
+        };
+
+        // max_uo_cost alone would reject it, but it does not apply in reservoir mode
+        let settings = Settings {
+            max_uo_cost: op.max_gas_cost() - U256::from(1),
+            ..Default::default()
+        };
+        let prechecker = v0_7_prechecker(&cs, settings);
+        assert!(!over_max_cost(&prechecker.check_gas(
+            &op,
+            &cs,
+            &async_data,
+            &perms,
+            Some(30_000_000)
+        )));
+        assert!(over_max_cost(&prechecker.check_gas(
+            &op,
+            &cs,
+            &async_data,
+            &perms,
+            None
+        )));
+
+        // max_reservoir_uo_cost does
+        let settings = Settings {
+            max_reservoir_uo_cost: op.max_gas_cost() - U256::from(1),
+            ..Default::default()
+        };
+        let prechecker = v0_7_prechecker(&cs, settings);
+        assert!(over_max_cost(&prechecker.check_gas(
+            &op,
+            &cs,
+            &async_data,
+            &perms,
+            Some(30_000_000)
+        )));
     }
 
     #[tokio::test]
@@ -1196,7 +1708,13 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_gas(&op, &async_data, &UserOperationPermissions::default());
+        let res = prechecker.check_gas(
+            &op,
+            &prechecker.chain_spec,
+            &async_data,
+            &UserOperationPermissions::default(),
+            None,
+        );
 
         // Calculate expected max gas cost
         let max_gas_cost = op.max_gas_cost();
@@ -1238,7 +1756,13 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_gas(&op, &async_data, &UserOperationPermissions::default());
+        let res = prechecker.check_gas(
+            &op,
+            &prechecker.chain_spec,
+            &async_data,
+            &UserOperationPermissions::default(),
+            None,
+        );
         assert!(res.is_empty());
     }
 
@@ -1337,6 +1861,48 @@ mod tests {
                     signature: Bytes::default(),
                 },
             )
+        }
+
+        fn glamsterdam_prechecker(deposit: U256) -> (ChainSpec, TestPrechecker) {
+            let cs = ChainSpec {
+                id: 1,
+                eip7702_enabled: true,
+                glamsterdam_activation: rundler_types::chain::ForkActivation::Genesis,
+                ..Default::default()
+            };
+            let mut entry_point = MockEntryPointV0_7::new();
+            entry_point
+                .expect_balance_of()
+                .withf(|address, _| *address == TEST_SENDER)
+                .returning(move |_, _| Ok(deposit));
+            let prechecker = PrecheckerImpl::new(
+                cs.clone(),
+                Arc::new(MockEvmProvider::new()),
+                entry_point,
+                MockFeeEstimator::new(),
+                Settings::default(),
+            );
+            (cs, prechecker)
+        }
+
+        #[tokio::test]
+        async fn test_required_pvg_prices_zero_sender_deposit_with_glamsterdam() {
+            let perms = UserOperationPermissions::default();
+            let (cs, zero) = glamsterdam_prechecker(U256::ZERO);
+            let op = create_uo_builder(&cs, EntryPointVersion::V0_7).build();
+            let cs = cs.at_timestamp(0);
+            let (pvg_zero, _, state) = zero
+                .get_required_pre_verification_gas(op.clone(), B256::ZERO, &cs, 1, &perms)
+                .await
+                .unwrap();
+            assert_eq!(state.sender_deposit_is_zero, Some(true));
+
+            let (_, funded) = glamsterdam_prechecker(U256::from(1_000_000));
+            let (pvg_funded, _, _) = funded
+                .get_required_pre_verification_gas(op, B256::ZERO, &cs, 1, &perms)
+                .await
+                .unwrap();
+            assert_eq!(pvg_zero - pvg_funded, 97_920);
         }
 
         #[tokio::test]

@@ -53,8 +53,8 @@ use rundler_sim::{
     EstimationSettings, MIN_CALL_GAS_LIMIT, MempoolConfigs, PrecheckSettings, SimulationSettings,
 };
 use rundler_types::{
-    EntryPointAbiVersion, EntryPointVersion, PriorityFeeMode,
-    chain::{ChainSpec, TryFromWithSpec},
+    EntryPointAbiVersion, EntryPointVersion, PriorityFeeMode, TX_MAX_GAS_LIMIT,
+    chain::{ChainSpec, ForkActivation, TryFromWithSpec},
     da::DAGasOracleType,
     v0_6::UserOperation as UserOperationV0_6,
     v0_7::UserOperation as UserOperationV0_7,
@@ -94,6 +94,19 @@ pub async fn run() -> anyhow::Result<()> {
     aggregator::instantiate_aggregators(&opt.common, &mut cs, &providers);
 
     tracing::info!("Chain spec: {:#?}", cs);
+    if cs.glamsterdam_activation != ForkActivation::Never {
+        tracing::info!(
+            "Glamsterdam activation: {:?}, pre-Glamsterdam gas schedule: {:?}, Glamsterdam gas schedule: {:?}",
+            cs.glamsterdam_activation,
+            cs.pre_glamsterdam_gas_schedule(),
+            cs.glamsterdam_gas_schedule(),
+        );
+        if let ForkActivation::Timestamp(activation) = cs.glamsterdam_activation {
+            tracing::warn!(
+                "Until Glamsterdam activation at {activation}, gas estimation, pool admission and bundle building use the larger cost of each gas field from both schedules. Required preVerificationGas is higher and bundle capacity may be lower until then."
+            );
+        }
+    }
 
     match opt.command {
         Command::Node(args) => {
@@ -264,6 +277,18 @@ pub struct CommonArgs {
         global = true
     )]
     max_uo_cost: Option<U256>,
+
+    /// Maximum cost (in ETH) of a user operation in reservoir mode, whose preVerificationGas
+    /// carries its EIP-8037 state gas. Replaces `max_uo_cost` for those ops; unset means no cap.
+    /// Must be at least `max_uo_cost` when both are set.
+    #[arg(
+        long = "max_reservoir_uo_cost",
+        name = "max_reservoir_uo_cost",
+        env = "MAX_RESERVOIR_UO_COST",
+        value_parser = alloy_primitives::utils::parse_ether,
+        global = true
+    )]
+    max_reservoir_uo_cost: Option<U256>,
 
     #[arg(
         long = "target_bundle_transaction_gas_limit_ratio",
@@ -459,6 +484,38 @@ pub struct CommonArgs {
     )]
     pub max_gas_estimation_rounds: u32,
 
+    /// The most EIP-8037 state gas a user operation may carry in reservoir mode (bundled alone
+    /// above the 2^24 transaction gas cap, on chains with Glamsterdam active)
+    #[arg(
+        long = "max_reservoir_gas",
+        name = "max_reservoir_gas",
+        env = "MAX_RESERVOIR_GAS",
+        default_value = "60000000",
+        global = true
+    )]
+    pub max_reservoir_gas: u64,
+
+    /// The most time estimation's reservoir-mode fallback may spend simulating an op for its
+    /// state gas, reservoir and call gas limit
+    #[arg(
+        long = "reservoir_trace_timeout_ms",
+        name = "reservoir_trace_timeout_ms",
+        env = "RESERVOIR_TRACE_TIMEOUT_MS",
+        default_value = "10000",
+        global = true
+    )]
+    pub reservoir_trace_timeout_ms: u64,
+
+    /// The most reservoir-mode estimation fallbacks that may run at once
+    #[arg(
+        long = "max_concurrent_reservoir_estimations",
+        name = "max_concurrent_reservoir_estimations",
+        env = "MAX_CONCURRENT_RESERVOIR_ESTIMATIONS",
+        default_value = "4",
+        global = true
+    )]
+    pub max_concurrent_reservoir_estimations: usize,
+
     #[arg(
         long = "mempool_config_path",
         name = "mempool_config_path",
@@ -629,6 +686,19 @@ impl TryFromWithSpec<&CommonArgs> for EstimationSettings {
             );
         }
 
+        // A reservoir-mode bundle (`tx.gas = 2^24 + R`) has 2^24 of execution gas, which its
+        // op's computation gas (at most `max_bundle_execution_gas`) must fit. Metered bundles
+        // must stay at or below 2^24 too, or the reservoir is not empty.
+        if chain_spec.glamsterdam_activation != ForkActivation::Never
+            && value.max_reservoir_gas > 0
+            && bundle_limits.max_bundle_execution_gas_limit > u128::from(TX_MAX_GAS_LIMIT)
+        {
+            anyhow::bail!(
+                "max_bundle_execution_gas ({}) must be at most {TX_MAX_GAS_LIMIT} on a chain with Glamsterdam, for reservoir mode: set the chain's transaction_gas_limit to {TX_MAX_GAS_LIMIT}, or set max_reservoir_gas to 0",
+                bundle_limits.max_bundle_execution_gas_limit,
+            );
+        }
+
         if bundle_limits.max_bundle_execution_gas_limit < MIN_CALL_GAS_LIMIT {
             anyhow::bail!(
                 "max_bundle_execution_gas ({}) must be greater than or equal to {}",
@@ -649,6 +719,9 @@ impl TryFromWithSpec<&CommonArgs> for EstimationSettings {
             verification_gas_allowed_error_pct: value.verification_gas_allowed_error_pct,
             call_gas_allowed_error_pct: value.call_gas_allowed_error_pct,
             max_gas_estimation_rounds: value.max_gas_estimation_rounds,
+            max_reservoir_gas: value.max_reservoir_gas,
+            reservoir_trace_timeout: Duration::from_millis(value.reservoir_trace_timeout_ms),
+            max_concurrent_reservoir_estimations: value.max_concurrent_reservoir_estimations,
         })
     }
 }
@@ -658,11 +731,21 @@ impl TryFromWithSpec<&CommonArgs> for PrecheckSettings {
 
     fn try_from_with_spec(value: &CommonArgs, chain_spec: &ChainSpec) -> Result<Self, Self::Error> {
         let bundle_limits = value.bundle_limits(chain_spec);
+        if let (Some(max_uo_cost), Some(max_reservoir_uo_cost)) =
+            (value.max_uo_cost, value.max_reservoir_uo_cost)
+            && max_reservoir_uo_cost < max_uo_cost
+        {
+            anyhow::bail!(
+                "max_reservoir_uo_cost ({max_reservoir_uo_cost}) must be at least max_uo_cost ({max_uo_cost})"
+            );
+        }
 
         Ok(Self {
             max_verification_gas: value.max_verification_gas as u128,
             max_bundle_execution_gas: bundle_limits.max_bundle_execution_gas_limit,
             max_uo_cost: value.max_uo_cost.unwrap_or(U256::MAX),
+            max_reservoir_uo_cost: value.max_reservoir_uo_cost.unwrap_or(U256::MAX),
+            max_reservoir_gas: u128::from(value.max_reservoir_gas),
             bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
             priority_fee_mode: PriorityFeeMode::try_from(
                 value.priority_fee_mode_kind.as_str(),
