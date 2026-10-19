@@ -929,7 +929,7 @@ mod tests {
         let mut provider = MockEvmProvider::new();
         provider
             .expect_get_transaction_count()
-            .returning(move |_a| Ok(0));
+            .returning(move |_a, _| Ok(0));
         provider
             .expect_get_balance()
             .returning(move |_a, _b| Ok(U256::ZERO));

@@ -259,6 +259,13 @@ sol!(
 
         function estimatePaymasterVerificationGas(EstimateGasArgs calldata args);
     }
+
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    #[derive(Default, Debug, PartialEq, Eq)]
+    contract ReservoirProbe {
+        function probe() external returns (bool reservoir);
+    }
 );
 
 mod no_sig {
@@ -336,6 +343,20 @@ static __VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE: [u8; 5252] =
 
 pub static VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE: Bytes =
     Bytes::from_static(&__VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE);
+
+// ReservoirProbe deployed bytecode
+static __RESERVOIR_PROBE_V0_7_DEPLOYED_BYTECODE_HEX: &[u8] =
+    include_bytes!("../contracts/out/v0_7/ReservoirProbe.sol/ReservoirProbe_deployedBytecode.txt");
+
+static __RESERVOIR_PROBE_V0_7_DEPLOYED_BYTECODE: [u8; 431] = {
+    match const_hex::const_decode_to_array(__RESERVOIR_PROBE_V0_7_DEPLOYED_BYTECODE_HEX) {
+        Ok(a) => a,
+        Err(_) => panic!("Failed to decode reservoir probe hex"),
+    }
+};
+
+pub static RESERVOIR_PROBE_V0_7_DEPLOYED_BYTECODE: Bytes =
+    Bytes::from_static(&__RESERVOIR_PROBE_V0_7_DEPLOYED_BYTECODE);
 
 pub use no_sig::PackedUserOperation as PackedUserOperationNoSig;
 

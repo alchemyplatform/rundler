@@ -694,6 +694,9 @@ mod tests {
             verification_gas_allowed_error_pct: 15,
             call_gas_allowed_error_pct: 15,
             max_gas_estimation_rounds: 3,
+            max_reservoir_gas: 60_000_000,
+            reservoir_trace_timeout: std::time::Duration::from_secs(10),
+            max_concurrent_reservoir_estimations: 4,
         };
         let estimator = create_custom_estimator(
             ChainSpec::default(),
@@ -1442,6 +1445,9 @@ mod tests {
             verification_gas_allowed_error_pct: 15,
             call_gas_allowed_error_pct: 15,
             max_gas_estimation_rounds: 3,
+            max_reservoir_gas: 60_000_000,
+            reservoir_trace_timeout: std::time::Duration::from_secs(10),
+            max_concurrent_reservoir_estimations: 4,
         };
 
         create_custom_estimator(
@@ -1703,8 +1709,8 @@ mod tests {
         async fn total_gas_limit(chain_spec: ChainSpec, call_gas_limit: u128, vgl: u128) -> u128 {
             let (mut entry, mut provider) = create_base_config();
             provider
-                .expect_get_latest_block_hash_and_number()
-                .returning(|| Ok((B256::ZERO, 0)));
+                .expect_get_latest_block_hash_number_and_timestamp()
+                .returning(|| Ok((B256::ZERO, 0, 0)));
             entry
                 .expect_simulate_handle_op_estimate_gas()
                 .returning(move |_a, _b, _c, _d, _e| {

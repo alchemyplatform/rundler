@@ -11,3 +11,6 @@ calldata_floor_non_zero_byte_gas = 40
 
 # TODO(verify): EF Glamsterdam testnet announcement (2026-09-17), epoch 353024
 glamsterdam_activation = 1791294816
+# EIP-7825 cap; keeping bundles at or below it leaves the EIP-8037 state-gas reservoir empty,
+# and gives reservoir-mode bundles (tx.gas = 2^24 + R) their full execution budget
+transaction_gas_limit = 16777216

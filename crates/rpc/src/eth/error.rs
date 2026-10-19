@@ -559,9 +559,8 @@ impl From<GasEstimationError> for EthRpcError {
             error @ GasEstimationError::GasUsedTooLarge => {
                 Self::EntryPointValidationRejected(error.to_string())
             }
-            error @ GasEstimationError::GasTotalTooLarge(_, _) => {
-                Self::InvalidParams(error.to_string())
-            }
+            error @ (GasEstimationError::GasTotalTooLarge(_, _)
+            | GasEstimationError::StateGasTooLarge(_, _)) => Self::InvalidParams(error.to_string()),
             error @ GasEstimationError::GasFieldTooLarge(_, _) => {
                 Self::InvalidParams(error.to_string())
             }
