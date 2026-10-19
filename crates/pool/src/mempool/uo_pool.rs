@@ -752,6 +752,7 @@ where
             filter_id,
             perms,
             sender_is_7702: precheck_ret.sender_is_7702,
+            reservoir_gas: precheck_ret.reservoir_gas,
         };
 
         // Check sender count in mempool. If sender has too many operations, must be staked
@@ -762,6 +763,7 @@ where
                 .unwrap_or(self.config.same_sender_mempool_count);
 
             let state = self.state.read();
+
             if !pool_op.account_is_staked
                 && to_replace.is_none()
                 && state.pool.address_count(&pool_op.uo.sender()) >= sender_allowed_count
@@ -797,6 +799,24 @@ where
         // Add op to pool
         let hash = {
             let mut state = self.state.write();
+            // Reservoir-mode ops each take a whole bundle and reserve 2^24 of a block's
+            // execution gas: cap them per sender and in total. Checked under the same lock as
+            // the insert, so concurrent submissions cannot both pass a cap.
+            if pool_op.reservoir_gas.is_some() {
+                let sender = pool_op.uo.sender();
+                let (total, by_sender) = state
+                    .pool
+                    .reservoir_op_counts(sender, to_replace.as_ref().map(|op| op.uo.hash()));
+                if by_sender >= self.config.max_reservoir_ops_per_sender {
+                    return Err(MempoolError::MaxOperationsReached(
+                        self.config.max_reservoir_ops_per_sender,
+                        Entity::account(sender),
+                    ));
+                }
+                if total >= self.config.max_reservoir_ops {
+                    return Err(MempoolError::DiscardedOnInsert);
+                }
+            }
             let base_fee = state.base_fee;
             let hash = state.pool.add_operation_with_pvg_state(
                 pool_op.clone(),
@@ -2695,6 +2715,89 @@ mod tests {
             .unwrap();
     }
 
+    fn reservoir_op(sender: Address, nonce: usize) -> OpWithErrors {
+        OpWithErrors {
+            reservoir_gas: Some(37_882_800),
+            ..create_op(sender, nonce, 100, None)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reservoir_ops_per_sender_cap() {
+        let sender = Address::random();
+        let op1 = reservoir_op(sender, 1);
+        let op2 = reservoir_op(sender, 2);
+        let pool = create_pool_with_config(default_config(), vec![op1.clone(), op2.clone()]);
+        pool.add_operation(OperationOrigin::Local, op1.op, Default::default())
+            .await
+            .unwrap();
+        let err = pool
+            .add_operation(OperationOrigin::Local, op2.op, Default::default())
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(err, MempoolError::MaxOperationsReached(1, _)));
+    }
+
+    #[tokio::test]
+    async fn test_reservoir_ops_pool_cap() {
+        let config = PoolConfig {
+            max_reservoir_ops: 1,
+            ..default_config()
+        };
+        let op1 = reservoir_op(Address::random(), 1);
+        let op2 = reservoir_op(Address::random(), 1);
+        let pool = create_pool_with_config(config, vec![op1.clone(), op2.clone()]);
+        pool.add_operation(OperationOrigin::Local, op1.op, Default::default())
+            .await
+            .unwrap();
+        let err = pool
+            .add_operation(OperationOrigin::Local, op2.op, Default::default())
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(err, MempoolError::DiscardedOnInsert));
+    }
+
+    /// Concurrent submissions near the caps: the cap checks and the insert share one lock, so
+    /// no interleaving lets two ops past a cap.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_reservoir_caps_hold_under_concurrency() {
+        let config = PoolConfig {
+            max_reservoir_ops: 2,
+            ..default_config()
+        };
+        let shared_sender = Address::random();
+        let ops = (0..8)
+            .map(|i| {
+                if i < 4 {
+                    reservoir_op(shared_sender, i + 1)
+                } else {
+                    reservoir_op(Address::random(), 1)
+                }
+            })
+            .collect::<Vec<_>>();
+        let pool = Arc::new(create_pool_with_config(config, ops.clone()));
+        let tasks = ops
+            .into_iter()
+            .map(|op| {
+                let pool = pool.clone();
+                tokio::spawn(async move {
+                    pool.add_operation(OperationOrigin::Local, op.op, Default::default())
+                        .await
+                })
+            })
+            .collect::<Vec<_>>();
+        for task in tasks {
+            let _ = task.await.unwrap();
+        }
+
+        let state = pool.state.read();
+        let (total, by_sender) = state.pool.reservoir_op_counts(shared_sender, None);
+        assert_eq!(total, 2);
+        assert!(by_sender <= 1);
+    }
+
     #[tokio::test]
     async fn test_max_allowed_in_pool_for_sender() {
         let config = default_config();
@@ -2732,6 +2835,7 @@ mod tests {
         simulation_error: Option<SimulationViolation>,
         staked: bool,
         trusted: bool,
+        reservoir_gas: Option<u128>,
     }
 
     fn default_config() -> PoolConfig {
@@ -2747,6 +2851,8 @@ mod tests {
             sim_settings: SimulationSettings::default(),
             mempool_channel_configs: HashMap::new(),
             same_sender_mempool_count: 4,
+            max_reservoir_ops: 8,
+            max_reservoir_ops_per_sender: 1,
             throttled_entity_mempool_count: 4,
             throttled_entity_live_blocks: 10,
             paymaster_tracking_enabled: true,
@@ -2872,6 +2978,7 @@ mod tests {
                         required_pre_verification_gas: 100_000,
                         pvg_state: PvgState::unknown(),
                         sender_is_7702: false,
+                        reservoir_gas: op.reservoir_gas,
                     })
                 }
             });
@@ -2988,6 +3095,7 @@ mod tests {
             simulation_error: None,
             staked: false,
             trusted: false,
+            reservoir_gas: None,
         }
     }
 
@@ -3016,6 +3124,7 @@ mod tests {
             simulation_error,
             staked,
             trusted: false,
+            reservoir_gas: None,
         }
     }
 
@@ -3034,6 +3143,7 @@ mod tests {
             simulation_error: None,
             staked: false,
             trusted: false,
+            reservoir_gas: None,
         }
     }
 
@@ -3047,6 +3157,7 @@ mod tests {
             simulation_error: None,
             staked: false,
             trusted: false,
+            reservoir_gas: None,
         }
     }
 

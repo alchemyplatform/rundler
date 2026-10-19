@@ -52,6 +52,9 @@ pub use user_operation::*;
 mod storage;
 pub use storage::*;
 
+mod state_gas;
+pub use state_gas::{StateGasMode, TX_MAX_GAS_LIMIT};
+
 mod validation_results;
 pub use validation_results::{
     AaErrorCode, AggregatorInfo, StakeInfo, ValidationOutput, ValidationReturnInfo,
