@@ -37,14 +37,15 @@ use super::protos::{
     OperationAlreadyKnownError, OperationDropTooSoon, OperationRevert, OutOfGas, OverMaxCost,
     PanicRevert, PaymasterBalanceTooLow, PaymasterDepositTooLow, PaymasterIsNotContract,
     PreVerificationGasTooLow, PrecheckViolationError as ProtoPrecheckViolationError,
-    ReplacementUnderpricedError, SenderAddressUsedAsAlternateEntity, SenderFundsTooLow,
-    SenderIsNotContractAndNoInitCode, SimulationViolationError as ProtoSimulationViolationError,
-    TooManyExpectedStorageSlots, TotalGasLimitTooHigh, UnintendedRevert,
-    UnintendedRevertWithMessage, UnknownEntryPointError, UnknownRevert, UnstakedPaymasterContext,
-    UseUnsupportedEip, UsedForbiddenOpcode, UsedForbiddenPrecompile,
-    ValidationRevert as ProtoValidationRevert, VerificationGasLimitBufferTooLow,
-    VerificationGasLimitEfficiencyTooLow, VerificationGasLimitTooHigh, WrongNumberOfPhases,
-    mempool_error, precheck_violation_error, simulation_violation_error, validation_revert,
+    ReplacementUnderpricedError, ReservoirGasTooHigh, SenderAddressUsedAsAlternateEntity,
+    SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
+    SimulationViolationError as ProtoSimulationViolationError, TooManyExpectedStorageSlots,
+    TotalGasLimitTooHigh, UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError,
+    UnknownRevert, UnstakedPaymasterContext, UseUnsupportedEip, UsedForbiddenOpcode,
+    UsedForbiddenPrecompile, ValidationRevert as ProtoValidationRevert,
+    VerificationGasLimitBufferTooLow, VerificationGasLimitEfficiencyTooLow,
+    VerificationGasLimitTooHigh, WrongNumberOfPhases, mempool_error, precheck_violation_error,
+    simulation_violation_error, validation_revert,
 };
 
 impl TryFrom<ProtoMempoolError> for PoolError {
@@ -323,6 +324,14 @@ impl From<PrecheckViolation> for ProtoPrecheckViolationError {
                     },
                 )),
             },
+            PrecheckViolation::ReservoirGasTooHigh(actual, max) => ProtoPrecheckViolationError {
+                violation: Some(precheck_violation_error::Violation::ReservoirGasTooHigh(
+                    ReservoirGasTooHigh {
+                        actual_gas: actual.to_proto_bytes(),
+                        max_gas: max.to_proto_bytes(),
+                    },
+                )),
+            },
             PrecheckViolation::VerificationGasLimitTooHigh(actual, max) => {
                 ProtoPrecheckViolationError {
                     violation: Some(
@@ -486,6 +495,12 @@ impl TryFrom<ProtoPrecheckViolationError> for PrecheckViolation {
             }
             Some(precheck_violation_error::Violation::TotalGasLimitTooHigh(e)) => {
                 PrecheckViolation::TotalGasLimitTooHigh(
+                    from_bytes(&e.actual_gas)?,
+                    from_bytes(&e.max_gas)?,
+                )
+            }
+            Some(precheck_violation_error::Violation::ReservoirGasTooHigh(e)) => {
+                PrecheckViolation::ReservoirGasTooHigh(
                     from_bytes(&e.actual_gas)?,
                     from_bytes(&e.max_gas)?,
                 )

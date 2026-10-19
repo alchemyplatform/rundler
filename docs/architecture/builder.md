@@ -49,6 +49,8 @@ On chains that charge a minimum fraction of the transaction gas limit (e.g. Aval
 
 The pre-simulation gas limit filter uses the same sizing without the post-op retry. Precheck and estimation check that a UO fits in a bundle with the same sizing including the post-op retry, the largest the builder can use, so any UO they accept can be bundled. v0.6 UOs without a paymaster keep the static limit.
 
+A UO in [reservoir mode](./glamsterdam_pvg.md#reservoir-mode) (Glamsterdam) is always bundled alone, with a gas limit of exactly `2^24 + R`, its state-gas reservoir. Before it is sent, the bundle is simulated with `eth_simulateV1` at that gas limit.
+
 ### 2nd Simulation and Rejection
 
 Once a candidate bundle is constructed, each UO is re-simulated and validation rules are re-checked. UOs that fail are removed from the bundle and removed from the pool.
@@ -108,6 +110,8 @@ The Assigner component is responsible for coordinating work distribution among w
    - Releases assignments when bundles complete
 
 3. **Virtual Entrypoints**: Supports multiple configurations per entry point address via `filter_id`, creating "virtual entrypoints" that workers can build for independently
+
+4. **Single-op bundles**: Suspect operations (isolation) and [reservoir-mode](./glamsterdam_pvg.md#reservoir-mode) operations are assigned alone, from their own bounded sets of workers, and stay alone in fee-bump replacements
 
 ### Per-EntryPoint signer pools
 

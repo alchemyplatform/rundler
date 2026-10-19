@@ -51,6 +51,7 @@ rundler-provider = { workspace = true, features = ["test-utils"] }
 rundler-sim = { workspace = true, features = ["test-utils"] }
 rundler-types = { workspace = true, features = ["test-utils"] }
 serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [build-dependencies]
 tonic-build.workspace = true

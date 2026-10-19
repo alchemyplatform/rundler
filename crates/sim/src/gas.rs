@@ -22,6 +22,22 @@ use rundler_types::{AuthorityState, PvgState, UserOperation, chain::ChainSpec, d
 use rundler_utils::guard_timer::CustomTimerGuard;
 use tracing::instrument;
 
+/// The smallest preVerificationGas surplus (PVG minus the metered requirement) that puts a user
+/// operation in [`StateGasMode::Reservoir`](rundler_types::StateGasMode): the least state gas
+/// that does not fit under `max_bundle_execution_gas` next to the op's own computation gas.
+///
+/// Estimation, admission and the builder all classify with this one function, so they cannot
+/// disagree about an op's mode. At least 1, so an op without state is never in reservoir mode.
+pub fn reservoir_threshold<UO: UserOperation>(
+    op: &UO,
+    chain_spec: &ChainSpec,
+    max_bundle_execution_gas: u128,
+) -> u128 {
+    max_bundle_execution_gas
+        .saturating_sub(op.bundle_computation_gas_limit(chain_spec, Some(1)))
+        .saturating_add(1)
+}
+
 /// Estimates only the DA gas portion for the given user operation
 ///
 /// `random_op` is either the user operation submitted via `sendUserOperation`
