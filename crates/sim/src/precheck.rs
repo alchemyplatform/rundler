@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{cmp, marker::PhantomData};
+use std::{cmp, marker::PhantomData, sync::Arc};
 
 use alloy_eips::eip7702::SignedAuthorization;
 use alloy_primitives::{Address, B256, Bytes, U256};
@@ -31,7 +31,7 @@ use rundler_types::{
 use rundler_utils::{authorization_utils, math};
 use tracing::instrument;
 
-use crate::{gas, types::ViolationError};
+use crate::{SponsoredReservoir, gas, types::ViolationError};
 
 /// The min cost of a `CALL` with nonzero value, as required by the spec.
 pub const MIN_CALL_GAS_LIMIT: u128 = 9100;
@@ -99,7 +99,21 @@ pub struct PrecheckerImpl<UO, P, E, F> {
     entry_point: E,
     settings: Settings,
     fee_estimator: F,
+    sponsored_reservoir: Option<Arc<dyn SponsoredReservoirEstimator<UO>>>,
     _uo_type: PhantomData<UO>,
+}
+
+/// Finds the state-gas reservoir a bundler-sponsored op needs at admission. A sponsored op's PVG
+/// is zero, so it cannot carry a reservoir as a paying op does.
+#[async_trait::async_trait]
+pub trait SponsoredReservoirEstimator<UO>: Send + Sync {
+    /// The reservoir `op` needs to run at its own limits
+    async fn sponsored_reservoir_gas(
+        &self,
+        op: &UO,
+        chain_spec: &ChainSpec,
+        block_hash: B256,
+    ) -> anyhow::Result<SponsoredReservoir>;
 }
 
 /// Precheck settings
@@ -201,8 +215,10 @@ where
         } else {
             violations.extend(self.check_init_code(op, &async_data, perms));
         }
-        let reservoir_gas =
-            self.reservoir_gas(op, &chain_spec, block_timestamp, &async_data, perms);
+        let reservoir_gas = self
+            .sponsored_reservoir_gas(op, perms, &chain_spec, block_hash, block_timestamp)
+            .await?
+            .or_else(|| self.reservoir_gas(op, &chain_spec, block_timestamp, &async_data, perms));
         violations.extend(self.check_reservoir_supported(
             op,
             &chain_spec,
@@ -248,8 +264,18 @@ where
             entry_point,
             settings,
             fee_estimator,
+            sponsored_reservoir: None,
             _uo_type: PhantomData,
         }
+    }
+
+    /// Find a reservoir for bundler-sponsored ops that need one, on chains with reservoir mode
+    pub fn with_sponsored_reservoir(
+        mut self,
+        estimator: Arc<dyn SponsoredReservoirEstimator<UO>>,
+    ) -> Self {
+        self.sponsored_reservoir = Some(estimator);
+        self
     }
 
     fn check_init_code(
@@ -291,6 +317,39 @@ where
         violations
     }
 
+    /// The state-gas reservoir a bundler-sponsored op needs, found by simulation: its PVG is
+    /// zero, so it carries none. `None` for other ops, without reservoir mode, or if the op runs
+    /// metered (including if it fails either way, as a sponsored op is admitted without its
+    /// execution simulated). A reservoir over `max_reservoir_gas` is returned for `check_gas` to
+    /// reject.
+    async fn sponsored_reservoir_gas(
+        &self,
+        op: &UO,
+        perms: &UserOperationPermissions,
+        chain_spec: &ChainSpec,
+        block_hash: B256,
+        block_timestamp: u64,
+    ) -> anyhow::Result<Option<u128>> {
+        if perms.bundler_sponsorship.is_none()
+            || op.aggregator().is_some()
+            || !chain_spec.reservoir_mode_enabled_at(block_timestamp)
+        {
+            return Ok(None);
+        }
+        let Some(estimator) = &self.sponsored_reservoir else {
+            return Ok(None);
+        };
+        Ok(
+            match estimator
+                .sponsored_reservoir_gas(op, chain_spec, block_hash)
+                .await?
+            {
+                SponsoredReservoir::Reservoir(reservoir_gas) => Some(reservoir_gas),
+                SponsoredReservoir::Metered | SponsoredReservoir::Fails => None,
+            },
+        )
+    }
+
     /// The state-gas reservoir `R` if `op` is in reservoir mode, decided from what its PVG pays
     /// for: Glamsterdam is active and the op's PVG surplus over the metered requirement is at
     /// least [`gas::reservoir_threshold`], the least state gas that cannot fit under
@@ -301,7 +360,8 @@ where
     /// `test/pvg-calibration/docs/reservoir-mode-plan.md`.
     ///
     /// Aggregated and bundler-sponsored ops are not supported, and are rejected by `check` if
-    /// their PVG surplus reaches the threshold.
+    /// their PVG surplus reaches the threshold. A bundler-sponsored op's PVG is zero; its
+    /// reservoir is found by a [`SponsoredReservoirEstimator`] instead.
     fn reservoir_gas(
         &self,
         op: &UO,
@@ -1883,6 +1943,99 @@ mod tests {
                 Settings::default(),
             );
             (cs, prechecker)
+        }
+
+        /// Returns `result` for the op, or panics if it is asked
+        struct StubSponsoredReservoir(Option<anyhow::Result<SponsoredReservoir>>);
+
+        #[async_trait::async_trait]
+        impl SponsoredReservoirEstimator<UserOperationV07> for StubSponsoredReservoir {
+            async fn sponsored_reservoir_gas(
+                &self,
+                _op: &UserOperationV07,
+                _chain_spec: &ChainSpec,
+                _block_hash: B256,
+            ) -> anyhow::Result<SponsoredReservoir> {
+                match &self.0 {
+                    Some(Ok(reservoir)) => Ok(*reservoir),
+                    Some(Err(error)) => Err(anyhow::anyhow!("{error}")),
+                    None => panic!("the reservoir search should not run"),
+                }
+            }
+        }
+
+        fn sponsored_perms() -> UserOperationPermissions {
+            UserOperationPermissions {
+                bundler_sponsorship: Some(rundler_types::BundlerSponsorship {
+                    max_cost: U256::MAX,
+                    valid_until: u64::MAX,
+                }),
+                ..Default::default()
+            }
+        }
+
+        async fn sponsored_reservoir_with(
+            stub: StubSponsoredReservoir,
+            perms: UserOperationPermissions,
+            glamsterdam: bool,
+        ) -> anyhow::Result<Option<u128>> {
+            let (cs, prechecker) = glamsterdam_prechecker(U256::ZERO);
+            let cs = if glamsterdam {
+                cs
+            } else {
+                ChainSpec {
+                    glamsterdam_activation: rundler_types::chain::ForkActivation::Never,
+                    ..cs
+                }
+            };
+            let prechecker = prechecker.with_sponsored_reservoir(Arc::new(stub));
+            let op = create_uo_builder(&cs, EntryPointVersion::V0_7).build();
+            let cs = cs.at_timestamp(0);
+            prechecker
+                .sponsored_reservoir_gas(&op, &perms, &cs, B256::ZERO, 0)
+                .await
+        }
+
+        #[tokio::test]
+        async fn test_sponsored_op_gets_reservoir() {
+            let stub = StubSponsoredReservoir(Some(Ok(SponsoredReservoir::Reservoir(5_000_000))));
+            let reservoir = sponsored_reservoir_with(stub, sponsored_perms(), true).await;
+            assert_eq!(reservoir.unwrap(), Some(5_000_000));
+        }
+
+        #[tokio::test]
+        async fn test_sponsored_op_metered_or_failing_has_no_reservoir() {
+            for result in [SponsoredReservoir::Metered, SponsoredReservoir::Fails] {
+                let stub = StubSponsoredReservoir(Some(Ok(result)));
+                let reservoir = sponsored_reservoir_with(stub, sponsored_perms(), true).await;
+                assert_eq!(reservoir.unwrap(), None);
+            }
+        }
+
+        #[tokio::test]
+        async fn test_sponsored_reservoir_search_error_fails_admission() {
+            let stub = StubSponsoredReservoir(Some(Err(anyhow::anyhow!("busy"))));
+            assert!(
+                sponsored_reservoir_with(stub, sponsored_perms(), true)
+                    .await
+                    .is_err()
+            );
+        }
+
+        #[tokio::test]
+        async fn test_reservoir_search_only_for_sponsored_ops_with_glamsterdam() {
+            let not_sponsored = sponsored_reservoir_with(
+                StubSponsoredReservoir(None),
+                UserOperationPermissions::default(),
+                true,
+            )
+            .await;
+            assert_eq!(not_sponsored.unwrap(), None);
+
+            let before_glamsterdam =
+                sponsored_reservoir_with(StubSponsoredReservoir(None), sponsored_perms(), false)
+                    .await;
+            assert_eq!(before_glamsterdam.unwrap(), None);
         }
 
         #[tokio::test]

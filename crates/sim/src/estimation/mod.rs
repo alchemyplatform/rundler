@@ -34,6 +34,8 @@ pub use estimate_call_gas::{
 };
 
 /// Gas estimation module for Entry Point v0.6
+mod reservoir;
+pub use reservoir::{ReservoirEstimator, SponsoredReservoir};
 mod state_gas;
 mod v0_6;
 pub use v0_6::GasEstimator as GasEstimatorV0_6;
@@ -187,6 +189,12 @@ struct Metrics {
     pvgl_estimate_ms: Histogram,
     #[metric(describe = "the count of estimates that fell back to reservoir mode.")]
     reservoir_fallbacks: Counter,
+    #[metric(
+        describe = "the count of bundler-sponsored ops searched for a reservoir at admission."
+    )]
+    sponsored_reservoir_searches: Counter,
+    #[metric(describe = "the count of bundler-sponsored ops admitted in reservoir mode.")]
+    sponsored_reservoirs: Counter,
     #[metric(describe = "the count of reservoir-mode fallbacks that produced an estimate.")]
     reservoir_estimates: Counter,
     #[metric(

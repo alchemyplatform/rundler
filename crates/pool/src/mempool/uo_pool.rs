@@ -2848,6 +2848,7 @@ mod tests {
             blocklist: None,
             allowlist: None,
             precheck_settings: PrecheckSettings::default(),
+            reservoir_estimation_settings: None,
             sim_settings: SimulationSettings::default(),
             mempool_channel_configs: HashMap::new(),
             same_sender_mempool_count: 4,

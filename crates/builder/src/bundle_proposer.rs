@@ -1463,8 +1463,9 @@ where
     /// which gives it the transaction's state-gas reservoir (an `eth_call` on reth v2.7 gets
     /// none). Besides `handleOps` reverting, the op is rejected if the gas it is charged does not
     /// cover the transaction's gas used: the state the reservoir pays is not metered by the entry
-    /// point, so PVG must pay for it, and a shortfall would be the bundler's loss. An op whose
-    /// own execution fails is still sent, as in a normal bundle: it is charged in full.
+    /// point, so PVG must pay for it, and a shortfall would be the bundler's loss. A
+    /// bundler-sponsored op is exempt: it pays nothing, and its max cost bounds the loss. An op
+    /// whose own execution fails is still sent, as in a normal bundle: it is charged in full.
     async fn simulate_reservoir_bundle(
         &self,
         context: &ProposalContext<EP::UO>,
@@ -1518,7 +1519,9 @@ where
                 event.userOpHash
             );
         }
-        if event.actualGasUsed < U256::from(result.gas_used) {
+        // A bundler-sponsored op is charged nothing (its fees are zero): the bundler pays the
+        // whole transaction by design, within the sponsorship's max cost.
+        if !event.actualGasCost.is_zero() && event.actualGasUsed < U256::from(result.gas_used) {
             return Ok(HandleOpsOut::FailedOp(
                 0,
                 format!(
@@ -2888,6 +2891,9 @@ mod tests {
         op_success: bool,
         /// The op's `actualGasUsed`
         charged: u128,
+        /// The gas price the op is charged at (`actualGasCost = actualGasUsed × this`): zero
+        /// for a bundler-sponsored op
+        cost_per_gas: u128,
     }
 
     impl ReservoirSimulation {
@@ -2898,6 +2904,7 @@ mod tests {
                 gas_used: 37_889_187,
                 op_success: true,
                 charged: 37_984_630,
+                cost_per_gas: 50,
             }
         }
 
@@ -2916,7 +2923,12 @@ mod tests {
                         "address": entry_point,
                         "topics": [UserOperationEvent::SIGNATURE_HASH, B256::ZERO, B256::ZERO, B256::ZERO],
                         "data": Bytes::from(
-                            (U256::ZERO, self.op_success, U256::ZERO, U256::from(self.charged))
+                            (
+                                U256::ZERO,
+                                self.op_success,
+                                U256::from(self.charged * self.cost_per_gas),
+                                U256::from(self.charged),
+                            )
                                 .abi_encode_params(),
                         ),
                     }],
@@ -2931,11 +2943,26 @@ mod tests {
         reservoir_gas: u128,
         simulation: ReservoirSimulation,
     ) -> Bundle<UserOperation> {
+        make_reservoir_bundle_with_perms(
+            op,
+            reservoir_gas,
+            simulation,
+            UserOperationPermissions::default(),
+        )
+        .await
+    }
+
+    async fn make_reservoir_bundle_with_perms(
+        op: UserOperation,
+        reservoir_gas: u128,
+        simulation: ReservoirSimulation,
+        perms: UserOperationPermissions,
+    ) -> Bundle<UserOperation> {
         mock_make_bundle_at(
             vec![MockOp {
                 op,
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                perms: UserOperationPermissions::default(),
+                perms,
                 reservoir_gas: Some(reservoir_gas),
             }],
             vec![],
@@ -3030,6 +3057,34 @@ mod tests {
 
         assert!(bundle.ops_per_aggregator.is_empty());
         assert_eq!(bundle.rejected_ops, vec![op]);
+    }
+
+    /// A bundler-sponsored reservoir-mode op is charged nothing, so its charge is always below
+    /// the bundle's gas used: still sent, as the bundler pays within the sponsorship's max cost.
+    #[tokio::test]
+    async fn test_reservoir_mode_bundle_sponsored_op_not_held_to_charge() {
+        let op = op_with_sender_and_fees(address(1), 0, 0, 0);
+        let perms = UserOperationPermissions {
+            bundler_sponsorship: Some(BundlerSponsorship {
+                max_cost: U256::MAX,
+                valid_until: u64::MAX,
+            }),
+            ..Default::default()
+        };
+        let bundle = make_reservoir_bundle_with_perms(
+            op.clone(),
+            RESERVOIR,
+            ReservoirSimulation {
+                charged: 37_000_000,
+                cost_per_gas: 0,
+                ..ReservoirSimulation::passing(reservoir_tx_gas())
+            },
+            perms,
+        )
+        .await;
+
+        assert_eq!(bundle.ops_per_aggregator[0].user_ops, vec![op]);
+        assert!(bundle.rejected_ops.is_empty());
     }
 
     /// The op's execution fails in the simulation, but it is charged in full: still sent, as in a
