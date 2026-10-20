@@ -318,6 +318,38 @@ impl UserOperationTrait for UserOperation {
         self.verification_gas_limit + ENTRY_POINT_INNER_GAS_OVERHEAD
     }
 
+    fn bundle_computation_gas_limit_with_post_op(
+        &self,
+        chain_spec: &ChainSpec,
+        bundle_size: Option<usize>,
+        requires_post_op: bool,
+    ) -> u128 {
+        if !chain_spec.v06_bundle_gas_limit_from_simulation || self.paymaster().is_none() {
+            return self.bundle_computation_gas_limit(chain_spec, bundle_size);
+        }
+
+        // Size the gas limit to what EntryPoint v0.6 can actually require:
+        // - Validation: account, factory and paymaster validation share a single
+        //   verification gas limit (paymaster gets VGL minus account usage, AA40 otherwise).
+        // - innerHandleOp requires gasleft() >= CGL + VGL + 5000 before execution (AA95),
+        //   the VGL portion covers the paymaster post-op.
+        // - innerHandleOp is an external call, so only 63/64 of the remaining gas is forwarded.
+        // - If the post-op reverts, it is called again in postOpReverted mode with another VGL.
+        //   Only reserve this when simulation shows the paymaster requires a post-op.
+        let vgl = self.verification_gas_limit;
+        let inner_required = self
+            .call_gas_limit
+            .saturating_add(vgl)
+            .saturating_add(ENTRY_POINT_INNER_GAS_OVERHEAD);
+        let post_op_retry = if requires_post_op { vgl } else { 0 };
+
+        self.pre_verification_execution_gas_limit(chain_spec, bundle_size)
+            .saturating_add(vgl)
+            .saturating_add(inner_required)
+            .saturating_add(inner_required.div_ceil(63))
+            .saturating_add(post_op_retry)
+    }
+
     fn static_pre_verification_gas(&self, chain_spec: &ChainSpec) -> u128 {
         self.calldata_gas_cost
             + chain_spec.per_user_op_v0_6_gas()
@@ -1185,5 +1217,72 @@ mod tests {
         let uo = uo.with_original_signature();
         assert_eq!(uo.signature, orig_sig);
         assert_eq!(uo.calldata_gas_cost, orig_calldata_cost);
+    }
+
+    fn gas_limit_test_op(chain_spec: &ChainSpec, with_paymaster: bool) -> UserOperation {
+        UserOperationBuilder::new(
+            chain_spec,
+            UserOperationRequiredFields {
+                call_gas_limit: 10_000,
+                verification_gas_limit: 100_000,
+                paymaster_and_data: if with_paymaster {
+                    Bytes::from(vec![1; 20])
+                } else {
+                    Bytes::default()
+                },
+                ..Default::default()
+            },
+        )
+        .build()
+    }
+
+    #[test]
+    fn test_bundle_computation_gas_limit_with_post_op_disabled() {
+        let cs = ChainSpec::default();
+        for with_paymaster in [true, false] {
+            let uo = gas_limit_test_op(&cs, with_paymaster);
+            for requires_post_op in [true, false] {
+                assert_eq!(
+                    uo.bundle_computation_gas_limit_with_post_op(&cs, None, requires_post_op),
+                    uo.bundle_computation_gas_limit(&cs, None)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_bundle_computation_gas_limit_with_post_op_enabled() {
+        let cs = ChainSpec {
+            v06_bundle_gas_limit_from_simulation: true,
+            ..Default::default()
+        };
+
+        let uo = gas_limit_test_op(&cs, true);
+        let pvg = uo.pre_verification_execution_gas_limit(&cs, None);
+        // inner requirement = 10_000 + 100_000 + 5_000 = 115_000
+        // 115_000 / 63 = 1825.39..., rounded up to 1826
+        let without_post_op = pvg + 100_000 + 115_000 + 1_826;
+        assert_eq!(
+            uo.bundle_computation_gas_limit_with_post_op(&cs, None, false),
+            without_post_op
+        );
+        assert_eq!(
+            uo.bundle_computation_gas_limit_with_post_op(&cs, None, true),
+            without_post_op + 100_000
+        );
+        // Static upper bound is 5x VGL + CGL + overhead
+        assert_eq!(
+            uo.bundle_computation_gas_limit(&cs, None),
+            pvg + 500_000 + 10_000 + 5_000
+        );
+
+        // No paymaster: unchanged
+        let uo = gas_limit_test_op(&cs, false);
+        for requires_post_op in [true, false] {
+            assert_eq!(
+                uo.bundle_computation_gas_limit_with_post_op(&cs, None, requires_post_op),
+                uo.bundle_computation_gas_limit(&cs, None)
+            );
+        }
     }
 }

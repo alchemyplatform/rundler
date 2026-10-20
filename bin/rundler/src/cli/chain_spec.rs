@@ -124,3 +124,20 @@ define_hardcoded_chain_specs!(
     avax,
     avax_fuji
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_v06_bundle_gas_limit_from_simulation_only_on_avax() {
+        for network in HARDCODED_CHAIN_SPECS {
+            let chain_spec = resolve_chain_spec(&Some((*network).to_string()), &None);
+            let expected = matches!(*network, "avax" | "avax_fuji");
+            assert_eq!(
+                chain_spec.v06_bundle_gas_limit_from_simulation, expected,
+                "unexpected v06_bundle_gas_limit_from_simulation for {network}"
+            );
+        }
+    }
+}

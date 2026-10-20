@@ -5,3 +5,7 @@ id = 43114
 transaction_intrinsic_gas = 24000
 # Extra cost of a deploy without refunds
 per_user_op_deploy_overhead_gas = 20000
+
+# Avalanche charges at least half of the transaction gas limit (ACP-194),
+# so size the v0.6 bundle gas limit from simulation instead of the static upper bound
+v06_bundle_gas_limit_from_simulation = true

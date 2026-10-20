@@ -38,6 +38,8 @@ The proposer limits the amount of UO gas that it will attempt to put into a sing
 
 The maximum gas usage of each UO is a function of its `preVerificationGas`, `verificationGasLimit`, and `callGasLimit`.
 
+On chains that charge a minimum fraction of the transaction gas limit (e.g. Avalanche charges at least half), an oversized gas limit costs the bundler gas. When the chain spec enables `v06_bundle_gas_limit_from_simulation`, v0.6 UOs with a paymaster are sized from simulation: the post-op retry gas (`verificationGasLimit`) is only reserved when the paymaster returns a context, instead of the static `5 * verificationGasLimit` upper bound. Pre-simulation checks (precheck, estimation) keep using the static upper bound.
+
 ### 2nd Simulation and Rejection
 
 Once a candidate bundle is constructed, each UO is re-simulated and validation rules are re-checked. UOs that fail are removed from the bundle and removed from the pool.
