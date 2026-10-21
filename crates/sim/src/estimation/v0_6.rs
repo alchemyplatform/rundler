@@ -169,8 +169,10 @@ where
             .pre_verification_gas(pre_verification_gas)
             .build();
 
-        // require that this can fit in a bundle of size 1
-        let gas_limit = op_with_gas.bundle_computation_gas_limit(&self.chain_spec, Some(1));
+        // require that this can fit in a bundle of size 1, assuming the paymaster requires a post-op
+        // to match the largest gas limit the builder can size it with
+        let gas_limit =
+            op_with_gas.bundle_computation_gas_limit_with_post_op(&self.chain_spec, Some(1), true);
         if gas_limit > self.settings.max_bundle_execution_gas {
             return Err(GasEstimationError::GasTotalTooLarge(
                 gas_limit,
@@ -1554,6 +1556,77 @@ mod tests {
             err,
             GasEstimationError::GasTotalTooLarge(_, TEST_MAX_GAS_LIMITS)
         ))
+    }
+
+    #[tokio::test]
+    async fn test_total_limit_v06_from_simulation() {
+        // Returns the total gas limit estimation reports for a paymaster op that doesn't fit
+        async fn total_gas_limit(chain_spec: ChainSpec, call_gas_limit: u128, vgl: u128) -> u128 {
+            let (mut entry, mut provider) = create_base_config();
+            provider
+                .expect_get_latest_block_hash_and_number()
+                .returning(|| Ok((B256::ZERO, 0)));
+            entry
+                .expect_simulate_handle_op_estimate_gas()
+                .returning(move |_a, _b, _c, _d, _e| {
+                    Ok(Ok(ExecutionResult {
+                        target_result: TestCallGasResult {
+                            success: true,
+                            gasUsed: U256::ZERO,
+                            revertData: Bytes::new(),
+                        }
+                        .abi_encode()
+                        .into(),
+                        target_success: true,
+                        ..Default::default()
+                    }))
+                });
+
+            // Smaller than any total gas limit for the op
+            let max_bundle_execution_gas = call_gas_limit + 1;
+            let (_, settings) = create_estimator(MockEntryPointV0_6::new(), MockEvmProvider::new());
+            let estimator = create_custom_estimator(
+                chain_spec,
+                provider,
+                MockFeeEstimator::new(),
+                entry,
+                Settings {
+                    max_bundle_execution_gas,
+                    ..settings
+                },
+            );
+
+            let mut optional_op = demo_user_op_optional_gas(Some(10000));
+            optional_op.call_gas_limit = Some(call_gas_limit);
+            optional_op.verification_gas_limit = Some(vgl);
+            optional_op.paymaster_and_data = Bytes::from(vec![1; 20]);
+
+            let err = estimator
+                .estimate_op_gas(optional_op, StateOverride::default())
+                .await
+                .err()
+                .unwrap();
+            let GasEstimationError::GasTotalTooLarge(gas_limit, max) = err else {
+                panic!("expected GasTotalTooLarge, got {err:?}");
+            };
+            assert_eq!(max, max_bundle_execution_gas);
+            gas_limit
+        }
+
+        let sim_cs = ChainSpec {
+            v06_bundle_gas_limit_from_simulation: true,
+            ..Default::default()
+        };
+
+        // Large CGL: the simulated limit (63/64 cut, overhead, post-op retry) is above the static limit
+        let static_limit = total_gas_limit(ChainSpec::default(), 9_000_000, 50_000).await;
+        let sim_limit = total_gas_limit(sim_cs.clone(), 9_000_000, 50_000).await;
+        assert!(sim_limit > static_limit);
+
+        // Typical op: the simulated limit is below the static 5x VGL limit
+        let static_limit = total_gas_limit(ChainSpec::default(), 100_000, 100_000).await;
+        let sim_limit = total_gas_limit(sim_cs, 100_000, 100_000).await;
+        assert!(sim_limit < static_limit);
     }
 
     #[tokio::test]

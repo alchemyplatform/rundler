@@ -46,7 +46,7 @@ On chains that charge a minimum fraction of the transaction gas limit (e.g. Aval
 - A fixed `8000` for entry point overhead not covered by the static pre-verification gas. It is measured with the Avalanche `transaction_intrinsic_gas` of 24000.
 - Only when simulation shows the paymaster returns a context: `verificationGasLimit + ceil(verificationGasLimit / 63) + 5000` for the post-op retry in `postOpReverted` mode.
 
-The pre-simulation gas limit filter uses the same sizing without the post-op retry. v0.6 UOs without a paymaster keep the static limit. Precheck and estimation keep using the static upper bound.
+The pre-simulation gas limit filter uses the same sizing without the post-op retry. Precheck and estimation check that a UO fits in a bundle with the same sizing including the post-op retry, the largest the builder can use, so any UO they accept can be bundled. v0.6 UOs without a paymaster keep the static limit.
 
 ### 2nd Simulation and Rejection
 

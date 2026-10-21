@@ -286,9 +286,11 @@ where
             ));
         }
 
-        // Compute the worst case total gas limit by assuming the UO is in its own bundle.
+        // Compute the worst case total gas limit by assuming the UO is in its own bundle and that its
+        // paymaster requires a post-op, matching the largest gas limit the builder can size it with.
         // This is conservative and potentially may invalidate some very large UOs that would otherwise be valid.
-        let gas_limit = op.bundle_computation_gas_limit(&self.chain_spec, Some(1));
+        let gas_limit =
+            op.bundle_computation_gas_limit_with_post_op(&self.chain_spec, Some(1), true);
         if gas_limit > max_bundle_execution_gas {
             violations.push(PrecheckViolation::TotalGasLimitTooHigh(
                 gas_limit,
@@ -637,7 +639,9 @@ mod tests {
     use rundler_provider::{MockEntryPointV0_6, MockEvmProvider, MockFeeEstimator};
     use rundler_types::{
         BundlerSponsorship, UserOperation as _,
-        v0_6::{UserOperationBuilder, UserOperationRequiredFields},
+        v0_6::{
+            UserOperation as UserOperationV0_6, UserOperationBuilder, UserOperationRequiredFields,
+        },
     };
 
     use super::*;
@@ -815,6 +819,67 @@ mod tests {
                 PrecheckViolation::MaxFeePerGasTooLow(5_000, 8_000,),
             ])
         );
+    }
+
+    #[tokio::test]
+    async fn test_check_gas_total_limit_v06_from_simulation() {
+        let total_gas_limit_too_high = |cs: &ChainSpec, op: &UserOperationV0_6, max: u128| {
+            let (_, provider, entry_point, fee_estimator) = create_base_config();
+            let prechecker = PrecheckerImpl::new(
+                cs.clone(),
+                Arc::new(provider),
+                entry_point,
+                fee_estimator,
+                Settings {
+                    max_bundle_execution_gas: max,
+                    ..Default::default()
+                },
+            );
+            prechecker
+                .check_gas(
+                    op,
+                    &get_test_async_data(),
+                    &UserOperationPermissions::default(),
+                )
+                .iter()
+                .any(|v| matches!(v, PrecheckViolation::TotalGasLimitTooHigh(..)))
+        };
+        let paymaster_op = |cs: &ChainSpec, call_gas_limit: u128, verification_gas_limit: u128| {
+            UserOperationBuilder::new(
+                cs,
+                UserOperationRequiredFields {
+                    call_gas_limit,
+                    verification_gas_limit,
+                    paymaster_and_data: Bytes::from(vec![1; 20]),
+                    ..Default::default()
+                },
+            )
+            .build()
+        };
+        let static_cs = ChainSpec::default();
+        let sim_cs = ChainSpec {
+            v06_bundle_gas_limit_from_simulation: true,
+            ..Default::default()
+        };
+
+        // Large CGL: the simulated limit (63/64 cut, overhead, retry) exceeds the static 5x VGL limit,
+        // so an op the builder could never fit must be rejected
+        let op = paymaster_op(&sim_cs, 9_000_000, 50_000);
+        let static_limit = op.bundle_computation_gas_limit(&sim_cs, Some(1));
+        let sim_limit = op.bundle_computation_gas_limit_with_post_op(&sim_cs, Some(1), true);
+        assert!(sim_limit > static_limit);
+        assert!(!total_gas_limit_too_high(&static_cs, &op, static_limit));
+        assert!(total_gas_limit_too_high(&sim_cs, &op, static_limit));
+        assert!(!total_gas_limit_too_high(&sim_cs, &op, sim_limit));
+
+        // Typical op: the simulated limit is below the static limit, so an op the builder can fit
+        // is accepted
+        let op = paymaster_op(&sim_cs, 100_000, 100_000);
+        let static_limit = op.bundle_computation_gas_limit(&sim_cs, Some(1));
+        let sim_limit = op.bundle_computation_gas_limit_with_post_op(&sim_cs, Some(1), true);
+        assert!(sim_limit < static_limit);
+        assert!(total_gas_limit_too_high(&static_cs, &op, sim_limit));
+        assert!(!total_gas_limit_too_high(&sim_cs, &op, sim_limit));
     }
 
     #[tokio::test]
