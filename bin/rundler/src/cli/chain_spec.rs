@@ -131,6 +131,10 @@ mod tests {
 
     #[test]
     fn test_v06_bundle_gas_limit_from_simulation_only_on_avax() {
+        // resolve_chain_spec applies CHAIN_* environment overrides on top of every spec
+        if std::env::var_os("CHAIN_V06_BUNDLE_GAS_LIMIT_FROM_SIMULATION").is_some() {
+            return;
+        }
         for network in HARDCODED_CHAIN_SPECS {
             let chain_spec = resolve_chain_spec(&Some((*network).to_string()), &None);
             let expected = matches!(*network, "avax" | "avax_fuji");

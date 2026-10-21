@@ -1708,10 +1708,11 @@ where
 
             // Here we use optimistic gas limits for the UOs by assuming none of the paymaster UOs use postOp calls.
             // This way after simulation once we have determined if each UO actually uses a postOp call or not we can still pack a full bundle
-            let gas = op
-                .op
-                .uo
-                .bundle_computation_gas_limit(&self.settings.chain_spec, None);
+            let gas = op.op.uo.bundle_computation_gas_limit_with_post_op(
+                &self.settings.chain_spec,
+                None,
+                false,
+            );
             if gas_left < gas {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
@@ -3587,13 +3588,15 @@ mod tests {
             (no_pm_op.clone(), false),
         ]);
 
-        // validation + AA95 inner requirement + 63/64 forwarding margin (+ post-op retry)
+        // validation + AA95 inner requirement + 63/64 forwarding margin + entry point overhead
+        // (+ post-op retry with its 63/64 margin and bookkeeping), no call data to decode
         let inner_required = cgl + vgl + 5_000;
         let pm_op_gas = pm_op.pre_verification_execution_gas_limit(&cs, None)
             + vgl
             + inner_required
-            + inner_required.div_ceil(63);
-        let pm_post_op_gas = pm_op_gas + vgl;
+            + inner_required.div_ceil(63)
+            + 8_000;
+        let pm_post_op_gas = pm_op_gas + vgl + vgl.div_ceil(63) + 5_000;
         // No paymaster: unchanged
         let no_pm_op_gas = no_pm_op.bundle_gas_limit(&cs, None);
 

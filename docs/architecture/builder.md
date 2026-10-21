@@ -38,7 +38,15 @@ The proposer limits the amount of UO gas that it will attempt to put into a sing
 
 The maximum gas usage of each UO is a function of its `preVerificationGas`, `verificationGasLimit`, and `callGasLimit`.
 
-On chains that charge a minimum fraction of the transaction gas limit (e.g. Avalanche charges at least half), an oversized gas limit costs the bundler gas. When the chain spec enables `v06_bundle_gas_limit_from_simulation`, v0.6 UOs with a paymaster are sized from simulation: the post-op retry gas (`verificationGasLimit`) is only reserved when the paymaster returns a context, instead of the static `5 * verificationGasLimit` upper bound. Pre-simulation checks (precheck, estimation) keep using the static upper bound.
+On chains that charge a minimum fraction of the transaction gas limit (e.g. Avalanche charges at least half), an oversized gas limit costs the bundler gas. When the chain spec enables `v06_bundle_gas_limit_from_simulation`, v0.6 UOs with a paymaster are sized to what EntryPoint v0.6 can require, instead of the static `5 * verificationGasLimit + callGasLimit + 5000` upper bound:
+
+- `verificationGasLimit` for validation (account, factory and paymaster share it).
+- `inner = callGasLimit + verificationGasLimit + 5000`, the `gasleft()` check before `innerHandleOp` (AA95), plus `ceil(inner / 63)` for the 63/64 gas forwarded to that external call.
+- `6w + w²/512` to decode `w` words of call data into `innerHandleOp` memory.
+- A fixed `8000` for entry point overhead not covered by the static pre-verification gas. It is measured with the Avalanche `transaction_intrinsic_gas` of 24000.
+- Only when simulation shows the paymaster returns a context: `verificationGasLimit + ceil(verificationGasLimit / 63) + 5000` for the post-op retry in `postOpReverted` mode.
+
+The pre-simulation gas limit filter uses the same sizing without the post-op retry. v0.6 UOs without a paymaster keep the static limit. Precheck and estimation keep using the static upper bound.
 
 ### 2nd Simulation and Rejection
 
