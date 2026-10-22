@@ -517,7 +517,7 @@ pub struct CommonArgs {
     pub max_concurrent_reservoir_estimations: usize,
 
     /// The most reservoir searches for bundler-sponsored ops that the pool may run at once at
-    /// admission
+    /// admission, per entry point
     #[arg(
         long = "max_concurrent_sponsored_reservoir_searches",
         name = "max_concurrent_sponsored_reservoir_searches",

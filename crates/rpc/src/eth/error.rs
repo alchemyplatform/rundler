@@ -138,6 +138,9 @@ pub enum EthRpcError {
     PaymasterSignatureCheckFailed,
     #[error("precheck failed: {0}")]
     PrecheckFailed(PrecheckViolation),
+    /// Precheck could not finish because of load on the bundler; retrying may succeed
+    #[error("precheck failed: {0}")]
+    PrecheckRetryable(PrecheckViolation),
     #[error("validation simulation failed: {0}")]
     SimulationFailed(SimulationViolation),
     #[error("validation reverted: {0}")]
@@ -343,6 +346,9 @@ impl From<PrecheckViolation> for EthRpcError {
             | PrecheckViolation::Eip7702SenderPendingTransactionCountTooHigh(_) => {
                 Self::EntryPointValidationRejected(value.to_string())
             }
+            PrecheckViolation::ReservoirSearchBusy | PrecheckViolation::ReservoirSearchTimedOut => {
+                Self::PrecheckRetryable(value)
+            }
             _ => Self::PrecheckFailed(value),
         }
     }
@@ -446,6 +452,7 @@ impl From<EthRpcError> for ErrorObjectOwned {
             | EthRpcError::AggregatorError(_)
             | EthRpcError::AggregatorMismatch(_, _) => rpc_err(SIGNATURE_CHECK_FAILED_CODE, msg),
             EthRpcError::PrecheckFailed(_) => rpc_err(CALL_EXECUTION_FAILED_CODE, msg),
+            EthRpcError::PrecheckRetryable(_) => rpc_err(THROTTLED_OR_BANNED_CODE, msg),
             EthRpcError::ExecutionReverted(_) => rpc_err(EXECUTION_REVERTED, msg),
             EthRpcError::ExecutionRevertedWithBytes(data) => {
                 rpc_err_with_data(EXECUTION_REVERTED, msg, data)
@@ -581,5 +588,30 @@ impl From<GasEstimationError> for EthRpcError {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn precheck_code(violation: PrecheckViolation) -> i32 {
+        ErrorObjectOwned::from(EthRpcError::from(violation)).code()
+    }
+
+    #[test]
+    fn test_reservoir_search_precheck_codes() {
+        assert_eq!(
+            precheck_code(PrecheckViolation::ReservoirSearchBusy),
+            THROTTLED_OR_BANNED_CODE
+        );
+        assert_eq!(
+            precheck_code(PrecheckViolation::ReservoirSearchTimedOut),
+            THROTTLED_OR_BANNED_CODE
+        );
+        assert_eq!(
+            precheck_code(PrecheckViolation::ReservoirSimulationUnsupported),
+            CALL_EXECUTION_FAILED_CODE
+        );
     }
 }

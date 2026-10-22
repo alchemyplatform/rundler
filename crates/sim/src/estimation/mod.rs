@@ -161,8 +161,8 @@ pub struct Settings {
     /// The most reservoir-mode fallbacks that may run at once; more fall back to the metered
     /// estimate's error
     pub max_concurrent_reservoir_estimations: usize,
-    /// The most reservoir searches for bundler-sponsored ops that admission may run at once; more
-    /// are rejected with a retryable error
+    /// The most reservoir searches for bundler-sponsored ops that admission may run at once, per
+    /// entry point; more are rejected with a retryable error
     pub max_concurrent_sponsored_reservoir_searches: usize,
 }
 

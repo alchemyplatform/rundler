@@ -80,7 +80,7 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - env: _RESERVOIR_TRACE_TIMEOUT_MS_
 - `--max_concurrent_reservoir_estimations`: The most reservoir-mode estimation fallbacks that may run at once; further ones return the normal estimation error. (default: 4)
   - env: _MAX_CONCURRENT_RESERVOIR_ESTIMATIONS_
-- `--max_concurrent_sponsored_reservoir_searches`: The most reservoir searches for bundler-sponsored ops that the pool may run at once at admission (Glamsterdam chains only). A sponsored op that fails without a reservoir while this many are running is rejected with a retryable error; one that runs without a reservoir needs no search. (default: 4)
+- `--max_concurrent_sponsored_reservoir_searches`: The most reservoir searches for bundler-sponsored ops that the pool may run at once at admission, per entry point (Glamsterdam chains only). A sponsored op that fails without a reservoir while this many are running is rejected with a retryable error; one that runs without a reservoir needs no search. (default: 4)
   - env: _MAX_CONCURRENT_SPONSORED_RESERVOIR_SEARCHES_
 - `--max_gas_estimation_rounds`: The maximum amount of remote RPC calls to make during gas estimation while attempting to converge to the error percentage. (default: 3)
   - env: _MAX_GAS_ESTIMATION_ROUNDS_
