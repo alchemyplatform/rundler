@@ -99,6 +99,39 @@ pub enum SponsoredReservoir {
     Fails,
 }
 
+/// Why admission could not find a bundler-sponsored op's reservoir
+#[derive(Debug, thiserror::Error)]
+pub enum SponsoredReservoirError {
+    /// The most reservoir searches are already running: retryable
+    #[error("too many reservoir searches are running")]
+    Busy,
+    /// The search ran past `reservoir_trace_timeout`: retryable
+    #[error("the reservoir search timed out")]
+    TimedOut,
+    /// The node's `eth_simulateV1` gives calls no state-gas reservoir, so a reservoir cannot be
+    /// sized for an op that fails without one
+    #[error(transparent)]
+    NoSimulationReservoir(#[from] NoSimulationReservoir),
+    /// Any other error
+    #[error(transparent)]
+    Other(anyhow::Error),
+}
+
+impl From<anyhow::Error> for SponsoredReservoirError {
+    fn from(error: anyhow::Error) -> Self {
+        match error.downcast::<NoSimulationReservoir>() {
+            Ok(error) => Self::NoSimulationReservoir(error),
+            Err(error) => Self::Other(error),
+        }
+    }
+}
+
+/// The node's `eth_simulateV1` gives calls no state-gas reservoir (geth from v1.17.8), which all
+/// of the reservoir-mode simulations rely on
+#[derive(Debug, thiserror::Error)]
+#[error("the node's eth_simulateV1 gives calls no state-gas reservoir")]
+pub struct NoSimulationReservoir;
+
 /// Finds the state-gas reservoir a v0.7 op needs, with `eth_simulateV1`
 pub struct ReservoirEstimator<P, E> {
     provider: P,
@@ -107,6 +140,8 @@ pub struct ReservoirEstimator<P, E> {
     metrics: Metrics,
     /// Bounds the reservoir searches running at once (each traces at up to the node's gas cap)
     reservoir_permits: Arc<Semaphore>,
+    /// Bounds admission's reservoir searches for bundler-sponsored ops running at once
+    sponsored_permits: Arc<Semaphore>,
 }
 
 impl<P, E> ReservoirEstimator<P, E> {
@@ -119,6 +154,9 @@ impl<P, E> ReservoirEstimator<P, E> {
             metrics: Metrics::default(),
             reservoir_permits: Arc::new(Semaphore::new(
                 settings.max_concurrent_reservoir_estimations,
+            )),
+            sponsored_permits: Arc::new(Semaphore::new(
+                settings.max_concurrent_sponsored_reservoir_searches,
             )),
         }
     }
@@ -195,6 +233,7 @@ where
             // The op fails even with the most reservoir and call gas: a genuine failure.
             Ok(Ok(None)) => return Err(metered_error),
             Ok(Err(error)) => {
+                self.count_no_simulation_reservoir(&error);
                 tracing::warn!("reservoir-mode state-gas simulation failed: {error:#}");
                 return Err(metered_error);
             }
@@ -227,6 +266,7 @@ where
             Ok(Ok(Some(found))) => found,
             Ok(Ok(None)) => return Err(metered_error),
             Ok(Err(error)) => {
+                self.count_no_simulation_reservoir(&error);
                 tracing::warn!("reservoir-mode simulation failed: {error:#}");
                 return Err(metered_error);
             }
@@ -624,8 +664,10 @@ where
     /// `eth_simulateV1`, and returns its result and the transaction's intrinsic gas. A
     /// `ReservoirProbe` call in the same request checks that the node's `eth_simulateV1` gives
     /// calls a state-gas reservoir, which all of the reservoir-mode simulations rely on (geth from
-    /// v1.17.8 gives none): an error if it does not. The probe is its own call, not
-    /// `simulateHandleOp`'s target, which would see what the op left of the reservoir.
+    /// v1.17.8 gives none): a [`NoSimulationReservoir`] error if it does not. The probe is its own
+    /// call, not `simulateHandleOp`'s target, which would see what the op left of the reservoir.
+    /// At a reservoir of 0 the op uses none, so the probe is not run, and the op runs on any
+    /// node.
     async fn simulate_op_with_probe(
         &self,
         args: &ReservoirArgs<'_>,
@@ -634,14 +676,16 @@ where
     ) -> anyhow::Result<(SimulatedCall, u128)> {
         let mut state_override = args.state_override.clone();
         // A random address, so a user's override cannot collide with it.
-        let probe = Address::random();
-        state_override.insert(
-            probe,
-            AccountOverride {
-                code: Some(RESERVOIR_PROBE_V0_7_DEPLOYED_BYTECODE.clone()),
-                ..Default::default()
-            },
-        );
+        let probe = (reservoir_gas > 0).then(Address::random);
+        if let Some(probe) = probe {
+            state_override.insert(
+                probe,
+                AccountOverride {
+                    code: Some(RESERVOIR_PROBE_V0_7_DEPLOYED_BYTECODE.clone()),
+                    ..Default::default()
+                },
+            );
+        }
         let gas = (u128::from(TX_MAX_GAS_LIMIT) + reservoir_gas)
             .try_into()
             .unwrap_or(u64::MAX);
@@ -657,6 +701,16 @@ where
             args.chain_spec,
             tx.input.input().map(|input| &input[..]).unwrap_or_default(),
         );
+        let Some(probe) = probe else {
+            let result = simulate_call(
+                &self.provider,
+                tx,
+                Some(args.block_hash.into()),
+                state_override,
+            )
+            .await?;
+            return Ok((result, intrinsic_gas));
+        };
         let probe_tx = TransactionRequest::default()
             .from(SIMULATION_SENDER)
             .to(probe)
@@ -674,12 +728,18 @@ where
             && probeCall::abi_decode_returns(&probe_result.return_data)
                 .context("should decode the reservoir probe's result")?;
         if !reservoir_in_simulation {
+            return Err(NoSimulationReservoir.into());
+        }
+        Ok((results.remove(1), intrinsic_gas))
+    }
+
+    /// Counts an estimation simulation that failed because the node gives calls no reservoir
+    fn count_no_simulation_reservoir(&self, error: &anyhow::Error) {
+        if error.is::<NoSimulationReservoir>() {
             self.metrics
                 .reservoir_simulation_without_reservoir
                 .increment(1);
-            anyhow::bail!("the node's eth_simulateV1 gives calls no state-gas reservoir");
         }
-        Ok((results.remove(1), intrinsic_gas))
     }
 
     /// Simulates `simulateHandleOp` of `op` (without postOp if `skip_post_op`) with
@@ -744,7 +804,8 @@ where
     /// PVG is zero, so it cannot carry its reservoir as a paying op does; admission finds it with
     /// the simulations estimation runs. The op is first run without a reservoir, and only if it
     /// fails is one searched for, from its net state gas up to `max_reservoir_gas`, at the call
-    /// gas limit the op was signed with.
+    /// gas limit the op was signed with. Only the search takes a permit and is timed out, so an
+    /// op that runs metered is not turned away under load.
     ///
     /// Unlike a paying op's, the reservoir is not padded up to the reservoir threshold: that
     /// padding lets admission classify a paying op by its PVG surplus, while a sponsored op's
@@ -755,25 +816,10 @@ where
         op: &UserOperation,
         chain_spec: &ChainSpec,
         block_hash: B256,
-    ) -> anyhow::Result<SponsoredReservoir> {
+    ) -> Result<SponsoredReservoir, SponsoredReservoirError> {
         if self.settings.max_reservoir_gas == 0 {
             return Ok(SponsoredReservoir::Metered);
         }
-        self.metrics.sponsored_reservoir_searches.increment(1);
-        let Ok(_permit) = self.reservoir_permits.try_acquire() else {
-            self.metrics.reservoir_fallbacks_busy.increment(1);
-            anyhow::bail!("too many reservoir searches are running");
-        };
-        let _timer = CustomTimerGuard::new(self.metrics.reservoir_trace_ms.clone());
-
-        let pvg_state = gas::load_pvg_state(
-            chain_spec,
-            &self.provider,
-            &self.entry_point,
-            op,
-            Some(block_hash.into()),
-        )
-        .await?;
         let optional_op = UserOperationOptionalGas::from(op);
         let state_override = StateOverride::default();
         let args = ReservoirArgs {
@@ -783,14 +829,41 @@ where
             block_hash,
             state_override: &state_override,
             da_gas: 0,
-            pvg_state,
+            // Only a new EIP-7702 authority's state depends on it, which is loaded once a
+            // reservoir is found
+            pvg_state: PvgState::unknown(),
             verification_gas_limit: op.verification_gas_limit(),
             paymaster_verification_gas_limit: op.paymaster_verification_gas_limit(),
         };
+        if self
+            .reservoir_op_succeeds(&args, 0, op.call_gas_limit())
+            .await?
+        {
+            return Ok(SponsoredReservoir::Metered);
+        }
+
+        self.metrics.sponsored_reservoir_searches.increment(1);
+        let Ok(_permit) = self.sponsored_permits.try_acquire() else {
+            self.metrics.sponsored_reservoir_busy.increment(1);
+            return Err(SponsoredReservoirError::Busy);
+        };
+        let _timer = CustomTimerGuard::new(self.metrics.sponsored_reservoir_trace_ms.clone());
         let deadline = tokio::time::Instant::now() + self.settings.reservoir_trace_timeout;
-        let reservoir = tokio::time::timeout_at(deadline, self.search_sponsored_reservoir(&args))
+        let searched = tokio::time::timeout_at(deadline, self.search_sponsored_reservoir(&args))
             .await
-            .context("reservoir search for a sponsored op timed out")??;
+            .map_err(|_| {
+                self.metrics.sponsored_reservoir_timeouts.increment(1);
+                SponsoredReservoirError::TimedOut
+            })?;
+        let reservoir = searched.map_err(|error| {
+            let error = SponsoredReservoirError::from(error);
+            if matches!(error, SponsoredReservoirError::NoSimulationReservoir(_)) {
+                self.metrics
+                    .sponsored_reservoir_without_simulation_reservoir
+                    .increment(1);
+            }
+            error
+        })?;
         if let SponsoredReservoir::Reservoir(reservoir_gas) = reservoir {
             self.metrics.sponsored_reservoirs.increment(1);
             tracing::debug!("sponsored op needs a reservoir of {reservoir_gas}");
@@ -798,14 +871,12 @@ where
         Ok(reservoir)
     }
 
+    /// The search for a sponsored op that fails without a reservoir
     async fn search_sponsored_reservoir(
         &self,
         args: &ReservoirArgs<'_>,
     ) -> anyhow::Result<SponsoredReservoir> {
         let call_gas_limit = args.full_op.call_gas_limit();
-        if self.reservoir_op_succeeds(args, 0, call_gas_limit).await? {
-            return Ok(SponsoredReservoir::Metered);
-        }
         let Some(state_gas) = self.simulate_state_gas(args).await? else {
             tracing::debug!("sponsored op fails with the most reservoir and call gas");
             return Ok(SponsoredReservoir::Fails);
@@ -816,21 +887,35 @@ where
         }
         let passes =
             |reservoir_gas| self.reservoir_op_succeeds(args, reservoir_gas, call_gas_limit);
-        if !passes(max_reservoir_gas).await? {
-            tracing::debug!(
-                "sponsored op fails at its call gas limit {call_gas_limit} with the most reservoir"
-            );
-            return Ok(SponsoredReservoir::Fails);
-        }
-        let reservoir_gas = least_passing(state_gas, max_reservoir_gas, passes).await?;
+        // `least_passing` needs a lower bound that fails, and the measured state gas can read a
+        // little above the op's: if the op runs with it, it is the reservoir.
+        let reservoir_gas = if state_gas > 0 && passes(state_gas).await? {
+            state_gas
+        } else {
+            if !passes(max_reservoir_gas).await? {
+                tracing::debug!(
+                    "sponsored op fails at its call gas limit {call_gas_limit} with the most reservoir"
+                );
+                return Ok(SponsoredReservoir::Fails);
+            }
+            least_passing(state_gas, max_reservoir_gas, passes).await?
+        };
         // State charged to the reservoir before the op runs, which the simulations cannot see: a
         // new EIP-7702 authority is applied by state override, not by processing the
         // authorization.
+        let pvg_state = gas::load_pvg_state(
+            args.chain_spec,
+            &self.provider,
+            &self.entry_point,
+            args.full_op,
+            Some(args.block_hash.into()),
+        )
+        .await?;
         Ok(SponsoredReservoir::Reservoir(
             reservoir_gas
                 + args
                     .full_op
-                    .authorization_state_gas(args.chain_spec, &args.pvg_state),
+                    .authorization_state_gas(args.chain_spec, &pvg_state),
         ))
     }
 }
@@ -846,7 +931,7 @@ where
         op: &UserOperation,
         chain_spec: &ChainSpec,
         block_hash: B256,
-    ) -> anyhow::Result<SponsoredReservoir> {
+    ) -> Result<SponsoredReservoir, SponsoredReservoirError> {
         ReservoirEstimator::sponsored_reservoir_gas(self, op, chain_spec, block_hash).await
     }
 }

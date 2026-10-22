@@ -37,9 +37,9 @@ pub use estimation::MockGasEstimator;
 pub use estimation::{
     CallGasEstimator, CallGasEstimatorImpl, CallGasEstimatorSpecialization,
     ESTIMATION_ETH_CALL_BUCKETS, ESTIMATION_ETH_CALL_HISTOGRAMS, GasEstimationError, GasEstimator,
-    GasEstimatorV0_6, GasEstimatorV0_7, ReservoirEstimator, Settings as EstimationSettings,
-    SponsoredReservoir, VerificationGasEstimator, VerificationGasEstimatorImpl,
-    record_estimation_error,
+    GasEstimatorV0_6, GasEstimatorV0_7, NoSimulationReservoir, ReservoirEstimator,
+    Settings as EstimationSettings, SponsoredReservoir, SponsoredReservoirError,
+    VerificationGasEstimator, VerificationGasEstimatorImpl, record_estimation_error,
 };
 
 /// Gas estimation utilities

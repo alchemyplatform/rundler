@@ -516,6 +516,17 @@ pub struct CommonArgs {
     )]
     pub max_concurrent_reservoir_estimations: usize,
 
+    /// The most reservoir searches for bundler-sponsored ops that the pool may run at once at
+    /// admission
+    #[arg(
+        long = "max_concurrent_sponsored_reservoir_searches",
+        name = "max_concurrent_sponsored_reservoir_searches",
+        env = "MAX_CONCURRENT_SPONSORED_RESERVOIR_SEARCHES",
+        default_value = "4",
+        global = true
+    )]
+    pub max_concurrent_sponsored_reservoir_searches: usize,
+
     #[arg(
         long = "mempool_config_path",
         name = "mempool_config_path",
@@ -722,6 +733,8 @@ impl TryFromWithSpec<&CommonArgs> for EstimationSettings {
             max_reservoir_gas: value.max_reservoir_gas,
             reservoir_trace_timeout: Duration::from_millis(value.reservoir_trace_timeout_ms),
             max_concurrent_reservoir_estimations: value.max_concurrent_reservoir_estimations,
+            max_concurrent_sponsored_reservoir_searches: value
+                .max_concurrent_sponsored_reservoir_searches,
         })
     }
 }

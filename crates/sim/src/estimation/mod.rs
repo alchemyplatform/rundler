@@ -35,7 +35,9 @@ pub use estimate_call_gas::{
 
 /// Gas estimation module for Entry Point v0.6
 mod reservoir;
-pub use reservoir::{ReservoirEstimator, SponsoredReservoir};
+pub use reservoir::{
+    NoSimulationReservoir, ReservoirEstimator, SponsoredReservoir, SponsoredReservoirError,
+};
 mod state_gas;
 mod v0_6;
 pub use v0_6::GasEstimator as GasEstimatorV0_6;
@@ -159,6 +161,9 @@ pub struct Settings {
     /// The most reservoir-mode fallbacks that may run at once; more fall back to the metered
     /// estimate's error
     pub max_concurrent_reservoir_estimations: usize,
+    /// The most reservoir searches for bundler-sponsored ops that admission may run at once; more
+    /// are rejected with a retryable error
+    pub max_concurrent_sponsored_reservoir_searches: usize,
 }
 
 impl Settings {
@@ -190,11 +195,27 @@ struct Metrics {
     #[metric(describe = "the count of estimates that fell back to reservoir mode.")]
     reservoir_fallbacks: Counter,
     #[metric(
-        describe = "the count of bundler-sponsored ops searched for a reservoir at admission."
+        describe = "the count of bundler-sponsored ops searched for a reservoir at admission, after failing without one."
     )]
     sponsored_reservoir_searches: Counter,
     #[metric(describe = "the count of bundler-sponsored ops admitted in reservoir mode.")]
     sponsored_reservoirs: Counter,
+    #[metric(
+        describe = "the count of bundler-sponsored ops rejected at admission because too many reservoir searches were running."
+    )]
+    sponsored_reservoir_busy: Counter,
+    #[metric(
+        describe = "the count of bundler-sponsored ops rejected at admission because their reservoir search timed out."
+    )]
+    sponsored_reservoir_timeouts: Counter,
+    #[metric(
+        describe = "the count of bundler-sponsored ops rejected at admission because the node's eth_simulateV1 gives calls no state-gas reservoir."
+    )]
+    sponsored_reservoir_without_simulation_reservoir: Counter,
+    #[metric(
+        describe = "the distribution of admission's reservoir search time for bundler-sponsored ops."
+    )]
+    sponsored_reservoir_trace_ms: Histogram,
     #[metric(describe = "the count of reservoir-mode fallbacks that produced an estimate.")]
     reservoir_estimates: Counter,
     #[metric(

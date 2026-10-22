@@ -1520,7 +1520,10 @@ where
             );
         }
         // A bundler-sponsored op is charged nothing (its fees are zero): the bundler pays the
-        // whole transaction by design, within the sponsorship's max cost.
+        // whole transaction by design, within the sponsorship's max cost. Keyed on the zero cost
+        // rather than the op's permissions, which `OpWithSimulation` does not carry: precheck
+        // requires a non-sponsored op's max fee to cover the base fee and the minimum priority
+        // fee, so it is charged nothing only on a chain where both are zero.
         if !event.actualGasCost.is_zero() && event.actualGasUsed < U256::from(result.gas_used) {
             return Ok(HandleOpsOut::FailedOp(
                 0,

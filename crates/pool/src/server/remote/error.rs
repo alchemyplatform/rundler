@@ -37,15 +37,15 @@ use super::protos::{
     OperationAlreadyKnownError, OperationDropTooSoon, OperationRevert, OutOfGas, OverMaxCost,
     PanicRevert, PaymasterBalanceTooLow, PaymasterDepositTooLow, PaymasterIsNotContract,
     PreVerificationGasTooLow, PrecheckViolationError as ProtoPrecheckViolationError,
-    ReplacementUnderpricedError, ReservoirGasTooHigh, SenderAddressUsedAsAlternateEntity,
-    SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
-    SimulationViolationError as ProtoSimulationViolationError, TooManyExpectedStorageSlots,
-    TotalGasLimitTooHigh, UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError,
-    UnknownRevert, UnstakedPaymasterContext, UseUnsupportedEip, UsedForbiddenOpcode,
-    UsedForbiddenPrecompile, ValidationRevert as ProtoValidationRevert,
-    VerificationGasLimitBufferTooLow, VerificationGasLimitEfficiencyTooLow,
-    VerificationGasLimitTooHigh, WrongNumberOfPhases, mempool_error, precheck_violation_error,
-    simulation_violation_error, validation_revert,
+    ReplacementUnderpricedError, ReservoirGasTooHigh, ReservoirSearchBusy, ReservoirSearchTimedOut,
+    ReservoirSimulationUnsupported, SenderAddressUsedAsAlternateEntity, SenderFundsTooLow,
+    SenderIsNotContractAndNoInitCode, SimulationViolationError as ProtoSimulationViolationError,
+    TooManyExpectedStorageSlots, TotalGasLimitTooHigh, UnintendedRevert,
+    UnintendedRevertWithMessage, UnknownEntryPointError, UnknownRevert, UnstakedPaymasterContext,
+    UseUnsupportedEip, UsedForbiddenOpcode, UsedForbiddenPrecompile,
+    ValidationRevert as ProtoValidationRevert, VerificationGasLimitBufferTooLow,
+    VerificationGasLimitEfficiencyTooLow, VerificationGasLimitTooHigh, WrongNumberOfPhases,
+    mempool_error, precheck_violation_error, simulation_violation_error, validation_revert,
 };
 
 impl TryFrom<ProtoMempoolError> for PoolError {
@@ -475,6 +475,23 @@ impl From<PrecheckViolation> for ProtoPrecheckViolationError {
                     },
                 )),
             },
+            PrecheckViolation::ReservoirSearchBusy => ProtoPrecheckViolationError {
+                violation: Some(precheck_violation_error::Violation::ReservoirSearchBusy(
+                    ReservoirSearchBusy {},
+                )),
+            },
+            PrecheckViolation::ReservoirSearchTimedOut => ProtoPrecheckViolationError {
+                violation: Some(precheck_violation_error::Violation::ReservoirSearchTimedOut(
+                    ReservoirSearchTimedOut {},
+                )),
+            },
+            PrecheckViolation::ReservoirSimulationUnsupported => ProtoPrecheckViolationError {
+                violation: Some(
+                    precheck_violation_error::Violation::ReservoirSimulationUnsupported(
+                        ReservoirSimulationUnsupported {},
+                    ),
+                ),
+            },
         }
     }
 }
@@ -588,6 +605,15 @@ impl TryFrom<ProtoPrecheckViolationError> for PrecheckViolation {
             ) => PrecheckViolation::Eip7702SenderPendingTransactionCountTooHigh(
                 e.pending_transaction_count,
             ),
+            Some(precheck_violation_error::Violation::ReservoirSearchBusy(_)) => {
+                PrecheckViolation::ReservoirSearchBusy
+            }
+            Some(precheck_violation_error::Violation::ReservoirSearchTimedOut(_)) => {
+                PrecheckViolation::ReservoirSearchTimedOut
+            }
+            Some(precheck_violation_error::Violation::ReservoirSimulationUnsupported(_)) => {
+                PrecheckViolation::ReservoirSimulationUnsupported
+            }
             None => {
                 bail!("unknown proto mempool precheck violation")
             }
@@ -1081,6 +1107,23 @@ mod tests {
                 assert_eq!(y, U256::ZERO);
             }
             _ => panic!("wrong error type"),
+        }
+    }
+
+    #[test]
+    fn test_reservoir_search_precheck_errors() {
+        for violation in [
+            PrecheckViolation::ReservoirSearchBusy,
+            PrecheckViolation::ReservoirSearchTimedOut,
+            PrecheckViolation::ReservoirSimulationUnsupported,
+        ] {
+            let proto_error: ProtoMempoolError =
+                MempoolError::PrecheckViolation(violation.clone()).into();
+            let error: MempoolError = proto_error.try_into().unwrap();
+            assert!(
+                matches!(&error, MempoolError::PrecheckViolation(v) if *v == violation),
+                "{error:?}"
+            );
         }
     }
 

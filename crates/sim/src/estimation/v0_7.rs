@@ -819,7 +819,7 @@ use rundler_types::{PvgState, TX_MAX_GAS_LIMIT};
 
 #[cfg(test)]
 use super::{
-    CALL_GAS_BUFFER_VALUE, SponsoredReservoir,
+    CALL_GAS_BUFFER_VALUE, SponsoredReservoir, SponsoredReservoirError,
     reservoir::{SIMULATION_UNMETERED_GAS, transaction_intrinsic_gas},
 };
 
@@ -921,6 +921,7 @@ mod tests {
             max_reservoir_gas: 60_000_000,
             reservoir_trace_timeout: std::time::Duration::from_secs(10),
             max_concurrent_reservoir_estimations: 4,
+            max_concurrent_sponsored_reservoir_searches: 4,
         };
         let estimator = create_custom_estimator(ChainSpec::default(), provider, entry, settings);
         (estimator, settings)
@@ -1532,7 +1533,12 @@ mod tests {
                         call_gas_limit + post_op_gas_limit,
                         model.net_state_gas,
                     );
-                    let probe = probe.expect("a simulation of the op runs the probe");
+                    if reservoir_gas == 0 {
+                        assert!(probe.is_none(), "no probe without a reservoir");
+                        return Ok(serde_json::json!([{ "calls": [op] }]));
+                    }
+                    let probe =
+                        probe.expect("a simulation of the op with a reservoir runs the probe");
                     return Ok(serde_json::json!([{ "calls": [probe, op] }]));
                 }
                 assert!(
@@ -1582,6 +1588,7 @@ mod tests {
             max_reservoir_gas: 60_000_000,
             reservoir_trace_timeout: std::time::Duration::from_secs(10),
             max_concurrent_reservoir_estimations: 4,
+            max_concurrent_sponsored_reservoir_searches: 4,
         }
     }
 
@@ -2044,7 +2051,7 @@ mod tests {
         provider: MockEvmProvider,
         settings: Settings,
         call_gas_limit: u128,
-    ) -> anyhow::Result<SponsoredReservoir> {
+    ) -> Result<SponsoredReservoir, SponsoredReservoirError> {
         let mut entry = entry;
         entry
             .expect_balance_of()
@@ -2067,7 +2074,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sponsored_reservoir_found_at_signed_call_gas() {
-        let (entry, provider, _) = reservoir_mocks(deploy_24kb());
+        let (entry, provider, simulations) = reservoir_mocks(deploy_24kb());
 
         let reservoir = run_sponsored(
             entry,
@@ -2086,6 +2093,10 @@ mod tests {
         let state_gas = u128::from(DEPLOY_24KB_STATE_GAS);
         assert!(reservoir_gas >= state_gas - CALL_GAS_BUFFER_VALUE);
         assert!(reservoir_gas <= state_gas + state_gas / 100);
+        // The measured state gas passes, so it is the reservoir, without a search: the run
+        // without a reservoir, the measurement, and the run at it.
+        assert_eq!(reservoir_gas, state_gas);
+        assert_eq!(simulations.load(std::sync::atomic::Ordering::Relaxed), 3);
     }
 
     #[tokio::test]
@@ -2143,19 +2154,65 @@ mod tests {
         assert_eq!(reservoir, SponsoredReservoir::Metered);
     }
 
+    /// The search is busy: an op that needs a reservoir is rejected (not admitted metered), one
+    /// that runs without needs no permit.
     #[tokio::test]
     async fn test_sponsored_reservoir_busy() {
-        let (entry, provider) = create_base_config();
         let settings = Settings {
-            max_concurrent_reservoir_estimations: 0,
+            max_concurrent_sponsored_reservoir_searches: 0,
             ..reservoir_settings()
         };
 
-        // An error, so the op is not admitted metered when it may need a reservoir
+        let (entry, provider, _) = reservoir_mocks(deploy_24kb());
+        let reservoir = run_sponsored(
+            entry,
+            provider,
+            settings,
+            buffered(DEPLOY_24KB_EXECUTION_GAS),
+        )
+        .await;
         assert!(
-            run_sponsored(entry, provider, settings, buffered(25_908))
-                .await
-                .is_err()
+            matches!(reservoir, Err(SponsoredReservoirError::Busy)),
+            "{reservoir:?}"
+        );
+
+        let (entry, provider, _) = reservoir_mocks(OpModel::new(25_908, 0));
+        let reservoir = run_sponsored(entry, provider, settings, buffered(25_908))
+            .await
+            .unwrap();
+        assert_eq!(reservoir, SponsoredReservoir::Metered);
+    }
+
+    /// On a node whose `eth_simulateV1` gives calls no reservoir, an op that runs without one is
+    /// still admitted (no probe at a reservoir of 0), and one that needs one is rejected.
+    #[tokio::test]
+    async fn test_sponsored_reservoir_without_reservoir_in_simulation() {
+        let (entry, provider, _) = reservoir_mocks(OpModel {
+            reservoir_in_simulation: false,
+            ..OpModel::new(25_908, 0)
+        });
+        let reservoir = run_sponsored(entry, provider, reservoir_settings(), buffered(25_908))
+            .await
+            .unwrap();
+        assert_eq!(reservoir, SponsoredReservoir::Metered);
+
+        let (entry, provider, _) = reservoir_mocks(OpModel {
+            reservoir_in_simulation: false,
+            ..deploy_24kb()
+        });
+        let reservoir = run_sponsored(
+            entry,
+            provider,
+            reservoir_settings(),
+            buffered(DEPLOY_24KB_EXECUTION_GAS),
+        )
+        .await;
+        assert!(
+            matches!(
+                reservoir,
+                Err(SponsoredReservoirError::NoSimulationReservoir(_))
+            ),
+            "{reservoir:?}"
         );
     }
 

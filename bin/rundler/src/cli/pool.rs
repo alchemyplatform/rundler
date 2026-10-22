@@ -22,7 +22,7 @@ use rundler_sim::MempoolConfigs;
 use rundler_task::TaskSpawnerExt;
 use rundler_types::{
     EntryPointVersion,
-    chain::{ChainSpec, TryIntoWithSpec},
+    chain::{ChainSpec, ForkActivation, TryIntoWithSpec},
 };
 use rundler_utils::emit::{self, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
@@ -297,7 +297,15 @@ impl PoolArgs {
             blocklist: blocklist.clone(),
             allowlist: allowlist.clone(),
             precheck_settings: common.try_into_with_spec(&chain_spec)?,
-            reservoir_estimation_settings: Some(common.try_into_with_spec(&chain_spec)?),
+            // Without reservoir mode, sponsored ops are admitted metered with no search, and the
+            // estimation settings' checks need not pass.
+            reservoir_estimation_settings: if common.max_reservoir_gas > 0
+                && chain_spec.glamsterdam_activation != ForkActivation::Never
+            {
+                Some(common.try_into_with_spec(&chain_spec)?)
+            } else {
+                None
+            },
             sim_settings: common.try_into()?,
             throttled_entity_mempool_count: self.throttled_entity_mempool_count,
             throttled_entity_live_blocks: self.throttled_entity_live_blocks,
