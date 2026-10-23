@@ -13,7 +13,7 @@
 
 use config::{Config, Environment, File, FileFormat};
 use paste::paste;
-use rundler_types::chain::ChainSpec;
+use rundler_types::{chain::ChainSpec, v0_6::V06_SIMULATED_BUNDLE_MIN_PER_USER_OP_WORD_GAS};
 
 /// Resolve the chain spec from the network flag and a chain spec file
 pub fn resolve_chain_spec(network: &Option<String>, file: &Option<String>) -> ChainSpec {
@@ -85,7 +85,22 @@ pub fn resolve_chain_spec(network: &Option<String>, file: &Option<String>) -> Ch
         panic!("chain id must be defined");
     }
 
-    c.try_deserialize().expect("should deserialize config")
+    let chain_spec: ChainSpec = c.try_deserialize().expect("should deserialize config");
+    check_chain_spec(&chain_spec);
+    chain_spec
+}
+
+fn check_chain_spec(chain_spec: &ChainSpec) {
+    // The v0.6 bundle gas limit sized from simulation relies on the pre-verification gas
+    // to cover copying the call data into memory
+    if chain_spec.v06_bundle_gas_limit_from_simulation
+        && chain_spec.per_user_op_word_gas < V06_SIMULATED_BUNDLE_MIN_PER_USER_OP_WORD_GAS
+    {
+        panic!(
+            "per_user_op_word_gas must be at least {V06_SIMULATED_BUNDLE_MIN_PER_USER_OP_WORD_GAS} when v06_bundle_gas_limit_from_simulation is enabled, got {}",
+            chain_spec.per_user_op_word_gas
+        );
+    }
 }
 
 macro_rules! define_hardcoded_chain_specs {
@@ -143,5 +158,25 @@ mod tests {
                 "unexpected v06_bundle_gas_limit_from_simulation for {network}"
             );
         }
+    }
+
+    #[test]
+    fn test_check_chain_spec_word_gas_with_v06_simulated_sizing() {
+        check_chain_spec(&ChainSpec {
+            v06_bundle_gas_limit_from_simulation: true,
+            per_user_op_word_gas: V06_SIMULATED_BUNDLE_MIN_PER_USER_OP_WORD_GAS,
+            ..Default::default()
+        });
+        // The default word gas is fine while the flag is off
+        check_chain_spec(&ChainSpec::default());
+    }
+
+    #[test]
+    #[should_panic(expected = "per_user_op_word_gas must be at least 17")]
+    fn test_check_chain_spec_word_gas_too_low_with_v06_simulated_sizing() {
+        check_chain_spec(&ChainSpec {
+            v06_bundle_gas_limit_from_simulation: true,
+            ..Default::default()
+        });
     }
 }

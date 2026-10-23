@@ -39,6 +39,12 @@ pub const ENTRY_POINT_INNER_GAS_OVERHEAD: u128 = 5000;
 /// lower values need a larger overhead.
 pub const V06_SIMULATED_BUNDLE_GAS_OVERHEAD: u128 = 5_000;
 
+/// Minimum `per_user_op_word_gas` when the v0.6 bundle gas limit is sized from simulation.
+///
+/// The static pre-verification gas covers copying the call data into `innerHandleOp` memory
+/// (~9w + w^2/512 for w words), which the simulated sizing has no separate term for.
+pub const V06_SIMULATED_BUNDLE_MIN_PER_USER_OP_WORD_GAS: u64 = 17;
+
 /// Gas added for the entry point bookkeeping after a v0.6 post-op retry in `postOpReverted` mode
 /// (deposit refund, `UserOperationEvent`) when the bundle gas limit is sized from simulation.
 ///
@@ -358,7 +364,8 @@ impl UserOperationTrait for UserOperation {
         //   pre-verification gas, see V06_SIMULATED_BUNDLE_GAS_OVERHEAD. The static
         //   pre-verification gas also covers copying the call data into innerHandleOp memory
         //   (~9w + w^2/512 for w words) through `per_user_op_word_gas`, which needs to be at
-        //   least 17 when this is enabled.
+        //   least V06_SIMULATED_BUNDLE_MIN_PER_USER_OP_WORD_GAS (checked when the chain spec is
+        //   resolved).
         // - If the post-op reverts, it is called again in postOpReverted mode with another VGL,
         //   forwarded as an external call, followed by the entry point bookkeeping.
         //   Only reserve this when simulation shows the paymaster requires a post-op.
