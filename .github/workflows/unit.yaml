@@ -25,7 +25,7 @@ jobs:
           components: llvm-tools-preview
 
       - name: Install protobuf
-        run: sudo apt-get install -y protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - uses: Swatinem/rust-cache@v2
         with:
