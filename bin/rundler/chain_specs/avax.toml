@@ -5,3 +5,16 @@ id = 43114
 transaction_intrinsic_gas = 24000
 # Extra cost of a deploy without refunds
 per_user_op_deploy_overhead_gas = 20000
+# Entry point v0.6 gas outside a paymaster op's own accounting, measured at ~22.4k on Fuji.
+# 18300 plus the 3000 in the intrinsic gas left ops ~1.1k short. The pre-verification gas also
+# raises the bundle gas limit, so ops pay ~0.5x of it again while bundles pay half the limit.
+per_user_op_v0_6_gas = 21000
+# Copying an op's callData into memory costs ~9.1 gas per word plus words^2/512 outside the
+# entry point's per-op accounting, on all entry point versions. The default 4 left 32 KB ops
+# ~2-7k short on Fuji, and part of the extra pre-verification gas is lost to the half-limit floor.
+# The v0.6 bundle gas limit sized from simulation relies on this to cover the copy.
+per_user_op_word_gas = 17
+
+# Avalanche charges at least half of the transaction gas limit (ACP-194),
+# so size the v0.6 bundle gas limit from simulation instead of the static upper bound
+v06_bundle_gas_limit_from_simulation = true

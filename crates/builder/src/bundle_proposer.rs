@@ -1708,10 +1708,11 @@ where
 
             // Here we use optimistic gas limits for the UOs by assuming none of the paymaster UOs use postOp calls.
             // This way after simulation once we have determined if each UO actually uses a postOp call or not we can still pack a full bundle
-            let gas = op
-                .op
-                .uo
-                .bundle_computation_gas_limit(&self.settings.chain_spec, None);
+            let gas = op.op.uo.bundle_computation_gas_limit_with_post_op(
+                &self.settings.chain_spec,
+                None,
+                false,
+            );
             if gas_left < gas {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
@@ -2167,7 +2168,11 @@ impl<UO: UserOperation> ProposalContext<UO> {
 
             // EIP-7623 calculations require this to be done without the EIP-7702 intrinsic gas. Its added later in the final calculation.
             standard_gas_limit = standard_gas_limit.saturating_add(
-                sim_op.op.bundle_computation_gas_limit(chain_spec, None) - op_authorization_gas,
+                sim_op.op.bundle_computation_gas_limit_with_post_op(
+                    chain_spec,
+                    None,
+                    sim_op.simulation.requires_post_op,
+                ) - op_authorization_gas,
             );
 
             calldata_floor_gas_limit =
@@ -3507,6 +3512,110 @@ mod tests {
             + rundler_types::bundle_shared_gas(&cs);
 
         assert_eq!(gas_limit, expected_gas_limit);
+    }
+
+    fn v06_gas_limit_context(ops: Vec<(UserOperation, bool)>) -> ProposalContext<UserOperation> {
+        let mut groups_by_aggregator = LinkedHashMap::new();
+        groups_by_aggregator.insert(
+            Address::ZERO,
+            AggregatorGroup {
+                ops_with_simulations: ops
+                    .into_iter()
+                    .map(|(op, requires_post_op)| OpWithSimulation {
+                        op,
+                        simulation: SimulationResult {
+                            requires_post_op,
+                            ..Default::default()
+                        },
+                        sponsored_da_gas: 0,
+                    })
+                    .collect(),
+                signature: Default::default(),
+            },
+        );
+        ProposalContext {
+            sender_eoa: Address::ZERO,
+            groups_by_aggregator,
+            rejected_ops: vec![],
+            suspect_ops: vec![],
+            entity_updates: BTreeMap::new(),
+            bundle_expected_storage: BundleExpectedStorage::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bundle_gas_limit_v06_from_simulation_disabled() {
+        let cs = ChainSpec::default();
+        let pm_op = op_with_gas(100_000, 100_000, 200_000, true);
+        let pm_post_op = op_with_gas(100_000, 100_000, 300_000, true);
+        let no_pm_op = op_with_gas(100_000, 100_000, 200_000, false);
+        let context = v06_gas_limit_context(vec![
+            (pm_op.clone(), false),
+            (pm_post_op.clone(), true),
+            (no_pm_op.clone(), false),
+        ]);
+
+        // Flag off: same as the static upper bound regardless of simulation
+        let expected_gas_limit = pm_op.bundle_gas_limit(&cs, None)
+            + pm_post_op.bundle_gas_limit(&cs, None)
+            + no_pm_op.bundle_gas_limit(&cs, None)
+            + rundler_types::bundle_shared_gas(&cs);
+        assert_eq!(context.get_bundle_gas_limit(&cs), expected_gas_limit);
+        assert_eq!(
+            context.get_bundle_computation_gas_limit(&cs),
+            expected_gas_limit
+        );
+        assert_eq!(
+            context.get_bundle_cost(&cs, 1),
+            U256::from(expected_gas_limit)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bundle_gas_limit_v06_from_simulation_enabled() {
+        let cs = ChainSpec {
+            v06_bundle_gas_limit_from_simulation: true,
+            ..Default::default()
+        };
+        let vgl = 82_572;
+        let cgl = 10_095;
+        let pm_op = op_with_gas(100_000, cgl, vgl, true);
+        let pm_post_op = op_with_gas(100_000, cgl, vgl, true);
+        let no_pm_op = op_with_gas(100_000, cgl, vgl, false);
+        let context = v06_gas_limit_context(vec![
+            (pm_op.clone(), false),
+            (pm_post_op.clone(), true),
+            (no_pm_op.clone(), false),
+        ]);
+
+        // validation + AA95 inner requirement with the 63/64 margin for the account call and
+        // post-op + 63/64 forwarding margin + entry point overhead
+        // (+ post-op retry with its 63/64 margin and bookkeeping)
+        let inner_required = cgl + vgl + (cgl + vgl).div_ceil(63) + 5_000;
+        let pm_op_gas = pm_op.pre_verification_execution_gas_limit(&cs, None)
+            + vgl
+            + inner_required
+            + inner_required.div_ceil(63)
+            + 5_000;
+        let pm_post_op_gas = pm_op_gas + vgl + vgl.div_ceil(63) + 5_000;
+        // No paymaster: unchanged
+        let no_pm_op_gas = no_pm_op.bundle_gas_limit(&cs, None);
+
+        let expected_gas_limit =
+            pm_op_gas + pm_post_op_gas + no_pm_op_gas + rundler_types::bundle_shared_gas(&cs);
+        assert_eq!(context.get_bundle_gas_limit(&cs), expected_gas_limit);
+        assert_eq!(
+            context.get_bundle_computation_gas_limit(&cs),
+            expected_gas_limit
+        );
+        assert_eq!(
+            context.get_bundle_cost(&cs, 1),
+            U256::from(expected_gas_limit)
+        );
+
+        // Tighter than the static upper bound
+        assert!(pm_op_gas < pm_op.bundle_gas_limit(&cs, None));
+        assert!(pm_post_op_gas < pm_post_op.bundle_gas_limit(&cs, None));
     }
 
     #[tokio::test]

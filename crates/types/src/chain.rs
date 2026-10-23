@@ -135,6 +135,18 @@ pub struct ChainSpec {
     /// True if the bundle validation `eth_call` should be sent without
     /// `maxFeePerGas`/`maxPriorityFeePerGas` fee caps.
     pub bundle_simulation_omit_gas_fees: bool,
+    /// True if the bundle gas limit for v0.6 user operations with a paymaster should be sized
+    /// from simulation (only reserving the post-op retry gas when the paymaster requires a
+    /// post-op), instead of the static 5x verification gas limit upper bound.
+    ///
+    /// Useful on chains that charge a minimum fraction of the transaction gas limit
+    /// (e.g. Avalanche charges at least half of it), where an oversized gas limit costs gas.
+    ///
+    /// The sizing relies on the static pre-verification gas and is measured with the Avalanche
+    /// chain spec: `transaction_intrinsic_gas` of 24000, `per_user_op_v0_6_gas` of 21000 and
+    /// `per_user_op_word_gas` of 17 (which covers copying the call data into memory). Chains with
+    /// lower values need a larger entry point overhead before enabling this.
+    pub v06_bundle_gas_limit_from_simulation: bool,
 
     /*
      * Senders
@@ -223,6 +235,7 @@ impl Default for ChainSpec {
             max_transaction_size_bytes: 131072, // 128 KiB
             bundle_max_send_interval_millis: 1000,
             bundle_simulation_omit_gas_fees: false,
+            v06_bundle_gas_limit_from_simulation: false,
             flashbots_enabled: false,
             flashbots_relay_url: None,
             bloxroute_enabled: false,
