@@ -12,6 +12,7 @@ per_user_op_v0_6_gas = 21000
 # Copying an op's callData into memory costs ~9.1 gas per word plus words^2/512 outside the
 # entry point's per-op accounting, on all entry point versions. The default 4 left 32 KB ops
 # ~2-7k short on Fuji, and part of the extra pre-verification gas is lost to the half-limit floor.
+# The v0.6 bundle gas limit sized from simulation relies on this to cover the copy.
 per_user_op_word_gas = 17
 
 # Avalanche charges at least half of the transaction gas limit (ACP-194),

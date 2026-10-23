@@ -142,9 +142,10 @@ pub struct ChainSpec {
     /// Useful on chains that charge a minimum fraction of the transaction gas limit
     /// (e.g. Avalanche charges at least half of it), where an oversized gas limit costs gas.
     ///
-    /// The entry point overhead added per user operation is measured with the Avalanche
-    /// `transaction_intrinsic_gas` of 24000. Chains with a lower intrinsic gas need a larger
-    /// overhead before enabling this.
+    /// The sizing relies on the static pre-verification gas and is measured with the Avalanche
+    /// chain spec: `transaction_intrinsic_gas` of 24000, `per_user_op_v0_6_gas` of 21000 and
+    /// `per_user_op_word_gas` of 17 (which covers copying the call data into memory). Chains with
+    /// lower values need a larger entry point overhead before enabling this.
     pub v06_bundle_gas_limit_from_simulation: bool,
 
     /*

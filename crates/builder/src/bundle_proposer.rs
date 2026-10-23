@@ -3588,14 +3588,15 @@ mod tests {
             (no_pm_op.clone(), false),
         ]);
 
-        // validation + AA95 inner requirement + 63/64 forwarding margin + entry point overhead
-        // (+ post-op retry with its 63/64 margin and bookkeeping), no call data to decode
-        let inner_required = cgl + vgl + 5_000;
+        // validation + AA95 inner requirement with the 63/64 margin for the account call and
+        // post-op + 63/64 forwarding margin + entry point overhead
+        // (+ post-op retry with its 63/64 margin and bookkeeping)
+        let inner_required = cgl + vgl + (cgl + vgl).div_ceil(63) + 5_000;
         let pm_op_gas = pm_op.pre_verification_execution_gas_limit(&cs, None)
             + vgl
             + inner_required
             + inner_required.div_ceil(63)
-            + 8_000;
+            + 5_000;
         let pm_post_op_gas = pm_op_gas + vgl + vgl.div_ceil(63) + 5_000;
         // No paymaster: unchanged
         let no_pm_op_gas = no_pm_op.bundle_gas_limit(&cs, None);

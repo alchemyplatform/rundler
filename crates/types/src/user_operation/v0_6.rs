@@ -34,9 +34,10 @@ pub const ENTRY_POINT_INNER_GAS_OVERHEAD: u128 = 5000;
 /// for entry point gas outside of the user operation's limits that the static pre-verification gas
 /// does not cover (e.g. the external `innerHandleOp` call and `handleOps` bookkeeping).
 ///
-/// Measured at ~6.9k against EntryPoint v0.6 with the Avalanche `transaction_intrinsic_gas` of 24000,
-/// which is 3000 above the actual intrinsic gas. Chains with a lower intrinsic gas need ~3000 more.
-pub const V06_SIMULATED_BUNDLE_GAS_OVERHEAD: u128 = 8_000;
+/// Measured against EntryPoint v0.6 with the Avalanche chain spec: `transaction_intrinsic_gas` of
+/// 24000 (3000 above the actual intrinsic gas) and `per_user_op_v0_6_gas` of 21000. Chains with
+/// lower values need a larger overhead.
+pub const V06_SIMULATED_BUNDLE_GAS_OVERHEAD: u128 = 5_000;
 
 /// Gas added for the entry point bookkeeping after a v0.6 post-op retry in `postOpReverted` mode
 /// (deposit refund, `UserOperationEvent`) when the bundle gas limit is sized from simulation.
@@ -350,21 +351,22 @@ impl UserOperationTrait for UserOperation {
         //   verification gas limit (paymaster gets VGL minus account usage, AA40 otherwise).
         // - innerHandleOp requires gasleft() >= CGL + VGL + 5000 before execution (AA95),
         //   the VGL portion covers the paymaster post-op.
+        // - The account call and the post-op are external calls that only get 63/64 of the
+        //   remaining gas, so add 1/63 of CGL + VGL to get their full limits.
         // - innerHandleOp is an external call, so only 63/64 of the remaining gas is forwarded.
-        // - innerHandleOp decodes the call data into fresh memory before the AA95 check:
-        //   memory expansion (3w + w^2/512) plus the copy (3w), for w words of call data.
         // - Entry point overhead outside of the UO's limits not covered by the static
-        //   pre-verification gas, see V06_SIMULATED_BUNDLE_GAS_OVERHEAD.
+        //   pre-verification gas, see V06_SIMULATED_BUNDLE_GAS_OVERHEAD. The static
+        //   pre-verification gas also covers copying the call data into innerHandleOp memory
+        //   (~9w + w^2/512 for w words) through `per_user_op_word_gas`, which needs to be at
+        //   least 17 when this is enabled.
         // - If the post-op reverts, it is called again in postOpReverted mode with another VGL,
         //   forwarded as an external call, followed by the entry point bookkeeping.
         //   Only reserve this when simulation shows the paymaster requires a post-op.
         let vgl = self.verification_gas_limit;
-        let inner_required = self
-            .call_gas_limit
-            .saturating_add(vgl)
+        let inner_calls = self.call_gas_limit.saturating_add(vgl);
+        let inner_required = inner_calls
+            .saturating_add(inner_calls.div_ceil(63))
             .saturating_add(ENTRY_POINT_INNER_GAS_OVERHEAD);
-        let call_data_words = (self.call_data.len() as u128).div_ceil(32);
-        let call_data_decode = 6 * call_data_words + call_data_words * call_data_words / 512;
         let post_op_retry = if requires_post_op {
             vgl.saturating_add(vgl.div_ceil(63))
                 .saturating_add(V06_POST_OP_RETRY_GAS_OVERHEAD)
@@ -376,7 +378,6 @@ impl UserOperationTrait for UserOperation {
             .saturating_add(vgl)
             .saturating_add(inner_required)
             .saturating_add(inner_required.div_ceil(63))
-            .saturating_add(call_data_decode)
             .saturating_add(V06_SIMULATED_BUNDLE_GAS_OVERHEAD)
             .saturating_add(post_op_retry)
     }
@@ -1299,10 +1300,10 @@ mod tests {
 
         let uo = gas_limit_test_op(&cs, true);
         let pvg = uo.pre_verification_execution_gas_limit(&cs, None);
-        // inner requirement = 10_000 + 100_000 + 5_000 = 115_000
-        // 115_000 / 63 = 1825.39..., rounded up to 1826
-        // no call data, so no decode gas
-        let without_post_op = pvg + 100_000 + 115_000 + 1_826 + 8_000;
+        // inner calls = 10_000 + 100_000 = 110_000, 110_000 / 63 = 1746.03..., rounded up to 1747
+        // inner requirement = 110_000 + 1_747 + 5_000 = 116_747
+        // 116_747 / 63 = 1853.12..., rounded up to 1854
+        let without_post_op = pvg + 100_000 + 116_747 + 1_854 + 5_000;
         assert_eq!(
             uo.bundle_computation_gas_limit_with_post_op(&cs, None, false),
             without_post_op
@@ -1329,7 +1330,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bundle_computation_gas_limit_with_post_op_call_data_decode() {
+    fn test_bundle_computation_gas_limit_with_post_op_call_data_in_pvg() {
         let cs = ChainSpec {
             v06_bundle_gas_limit_from_simulation: true,
             ..Default::default()
@@ -1338,12 +1339,12 @@ mod tests {
         let base_without_pvg = base.bundle_computation_gas_limit_with_post_op(&cs, None, false)
             - base.pre_verification_execution_gas_limit(&cs, None);
 
-        // (call data bytes, decode gas = 6w + w^2/512 for w words)
-        for (len, decode_gas) in [(1, 6), (1024, 6 * 32 + 2), (120 * 1024, 6 * 3_840 + 28_800)] {
+        // Copying the call data is covered by the pre-verification gas, not by an extra term
+        for len in [1, 1024, 120 * 1024] {
             let uo = gas_limit_test_op_with_call_data(&cs, true, Bytes::from(vec![1; len]));
             assert_eq!(
                 uo.bundle_computation_gas_limit_with_post_op(&cs, None, false),
-                uo.pre_verification_execution_gas_limit(&cs, None) + base_without_pvg + decode_gas,
+                uo.pre_verification_execution_gas_limit(&cs, None) + base_without_pvg,
                 "unexpected gas limit for {len} bytes of call data"
             );
         }
