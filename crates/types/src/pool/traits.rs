@@ -245,7 +245,7 @@ impl From<&PoolOperation> for PoolOperationSummary {
             sim_block_number: op.sim_block_number,
             max_fee_per_gas: op.uo.max_fee_per_gas(),
             max_priority_fee_per_gas: op.uo.max_priority_fee_per_gas(),
-            gas_limit: op.uo.total_gas_limit(),
+            gas_limit: op.total_gas_limit_with_reservoir(),
             bundler_sponsorship_max_cost: op.perms.bundler_sponsorship.as_ref().map(|s| s.max_cost),
             suspect: false,
             reservoir: op.reservoir_gas.is_some(),

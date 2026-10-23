@@ -198,6 +198,20 @@ pub enum PrecheckViolation {
     /// The EIP-7702 sender has too many pending transactions
     #[display("EIP-7702 auth sender has too many pending transactions: {0}. Max allowed: 1")]
     Eip7702SenderPendingTransactionCountTooHigh(u64),
+    /// The bundler-sponsored op fails without a state-gas reservoir, and too many reservoir
+    /// searches are running to find its own. Retryable.
+    #[display("too many state-gas reservoir searches are running for bundler-sponsored ops, retry")]
+    ReservoirSearchBusy,
+    /// The bundler-sponsored op fails without a state-gas reservoir, and the search for its own
+    /// timed out. Retryable.
+    #[display("the state-gas reservoir search for this bundler-sponsored op timed out, retry")]
+    ReservoirSearchTimedOut,
+    /// The bundler-sponsored op fails without a state-gas reservoir, and the node's
+    /// `eth_simulateV1` gives calls none, so its reservoir cannot be sized
+    #[display(
+        "the op fails without a state-gas reservoir, and the node's eth_simulateV1 cannot size one"
+    )]
+    ReservoirSimulationUnsupported,
 }
 
 /// All possible simulation violations

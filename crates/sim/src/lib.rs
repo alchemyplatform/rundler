@@ -37,8 +37,9 @@ pub use estimation::MockGasEstimator;
 pub use estimation::{
     CallGasEstimator, CallGasEstimatorImpl, CallGasEstimatorSpecialization,
     ESTIMATION_ETH_CALL_BUCKETS, ESTIMATION_ETH_CALL_HISTOGRAMS, GasEstimationError, GasEstimator,
-    GasEstimatorV0_6, GasEstimatorV0_7, Settings as EstimationSettings, VerificationGasEstimator,
-    VerificationGasEstimatorImpl, record_estimation_error,
+    GasEstimatorV0_6, GasEstimatorV0_7, NoSimulationReservoir, ReservoirEstimator,
+    Settings as EstimationSettings, SponsoredReservoir, SponsoredReservoirError,
+    VerificationGasEstimator, VerificationGasEstimatorImpl, record_estimation_error,
 };
 
 /// Gas estimation utilities
@@ -49,7 +50,7 @@ mod precheck;
 pub use precheck::MockPrechecker;
 pub use precheck::{
     MIN_CALL_GAS_LIMIT, PrecheckError, PrecheckReturn, Prechecker, PrecheckerImpl,
-    Settings as PrecheckSettings,
+    Settings as PrecheckSettings, SponsoredReservoirEstimator,
 };
 
 /// Simulation and violation checking
