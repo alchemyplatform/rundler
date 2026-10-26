@@ -137,7 +137,8 @@ pub struct ChainSpec {
     pub bundle_simulation_omit_gas_fees: bool,
     /// True if the bundle gas limit for v0.6 user operations with a paymaster should be sized
     /// from simulation (only reserving the post-op retry gas when the paymaster requires a
-    /// post-op), instead of the static 5x verification gas limit upper bound.
+    /// post-op, and sizing validation from the simulated verification gas), instead of the static
+    /// 5x verification gas limit upper bound.
     ///
     /// Useful on chains that charge a minimum fraction of the transaction gas limit
     /// (e.g. Avalanche charges at least half of it), where an oversized gas limit costs gas.

@@ -171,8 +171,12 @@ where
 
         // require that this can fit in a bundle of size 1, assuming the paymaster requires a post-op
         // to match the largest gas limit the builder can size it with
-        let gas_limit =
-            op_with_gas.bundle_computation_gas_limit_with_post_op(&self.chain_spec, Some(1), true);
+        let gas_limit = op_with_gas.bundle_computation_gas_limit_with_post_op(
+            &self.chain_spec,
+            Some(1),
+            true,
+            None,
+        );
         if gas_limit > self.settings.max_bundle_execution_gas {
             return Err(GasEstimationError::GasTotalTooLarge(
                 gas_limit,

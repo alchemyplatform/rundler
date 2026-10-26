@@ -1708,10 +1708,12 @@ where
 
             // Here we use optimistic gas limits for the UOs by assuming none of the paymaster UOs use postOp calls.
             // This way after simulation once we have determined if each UO actually uses a postOp call or not we can still pack a full bundle
+            // The verification gas used isn't known before simulation, so this uses the verification gas limit.
             let gas = op.op.uo.bundle_computation_gas_limit_with_post_op(
                 &self.settings.chain_spec,
                 None,
                 false,
+                None,
             );
             if gas_left < gas {
                 self.emit(BuilderEvent::skipped_op(
@@ -2172,6 +2174,12 @@ impl<UO: UserOperation> ProposalContext<UO> {
                     chain_spec,
                     None,
                     sim_op.simulation.requires_post_op,
+                    Some(
+                        sim_op
+                            .simulation
+                            .pre_op_gas
+                            .saturating_sub(sim_op.op.pre_verification_gas()),
+                    ),
                 ) - op_authorization_gas,
             );
 
@@ -3514,17 +3522,21 @@ mod tests {
         assert_eq!(gas_limit, expected_gas_limit);
     }
 
-    fn v06_gas_limit_context(ops: Vec<(UserOperation, bool)>) -> ProposalContext<UserOperation> {
+    /// Ops with whether they require a post-op and their simulated pre-op gas (0 if not measured)
+    fn v06_gas_limit_context(
+        ops: Vec<(UserOperation, bool, u128)>,
+    ) -> ProposalContext<UserOperation> {
         let mut groups_by_aggregator = LinkedHashMap::new();
         groups_by_aggregator.insert(
             Address::ZERO,
             AggregatorGroup {
                 ops_with_simulations: ops
                     .into_iter()
-                    .map(|(op, requires_post_op)| OpWithSimulation {
+                    .map(|(op, requires_post_op, pre_op_gas)| OpWithSimulation {
                         op,
                         simulation: SimulationResult {
                             requires_post_op,
+                            pre_op_gas,
                             ..Default::default()
                         },
                         sponsored_da_gas: 0,
@@ -3550,9 +3562,9 @@ mod tests {
         let pm_post_op = op_with_gas(100_000, 100_000, 300_000, true);
         let no_pm_op = op_with_gas(100_000, 100_000, 200_000, false);
         let context = v06_gas_limit_context(vec![
-            (pm_op.clone(), false),
-            (pm_post_op.clone(), true),
-            (no_pm_op.clone(), false),
+            (pm_op.clone(), false, 0),
+            (pm_post_op.clone(), true, 0),
+            (no_pm_op.clone(), false, 0),
         ]);
 
         // Flag off: same as the static upper bound regardless of simulation
@@ -3583,9 +3595,9 @@ mod tests {
         let pm_post_op = op_with_gas(100_000, cgl, vgl, true);
         let no_pm_op = op_with_gas(100_000, cgl, vgl, false);
         let context = v06_gas_limit_context(vec![
-            (pm_op.clone(), false),
-            (pm_post_op.clone(), true),
-            (no_pm_op.clone(), false),
+            (pm_op.clone(), false, 0),
+            (pm_post_op.clone(), true, 0),
+            (no_pm_op.clone(), false, 0),
         ]);
 
         // validation + AA95 inner requirement with the 63/64 margin for the account call and
@@ -3616,6 +3628,32 @@ mod tests {
         // Tighter than the static upper bound
         assert!(pm_op_gas < pm_op.bundle_gas_limit(&cs, None));
         assert!(pm_post_op_gas < pm_post_op.bundle_gas_limit(&cs, None));
+    }
+
+    #[tokio::test]
+    async fn test_bundle_gas_limit_v06_from_simulation_verification_gas_used() {
+        let cs = ChainSpec {
+            v06_bundle_gas_limit_from_simulation: true,
+            ..Default::default()
+        };
+        let pvg = 100_000;
+        let vgl = 287_834;
+        let cgl = 10_095;
+        let op = op_with_gas(pvg, cgl, vgl, true);
+        let unmeasured = v06_gas_limit_context(vec![(op.clone(), false, 0)]);
+        // Simulation measured 232_059 verification gas, sized at 232_059 * 1.05 = 243_661.95 -> 243_662
+        let measured = v06_gas_limit_context(vec![(op.clone(), false, pvg + 232_059)]);
+
+        let expected_gas_limit = unmeasured.get_bundle_gas_limit(&cs) - vgl + 243_662;
+        assert_eq!(measured.get_bundle_gas_limit(&cs), expected_gas_limit);
+        assert_eq!(
+            measured.get_bundle_computation_gas_limit(&cs),
+            expected_gas_limit
+        );
+        assert_eq!(
+            measured.get_bundle_cost(&cs, 1),
+            U256::from(expected_gas_limit)
+        );
     }
 
     #[tokio::test]

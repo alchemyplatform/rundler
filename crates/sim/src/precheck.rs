@@ -290,7 +290,7 @@ where
         // paymaster requires a post-op, matching the largest gas limit the builder can size it with.
         // This is conservative and potentially may invalidate some very large UOs that would otherwise be valid.
         let gas_limit =
-            op.bundle_computation_gas_limit_with_post_op(&self.chain_spec, Some(1), true);
+            op.bundle_computation_gas_limit_with_post_op(&self.chain_spec, Some(1), true, None);
         if gas_limit > max_bundle_execution_gas {
             violations.push(PrecheckViolation::TotalGasLimitTooHigh(
                 gas_limit,
@@ -866,7 +866,7 @@ mod tests {
         // so an op the builder could never fit must be rejected
         let op = paymaster_op(&sim_cs, 9_000_000, 50_000);
         let static_limit = op.bundle_computation_gas_limit(&sim_cs, Some(1));
-        let sim_limit = op.bundle_computation_gas_limit_with_post_op(&sim_cs, Some(1), true);
+        let sim_limit = op.bundle_computation_gas_limit_with_post_op(&sim_cs, Some(1), true, None);
         assert!(sim_limit > static_limit);
         assert!(!total_gas_limit_too_high(&static_cs, &op, static_limit));
         assert!(total_gas_limit_too_high(&sim_cs, &op, static_limit));
@@ -876,7 +876,7 @@ mod tests {
         // is accepted
         let op = paymaster_op(&sim_cs, 100_000, 100_000);
         let static_limit = op.bundle_computation_gas_limit(&sim_cs, Some(1));
-        let sim_limit = op.bundle_computation_gas_limit_with_post_op(&sim_cs, Some(1), true);
+        let sim_limit = op.bundle_computation_gas_limit_with_post_op(&sim_cs, Some(1), true, None);
         assert!(sim_limit < static_limit);
         assert!(total_gas_limit_too_high(&static_cs, &op, sim_limit));
         assert!(!total_gas_limit_too_high(&sim_cs, &op, sim_limit));

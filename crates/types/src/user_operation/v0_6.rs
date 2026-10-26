@@ -45,6 +45,17 @@ pub const V06_SIMULATED_BUNDLE_GAS_OVERHEAD: u128 = 5_000;
 /// (~9w + w^2/512 for w words), which the simulated sizing has no separate term for.
 pub const V06_SIMULATED_BUNDLE_MIN_PER_USER_OP_WORD_GAS: u64 = 17;
 
+/// Margin added to the simulated validation gas of a v0.6 paymaster user operation when the bundle
+/// gas limit is sized from simulation, in percent.
+///
+/// Validation gas is reproducible under the ERC-7562 validation rules, the margin covers storage
+/// changes between simulation and inclusion.
+pub const V06_SIMULATED_VALIDATION_GAS_MARGIN_PERCENT: u128 = 5;
+
+/// Minimum margin added to the simulated validation gas, matching the verification gas buffer
+/// required by simulation.
+pub const V06_SIMULATED_VALIDATION_GAS_MIN_MARGIN: u128 = 2_000;
+
 /// Gas added for the entry point bookkeeping after a v0.6 post-op retry in `postOpReverted` mode
 /// (deposit refund, `UserOperationEvent`) when the bundle gas limit is sized from simulation.
 ///
@@ -344,6 +355,7 @@ impl UserOperationTrait for UserOperation {
         chain_spec: &ChainSpec,
         bundle_size: Option<usize>,
         requires_post_op: bool,
+        verification_gas_used: Option<u128>,
     ) -> u128 {
         // Ops without a paymaster keep the static limit (2 * VGL + CGL + 5000). It has no margin
         // for the 63/64 cut or the entry point overhead, and relies on the bundle overhead
@@ -355,6 +367,9 @@ impl UserOperationTrait for UserOperation {
         // Size the gas limit to what EntryPoint v0.6 can actually require:
         // - Validation: account, factory and paymaster validation share a single
         //   verification gas limit (paymaster gets VGL minus account usage, AA40 otherwise).
+        //   When simulation measured the validation gas, use it plus a margin (capped at VGL)
+        //   instead. The AA95 reserve below is still unused during validation, so nested calls
+        //   (e.g. a factory deploy) keep their 63/64 headroom.
         // - innerHandleOp requires gasleft() >= CGL + VGL + 5000 before execution (AA95),
         //   the VGL portion covers the paymaster post-op.
         // - The account call and the post-op are external calls that only get 63/64 of the
@@ -370,6 +385,14 @@ impl UserOperationTrait for UserOperation {
         //   forwarded as an external call, followed by the entry point bookkeeping.
         //   Only reserve this when simulation shows the paymaster requires a post-op.
         let vgl = self.verification_gas_limit;
+        let validation_gas = match verification_gas_used {
+            Some(used) if used > 0 => vgl.min(
+                (used.saturating_mul(100 + V06_SIMULATED_VALIDATION_GAS_MARGIN_PERCENT))
+                    .div_ceil(100)
+                    .max(used.saturating_add(V06_SIMULATED_VALIDATION_GAS_MIN_MARGIN)),
+            ),
+            _ => vgl,
+        };
         let inner_calls = self.call_gas_limit.saturating_add(vgl);
         let inner_required = inner_calls
             .saturating_add(inner_calls.div_ceil(63))
@@ -382,7 +405,7 @@ impl UserOperationTrait for UserOperation {
         };
 
         self.pre_verification_execution_gas_limit(chain_spec, bundle_size)
-            .saturating_add(vgl)
+            .saturating_add(validation_gas)
             .saturating_add(inner_required)
             .saturating_add(inner_required.div_ceil(63))
             .saturating_add(V06_SIMULATED_BUNDLE_GAS_OVERHEAD)
@@ -1291,7 +1314,7 @@ mod tests {
             let uo = gas_limit_test_op(&cs, with_paymaster);
             for requires_post_op in [true, false] {
                 assert_eq!(
-                    uo.bundle_computation_gas_limit_with_post_op(&cs, None, requires_post_op),
+                    uo.bundle_computation_gas_limit_with_post_op(&cs, None, requires_post_op, None),
                     uo.bundle_computation_gas_limit(&cs, None)
                 );
             }
@@ -1312,12 +1335,12 @@ mod tests {
         // 116_747 / 63 = 1853.12..., rounded up to 1854
         let without_post_op = pvg + 100_000 + 116_747 + 1_854 + 5_000;
         assert_eq!(
-            uo.bundle_computation_gas_limit_with_post_op(&cs, None, false),
+            uo.bundle_computation_gas_limit_with_post_op(&cs, None, false, None),
             without_post_op
         );
         // post-op retry = 100_000 + ceil(100_000 / 63) + 5_000 = 100_000 + 1_588 + 5_000
         assert_eq!(
-            uo.bundle_computation_gas_limit_with_post_op(&cs, None, true),
+            uo.bundle_computation_gas_limit_with_post_op(&cs, None, true, None),
             without_post_op + 106_588
         );
         // Static upper bound is 5x VGL + CGL + overhead
@@ -1330,10 +1353,71 @@ mod tests {
         let uo = gas_limit_test_op(&cs, false);
         for requires_post_op in [true, false] {
             assert_eq!(
-                uo.bundle_computation_gas_limit_with_post_op(&cs, None, requires_post_op),
+                uo.bundle_computation_gas_limit_with_post_op(&cs, None, requires_post_op, None),
                 uo.bundle_computation_gas_limit(&cs, None)
             );
         }
+    }
+
+    #[test]
+    fn test_bundle_computation_gas_limit_with_post_op_verification_gas_used() {
+        let cs = ChainSpec {
+            v06_bundle_gas_limit_from_simulation: true,
+            ..Default::default()
+        };
+        let uo = gas_limit_test_op(&cs, true);
+        // VGL is 100_000, so the validation term is VGL without a measured verification gas
+        let with_vgl = uo.bundle_computation_gas_limit_with_post_op(&cs, None, false, None);
+        assert_eq!(
+            uo.bundle_computation_gas_limit_with_post_op(&cs, None, false, Some(0)),
+            with_vgl
+        );
+
+        // (verification gas used, validation term)
+        for (used, validation_gas) in [
+            // 5% margin: 80_000 * 1.05 = 84_000
+            (80_000, 84_000),
+            // 5% margin rounded up: 80_001 * 1.05 = 84_001.05
+            (80_001, 84_002),
+            // 5% is below the 2_000 minimum: 30_000 + 2_000
+            (30_000, 32_000),
+            // capped at VGL
+            (97_000, 100_000),
+            (100_000, 100_000),
+        ] {
+            for requires_post_op in [true, false] {
+                assert_eq!(
+                    uo.bundle_computation_gas_limit_with_post_op(
+                        &cs,
+                        None,
+                        requires_post_op,
+                        Some(used)
+                    ),
+                    uo.bundle_computation_gas_limit_with_post_op(&cs, None, requires_post_op, None)
+                        - 100_000
+                        + validation_gas,
+                    "unexpected gas limit for {used} verification gas used"
+                );
+            }
+        }
+
+        // Flag off or no paymaster: unchanged
+        let static_cs = ChainSpec::default();
+        let uo_static = gas_limit_test_op(&static_cs, true);
+        assert_eq!(
+            uo_static.bundle_computation_gas_limit_with_post_op(
+                &static_cs,
+                None,
+                false,
+                Some(30_000)
+            ),
+            uo_static.bundle_computation_gas_limit(&static_cs, None)
+        );
+        let uo_no_pm = gas_limit_test_op(&cs, false);
+        assert_eq!(
+            uo_no_pm.bundle_computation_gas_limit_with_post_op(&cs, None, false, Some(30_000)),
+            uo_no_pm.bundle_computation_gas_limit(&cs, None)
+        );
     }
 
     #[test]
@@ -1343,14 +1427,15 @@ mod tests {
             ..Default::default()
         };
         let base = gas_limit_test_op(&cs, true);
-        let base_without_pvg = base.bundle_computation_gas_limit_with_post_op(&cs, None, false)
+        let base_without_pvg = base
+            .bundle_computation_gas_limit_with_post_op(&cs, None, false, None)
             - base.pre_verification_execution_gas_limit(&cs, None);
 
         // Copying the call data is covered by the pre-verification gas, not by an extra term
         for len in [1, 1024, 120 * 1024] {
             let uo = gas_limit_test_op_with_call_data(&cs, true, Bytes::from(vec![1; len]));
             assert_eq!(
-                uo.bundle_computation_gas_limit_with_post_op(&cs, None, false),
+                uo.bundle_computation_gas_limit_with_post_op(&cs, None, false, None),
                 uo.pre_verification_execution_gas_limit(&cs, None) + base_without_pvg,
                 "unexpected gas limit for {len} bytes of call data"
             );

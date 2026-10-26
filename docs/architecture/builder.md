@@ -40,14 +40,14 @@ The maximum gas usage of each UO is a function of its `preVerificationGas`, `ver
 
 On chains that charge a minimum fraction of the transaction gas limit (e.g. Avalanche charges at least half), an oversized gas limit costs the bundler gas. When the chain spec enables `v06_bundle_gas_limit_from_simulation`, v0.6 UOs with a paymaster are sized to what EntryPoint v0.6 can require, instead of the static `5 * verificationGasLimit + callGasLimit + 5000` upper bound:
 
-- `verificationGasLimit` for validation (account, factory and paymaster share it).
+- Validation (account, factory and paymaster share one `verificationGasLimit`): the verification gas measured by the bundle's simulation plus 5% (at least 2000), capped at `verificationGasLimit`. Without a measurement it is `verificationGasLimit`.
 - `inner = callGasLimit + verificationGasLimit + ceil((callGasLimit + verificationGasLimit) / 63) + 5000`: the `gasleft()` check before `innerHandleOp` (AA95), plus the 63/64 margin so the account call and the post-op inside `innerHandleOp` get their full limits.
 - `ceil(inner / 63)` for the 63/64 gas forwarded to the external `innerHandleOp` call.
 - A fixed `5000` for entry point overhead not covered by the static pre-verification gas. It is measured with the Avalanche chain spec (`transaction_intrinsic_gas` of 24000, `per_user_op_v0_6_gas` of 21000).
 - Copying the call data into `innerHandleOp` memory (~`9w + w²/512` for `w` words) is covered by the static pre-verification gas through `per_user_op_word_gas`, which needs to be at least 17.
 - Only when simulation shows the paymaster returns a context: `verificationGasLimit + ceil(verificationGasLimit / 63) + 5000` for the post-op retry in `postOpReverted` mode.
 
-The pre-simulation gas limit filter uses the same sizing without the post-op retry. Precheck and estimation check that a UO fits in a bundle with the same sizing including the post-op retry, the largest the builder can use, so any UO they accept can be bundled. v0.6 UOs without a paymaster keep the static limit.
+The pre-simulation gas limit filter uses the same sizing without the post-op retry, and with `verificationGasLimit` for validation since nothing is measured yet. Precheck and estimation check that a UO fits in a bundle with the same sizing including the post-op retry, the largest the builder can use, so any UO they accept can be bundled. v0.6 UOs without a paymaster keep the static limit.
 
 ### 2nd Simulation and Rejection
 

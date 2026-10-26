@@ -286,17 +286,22 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     }
 
     /// Returns the gas limit that applies to the computation portion of a bundle's gas limit,
-    /// using the simulation result for whether the paymaster requires a post-op.
+    /// using the simulation result for whether the paymaster requires a post-op and, if known,
+    /// how much verification gas the operation used.
     ///
     /// Defaults to `bundle_computation_gas_limit`. Entry point versions can override this to
     /// size the gas limit more tightly when the chain spec allows it.
     ///
     /// `bundle_size` is the size of the bundle if applying shared gas to the gas limit, otherwise `None`.
+    ///
+    /// `verification_gas_used` is the simulated verification gas (pre-op gas minus the pre-verification
+    /// gas), or `None` before simulation.
     fn bundle_computation_gas_limit_with_post_op(
         &self,
         chain_spec: &ChainSpec,
         bundle_size: Option<usize>,
         _requires_post_op: bool,
+        _verification_gas_used: Option<u128>,
     ) -> u128 {
         self.bundle_computation_gas_limit(chain_spec, bundle_size)
     }
@@ -681,17 +686,20 @@ impl UserOperation for UserOperationVariant {
         chain_spec: &ChainSpec,
         bundle_size: Option<usize>,
         requires_post_op: bool,
+        verification_gas_used: Option<u128>,
     ) -> u128 {
         match self {
             UserOperationVariant::V0_6(op) => op.bundle_computation_gas_limit_with_post_op(
                 chain_spec,
                 bundle_size,
                 requires_post_op,
+                verification_gas_used,
             ),
             UserOperationVariant::V0_7(op) => op.bundle_computation_gas_limit_with_post_op(
                 chain_spec,
                 bundle_size,
                 requires_post_op,
+                verification_gas_used,
             ),
         }
     }
