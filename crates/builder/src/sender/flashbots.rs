@@ -14,6 +14,7 @@
 // Adapted from https://github.com/onbjerg/ethers-flashbots and
 // https://github.com/gakonst/ethers-rs/blob/master/ethers-providers/src/toolbox/pending_transaction.rs
 use std::str::FromStr;
+use std::time::Duration;
 
 use alloy_primitives::{Address, B256, Bytes, U64, U256, hex, utils};
 use alloy_signer::SignerSync;
@@ -252,7 +253,13 @@ struct FlashbotsClient {
 impl FlashbotsClient {
     fn new(auth_key: SecretString, builders: Vec<String>, relay_url: String) -> Self {
         Self {
-            http_client: Client::new(),
+            // Bound relay calls: a stalled Flashbots relay would otherwise
+            // hang the sender task's poll/cancel loop forever (reqwest's
+            // default is no timeout).
+            http_client: Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .expect("valid client config"),
             signer: auth_key
                 .expose_secret()
                 .parse()
