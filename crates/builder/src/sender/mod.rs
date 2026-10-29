@@ -230,6 +230,20 @@ fn is_terminal_rejection(message: &str, code: i64, chain_spec: &ChainSpec) -> bo
         return true;
     }
 
+    // Avalanche's mempool requires a gas limit of at least tx size * block gas
+    // limit / 1,572,864 and rejects the transaction before it is pooled
+    // ("insufficient gas limit for tx size: tx size N bytes must specify gas
+    // limit at least M when the block gas limit is L"). The minimum follows the
+    // block gas limit, which only drifts slowly, so an identical resend is
+    // rejected again. Substring-matched because the message ends with the
+    // transaction's own numbers.
+    if trimmed
+        .to_ascii_lowercase()
+        .contains("insufficient gas limit for tx size")
+    {
+        return true;
+    }
+
     // Some providers reuse this generic wording for transient outages, so it is
     // terminal only where the chain spec says so.
     chain_spec.internal_rpc_error_is_terminal && trimmed.eq_ignore_ascii_case("internal error")
@@ -710,6 +724,55 @@ mod tests {
                 matches!(error, TxSenderError::TerminalRpcError { .. }),
                 "message: {message}"
             );
+        }
+    }
+
+    #[test]
+    fn promotes_avalanche_gas_per_byte_rejection_to_terminal() {
+        let cases = [
+            "insufficient gas limit for tx size: tx size 33713 bytes must specify gas limit at least 685893 when the block gas limit is 32000000",
+            " Insufficient Gas Limit For Tx Size: tx size 1233 bytes must specify gas limit at least 62714 when the block gas limit is 80000000 ",
+        ];
+
+        for message in cases {
+            let error = TxSenderError::UnrecognizedRpc {
+                code: -32000,
+                message: message.to_string(),
+            }
+            .promote_terminal_error(&ChainSpec::default());
+
+            assert!(
+                matches!(error, TxSenderError::TerminalRpcError { code: -32000, .. }),
+                "message: {message}"
+            );
+            assert_eq!(error.classify(), RpcOutcomeClass::Terminal);
+        }
+    }
+
+    #[test]
+    fn does_not_promote_gas_per_byte_lookalikes() {
+        let cases = [
+            // The rule is specific to -32000
+            (
+                -32603,
+                "insufficient gas limit for tx size: tx size 33713 bytes must specify gas limit at least 685893 when the block gas limit is 32000000",
+            ),
+            (-32000, "insufficient gas limit"),
+            (-32000, "insufficient funds for gas * price + value"),
+        ];
+
+        for (code, message) in cases {
+            let error = TxSenderError::UnrecognizedRpc {
+                code,
+                message: message.to_string(),
+            }
+            .promote_terminal_error(&ChainSpec::default());
+
+            assert!(
+                matches!(error, TxSenderError::UnrecognizedRpc { .. }),
+                "message: {message}"
+            );
+            assert_eq!(error.classify(), RpcOutcomeClass::NonTerminal);
         }
     }
 
