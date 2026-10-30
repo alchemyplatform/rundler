@@ -293,6 +293,7 @@ where
                     da_block_data.as_ref(),
                     base_fee,
                     required_op_fees,
+                    bundle_fees,
                 )
             })
             .collect::<Vec<_>>();
@@ -637,6 +638,7 @@ where
         da_block_data: Option<&DAGasBlockData>,
         base_fee: u128,
         required_op_fees: GasFees,
+        bundle_fees: GasFees,
     ) -> Option<PoolOperationWithSponsoredDAGas> {
         let op_hash = op.uo.hash();
 
@@ -669,7 +671,9 @@ where
             return None;
         }
 
-        if !self.settings.chain_spec.da_pre_verification_gas {
+        if !self.settings.chain_spec.da_pre_verification_gas
+            && op.perms.bundler_sponsorship.is_none()
+        {
             // Skip PVG check if no da pre-verification gas as this is checked on entry to the mempool.
             return Some(PoolOperationWithSponsoredDAGas {
                 op,
@@ -681,12 +685,16 @@ where
         let bundle_size = 1;
 
         let gas_price = if op.perms.bundler_sponsorship.is_some() {
-            required_op_fees.gas_price(base_fee)
+            // Sponsorship covers the transaction we send, including replacement
+            // fees and a base fee increase up to its cap.
+            bundle_fees.max_fee_per_gas
         } else {
             op.uo.gas_price(base_fee)
         };
 
-        let required_da_gas = if self.settings.da_gas_tracking_enabled
+        let required_da_gas = if !self.settings.chain_spec.da_pre_verification_gas {
+            0
+        } else if self.settings.da_gas_tracking_enabled
             && op.da_gas_data != DAGasData::Empty
             && let Some(da_block_data) = da_block_data
             && let Some(da_gas_oracle) = self.ep_providers.da_gas_oracle_sync().as_ref()
@@ -730,7 +738,7 @@ where
             }
         };
 
-        let mut required_pvg = op.uo.required_pre_verification_gas(
+        let sponsorship_pvg = op.uo.required_pre_verification_gas(
             &self.settings.chain_spec,
             bundle_size,
             required_da_gas,
@@ -740,9 +748,12 @@ where
             ),
         );
 
-        if let Some(pct) = op.perms.underpriced_bundle_pct {
-            required_pvg = math::percent_ceil(required_pvg, pct);
-        }
+        let required_pvg = op
+            .perms
+            .underpriced_bundle_pct
+            .map_or(sponsorship_pvg, |pct| {
+                math::percent_ceil(sponsorship_pvg, pct)
+            });
 
         if op.uo.pre_verification_gas() < required_pvg && op.perms.bundler_sponsorship.is_none() {
             self.emit(BuilderEvent::skipped_op(
@@ -764,12 +775,17 @@ where
         // Check total gas cost and time for bundler sponsorship
         let mut sponsored_da_gas = 0;
         if let Some(bundler_sponsorship) = &op.perms.bundler_sponsorship {
-            let gas_limit = op
-                .uo
-                .bundle_gas_limit(&self.settings.chain_spec, Some(bundle_size))
-                + required_pvg; // PVG is added as part of the gas limit as this is part of the cost of sponsorship
-
-            let total_gas_cost = U256::from(gas_limit) * U256::from(gas_price);
+            // Underpriced-op permissions do not discount what the sponsor pays.
+            // Reserve the same gas headroom as the submitted bundle transaction.
+            let gas_limit = U256::from(
+                op.uo
+                    .bundle_gas_limit(&self.settings.chain_spec, Some(bundle_size)),
+            ) + U256::from(sponsorship_pvg);
+            let buffered_gas_limit = math::uint_increase_by_percent_ceil(
+                gas_limit,
+                BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
+            );
+            let total_gas_cost = buffered_gas_limit.saturating_mul(U256::from(gas_price));
             if total_gas_cost > bundler_sponsorship.max_cost {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
@@ -4551,6 +4567,157 @@ mod tests {
                 ..Default::default()
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn test_sponsorship_budget_includes_da_fee_cap_and_headroom() {
+        let op = op_with_gas(0, 10_000, 10_000, false);
+        let chain_spec = ChainSpec {
+            da_pre_verification_gas: true,
+            ..Default::default()
+        };
+        let unbuffered_cost = op.bundle_gas_limit(&chain_spec, Some(1))
+            + op.required_pre_verification_gas(&chain_spec, 1, 0, Some(0.5));
+        let buffered_cost = (unbuffered_cost * 105).div_ceil(100);
+
+        // The same zero-fee op is affordable until DA or the actual transaction
+        // fee cap increases. Underpriced permissions must not bypass its budget.
+        for (da_gas, fee_cap, discount, max_cost, accepted) in [
+            (Some(0), 1, None, 1_000_000, true),
+            (Some(2_000_000), 1, None, 1_000_000, false),
+            (Some(2_000_000), 1, Some(0), 1_000_000, false),
+            (Some(0), 100, None, 1_000_000, false),
+            (None, 100, None, 1_000_000, false),
+            (Some(0), 1, None, unbuffered_cost, false),
+            (Some(0), 1, None, buffered_cost - 1, false),
+            (Some(0), 1, None, buffered_cost, true),
+        ] {
+            let chain_spec = ChainSpec {
+                da_pre_verification_gas: da_gas.is_some(),
+                ..Default::default()
+            };
+            let block_hash = hash(125);
+            let mut entry_point = MockEntryPointV0_6::new();
+            entry_point
+                .expect_address()
+                .return_const(chain_spec.entry_point_address_v0_6);
+            if let Some(da_gas) = da_gas {
+                entry_point
+                    .expect_calc_da_gas()
+                    .times(1)
+                    .withf(move |_, block, price, size| {
+                        *block == block_hash.into() && *price == fee_cap && *size == 1
+                    })
+                    .returning(move |_, _, _, _| {
+                        Ok((da_gas, DAGasData::Empty, DAGasBlockData::Empty))
+                    });
+            }
+            // No EVM RPC expectations: checking the budget adds no network calls.
+            let proposer = BundleProposerImpl::new(
+                "test".to_string(),
+                ProvidersWithEntryPoint::new(
+                    Arc::new(MockEvmProvider::new()),
+                    Arc::new(entry_point),
+                    None::<Arc<MockDAGasOracleSync>>,
+                    Arc::new(MockFeeEstimator::new()),
+                ),
+                BundleProposerProviders::new(MockSimulator::new()),
+                Settings {
+                    chain_spec: chain_spec.clone(),
+                    target_bundle_gas: 10_000_000,
+                    max_bundle_gas: 25_000_000,
+                    da_gas_tracking_enabled: true,
+                    max_expected_storage_slots: MAX_EXPECTED_STORAGE_SLOTS,
+                    verification_gas_limit_efficiency_reject_threshold: 0.5,
+                    submission_proxy: None,
+                },
+                broadcast::channel(16).0,
+            );
+            let pool_op = PoolOperation {
+                uo: op.clone().into(),
+                entry_point: chain_spec.entry_point_address_v0_6,
+                aggregator: None,
+                valid_time_range: ValidTimeRange::default(),
+                expected_code_hash: B256::ZERO,
+                sim_block_hash: block_hash,
+                sim_block_number: 0,
+                account_is_staked: false,
+                entity_infos: EntityInfos::default(),
+                da_gas_data: DAGasData::Empty,
+                filter_id: None,
+                perms: UserOperationPermissions {
+                    bundler_sponsorship: Some(BundlerSponsorship {
+                        max_cost: U256::from(max_cost),
+                        valid_until: u64::MAX,
+                    }),
+                    underpriced_bundle_pct: discount,
+                    ..Default::default()
+                },
+                sender_is_7702: false,
+            };
+            let result = proposer
+                .check_fees(
+                    pool_op,
+                    block_hash,
+                    None,
+                    1,
+                    GasFees {
+                        max_fee_per_gas: 1,
+                        max_priority_fee_per_gas: 0,
+                    },
+                    GasFees {
+                        max_fee_per_gas: fee_cap,
+                        max_priority_fee_per_gas: 0,
+                    },
+                )
+                .await;
+            assert_eq!(
+                result.is_some(),
+                accepted,
+                "DA {da_gas:?}, fee cap {fee_cap}, discount {discount:?}, budget {max_cost}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bundle_does_not_pool_sponsorship_budgets() {
+        let expensive_op = op_with_sender_and_fees(address(1), 0, 0, 0);
+        let affordable_op = op_with_sender_and_fees(address(2), 0, 0, 0);
+        let mock_ops = [
+            (expensive_op, U256::from(1)),
+            (affordable_op.clone(), U256::MAX),
+        ]
+        .into_iter()
+        .map(|(op, max_cost)| MockOp {
+            op,
+            simulation_result: Box::new(|| Ok(SimulationResult::default())),
+            perms: UserOperationPermissions {
+                bundler_sponsorship: Some(BundlerSponsorship {
+                    max_cost,
+                    valid_until: u64::MAX,
+                }),
+                ..Default::default()
+            },
+        })
+        .collect();
+        let bundle = mock_make_bundle(
+            mock_ops,
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![],
+            100,
+            10,
+            false,
+            ExpectedStorage::default(),
+            true,
+            vec![],
+            None,
+            U256::MAX,
+            None,
+        )
+        .await;
+        assert_eq!(bundle.iter_ops().collect::<Vec<_>>(), vec![&affordable_op]);
+        assert!(bundle.rejected_ops.is_empty());
     }
 
     #[tokio::test]
