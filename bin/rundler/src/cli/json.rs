@@ -45,6 +45,7 @@ async fn get_s3_json_config<T>(path: &str) -> anyhow::Result<T>
 where
     T: DeserializeOwned,
 {
+    #[allow(deprecated)] // keep the pinned SDK behavior version
     let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
     let client = aws_sdk_s3::Client::new(&config);
 
