@@ -20,7 +20,10 @@ use rundler_types::{
     da::{DAGasBlockData, DAGasData},
 };
 
-use crate::{BlockHashOrNumber, BlockId, ProviderResult, StateOverride, TransactionRequest};
+use crate::{
+    BlockHashOrNumber, BlockId, ProviderResult, SimulationTransactionRequest, StateOverride,
+    TransactionRequest,
+};
 
 /// Output of a successful signature aggregator simulation call
 #[derive(Clone, Debug, Default)]
@@ -212,7 +215,7 @@ pub trait SimulationProvider: Send + Sync {
     fn get_tracer_simulate_validation_call(
         &self,
         user_op: Self::UO,
-    ) -> ProviderResult<(TransactionRequest, StateOverride)>;
+    ) -> ProviderResult<(SimulationTransactionRequest, StateOverride)>;
 
     /// Call the entry point contract's `simulateValidation` function.
     async fn simulate_validation(

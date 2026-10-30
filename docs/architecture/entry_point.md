@@ -50,6 +50,18 @@ See the version of the spec associated with the entry point version for the expe
 
 To support multiple entry point versions in the same codebase, Rundler's components are entry point version aware.
 
+### Nitro admission simulation
+
+For chains using the `ARBITRUM_NITRO` or `CACHED_NITRO` DA oracle, admission
+`simulateValidation` calls set Nitro's `skipL1Charging` RPC option. This applies
+to both `eth_call` and `debug_traceCall`. The call retains the configured
+`max_verification_gas` execution budget even when a sponsored operation has zero
+`preVerificationGas` or posting prices rise after the operation is signed.
+
+The Nitro node must support `skipL1Charging`. DA affordability checks and bundle
+transaction gas accounting still apply; this option only skips posting charges
+inside admission validation simulations.
+
 ### Types
 
 Versions v0.6 and v0.7 ABIs define different User Operation types. Rundler uses the following to represent these different versions:
