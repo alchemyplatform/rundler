@@ -775,14 +775,44 @@ where
         // Check total gas cost and time for bundler sponsorship
         let mut sponsored_da_gas = 0;
         if let Some(bundler_sponsorship) = &op.perms.bundler_sponsorship {
+            // Sizing the bundle gas limit panics on an unsupported aggregator.
+            if let Some(agg) = op.uo.aggregator()
+                && self
+                    .settings
+                    .chain_spec
+                    .get_signature_aggregator(&agg)
+                    .is_none()
+            {
+                self.emit(BuilderEvent::skipped_op(
+                    self.builder_tag.clone(),
+                    op_hash,
+                    SkipReason::UnsupportedAggregator(agg),
+                ));
+                return None;
+            }
+
             // Underpriced-op permissions do not discount what the sponsor pays.
-            // Reserve the same gas headroom as the submitted bundle transaction.
-            let gas_limit = U256::from(
-                op.uo
-                    .bundle_gas_limit(&self.settings.chain_spec, Some(bundle_size)),
-            ) + U256::from(required_da_gas);
+            // Reserve the gas limit, including the EIP-7623 calldata floor and
+            // headroom, of a bundle transaction containing only this op.
+            let mut single_op_bundle = ProposalContext::new(Address::ZERO);
+            single_op_bundle
+                .groups_by_aggregator
+                .entry(op.uo.aggregator().unwrap_or(Address::ZERO))
+                .or_default()
+                .ops_with_simulations
+                .push(OpWithSimulation {
+                    op: op.uo.clone(),
+                    // Not simulated yet, so assume the paymaster post-op runs.
+                    simulation: SimulationResult {
+                        requires_post_op: true,
+                        ..Default::default()
+                    },
+                    sponsored_da_gas: required_da_gas,
+                });
+            let gas_limit =
+                single_op_bundle.get_bundle_gas_limit_inner(&self.settings.chain_spec, true);
             let buffered_gas_limit = math::uint_increase_by_percent_ceil(
-                gas_limit,
+                U256::from(gas_limit),
                 BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
             );
             let total_gas_cost = buffered_gas_limit.saturating_mul(U256::from(gas_price));
@@ -4572,11 +4602,7 @@ mod tests {
     #[tokio::test]
     async fn test_sponsorship_budget_includes_da_fee_cap_and_headroom() {
         let op = op_with_gas(0, 10_000, 10_000, false);
-        let chain_spec = ChainSpec {
-            da_pre_verification_gas: true,
-            ..Default::default()
-        };
-        let unbuffered_cost = op.bundle_gas_limit(&chain_spec, Some(1));
+        let unbuffered_cost = op.bundle_gas_limit(&ChainSpec::default(), Some(1));
         let buffered_cost = (unbuffered_cost * 105).div_ceil(100);
 
         // The same zero-fee op is affordable until DA or the actual transaction
@@ -4595,87 +4621,156 @@ mod tests {
                 da_pre_verification_gas: da_gas.is_some(),
                 ..Default::default()
             };
-            let block_hash = hash(125);
-            let mut entry_point = MockEntryPointV0_6::new();
-            entry_point
-                .expect_address()
-                .return_const(chain_spec.entry_point_address_v0_6);
-            if let Some(da_gas) = da_gas {
-                entry_point
-                    .expect_calc_da_gas()
-                    .times(1)
-                    .withf(move |_, block, price, size| {
-                        *block == block_hash.into() && *price == fee_cap && *size == 1
-                    })
-                    .returning(move |_, _, _, _| {
-                        Ok((da_gas, DAGasData::Empty, DAGasBlockData::Empty))
-                    });
-            }
-            // No EVM RPC expectations: checking the budget adds no network calls.
-            let proposer = BundleProposerImpl::new(
-                "test".to_string(),
-                ProvidersWithEntryPoint::new(
-                    Arc::new(MockEvmProvider::new()),
-                    Arc::new(entry_point),
-                    None::<Arc<MockDAGasOracleSync>>,
-                    Arc::new(MockFeeEstimator::new()),
-                ),
-                BundleProposerProviders::new(MockSimulator::new()),
-                Settings {
-                    chain_spec: chain_spec.clone(),
-                    target_bundle_gas: 10_000_000,
-                    max_bundle_gas: 25_000_000,
-                    da_gas_tracking_enabled: true,
-                    max_expected_storage_slots: MAX_EXPECTED_STORAGE_SLOTS,
-                    verification_gas_limit_efficiency_reject_threshold: 0.5,
-                    submission_proxy: None,
-                },
-                broadcast::channel(16).0,
-            );
-            let pool_op = PoolOperation {
-                uo: op.clone().into(),
-                entry_point: chain_spec.entry_point_address_v0_6,
-                aggregator: None,
-                valid_time_range: ValidTimeRange::default(),
-                expected_code_hash: B256::ZERO,
-                sim_block_hash: block_hash,
-                sim_block_number: 0,
-                account_is_staked: false,
-                entity_infos: EntityInfos::default(),
-                da_gas_data: DAGasData::Empty,
-                filter_id: None,
-                perms: UserOperationPermissions {
-                    bundler_sponsorship: Some(BundlerSponsorship {
-                        max_cost: U256::from(max_cost),
-                        valid_until: u64::MAX,
-                    }),
-                    underpriced_bundle_pct: discount,
-                    ..Default::default()
-                },
-                sender_is_7702: false,
-            };
-            let result = proposer
-                .check_fees(
-                    pool_op,
-                    block_hash,
-                    None,
-                    1,
-                    GasFees {
-                        max_fee_per_gas: 1,
-                        max_priority_fee_per_gas: 0,
-                    },
-                    GasFees {
-                        max_fee_per_gas: fee_cap,
-                        max_priority_fee_per_gas: 0,
-                    },
-                )
-                .await;
             assert_eq!(
-                result.is_some(),
+                check_sponsored_op_fees(
+                    chain_spec,
+                    op.clone(),
+                    da_gas,
+                    fee_cap,
+                    discount,
+                    max_cost
+                )
+                .await,
                 accepted,
                 "DA {da_gas:?}, fee cap {fee_cap}, discount {discount:?}, budget {max_cost}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_sponsorship_budget_includes_calldata_floor() {
+        let chain_spec = ChainSpec {
+            eip7623_enabled: true,
+            ..Default::default()
+        };
+        let op = UserOperationBuilder::new(
+            &chain_spec,
+            UserOperationRequiredFields {
+                call_gas_limit: 1_000,
+                verification_gas_limit: 1_000,
+                call_data: Bytes::from(vec![1u8; 4096]),
+                ..Default::default()
+            },
+        )
+        .build();
+        let standard_cost = (op.bundle_gas_limit(&chain_spec, Some(1)) * 105).div_ceil(100);
+        let floor_cost = chain_spec.transaction_intrinsic_gas()
+            + (BUNDLE_BYTE_OVERHEAD as u128 + 32) * chain_spec.calldata_floor_non_zero_byte_gas()
+            + op.calldata_floor_gas_limit();
+        let buffered_floor_cost = (floor_cost * 105).div_ceil(100);
+        assert!(
+            floor_cost > standard_cost,
+            "calldata floor ({floor_cost}) must exceed buffered standard gas ({standard_cost})"
+        );
+
+        for (max_cost, accepted) in [
+            (standard_cost, false),
+            (buffered_floor_cost - 1, false),
+            (buffered_floor_cost, true),
+        ] {
+            assert_eq!(
+                check_sponsored_op_fees(chain_spec.clone(), op.clone(), None, 1, None, max_cost)
+                    .await,
+                accepted,
+                "budget {max_cost}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sponsorship_budget_skips_unsupported_aggregator() {
+        let chain_spec = ChainSpec::default();
+        let op = op_with_gas(0, 10_000, 10_000, false).transform_for_aggregator(
+            &chain_spec,
+            address(1),
+            AggregatorCosts::default(),
+            Bytes::new(),
+        );
+        assert!(!check_sponsored_op_fees(chain_spec, op, None, 1, None, u128::MAX).await);
+    }
+
+    async fn check_sponsored_op_fees(
+        chain_spec: ChainSpec,
+        op: UserOperation,
+        da_gas: Option<u128>,
+        fee_cap: u128,
+        discount: Option<u32>,
+        max_cost: u128,
+    ) -> bool {
+        let block_hash = hash(125);
+        let mut entry_point = MockEntryPointV0_6::new();
+        entry_point
+            .expect_address()
+            .return_const(chain_spec.entry_point_address_v0_6);
+        if let Some(da_gas) = da_gas {
+            entry_point
+                .expect_calc_da_gas()
+                .times(1)
+                .withf(move |_, block, price, size| {
+                    *block == block_hash.into() && *price == fee_cap && *size == 1
+                })
+                .returning(move |_, _, _, _| Ok((da_gas, DAGasData::Empty, DAGasBlockData::Empty)));
+        }
+        // No EVM RPC expectations: checking the budget adds no network calls.
+        let proposer = BundleProposerImpl::new(
+            "test".to_string(),
+            ProvidersWithEntryPoint::new(
+                Arc::new(MockEvmProvider::new()),
+                Arc::new(entry_point),
+                None::<Arc<MockDAGasOracleSync>>,
+                Arc::new(MockFeeEstimator::new()),
+            ),
+            BundleProposerProviders::new(MockSimulator::new()),
+            Settings {
+                chain_spec: chain_spec.clone(),
+                target_bundle_gas: 10_000_000,
+                max_bundle_gas: 25_000_000,
+                da_gas_tracking_enabled: true,
+                max_expected_storage_slots: MAX_EXPECTED_STORAGE_SLOTS,
+                verification_gas_limit_efficiency_reject_threshold: 0.5,
+                submission_proxy: None,
+            },
+            broadcast::channel(16).0,
+        );
+        let pool_op = PoolOperation {
+            uo: op.into(),
+            entry_point: chain_spec.entry_point_address_v0_6,
+            aggregator: None,
+            valid_time_range: ValidTimeRange::default(),
+            expected_code_hash: B256::ZERO,
+            sim_block_hash: block_hash,
+            sim_block_number: 0,
+            account_is_staked: false,
+            entity_infos: EntityInfos::default(),
+            da_gas_data: DAGasData::Empty,
+            filter_id: None,
+            perms: UserOperationPermissions {
+                bundler_sponsorship: Some(BundlerSponsorship {
+                    max_cost: U256::from(max_cost),
+                    valid_until: u64::MAX,
+                }),
+                underpriced_bundle_pct: discount,
+                ..Default::default()
+            },
+            sender_is_7702: false,
+        };
+        proposer
+            .check_fees(
+                pool_op,
+                block_hash,
+                None,
+                1,
+                GasFees {
+                    max_fee_per_gas: 1,
+                    max_priority_fee_per_gas: 0,
+                },
+                GasFees {
+                    max_fee_per_gas: fee_cap,
+                    max_priority_fee_per_gas: 0,
+                },
+            )
+            .await
+            .is_some()
     }
 
     #[tokio::test]
