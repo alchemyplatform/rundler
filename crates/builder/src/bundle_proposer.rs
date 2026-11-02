@@ -780,7 +780,7 @@ where
             let gas_limit = U256::from(
                 op.uo
                     .bundle_gas_limit(&self.settings.chain_spec, Some(bundle_size)),
-            ) + U256::from(sponsorship_pvg);
+            ) + U256::from(required_da_gas);
             let buffered_gas_limit = math::uint_increase_by_percent_ceil(
                 gas_limit,
                 BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
@@ -4576,8 +4576,7 @@ mod tests {
             da_pre_verification_gas: true,
             ..Default::default()
         };
-        let unbuffered_cost = op.bundle_gas_limit(&chain_spec, Some(1))
-            + op.required_pre_verification_gas(&chain_spec, 1, 0, Some(0.5));
+        let unbuffered_cost = op.bundle_gas_limit(&chain_spec, Some(1));
         let buffered_cost = (unbuffered_cost * 105).div_ceil(100);
 
         // The same zero-fee op is affordable until DA or the actual transaction
