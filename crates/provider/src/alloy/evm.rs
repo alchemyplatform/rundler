@@ -33,8 +33,8 @@ use serde_json::json;
 use tracing::instrument;
 
 use crate::{
-    AlloyProvider, Block, EvmCall, EvmProvider, ProviderResult, RpcRecv, RpcSend, Transaction,
-    TransactionReceipt, TransactionRequest,
+    AlloyProvider, Block, EvmCall, EvmProvider, ProviderResult, RpcRecv, RpcSend,
+    SimulationTransactionRequest, Transaction, TransactionReceipt, TransactionRequest,
 };
 
 /// Evm Provider implementation using [alloy-provider](https://github.com/alloy-rs/alloy-rs)
@@ -236,16 +236,15 @@ where
     #[instrument(skip_all)]
     async fn debug_trace_call(
         &self,
-        tx: TransactionRequest,
+        tx: SimulationTransactionRequest,
         block_id: Option<BlockId>,
         trace_options: GethDebugTracingCallOptions,
     ) -> ProviderResult<GethTrace> {
         let call = if let Some(block_id) = block_id {
-            self.inner
-                .debug_trace_call(tx.into(), block_id, trace_options)
+            self.inner.debug_trace_call(tx, block_id, trace_options)
         } else {
             self.inner
-                .debug_trace_call(tx.into(), BlockNumberOrTag::Latest.into(), trace_options)
+                .debug_trace_call(tx, BlockNumberOrTag::Latest.into(), trace_options)
         };
 
         Ok(call.await?)

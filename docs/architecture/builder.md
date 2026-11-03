@@ -32,6 +32,18 @@ The worker estimates the required fees for the bundle transaction before invokin
 
 These can be tweaked to modify the bundler's profitability.
 
+For bundler-sponsored operations, each operation's `max_cost` is checked separately
+before simulation. The budget is the gas limit of a bundle transaction containing only
+that operation: execution and pre-verification costs (including estimated DA) or the
+EIP-7623 calldata floor, whichever is larger, plus the bundle transaction's 5% gas
+headroom. It is priced at the bundle's `max_fee_per_gas`, including replacement fee
+increases. Underpriced-operation permissions do not discount the sponsorship cost. An
+over-budget operation is skipped and remains in the pool; another operation's unused
+budget cannot cover it. This check also applies on chains without DA charges.
+
+The check reuses the proposal's DA estimate and adds no RPC calls. It is not a guarantee
+against DA price changes after that estimate, nor a cap on off-chain customer billing.
+
 ### Gas Limit
 
 The proposer limits the amount of UO gas that it will attempt to put into a single bundle to ensure that transactions are below the gas cap of a block. This limit is calculated by summing the maximum gas usage of each UO in the bundle. If a UO puts the bundle over this limit, it (and all following UOs) will be skipped (but not removed from the pool).
