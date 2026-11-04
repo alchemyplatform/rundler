@@ -622,7 +622,7 @@ Currently, it simply queries each the `Pool` and the `Builder` servers to check 
 
 Rundler supports a non-standard 3rd positional parameter on `eth_sendUserOperation` to enabled special permissions on a per-user operation basis. If `rpc.permissions_enabled` is set, these permissions will be sent to the mempool. If disabled, the permissions will be ignored.
 
-NOTE: this positional parameter is deprecated in favor of the [per-request permission headers](#per-request-permissions-http-headers), which carry the same fields. When both are supplied, the headers take precedence.
+NOTE: this positional parameter is deprecated in favor of the [per-request permission headers](#per-request-permissions-http-headers), which carry the same fields except `rejectUnderpricedSponsorship`. When both are supplied, the headers take precedence.
 
 These permissions are meant to be used only by trusted connections. For example, an internal proxy that has a trusted relationship with a sender can tag that user operation as `trusted` and skip complex untrusted simulation.
 
@@ -649,6 +649,7 @@ When enabled, the `eth_sendUserOperation` request schema becomes:
         validUntil: uint64                // required if bundler sponsorship, sets the expiry time for the sponsorship in seconds
       }
       eip7702Disabled: bool,              // optional, if true senders using EIP-7702 are disabled
+      rejectUnderpricedSponsorship: bool, // optional, default false. If true and bundlerSponsorship is set, reject when maxCost is below the current required cost
     }
   ]
 }
@@ -688,6 +689,34 @@ To be eligible for `bundlerSponsorship` a user operation must have certain field
 - `paymaster` = empty
 - `paymasterData` = empty
 - `paymasterAndData` (v0.6) = empty
+
+#### `rejectUnderpricedSponsorship`
+
+Optional boolean, default `false`. Only applies when `bundlerSponsorship` is also set; it has no effect on unsponsored user operations. There is no HTTP header for this field, so it is only available via the positional parameter (and is therefore ignored when any permission header is present).
+
+Without this flag, a sponsored user operation whose `maxCost` is too low is still accepted into the mempool and waits until fees drop far enough for it to be bundled, or until `validUntil` expires.
+
+With this flag, `eth_sendUserOperation` rejects the user operation before simulation if `maxCost` is below the cost the mempool currently requires for it to be a bundle candidate:
+
+```
+requiredCostWei = totalGasLimit * requiredOpMaxFeePerGas
+```
+
+`requiredOpMaxFeePerGas` is the current required operation fee from the fee estimator at the latest block (the same value the mempool's candidate check and the builder's assigner use), not a buffered suggested fee. Equality passes. All amounts are in wei; Rundler does no USD conversion.
+
+The rejection is returned with code `-32602` and the following `data`:
+
+```json
+{
+  "maxCostWei": "0x...",       // the supplied bundlerSponsorship.maxCost
+  "requiredCostWei": "0x...",  // the required cost at blockNumber
+  "blockNumber": "0x..."       // the block whose fee estimate produced requiredCostWei
+}
+```
+
+The rejection means `maxCost` is below the requirement **at that block**. The same user operation may be accepted later if network fees fall. Passing the check does not guarantee inclusion: the bundle proposer later computes gas and DA costs in more detail and may still find the sponsorship insufficient.
+
+If fee estimation fails during this check, `eth_sendUserOperation` returns an internal error (`-32603`), not the price rejection above.
 
 #### `eip7702Disabled`
 

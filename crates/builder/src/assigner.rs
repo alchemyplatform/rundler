@@ -16,12 +16,12 @@ use std::{
     sync::Mutex,
 };
 
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, B256};
 use anyhow::bail;
 use metrics::{Counter, Gauge};
 use metrics_derive::Metrics;
 use rundler_types::{
-    GasFees,
+    BundlerSponsorship, GasFees,
     pool::{Pool, PoolOperation, PoolOperationSummary},
 };
 
@@ -754,7 +754,8 @@ impl Assigner {
     ) -> bool {
         if let Some(max_cost) = op.bundler_sponsorship_max_cost {
             // Bundler-sponsored: check that required fees fit within the sponsorship budget
-            let total_cost = U256::from(op.gas_limit) * U256::from(required_fees.max_fee_per_gas);
+            let total_cost =
+                BundlerSponsorship::required_cost(op.gas_limit, required_fees.max_fee_per_gas);
             if total_cost > max_cost {
                 if log {
                     let hash = op.hash;
@@ -1133,7 +1134,7 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
     };
 
-    use alloy_primitives::B256;
+    use alloy_primitives::{B256, U256};
     use rundler_types::{
         BundlerSponsorship, EntityInfos, UserOperation, UserOperationPermissions, ValidTimeRange,
         chain::ChainSpec,

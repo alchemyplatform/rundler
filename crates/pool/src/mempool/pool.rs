@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, B256};
 use anyhow::Context;
 use metrics::{Counter, Gauge, Histogram};
 use metrics_derive::Metrics;
@@ -611,8 +611,7 @@ where
                 // only bundleable while its budget still covers the required
                 // fee. The op's own fees are irrelevant, the bundler pays.
                 Some(sponsorship) => {
-                    U256::from(op.uo().total_gas_limit()) * U256::from(uo_fees.max_fee_per_gas)
-                        <= sponsorship.max_cost
+                    sponsorship.covers(op.uo().total_gas_limit(), uo_fees.max_fee_per_gas)
                 }
                 None => {
                     op.uo().max_fee_per_gas() >= uo_fees.max_fee_per_gas
