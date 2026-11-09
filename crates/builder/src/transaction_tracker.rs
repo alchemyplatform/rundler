@@ -748,6 +748,7 @@ mod tests {
         WithOtherFields,
     };
     use rundler_signer::CachedAccountState;
+    use rundler_types::EntryPointVersion;
 
     use super::*;
     use crate::sender::MockTransactionSender;
@@ -791,6 +792,11 @@ mod tests {
 
         fn lease_signer(&self) -> Option<SignerLease> {
             self.lease_signer_by_address(&self.signer.address())
+        }
+
+        fn lease_signer_for(&self, _: EntryPointVersion) -> Option<SignerLease> {
+            // The test signer is untagged, so it never serves a specific EntryPoint.
+            None
         }
 
         fn lease_signer_by_address(&self, _: &Address) -> Option<SignerLease> {
