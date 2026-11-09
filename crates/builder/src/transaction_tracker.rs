@@ -16,7 +16,7 @@ use std::sync::Arc;
 use alloy_consensus::Transaction;
 use alloy_primitives::{Address, B256, I256, U256};
 use alloy_sol_types::SolEvent;
-use anyhow::bail;
+use anyhow::{Context, bail};
 use async_trait::async_trait;
 use metrics::{Gauge, Histogram};
 use metrics_derive::Metrics;
@@ -25,7 +25,7 @@ use mockall::automock;
 use rundler_contracts::v0_7::IEntryPoint::UserOperationEvent;
 use rundler_provider::{EvmProvider, Log, ReceiptResponse, TransactionRequest};
 use rundler_signer::{SignerLease, SignerManager};
-use rundler_types::{ExpectedStorage, GasFees, pool::AddressUpdate};
+use rundler_types::{EntryPointVersion, ExpectedStorage, GasFees, pool::AddressUpdate};
 use tokio::time::Instant;
 use tracing::{info, warn};
 
@@ -102,6 +102,9 @@ pub(crate) trait TransactionTracker: Send + Sync {
     /// Returns `true` if the signer was released, `false` if kept because
     /// pending transactions still exist.
     fn end_cycle(&mut self) -> bool;
+
+    /// Check that the signer held for this cycle may send a bundle to `entry_point`.
+    fn ensure_entry_point(&self, entry_point: EntryPointVersion) -> anyhow::Result<()>;
 }
 
 /// Errors that can occur while using a `TransactionTracker`.
@@ -173,6 +176,9 @@ pub(crate) struct TransactionTrackerImpl<P, T> {
     /// The leased signer, held only during an active work cycle.
     /// The address of this signer is the sender's identity for the duration of the cycle.
     signer: Option<SignerLease>,
+    /// The entry point whose signers this tracker leases, or `None` to lease any signer
+    /// (legacy layout).
+    entry_point: Option<EntryPointVersion>,
     settings: Settings,
     nonce: u64,
     balance: U256,
@@ -220,12 +226,14 @@ where
         signer_manager: Arc<dyn SignerManager>,
         settings: Settings,
         builder_tag: String,
+        entry_point: Option<EntryPointVersion>,
     ) -> Self {
         Self {
             provider,
             sender,
             signer_manager,
             signer: None,
+            entry_point,
             settings,
             nonce: 0,
             balance: U256::ZERO,
@@ -675,10 +683,11 @@ where
         if self.signer.is_some() {
             return Ok(());
         }
-        let signer = self
-            .signer_manager
-            .lease_signer()
-            .ok_or_else(|| anyhow::anyhow!("no signer available"))?;
+        let signer = match self.entry_point {
+            Some(entry_point) => self.signer_manager.lease_signer_for(entry_point),
+            None => self.signer_manager.lease_signer(),
+        }
+        .ok_or_else(|| anyhow::anyhow!("no signer available"))?;
         let addr = signer.address();
         self.signer = Some(signer);
 
@@ -708,6 +717,14 @@ where
             return true;
         }
         false
+    }
+
+    fn ensure_entry_point(&self, entry_point: EntryPointVersion) -> anyhow::Result<()> {
+        let signer = self
+            .signer
+            .as_ref()
+            .context("ensure_entry_point requires an active cycle (call begin_cycle first)")?;
+        Ok(signer.ensure_entry_point(entry_point)?)
     }
 }
 
@@ -748,7 +765,6 @@ mod tests {
         WithOtherFields,
     };
     use rundler_signer::CachedAccountState;
-    use rundler_types::EntryPointVersion;
 
     use super::*;
     use crate::sender::MockTransactionSender;
@@ -759,15 +775,25 @@ mod tests {
         chain_id: u64,
         available: AtomicBool,
         account_state: std::sync::Mutex<Option<CachedAccountState>>,
+        /// The entry point the signer belongs to, or `None` for an untagged (legacy) signer
+        entry_point: Option<EntryPointVersion>,
     }
 
     impl TestSignerManager {
         fn new(signer: Arc<dyn TxSigner<Signature> + Send + Sync + 'static>) -> Arc<Self> {
+            Self::new_tagged(signer, None)
+        }
+
+        fn new_tagged(
+            signer: Arc<dyn TxSigner<Signature> + Send + Sync + 'static>,
+            entry_point: Option<EntryPointVersion>,
+        ) -> Arc<Self> {
             Arc::new(Self {
                 signer,
                 chain_id: 1,
                 available: AtomicBool::new(true),
                 account_state: std::sync::Mutex::new(None),
+                entry_point,
             })
         }
     }
@@ -794,16 +820,22 @@ mod tests {
             self.lease_signer_by_address(&self.signer.address())
         }
 
-        fn lease_signer_for(&self, _: EntryPointVersion) -> Option<SignerLease> {
-            // The test signer is untagged, so it never serves a specific EntryPoint.
-            None
+        fn lease_signer_for(&self, entry_point: EntryPointVersion) -> Option<SignerLease> {
+            // Untagged signers never serve a specific entry point.
+            if self.entry_point != Some(entry_point) {
+                return None;
+            }
+            self.lease_signer_by_address(&self.signer.address())
         }
 
         fn lease_signer_by_address(&self, _: &Address) -> Option<SignerLease> {
             self.available
                 .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
                 .ok()
-                .map(|_| SignerLease::new(self.signer.clone(), self.chain_id))
+                .map(|_| {
+                    SignerLease::new(self.signer.clone(), self.chain_id)
+                        .with_entry_point(self.entry_point)
+                })
         }
 
         fn return_lease(&self, _: SignerLease) {
@@ -880,6 +912,7 @@ mod tests {
             signer_manager,
             settings,
             "test".to_string(),
+            None,
         );
 
         tracker
@@ -887,6 +920,69 @@ mod tests {
             .await
             .expect("failed to begin cycle in test");
         tracker
+    }
+
+    fn tagged_tracker(
+        signer_entry_point: Option<EntryPointVersion>,
+        tracker_entry_point: Option<EntryPointVersion>,
+    ) -> TransactionTrackerImpl<MockEvmProvider, MockTransactionSender> {
+        let mut provider = MockEvmProvider::new();
+        provider
+            .expect_get_transaction_count()
+            .returning(move |_a| Ok(0));
+        provider
+            .expect_get_balance()
+            .returning(move |_a, _b| Ok(U256::ZERO));
+        let signer: Arc<dyn TxSigner<Signature> + Send + Sync + 'static> =
+            Arc::new(MockTxSigner {});
+        TransactionTrackerImpl::new(
+            provider,
+            MockTransactionSender::new(),
+            TestSignerManager::new_tagged(signer, signer_entry_point),
+            Settings {
+                replacement_fee_percent_increase: 5,
+            },
+            "test".to_string(),
+            tracker_entry_point,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_begin_cycle_leases_signer_of_its_entry_point() {
+        let mut tracker =
+            tagged_tracker(Some(EntryPointVersion::V0_7), Some(EntryPointVersion::V0_7));
+        tracker.begin_cycle().await.unwrap();
+        tracker.ensure_entry_point(EntryPointVersion::V0_7).unwrap();
+        let err = tracker
+            .ensure_entry_point(EntryPointVersion::V0_6)
+            .unwrap_err();
+        assert!(err.to_string().contains("v0.7"), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn test_begin_cycle_never_leases_signer_of_another_entry_point() {
+        let mut tracker =
+            tagged_tracker(Some(EntryPointVersion::V0_7), Some(EntryPointVersion::V0_6));
+        let err = tracker.begin_cycle().await.unwrap_err();
+        assert!(err.to_string().contains("no signer available"), "{err:#}");
+
+        // An untagged signer is not handed to an entry point specific tracker either.
+        let mut tracker = tagged_tracker(None, Some(EntryPointVersion::V0_6));
+        assert!(tracker.begin_cycle().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_legacy_tracker_leases_any_signer() {
+        let mut tracker = tagged_tracker(None, None);
+        tracker.begin_cycle().await.unwrap();
+        // Untagged leases pass the check for any entry point.
+        tracker.ensure_entry_point(EntryPointVersion::V0_6).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_ensure_entry_point_requires_active_cycle() {
+        let tracker = tagged_tracker(Some(EntryPointVersion::V0_7), Some(EntryPointVersion::V0_7));
+        assert!(tracker.ensure_entry_point(EntryPointVersion::V0_7).is_err());
     }
 
     #[tokio::test]

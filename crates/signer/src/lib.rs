@@ -476,6 +476,7 @@ async fn new_kms_funding_mapped_signer_manager<
         "signer mapping: funding group {group} = funding key {funding_key_id} ({}); signers per entry point: {per_entry_point}",
         funding_signer.address()
     );
+    metrics::gauge!("signer_funding_group", "group" => group.to_string()).set(1.0);
 
     let funder_settings = FunderSettings {
         fund_below_balance: settings.fund_below_balance,

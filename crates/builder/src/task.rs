@@ -24,7 +24,10 @@ use futures_util::StreamExt;
 use rundler_provider::{
     AlloyNetworkConfig, FeeEstimator, Providers as ProvidersT, ProvidersWithEntryPointT,
 };
-use rundler_signer::{SignerManager, SigningScheme};
+use rundler_signer::{
+    SignerManager, SigningScheme,
+    mapping::{SignerCounts, entry_point_name},
+};
 use rundler_sim::{
     MempoolConfig, SimulationSettings,
     simulation::{self, UnsafeSimulator},
@@ -63,8 +66,8 @@ pub struct Args {
     pub unsafe_mode: bool,
     /// Signing scheme to use
     pub signing_scheme: SigningScheme,
-    /// Number of signers (workers) to use
-    pub num_signers: u64,
+    /// How bundle workers (and their signers) are laid out
+    pub worker_layout: WorkerLayout,
     /// Whether to automatically fund signers
     pub auto_fund: bool,
     /// Maximum bundle size in number of operations
@@ -106,6 +109,96 @@ pub struct Args {
     pub assigner_max_ops_per_request: u64,
     /// Starvation multiplier for the assigner (applied to `num_signers` before force-selecting a starved entrypoint)
     pub assigner_starvation_ratio: f64,
+}
+
+/// How bundle workers are laid out across entry points.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkerLayout {
+    /// Legacy layout: `num_signers` workers shared by all entry points. A worker leases any
+    /// free signer and then picks an entry point.
+    Shared {
+        /// Number of workers (and signers)
+        num_signers: u64,
+    },
+    /// Mapping layout: `counts[ep]` workers per entry point. Each worker leases only that
+    /// entry point's signers and only receives that entry point's work.
+    PerEntryPoint {
+        /// Workers per entry point
+        counts: SignerCounts,
+    },
+}
+
+impl WorkerLayout {
+    /// Total number of workers (and signers needed at startup).
+    pub fn total(&self) -> usize {
+        match self {
+            WorkerLayout::Shared { num_signers } => *num_signers as usize,
+            WorkerLayout::PerEntryPoint { counts } => counts.total(),
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            WorkerLayout::Shared { .. } => "legacy",
+            WorkerLayout::PerEntryPoint { .. } => "mapping",
+        }
+    }
+}
+
+/// A group of workers sharing one assigner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WorkerGroup {
+    /// The entry point all workers in the group serve, or `None` for the legacy shared group
+    pub(crate) entry_point: Option<EntryPointVersion>,
+    /// The (entry point, filter id) combinations the group's assigner serves
+    pub(crate) infos: Vec<EntrypointInfo>,
+    /// Number of workers in the group
+    pub(crate) num_workers: usize,
+}
+
+/// Split the configured entry points into worker groups.
+///
+/// `entry_points` lists, for each enabled entry point, the assigner entries built for it.
+pub(crate) fn plan_workers(
+    entry_points: &[(EntryPointVersion, Vec<EntrypointInfo>)],
+    layout: &WorkerLayout,
+) -> anyhow::Result<Vec<WorkerGroup>> {
+    match layout {
+        WorkerLayout::Shared { num_signers } => Ok(vec![WorkerGroup {
+            entry_point: None,
+            infos: entry_points
+                .iter()
+                .flat_map(|(_, infos)| infos.iter().cloned())
+                .collect(),
+            num_workers: *num_signers as usize,
+        }]),
+        WorkerLayout::PerEntryPoint { counts } => {
+            for (entry_point, _) in counts.entries() {
+                if !entry_points.iter().any(|(ep, _)| ep == entry_point) {
+                    anyhow::bail!(
+                        "signer count set for entry point {}, which is not enabled",
+                        entry_point_name(*entry_point)
+                    );
+                }
+            }
+            entry_points
+                .iter()
+                .map(|(entry_point, infos)| {
+                    let num_workers = counts.get(*entry_point).with_context(|| {
+                        format!(
+                            "entry point {} is enabled but has no signer count",
+                            entry_point_name(*entry_point)
+                        )
+                    })?;
+                    Ok(WorkerGroup {
+                        entry_point: Some(*entry_point),
+                        infos: infos.clone(),
+                        num_workers,
+                    })
+                })
+                .collect()
+        }
+    }
 }
 
 /// Builder settings
@@ -185,7 +278,9 @@ where
     {
         let mut bundle_sender_actions = vec![];
 
-        let num_required_signers = self.args.num_signers as usize;
+        let num_required_signers = self.args.worker_layout.total();
+        metrics::gauge!("builder_signer_layout", "layout" => self.args.worker_layout.name())
+            .set(1.0);
 
         // wait 60 seconds for the signers to be available
         match tokio::time::timeout(
@@ -208,9 +303,10 @@ where
 
         // Build entrypoint info (for assigner) and registry (for proposers) in a single pass.
         // Each (address, filter_id) combination is a separate "virtual entrypoint".
-        let mut entrypoint_infos: Vec<EntrypointInfo> = vec![];
+        let mut infos_by_entry_point: Vec<(EntryPointVersion, Vec<EntrypointInfo>)> = vec![];
         let mut proposers: HashMap<ProposerKey, Box<dyn BundleProposerT>> = HashMap::new();
         for ep in &self.args.entry_points {
+            let mut entrypoint_infos: Vec<EntrypointInfo> = vec![];
             // Enforce unique filter_ids per entrypoint
             let mut seen_filter_ids: HashSet<Option<String>> = HashSet::new();
             for builder in &ep.builders {
@@ -272,27 +368,45 @@ where
                     ep.address, ep.version, builder.filter_id, builder.submission_proxy
                 );
             }
+            infos_by_entry_point.push((ep.version, entrypoint_infos));
         }
 
-        let assigner = Arc::new(Assigner::new(
-            Box::new(self.pool.clone()),
-            entrypoint_infos,
-            self.args.num_signers as usize,
-            self.args.assigner_max_ops_per_request,
-            self.args.max_bundle_size,
-            self.args.assigner_starvation_ratio,
-        ));
+        // One assigner per worker group: a single shared group in the legacy layout, one
+        // group per entry point in the mapping layout.
+        let groups = plan_workers(&infos_by_entry_point, &self.args.worker_layout)?;
+        let groups: Vec<(WorkerGroup, Arc<Assigner>)> = groups
+            .into_iter()
+            .map(|group| {
+                let mut assigner = Assigner::new(
+                    Box::new(self.pool.clone()),
+                    group.infos.clone(),
+                    group.num_workers,
+                    self.args.assigner_max_ops_per_request,
+                    self.args.max_bundle_size,
+                    self.args.assigner_starvation_ratio,
+                );
+                if let Some(entry_point) = group.entry_point {
+                    assigner = assigner.with_metrics_entry_point(entry_point);
+                    info!(
+                        "Builder workers for entry point {}: {}",
+                        entry_point_name(entry_point),
+                        group.num_workers
+                    );
+                }
+                (group, Arc::new(assigner))
+            })
+            .collect();
 
         let proposers = Arc::new(proposers);
         let supported_entry_points: Vec<_> =
             self.args.entry_points.iter().map(|ep| ep.address).collect();
 
-        // Create one bundle sender per signer - each handles all entrypoints via the registry
+        // Create the bundle senders for each worker group
         let (actions, heads_tx) = self
             .create_builders(
                 &task_spawner,
                 &self.signer_manager,
-                assigner.clone(),
+                &groups,
                 proposers.clone(),
             )
             .await?;
@@ -450,13 +564,13 @@ where
         }
     }
 
-    /// Create one bundle sender per signer. Each sender handles all entrypoints
-    /// via the shared proposers map.
+    /// Create the bundle senders: `num_workers` per worker group, each using its group's
+    /// assigner. In the legacy layout a single group handles all entrypoints.
     async fn create_builders<T>(
         &self,
         task_spawner: &T,
         signer_manager: &Arc<dyn SignerManager>,
-        assigner: Arc<Assigner>,
+        groups: &[(WorkerGroup, Arc<Assigner>)],
         proposers: Arc<HashMap<ProposerKey, Box<dyn BundleProposerT>>>,
     ) -> anyhow::Result<(
         Vec<mpsc::Sender<BundleSenderAction>>,
@@ -497,19 +611,27 @@ where
         let provider_event_signal = Arc::new(ProviderEventSignal::default());
 
         let mut bundle_sender_actions = vec![];
-        for i in 0..self.args.num_signers {
-            let bundle_sender_action = self
-                .create_bundle_builder(
-                    task_spawner,
-                    signer_manager,
-                    assigner.clone(),
-                    proposers.clone(),
-                    i as usize,
-                    heads_tx.subscribe(),
-                    provider_event_signal.clone(),
-                )
-                .await?;
-            bundle_sender_actions.push(bundle_sender_action);
+        for (group, assigner) in groups {
+            for i in 0..group.num_workers {
+                // Tag identifies this sender slot since the signing address is dynamic.
+                let builder_tag = match group.entry_point {
+                    Some(entry_point) => format!("sender_{}_{i}", entry_point_name(entry_point)),
+                    None => format!("sender_{i}"),
+                };
+                let bundle_sender_action = self
+                    .create_bundle_builder(
+                        task_spawner,
+                        signer_manager,
+                        assigner.clone(),
+                        proposers.clone(),
+                        builder_tag,
+                        group.entry_point,
+                        heads_tx.subscribe(),
+                        provider_event_signal.clone(),
+                    )
+                    .await?;
+                bundle_sender_actions.push(bundle_sender_action);
+            }
         }
         Ok((bundle_sender_actions, heads_tx))
     }
@@ -521,7 +643,8 @@ where
         signer_manager: &Arc<dyn SignerManager>,
         assigner: Arc<Assigner>,
         proposers: Arc<HashMap<ProposerKey, Box<dyn BundleProposerT>>>,
-        index: usize,
+        builder_tag: String,
+        entry_point: Option<EntryPointVersion>,
         heads_rx: broadcast::Receiver<Arc<NewHead>>,
         provider_event_signal: Arc<ProviderEventSignal>,
     ) -> anyhow::Result<mpsc::Sender<BundleSenderAction>>
@@ -540,15 +663,13 @@ where
             replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,
         };
 
-        // Tag identifies this sender slot by index since the signing address is dynamic.
-        let builder_tag = format!("sender_{index}");
-
         let transaction_tracker = TransactionTrackerImpl::new(
             self.providers.evm().clone(),
             transaction_sender,
             signer_manager.clone(),
             tracker_settings,
             builder_tag.clone(),
+            entry_point,
         );
 
         let sender_settings = bundle_sender::Settings {
@@ -574,6 +695,7 @@ where
             sender_settings,
             self.event_sender.clone(),
             provider_event_signal,
+            entry_point,
         );
 
         // Spawn each sender as its own independent task
@@ -581,5 +703,96 @@ where
         task_spawner.spawn_critical("bundle sender", builder.send_bundles_in_loop(ts));
 
         Ok(send_bundle_tx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy_primitives::address;
+
+    use super::*;
+
+    const EP_6: Address = address!("0000000000000000000000000000000000000006");
+    const EP_7: Address = address!("0000000000000000000000000000000000000007");
+
+    fn info(address: Address, filter_id: Option<&str>) -> EntrypointInfo {
+        EntrypointInfo {
+            address,
+            filter_id: filter_id.map(str::to_string),
+        }
+    }
+
+    /// v0.6 with one builder config, v0.7 with a default and a filtered (PBH-style) config.
+    fn entry_points() -> Vec<(EntryPointVersion, Vec<EntrypointInfo>)> {
+        vec![
+            (EntryPointVersion::V0_6, vec![info(EP_6, None)]),
+            (
+                EntryPointVersion::V0_7,
+                vec![info(EP_7, None), info(EP_7, Some("pbh-aggregator"))],
+            ),
+        ]
+    }
+
+    fn per_entry_point(counts: &str) -> WorkerLayout {
+        WorkerLayout::PerEntryPoint {
+            counts: counts.parse().unwrap(),
+        }
+    }
+
+    #[test]
+    fn shared_layout_is_one_group_for_all_entry_points() {
+        let groups =
+            plan_workers(&entry_points(), &WorkerLayout::Shared { num_signers: 32 }).unwrap();
+        assert_eq!(
+            groups,
+            vec![WorkerGroup {
+                entry_point: None,
+                infos: vec![
+                    info(EP_6, None),
+                    info(EP_7, None),
+                    info(EP_7, Some("pbh-aggregator")),
+                ],
+                num_workers: 32,
+            }]
+        );
+        assert_eq!(WorkerLayout::Shared { num_signers: 32 }.total(), 32);
+    }
+
+    #[test]
+    fn per_entry_point_layout_splits_groups_and_keeps_filters() {
+        let layout = per_entry_point("v0.7=20,v0.6=6");
+        let groups = plan_workers(&entry_points(), &layout).unwrap();
+        assert_eq!(
+            groups,
+            vec![
+                WorkerGroup {
+                    entry_point: Some(EntryPointVersion::V0_6),
+                    infos: vec![info(EP_6, None)],
+                    num_workers: 6,
+                },
+                WorkerGroup {
+                    entry_point: Some(EntryPointVersion::V0_7),
+                    infos: vec![info(EP_7, None), info(EP_7, Some("pbh-aggregator"))],
+                    num_workers: 20,
+                },
+            ]
+        );
+        assert_eq!(layout.total(), 26);
+    }
+
+    #[test]
+    fn per_entry_point_layout_needs_a_count_for_every_entry_point() {
+        let err = plan_workers(&entry_points(), &per_entry_point("v0.7=20")).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("v0.6 is enabled but has no signer count")
+        );
+    }
+
+    #[test]
+    fn per_entry_point_layout_rejects_counts_for_disabled_entry_points() {
+        let err =
+            plan_workers(&entry_points(), &per_entry_point("v0.6=1,v0.7=1,v0.8=1")).unwrap_err();
+        assert!(err.to_string().contains("v0.8, which is not enabled"));
     }
 }

@@ -335,9 +335,13 @@ impl SignerManager for FundingSignerManager {
 
     fn lease_signer_for(&self, entry_point: EntryPointVersion) -> Option<SignerLease> {
         let mut statuses = self.signer_statuses.write();
-        self.lease_matching(&mut statuses, |address| {
+        let lease = self.lease_matching(&mut statuses, |address| {
             self.entry_points.get(address) == Some(&entry_point)
-        })
+        });
+        if lease.is_none() {
+            pool_metrics(entry_point).pool_exhausted.increment(1);
+        }
+        lease
     }
 
     fn lease_signer_by_address(&self, address: &Address) -> Option<SignerLease> {
@@ -359,6 +363,9 @@ impl SignerManager for FundingSignerManager {
             SignerStatus::Leased => *status = SignerStatus::Available,
             SignerStatus::LeasedNeedsFunding => *status = SignerStatus::NeedsFunding,
             _ => unreachable!(),
+        }
+        if let Some(entry_point) = lease.entry_point() {
+            pool_metrics(entry_point).pool_leased.decrement(1);
         }
     }
 
@@ -449,6 +456,16 @@ impl FundingSignerManager {
             );
         }
 
+        for entry_point in ENTRY_POINT_ORDER {
+            let size = entry_points
+                .values()
+                .filter(|ep| **ep == entry_point)
+                .count();
+            if size > 0 {
+                pool_metrics(entry_point).pool_size.set(size as f64);
+            }
+        }
+
         Self {
             chain_id,
             wallet,
@@ -476,10 +493,11 @@ impl FundingSignerManager {
 
     fn lease_for(&self, address: Address) -> Option<SignerLease> {
         let signer = self.wallet.signer_by_address(address)?.clone();
-        Some(
-            SignerLease::new(signer, self.chain_id)
-                .with_entry_point(self.entry_points.get(&address).copied()),
-        )
+        let entry_point = self.entry_points.get(&address).copied();
+        if let Some(entry_point) = entry_point {
+            pool_metrics(entry_point).pool_leased.increment(1);
+        }
+        Some(SignerLease::new(signer, self.chain_id).with_entry_point(entry_point))
     }
 
     pub(crate) fn update_signer_statuses(
@@ -528,6 +546,21 @@ impl FundingSignerManager {
 pub(crate) struct SignerMetrics {
     #[metric(describe = "the balance of a signer address")]
     pub(crate) account_balance: Gauge,
+}
+
+#[derive(Metrics)]
+#[metrics(scope = "signer")]
+struct SignerPoolMetrics {
+    #[metric(describe = "the number of signers registered for an entry point")]
+    pool_size: Gauge,
+    #[metric(describe = "the number of an entry point's signers currently leased")]
+    pool_leased: Gauge,
+    #[metric(describe = "the number of times a worker found no free signer for its entry point")]
+    pool_exhausted: Counter,
+}
+
+fn pool_metrics(entry_point: EntryPointVersion) -> SignerPoolMetrics {
+    SignerPoolMetrics::new_with_labels(&[("entry_point", entry_point_name(entry_point))])
 }
 
 #[derive(Metrics)]

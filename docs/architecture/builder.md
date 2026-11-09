@@ -109,6 +109,17 @@ The Assigner component is responsible for coordinating work distribution among w
 
 3. **Virtual Entrypoints**: Supports multiple configurations per entry point address via `filter_id`, creating "virtual entrypoints" that workers can build for independently
 
+### Per-EntryPoint signer pools
+
+With `--signer.layout mapping` (see [CLI docs](../cli.md#signer-mapping)), workers and signers are split by entry point instead of being shared:
+
+- The signer manager registers each key with the entry point it is mapped to. Workers lease with `lease_signer_for(entry_point)`, which never returns another entry point's key.
+- Each enabled entry point gets `--signer.counts[ep]` workers and its own Assigner, which only knows that entry point's (address, filter_id) configurations. Selection and starvation prevention then reduce to that single entry point.
+- After the Assigner hands out work and before a bundle is built, the worker checks that the work is for its own entry point and that its leased signer belongs to it (`SignerLease::ensure_entry_point`). A mismatch is refused, logged and counted in `signer_entry_point_mismatch`.
+- The delegation sender, which never calls an entry point, borrows a free key from the entry point pool with the most free keys.
+
+Pool usage is exported as `signer_pool_size`, `signer_pool_leased` and `signer_pool_exhausted`, labelled by entry point. `builder_signer_layout` shows which layout a builder runs.
+
 ### Proposers
 
 Proposers are stored in a shared `HashMap<(Address, Option<String>), Box<dyn BundleProposerT>>` keyed by `(entrypoint address, filter_id)`. Each proposer handles bundle construction and revert processing for its entrypoint configuration. Fee estimation is performed by the worker before invoking the proposer. Workers look up the appropriate proposer after the Assigner selects an entrypoint.

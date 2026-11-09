@@ -20,8 +20,9 @@ use alloy_primitives::{Address, B256, U256};
 use anyhow::bail;
 use metrics::{Counter, Gauge};
 use metrics_derive::Metrics;
+use rundler_signer::mapping::entry_point_name;
 use rundler_types::{
-    GasFees,
+    EntryPointVersion, GasFees,
     pool::{Pool, PoolOperation, PoolOperationSummary},
 };
 
@@ -162,6 +163,14 @@ impl Assigner {
             max_bundle_size,
             metrics: GlobalMetrics::default(),
         }
+    }
+
+    /// Label this assigner's global metrics with its entry point, so several
+    /// per-entry-point assigners don't overwrite each other's gauges.
+    pub(crate) fn with_metrics_entry_point(mut self, entry_point: EntryPointVersion) -> Self {
+        self.metrics =
+            GlobalMetrics::new_with_labels(&[("entry_point", entry_point_name(entry_point))]);
+        self
     }
 
     /// Assigns work to a worker using priority-based entrypoint selection with starvation prevention.
@@ -1722,6 +1731,56 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    /// Mapping layout: one assigner per entry point over a pool holding work for two entry
+    /// points. A builder of one entry point must never be handed the other's work, however
+    /// many cycles run and however the work is spread.
+    #[tokio::test]
+    async fn test_per_entry_point_assigners_never_cross_entry_points() {
+        let senders_1: Vec<Address> = (1..=6).map(address).collect();
+        let senders_2: Vec<Address> = (11..=16).map(address).collect();
+        let ops_1 = create_test_ops_for_entrypoint(&senders_1, TEST_ENTRY_POINT);
+        let ops_2 = create_test_ops_for_entrypoint(&senders_2, TEST_ENTRY_POINT_2);
+        let [info_1, info_2]: [EntrypointInfo; 2] = two_entrypoints().try_into().unwrap();
+
+        let assigner_1 = Assigner::new(
+            Box::new(mock_pool_two_eps(ops_1.clone(), ops_2.clone())),
+            vec![info_1],
+            2,
+            1024,
+            1024,
+            0.5,
+        );
+        let assigner_2 = Assigner::new(
+            Box::new(mock_pool_two_eps(ops_1, ops_2)),
+            vec![info_2],
+            2,
+            1024,
+            1024,
+            0.5,
+        );
+        let builders_1 = [address(101), address(102)];
+        let builders_2 = [address(201), address(202)];
+
+        let mut assigned = 0;
+        for _ in 0..20 {
+            for (assigner, builders, expected) in [
+                (&assigner_1, &builders_1, TEST_ENTRY_POINT),
+                (&assigner_2, &builders_2, TEST_ENTRY_POINT_2),
+            ] {
+                for builder in builders {
+                    if let AssignmentResult::Assigned(work) =
+                        assign_default(assigner, *builder).await
+                    {
+                        assert_eq!(work.entry_point, expected);
+                        assigned += 1;
+                    }
+                    assigner.release_all(*builder);
+                }
+            }
+        }
+        assert!(assigned > 0, "expected some work to be assigned");
     }
 
     fn create_test_ops_for_entrypoint(
