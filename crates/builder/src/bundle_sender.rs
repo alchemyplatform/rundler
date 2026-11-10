@@ -915,7 +915,12 @@ where
         };
         let assignment = self
             .assigner
-            .assign_work(self.sender_eoa, state.block_number(), required_op_fees)
+            .assign_work(
+                self.entry_point,
+                self.sender_eoa,
+                state.block_number(),
+                required_op_fees,
+            )
             .await?;
 
         let result = match assignment {
@@ -1928,7 +1933,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        assigner::{AssignmentResult, EntrypointInfo},
+        assigner::{AssignmentResult, EntrypointInfo, WorkerGroup},
         bundle_proposer::{BundleData, MockBundleProposerT, RevertOutcome},
         bundle_sender::{BundleSenderImpl, MockTrigger},
         transaction_tracker::MockTransactionTracker,
@@ -2629,7 +2634,12 @@ mod tests {
         // If assignment cleanup ran on error, another builder can immediately claim the same sender.
         let next_assignment = sender
             .assigner
-            .assign_work(Address::from([0xAA; 20]), u64::MAX, GasFees::default())
+            .assign_work(
+                sender.entry_point,
+                Address::from([0xAA; 20]),
+                u64::MAX,
+                GasFees::default(),
+            )
             .await
             .unwrap();
         assert!(
@@ -2638,7 +2648,8 @@ mod tests {
         );
     }
 
-    /// A sender whose assigner serves only v0.6, for the entry point check tests.
+    /// A sender in the `entry_point` worker group whose assigner serves only v0.6, for the
+    /// entry point check tests.
     fn v06_sender(
         mock_proposer: MockBundleProposerT,
         entry_point: Option<EntryPointVersion>,
@@ -2663,9 +2674,7 @@ mod tests {
         let mut proposers: HashMap<ProposerKey, Box<dyn BundleProposerT>> = HashMap::new();
         proposers.insert((ENTRY_POINT_ADDRESS_V0_6, None), Box::new(mock_proposer));
 
-        let mut sender = new_sender_with_entrypoints(mock_pool, entrypoints, proposers);
-        sender.entry_point = entry_point;
-        sender
+        new_sender_with_group(mock_pool, entry_point, entrypoints, proposers)
     }
 
     fn tracker_with_state() -> MockTransactionTracker {
@@ -2700,7 +2709,12 @@ mod tests {
         // The assignment was released, so another builder can take the same sender.
         let next_assignment = sender
             .assigner
-            .assign_work(Address::from([0xAA; 20]), u64::MAX, GasFees::default())
+            .assign_work(
+                sender.entry_point,
+                Address::from([0xAA; 20]),
+                u64::MAX,
+                GasFees::default(),
+            )
             .await
             .unwrap();
         assert!(matches!(next_assignment, AssignmentResult::Assigned(_)));
@@ -2804,7 +2818,12 @@ mod tests {
         // Pre-lock and confirm sender to simulate an existing in-flight bundle.
         let initial_assignment = match sender_impl
             .assigner
-            .assign_work(sender, u64::MAX, GasFees::default())
+            .assign_work(
+                sender_impl.entry_point,
+                sender,
+                u64::MAX,
+                GasFees::default(),
+            )
             .await
             .unwrap()
         {
@@ -2827,7 +2846,12 @@ mod tests {
         // Confirmed sender lock should remain while pending tx exists.
         let reassignment = sender_impl
             .assigner
-            .assign_work(Address::from([0xAA; 20]), u64::MAX, GasFees::default())
+            .assign_work(
+                sender_impl.entry_point,
+                Address::from([0xAA; 20]),
+                u64::MAX,
+                GasFees::default(),
+            )
             .await
             .unwrap();
         assert!(
@@ -2884,7 +2908,12 @@ mod tests {
         // Pre-lock and confirm the sender to simulate an existing in-flight bundle.
         match sender_impl
             .assigner
-            .assign_work(sender, u64::MAX, GasFees::default())
+            .assign_work(
+                sender_impl.entry_point,
+                sender,
+                u64::MAX,
+                GasFees::default(),
+            )
             .await
             .unwrap()
         {
@@ -2918,7 +2947,12 @@ mod tests {
         // The confirmed lock must survive: another builder cannot claim the in-flight sender.
         let reassignment = sender_impl
             .assigner
-            .assign_work(Address::from([0xAA; 20]), u64::MAX, GasFees::default())
+            .assign_work(
+                sender_impl.entry_point,
+                Address::from([0xAA; 20]),
+                u64::MAX,
+                GasFees::default(),
+            )
             .await
             .unwrap();
         assert!(
@@ -3687,7 +3721,7 @@ mod tests {
             broadcast::channel(1).0.subscribe(),
             MockTransactionTracker::new(),
             Box::new(TestFeeEstimator),
-            Arc::new(Assigner::new(
+            Arc::new(Assigner::single_group(
                 Box::new(pool.clone()),
                 entrypoints,
                 4, // num_signers
@@ -3715,6 +3749,18 @@ mod tests {
         entrypoints: Vec<EntrypointInfo>,
         proposers: HashMap<ProposerKey, Box<dyn BundleProposerT>>,
     ) -> BundleSenderImpl<MockTransactionTracker, Arc<MockPool>> {
+        new_sender_with_group(mock_pool, None, entrypoints, proposers)
+    }
+
+    /// A sender in the worker group for `entry_point` (`None` for the legacy group), whose
+    /// assigner serves `entrypoints` for that group. The entrypoints need not match the
+    /// group's entry point, which lets tests simulate misrouted work.
+    fn new_sender_with_group(
+        mock_pool: MockPool,
+        entry_point: Option<EntryPointVersion>,
+        entrypoints: Vec<EntrypointInfo>,
+        proposers: HashMap<ProposerKey, Box<dyn BundleProposerT>>,
+    ) -> BundleSenderImpl<MockTransactionTracker, Arc<MockPool>> {
         let pool = Arc::new(mock_pool);
 
         BundleSenderImpl::new(
@@ -3724,14 +3770,20 @@ mod tests {
             broadcast::channel(1).0.subscribe(),
             MockTransactionTracker::new(),
             Box::new(TestFeeEstimator),
-            Arc::new(Assigner::new(
-                Box::new(pool.clone()),
-                entrypoints,
-                4, // num_signers
-                1024,
-                1024,
-                0.50,
-            )),
+            Arc::new(
+                Assigner::new(
+                    Box::new(pool.clone()),
+                    vec![WorkerGroup {
+                        entry_point,
+                        infos: entrypoints,
+                        num_workers: 4,
+                    }],
+                    1024,
+                    1024,
+                    0.50,
+                )
+                .unwrap(),
+            ),
             Arc::new(proposers),
             pool,
             Settings {
@@ -3743,7 +3795,7 @@ mod tests {
             },
             broadcast::channel(1000).0,
             Arc::new(ProviderEventSignal::default()),
-            None,
+            entry_point,
         )
     }
 

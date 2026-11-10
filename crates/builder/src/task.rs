@@ -45,7 +45,7 @@ use tracing::info;
 
 use crate::{
     ProposerKey,
-    assigner::{Assigner, EntrypointInfo},
+    assigner::{Assigner, EntrypointInfo, WorkerGroup},
     bundle_proposer::{self, BundleProposerImpl, BundleProposerProviders, BundleProposerT},
     bundle_sender::{self, BundleSender, BundleSenderAction, BundleSenderImpl},
     delegation_sender::{DelegationSenderTask, Settings as DelegationSettings},
@@ -143,17 +143,6 @@ impl WorkerLayout {
             WorkerLayout::PerEntryPoint { .. } => "mapping",
         }
     }
-}
-
-/// A group of workers sharing one assigner.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct WorkerGroup {
-    /// The entry point all workers in the group serve, or `None` for the legacy shared group
-    pub(crate) entry_point: Option<EntryPointVersion>,
-    /// The (entry point, filter id) combinations the group's assigner serves
-    pub(crate) infos: Vec<EntrypointInfo>,
-    /// Number of workers in the group
-    pub(crate) num_workers: usize,
 }
 
 /// Split the configured entry points into worker groups.
@@ -371,32 +360,26 @@ where
             infos_by_entry_point.push((ep.version, entrypoint_infos));
         }
 
-        // One assigner per worker group: a single shared group in the legacy layout, one
-        // group per entry point in the mapping layout. In the mapping layout sender locks are
-        // per entry point, so ops from the same sender on two entry points are not serialized.
+        // One assigner for all workers: sender locks are shared across entry points, while
+        // entrypoint selection, isolation and starvation are per worker group (a single
+        // shared group in the legacy layout, one group per entry point in the mapping layout).
         let groups = plan_workers(&infos_by_entry_point, &self.args.worker_layout)?;
-        let groups: Vec<(WorkerGroup, Arc<Assigner>)> = groups
-            .into_iter()
-            .map(|group| {
-                let mut assigner = Assigner::new(
-                    Box::new(self.pool.clone()),
-                    group.infos.clone(),
-                    group.num_workers,
-                    self.args.assigner_max_ops_per_request,
-                    self.args.max_bundle_size,
-                    self.args.assigner_starvation_ratio,
+        for group in &groups {
+            if let Some(entry_point) = group.entry_point {
+                info!(
+                    "Builder workers for entry point {}: {}",
+                    entry_point_name(entry_point),
+                    group.num_workers
                 );
-                if let Some(entry_point) = group.entry_point {
-                    assigner = assigner.with_metrics_entry_point(entry_point);
-                    info!(
-                        "Builder workers for entry point {}: {}",
-                        entry_point_name(entry_point),
-                        group.num_workers
-                    );
-                }
-                (group, Arc::new(assigner))
-            })
-            .collect();
+            }
+        }
+        let assigner = Arc::new(Assigner::new(
+            Box::new(self.pool.clone()),
+            groups.clone(),
+            self.args.assigner_max_ops_per_request,
+            self.args.max_bundle_size,
+            self.args.assigner_starvation_ratio,
+        )?);
 
         let proposers = Arc::new(proposers);
         let supported_entry_points: Vec<_> =
@@ -408,6 +391,7 @@ where
                 &task_spawner,
                 &self.signer_manager,
                 &groups,
+                assigner,
                 proposers.clone(),
             )
             .await?;
@@ -565,13 +549,14 @@ where
         }
     }
 
-    /// Create the bundle senders: `num_workers` per worker group, each using its group's
-    /// assigner. In the legacy layout a single group handles all entrypoints.
+    /// Create the bundle senders: `num_workers` per worker group, all sharing one assigner.
+    /// In the legacy layout a single group handles all entrypoints.
     async fn create_builders<T>(
         &self,
         task_spawner: &T,
         signer_manager: &Arc<dyn SignerManager>,
-        groups: &[(WorkerGroup, Arc<Assigner>)],
+        groups: &[WorkerGroup],
+        assigner: Arc<Assigner>,
         proposers: Arc<HashMap<ProposerKey, Box<dyn BundleProposerT>>>,
     ) -> anyhow::Result<(
         Vec<mpsc::Sender<BundleSenderAction>>,
@@ -612,7 +597,7 @@ where
         let provider_event_signal = Arc::new(ProviderEventSignal::default());
 
         let mut bundle_sender_actions = vec![];
-        for (group, assigner) in groups {
+        for group in groups {
             for i in 0..group.num_workers {
                 // Tag identifies this sender slot since the signing address is dynamic.
                 let builder_tag = match group.entry_point {

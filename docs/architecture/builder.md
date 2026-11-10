@@ -114,7 +114,8 @@ The Assigner component is responsible for coordinating work distribution among w
 With `--signer.layout mapping` (see [CLI docs](../cli.md#signer-mapping)), workers and signers are split by entry point instead of being shared:
 
 - The signer manager registers each key with the entry point it is mapped to. Workers lease with `lease_signer_for(entry_point)`, which never returns another entry point's key.
-- Each enabled entry point gets `--signer.counts[ep]` workers and its own Assigner, which only knows that entry point's (address, filter_id) configurations. Selection and starvation prevention then reduce to that single entry point.
+- Each enabled entry point gets `--signer.counts[ep]` workers, which form one worker group in the shared Assigner. A worker only receives its group's (address, filter_id) configurations, and selection, isolation capacity and starvation prevention are tracked per group, scaled to the group's worker count.
+- Sender locks stay shared across all groups, as in the legacy layout: a sender with ops on two entry points is bundled by at most one builder at a time.
 - After the Assigner hands out work and before a bundle is built, the worker checks that the work is for its own entry point and that its leased signer belongs to it (`SignerLease::ensure_entry_point`). A mismatch is refused, logged and counted in `signer_entry_point_mismatch`.
 - The delegation sender, which never calls an entry point, borrows a free key from the entry point pool with the most free keys.
 

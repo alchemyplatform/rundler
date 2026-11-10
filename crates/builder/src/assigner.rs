@@ -79,10 +79,17 @@ pub(crate) enum AssignmentResult {
 // - Primary: Select the entrypoint with the most eligible ops (throughput-optimized)
 // - Starvation prevention: If any entrypoint hasn't been selected in (num_signers * starvation_ratio) cycles,
 //   force-select the most starved one. This ensures all entrypoints get attention.
+//
+// Worker groups:
+// - Workers are split into groups (see `WorkerGroup`). The legacy layout has one group serving
+//   every entrypoint; the mapping layout has one group per entry point version.
+// - Entrypoint selection, isolation capacity and starvation tracking are per group: a worker
+//   only sees its group's entrypoints, and limits scale with its group's worker count.
+// - Sender locks are shared by all groups, so a sender is bundled by at most one builder at a
+//   time across all entry points.
 pub(crate) struct Assigner {
     pool: Box<dyn Pool>,
-    entrypoints: Vec<EntrypointInfo>,
-    num_signers: usize,
+    groups: Vec<GroupConfig>,
     starvation_ratio: f64,
     state: Mutex<State>,
     max_pool_ops_per_request: u64,
@@ -90,19 +97,50 @@ pub(crate) struct Assigner {
     metrics: GlobalMetrics,
 }
 
+/// A group of workers that share entrypoint selection, isolation capacity and starvation
+/// tracking within the assigner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WorkerGroup {
+    /// The entry point all workers in the group serve, or `None` for the legacy shared group
+    pub(crate) entry_point: Option<EntryPointVersion>,
+    /// The (entry point, filter id) combinations the group serves
+    pub(crate) infos: Vec<EntrypointInfo>,
+    /// Number of workers in the group
+    pub(crate) num_workers: usize,
+}
+
+/// A worker group with its metrics.
+struct GroupConfig {
+    entry_point: Option<EntryPointVersion>,
+    infos: Vec<EntrypointInfo>,
+    num_workers: usize,
+    metrics: GroupMetrics,
+}
+
+/// Per-group mutable state. Indexed like `Assigner::groups`.
 #[derive(Default)]
-struct State {
-    uo_sender_to_builder_state: HashMap<Address, (Address, LockState)>,
-    builder_to_uo_senders: HashMap<Address, HashSet<Address>>,
-    /// Global cycle counter incremented on each assign_work call
+struct GroupState {
+    /// Cycle counter incremented on each assignment for this group
     global_cycle: u64,
-    /// Tracks when each entrypoint was last selected (by cycle number)
-    entrypoint_last_selected: HashMap<ProposerKey, u64>,
-    /// Tracks which entrypoint a builder is pinned to for replacement attempts
-    builder_to_pinned_proposer: HashMap<Address, ProposerKey>,
     /// Builders currently holding an isolation assignment for a suspect
     /// operation. Bounds isolation capacity while normal work is eligible.
     isolating_builders: HashSet<Address>,
+    /// Monotonic counter incremented each time an entrypoint is chosen for an
+    /// isolation assignment. Tracked independently of `global_cycle` so
+    /// isolation rotation doesn't affect normal-work starvation accounting.
+    isolation_cycle: u64,
+}
+
+struct State {
+    /// Sender locks, shared by all groups.
+    uo_sender_to_builder_state: HashMap<Address, (Address, LockState)>,
+    builder_to_uo_senders: HashMap<Address, HashSet<Address>>,
+    /// Per-group cycle counters and isolation slots.
+    groups: Vec<GroupState>,
+    /// Tracks when each entrypoint was last selected (by its group's cycle number)
+    entrypoint_last_selected: HashMap<ProposerKey, u64>,
+    /// Tracks which entrypoint a builder is pinned to for replacement attempts
+    builder_to_pinned_proposer: HashMap<Address, ProposerKey>,
     /// The op hash a builder is isolating, if any. Tracked independently of
     /// the pool's suspect flag: `Success` clears suspect status as soon as
     /// the RPC accepts a transaction, well before it's mined, so a stuck
@@ -110,12 +148,8 @@ struct State {
     /// look like ordinary work by the time it needs replacing. Cleared
     /// wherever `builder_to_pinned_proposer`/`isolating_builders` are.
     builder_to_isolation_hash: HashMap<Address, B256>,
-    /// Monotonic counter incremented each time an entrypoint is chosen for an
-    /// isolation assignment. Tracked independently of `global_cycle` so
-    /// isolation rotation doesn't affect normal-work starvation accounting.
-    isolation_cycle: u64,
     /// Tracks when each entrypoint was last chosen for an isolation
-    /// assignment (by `isolation_cycle`). Mirrors `entrypoint_last_selected`'s
+    /// assignment (by its group's `isolation_cycle`). Mirrors `entrypoint_last_selected`'s
     /// role for normal work: without it, suspect candidates are attempted in
     /// fixed config order every call, so an entrypoint with due suspects that
     /// happen to be unassignable this cycle can permanently block isolation
@@ -145,49 +179,131 @@ enum LockState {
 }
 
 impl Assigner {
+    /// Create an assigner for the given worker groups.
+    ///
+    /// Either a single legacy group (`entry_point: None`) or one group per entry point
+    /// version. Each (entry point, filter id) combination must belong to exactly one group.
     pub(crate) fn new(
         pool: Box<dyn Pool>,
-        entrypoints: Vec<EntrypointInfo>,
-        num_signers: usize,
+        groups: Vec<WorkerGroup>,
         max_pool_ops_per_request: u64,
         max_bundle_size: u64,
         starvation_ratio: f64,
-    ) -> Self {
-        Self {
+    ) -> anyhow::Result<Self> {
+        if groups.is_empty() {
+            bail!("assigner requires at least one worker group");
+        }
+        if groups.iter().any(|g| g.entry_point.is_none()) && groups.len() > 1 {
+            bail!("the legacy worker group cannot be combined with other worker groups");
+        }
+        let mut seen_entry_points = Vec::new();
+        let mut seen_keys = HashSet::new();
+        for group in &groups {
+            let name = group_name(group.entry_point);
+            if seen_entry_points.contains(&group.entry_point) {
+                bail!("duplicate worker group for entry point {name}");
+            }
+            seen_entry_points.push(group.entry_point);
+            if group.infos.is_empty() {
+                bail!("worker group for entry point {name} has no entrypoints");
+            }
+            for info in &group.infos {
+                if !seen_keys.insert(info.key()) {
+                    bail!(
+                        "entrypoint {:?} (filter: {:?}) is in more than one worker group",
+                        info.address,
+                        info.filter_id
+                    );
+                }
+            }
+        }
+
+        let group_states = groups.iter().map(|_| GroupState::default()).collect();
+        let groups = groups
+            .into_iter()
+            .map(|group| GroupConfig {
+                metrics: match group.entry_point {
+                    // Legacy layout: unlabelled, as before worker groups existed.
+                    None => GroupMetrics::default(),
+                    Some(entry_point) => GroupMetrics::new_with_labels(&[(
+                        "entry_point",
+                        entry_point_name(entry_point),
+                    )]),
+                },
+                entry_point: group.entry_point,
+                infos: group.infos,
+                num_workers: group.num_workers,
+            })
+            .collect();
+
+        Ok(Self {
             pool,
-            entrypoints,
-            num_signers,
+            groups,
             starvation_ratio,
-            state: Mutex::new(State::default()),
+            state: Mutex::new(State {
+                uo_sender_to_builder_state: HashMap::new(),
+                builder_to_uo_senders: HashMap::new(),
+                groups: group_states,
+                entrypoint_last_selected: HashMap::new(),
+                builder_to_pinned_proposer: HashMap::new(),
+                builder_to_isolation_hash: HashMap::new(),
+                entrypoint_last_isolated: HashMap::new(),
+            }),
             max_pool_ops_per_request,
             max_bundle_size,
             metrics: GlobalMetrics::default(),
-        }
+        })
     }
 
-    /// Label this assigner's global metrics with its entry point, so several
-    /// per-entry-point assigners don't overwrite each other's gauges.
-    pub(crate) fn with_metrics_entry_point(mut self, entry_point: EntryPointVersion) -> Self {
-        self.metrics =
-            GlobalMetrics::new_with_labels(&[("entry_point", entry_point_name(entry_point))]);
-        self
+    /// Index of the group serving `entry_point` (`None` for the legacy group).
+    fn group_index(&self, entry_point: Option<EntryPointVersion>) -> anyhow::Result<usize> {
+        self.groups
+            .iter()
+            .position(|g| g.entry_point == entry_point)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no worker group for entry point {}",
+                    group_name(entry_point)
+                )
+            })
+    }
+
+    /// Remove `builder_address` from every group's isolation slots. A builder only ever holds
+    /// a slot in its own group, so this frees at most one slot.
+    fn release_isolation_slot(&self, state: &mut State, builder_address: Address) {
+        for (config, group_state) in self.groups.iter().zip(state.groups.iter_mut()) {
+            if group_state.isolating_builders.remove(&builder_address) {
+                config
+                    .metrics
+                    .isolating_builders
+                    .set(group_state.isolating_builders.len() as f64);
+            }
+        }
     }
 
     /// Assigns work to a worker using priority-based entrypoint selection with starvation prevention.
     ///
-    /// 1. Queries all entrypoints for pending operations
+    /// `group` is the worker's entry point (`None` in the legacy layout). Only that group's
+    /// entrypoints are considered, and its worker count sets the isolation and starvation
+    /// limits. Sender locks are checked across all groups.
+    ///
+    /// 1. Queries the group's entrypoints for pending operations
     /// 2. Filters to only eligible ops (not assigned to other builders, simulated before max_sim_block_number, meets fee requirements)
     /// 3. Selects an entrypoint using starvation-aware priority:
-    ///    - If any entrypoint hasn't been selected in (num_signers * starvation_ratio) cycles, force-select the most starved
+    ///    - If any entrypoint hasn't been selected in (num_workers * starvation_ratio) group cycles, force-select the most starved
     ///    - Otherwise, select the entrypoint with the most eligible ops
     /// 4. Attempts assignment from selected entrypoints in priority order until one succeeds
     /// 5. Returns no-work only if all candidates fail assignment
     pub(crate) async fn assign_work(
         &self,
+        group: Option<EntryPointVersion>,
         builder_address: Address,
         max_sim_block_number: u64,
         required_fees: GasFees,
     ) -> anyhow::Result<AssignmentResult> {
+        let group_idx = self.group_index(group)?;
+        let group = &self.groups[group_idx];
+
         // If builder has confirmed locks, stay pinned to the same entrypoint.
         // This skips the all-entrypoint pool queries and candidate sorting.
         let (pinned_target, isolation_hash) = {
@@ -218,6 +334,13 @@ impl Assigner {
             (pinned_target, isolation_hash)
         };
         if let Some(pinned_proposer) = pinned_target {
+            // A builder is only ever pinned to an entrypoint of its own group.
+            if !group.infos.iter().any(|info| info.key() == pinned_proposer) {
+                bail!(
+                    "builder {builder_address:?} of entry point group {} is pinned to {pinned_proposer:?}, outside its group",
+                    group_name(group.entry_point)
+                );
+            }
             if let Some(hash) = isolation_hash {
                 return self
                     .assign_isolation_replacement(builder_address, hash, pinned_proposer)
@@ -225,6 +348,7 @@ impl Assigner {
             }
             return self
                 .assign_work_for_entrypoint(
+                    group_idx,
                     builder_address,
                     max_sim_block_number,
                     required_fees,
@@ -242,8 +366,8 @@ impl Assigner {
         // acceptable: assign_ops_internal re-checks sender locks under the state mutex,
         // so correctness is preserved. The worst case is suboptimal entrypoint selection
         // (picking an entrypoint that appeared to have more ops but some were claimed).
-        let query_futures: Vec<_> = self
-            .entrypoints
+        let query_futures: Vec<_> = group
+            .infos
             .iter()
             .map(|ep| {
                 // Request a full page of due suspects, not just `num_signers`:
@@ -265,8 +389,8 @@ impl Assigner {
         let mut candidates = Vec::new();
         let mut suspect_candidates = Vec::new();
         let mut fee_filtered_candidate_exists = false;
-        for (entrypoint_idx, (ep, result)) in self
-            .entrypoints
+        for (entrypoint_idx, (ep, result)) in group
+            .infos
             .iter()
             .zip(query_results.into_iter())
             .enumerate()
@@ -298,16 +422,16 @@ impl Assigner {
         }
 
         // Isolation is filled before normal work: while normal work is
-        // eligible, at most `max(1, num_signers / 2)` builders isolate so
-        // suspects cannot starve normal bundles; once normal work is
+        // eligible, at most `max(1, num_workers / 2)` of the group's builders
+        // isolate so suspects cannot starve normal bundles; once normal work is
         // exhausted, any idle builder may drain suspects. Recomputed on every
         // assignment.
         let isolation_limit = if candidates.is_empty() {
-            self.num_signers
+            group.num_workers
         } else {
-            (self.num_signers / 2).max(1)
+            (group.num_workers / 2).max(1)
         };
-        self.metrics.isolation_limit.set(isolation_limit as f64);
+        group.metrics.isolation_limit.set(isolation_limit as f64);
 
         if !suspect_candidates.is_empty() {
             // Rotate entrypoint order by least-recently-isolated first (stable
@@ -337,16 +461,16 @@ impl Assigner {
             // `isolating_builders` so it can't go stale between mutations.
             let reserved = {
                 let mut state = self.state.lock().unwrap();
-                let reserved = state.isolating_builders.len() < isolation_limit
-                    && state.isolating_builders.insert(builder_address);
-                self.metrics
-                    .isolating_builders
-                    .set(state.isolating_builders.len() as f64);
+                let isolating = &mut state.groups[group_idx].isolating_builders;
+                let reserved =
+                    isolating.len() < isolation_limit && isolating.insert(builder_address);
+                group.metrics.isolating_builders.set(isolating.len() as f64);
                 reserved
             };
             if reserved {
                 match self
                     .assign_isolation_work(
+                        group_idx,
                         builder_address,
                         suspect_candidates,
                         max_sim_block_number,
@@ -355,20 +479,11 @@ impl Assigner {
                     .await
                 {
                     Ok(Some(assignment)) => return Ok(AssignmentResult::Assigned(assignment)),
-                    Ok(None) => {
+                    // No claimable suspect, or an error: free the reserved slot.
+                    other => {
                         let mut state = self.state.lock().unwrap();
-                        state.isolating_builders.remove(&builder_address);
-                        self.metrics
-                            .isolating_builders
-                            .set(state.isolating_builders.len() as f64);
-                    }
-                    Err(e) => {
-                        let mut state = self.state.lock().unwrap();
-                        state.isolating_builders.remove(&builder_address);
-                        self.metrics
-                            .isolating_builders
-                            .set(state.isolating_builders.len() as f64);
-                        return Err(e);
+                        self.release_isolation_slot(&mut state, builder_address);
+                        other?;
                     }
                 }
             }
@@ -387,13 +502,14 @@ impl Assigner {
 
         // Starvation threshold: each entrypoint should be selected at least once per starvation_ratio cycle through signers
         let starvation_threshold =
-            ((self.num_signers as f64 * self.starvation_ratio) as usize).max(1) as u64;
+            ((group.num_workers as f64 * self.starvation_ratio) as usize).max(1) as u64;
 
         // Build candidate order with starvation prevention
         let (current_cycle, candidates) = {
             let mut state = self.state.lock().unwrap();
-            state.global_cycle += 1;
-            let current_cycle = state.global_cycle;
+            let group_state = &mut state.groups[group_idx];
+            group_state.global_cycle += 1;
+            let current_cycle = group_state.global_cycle;
 
             // Find the most starved entrypoint (if any are past threshold)
             let starved = candidates
@@ -514,6 +630,7 @@ impl Assigner {
     /// `None` or an error is returned.
     async fn assign_isolation_work(
         &self,
+        group_idx: usize,
         builder_address: Address,
         suspect_candidates: Vec<(EntrypointInfo, Vec<PoolOperationSummary>)>,
         max_sim_block_number: u64,
@@ -552,8 +669,9 @@ impl Assigner {
                     // Record this entrypoint as most-recently-isolated so the
                     // rotation in assign_work's caller moves on to other
                     // entrypoints with due suspects next time.
-                    state.isolation_cycle += 1;
-                    let isolation_cycle = state.isolation_cycle;
+                    let group_state = &mut state.groups[group_idx];
+                    group_state.isolation_cycle += 1;
+                    let isolation_cycle = group_state.isolation_cycle;
                     state
                         .entrypoint_last_isolated
                         .insert(ep.key(), isolation_cycle);
@@ -577,6 +695,7 @@ impl Assigner {
     /// This is used internally for replacement attempts to ensure the entrypoint does not change.
     async fn assign_work_for_entrypoint(
         &self,
+        group_idx: usize,
         builder_address: Address,
         max_sim_block_number: u64,
         required_fees: GasFees,
@@ -618,8 +737,9 @@ impl Assigner {
         // worked on (fee escalation), so it shouldn't trigger starvation prevention.
         {
             let mut state = self.state.lock().unwrap();
-            state.global_cycle += 1;
-            let global_cycle = state.global_cycle;
+            let group_state = &mut state.groups[group_idx];
+            group_state.global_cycle += 1;
+            let global_cycle = group_state.global_cycle;
             state
                 .entrypoint_last_selected
                 .insert(ep_info.key(), global_cycle);
@@ -958,11 +1078,8 @@ impl Assigner {
                 self.metrics.active_builders.decrement(1);
                 state.builder_to_uo_senders.remove(&builder_address);
                 state.builder_to_pinned_proposer.remove(&builder_address);
-                state.isolating_builders.remove(&builder_address);
                 state.builder_to_isolation_hash.remove(&builder_address);
-                self.metrics
-                    .isolating_builders
-                    .set(state.isolating_builders.len() as f64);
+                self.release_isolation_slot(&mut state, builder_address);
             }
         }
 
@@ -988,11 +1105,8 @@ impl Assigner {
             .get(&builder_address)
             .map(ep_metrics_for_key);
         state.builder_to_pinned_proposer.remove(&builder_address);
-        state.isolating_builders.remove(&builder_address);
         state.builder_to_isolation_hash.remove(&builder_address);
-        self.metrics
-            .isolating_builders
-            .set(state.isolating_builders.len() as f64);
+        self.release_isolation_slot(&mut state, builder_address);
         let Some(builder_senders) = state.builder_to_uo_senders.remove(&builder_address) else {
             return;
         };
@@ -1025,6 +1139,30 @@ impl Assigner {
 
 #[cfg(test)]
 impl Assigner {
+    /// Test helper: an assigner with a single legacy group (`entry_point: None`) serving
+    /// `entrypoints` with `num_signers` workers. Call `assign_work` with group `None`.
+    pub(crate) fn single_group(
+        pool: Box<dyn Pool>,
+        entrypoints: Vec<EntrypointInfo>,
+        num_signers: usize,
+        max_pool_ops_per_request: u64,
+        max_bundle_size: u64,
+        starvation_ratio: f64,
+    ) -> Self {
+        Self::new(
+            pool,
+            vec![WorkerGroup {
+                entry_point: None,
+                infos: entrypoints,
+                num_workers: num_signers,
+            }],
+            max_pool_ops_per_request,
+            max_bundle_size,
+            starvation_ratio,
+        )
+        .unwrap()
+    }
+
     /// Test helper: establish confirmed sender locks and pin a builder to a proposer key.
     /// This simulates the state after a successful bundle send.
     pub(crate) fn test_establish_pin(
@@ -1069,10 +1207,22 @@ impl Assigner {
 struct GlobalMetrics {
     #[metric(describe = "the number of active builders.")]
     active_builders: Gauge,
+}
+
+/// Isolation metrics for one worker group. Unlabelled for the legacy group, labelled with
+/// `entry_point` in the mapping layout.
+#[derive(Metrics, Clone)]
+#[metrics(scope = "builder_assigner")]
+struct GroupMetrics {
     #[metric(describe = "the computed isolation capacity limit for the current assignment cycle.")]
     isolation_limit: Gauge,
     #[metric(describe = "the number of builders currently holding an isolation assignment.")]
     isolating_builders: Gauge,
+}
+
+/// Name of a worker group's entry point for logs and errors.
+fn group_name(entry_point: Option<EntryPointVersion>) -> &'static str {
+    entry_point.map_or("legacy (all)", entry_point_name)
 }
 
 /// Result of `Assigner::count_ops` for one entrypoint's ops.
@@ -1224,7 +1374,7 @@ mod tests {
 
     async fn assign_default(assigner: &Assigner, builder: Address) -> AssignmentResult {
         assigner
-            .assign_work(builder, u64::MAX, GasFees::default())
+            .assign_work(None, builder, u64::MAX, GasFees::default())
             .await
             .unwrap()
     }
@@ -1243,7 +1393,8 @@ mod tests {
     async fn test_no_operations() {
         let mut mock_pool = MockPool::new();
         mock_pool_get_ops(&mut mock_pool, vec![]);
-        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
 
         let result = assign_default(&assigner, address(0)).await;
         assert!(matches!(result, AssignmentResult::NoOperations));
@@ -1255,7 +1406,8 @@ mod tests {
         let ops = create_test_ops(&[address(1), address(2)]);
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
-        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
         let assignment = assign_expect_default(&assigner, address(0)).await;
         assert_eq!(assignment.operations.len(), 2);
         assert_eq!(assignment.operations[0].uo.sender(), address(1));
@@ -1269,7 +1421,8 @@ mod tests {
         let ops = create_test_ops(&[address(1), address(2)]);
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
-        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
         let _ = assign_default(&assigner, address(0)).await;
 
         // Same builder address should assign again
@@ -1287,7 +1440,8 @@ mod tests {
         let ops = create_test_ops(&[address(1), address(2)]);
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
-        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
         let _ = assign_default(&assigner, address(0)).await;
 
         // Confirm sender 1, drop sender 2
@@ -1307,7 +1461,8 @@ mod tests {
         let ops = create_test_ops(&[address(1), address(2)]);
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
-        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
         let _ = assign_default(&assigner, address(0)).await;
 
         // Release all locks
@@ -1326,7 +1481,8 @@ mod tests {
         let ops = create_test_ops(&[address(1), address(2)]);
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
-        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
         let _ = assign_default(&assigner, address(0)).await;
 
         // confirm address(1)
@@ -1350,7 +1506,8 @@ mod tests {
         let ops = create_test_ops(&[address(1), address(2)]);
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
-        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
         let err = assigner
             .confirm_senders_drop_unused(address(0), &[address(3)])
             .expect_err("should error on unknown sender");
@@ -1363,7 +1520,8 @@ mod tests {
     #[tokio::test]
     async fn test_try_confirm_sender_not_assigned() {
         let mock_pool = MockPool::new();
-        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
         let err = assigner
             .confirm_senders_drop_unused(address(1), &[address(1)])
             .expect_err("should error on unassigned sender");
@@ -1379,7 +1537,8 @@ mod tests {
         let ops = create_test_ops(&[address(1), address(2)]);
         mock_pool_get_ops(&mut mock_pool, ops.clone());
 
-        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
         let _ = assign_default(&assigner, address(0)).await;
 
         let err = assigner
@@ -1424,7 +1583,8 @@ mod tests {
         // 1 suspect + 2 normal ops with 4 signers: isolation limit is 2
         let ops = create_test_ops(&[address(1), address(2), address(3)]);
         let mock_pool = mock_pool_with_suspects(ops, vec![address(3)]);
-        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
 
         // the first builder isolates the suspect
         let isolation = assign_expect_default(&assigner, address(10)).await;
@@ -1449,7 +1609,8 @@ mod tests {
         // 2 suspects + 1 normal op with 2 signers: isolation limit is 1
         let ops = create_test_ops(&[address(1), address(2), address(3)]);
         let mock_pool = mock_pool_with_suspects(ops, vec![address(2), address(3)]);
-        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 2, 10, 10, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), test_entrypoints(), 2, 10, 10, 0.50);
 
         let first = assign_expect_default(&assigner, address(10)).await;
         assert!(first.is_isolation);
@@ -1467,7 +1628,8 @@ mod tests {
         // only suspects with 2 signers: every builder may isolate
         let ops = create_test_ops(&[address(1), address(2)]);
         let mock_pool = mock_pool_with_suspects(ops, vec![address(1), address(2)]);
-        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 2, 10, 10, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), test_entrypoints(), 2, 10, 10, 0.50);
 
         let first = assign_expect_default(&assigner, address(10)).await;
         assert!(first.is_isolation);
@@ -1486,7 +1648,8 @@ mod tests {
     async fn test_isolation_slot_freed_after_release() {
         let ops = create_test_ops(&[address(1), address(2), address(3)]);
         let mock_pool = mock_pool_with_suspects(ops, vec![address(2), address(3)]);
-        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 2, 10, 10, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), test_entrypoints(), 2, 10, 10, 0.50);
 
         let first = assign_expect_default(&assigner, address(10)).await;
         assert!(first.is_isolation);
@@ -1517,7 +1680,8 @@ mod tests {
         mock_pool
             .expect_get_op_by_hash()
             .returning(move |hash| Ok((hash == suspect_op.uo.hash()).then(|| suspect_op.clone())));
-        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
 
         let isolation = assign_expect_default(&assigner, address(10)).await;
         assert!(isolation.is_isolation);
@@ -1578,7 +1742,7 @@ mod tests {
                     .collect::<Vec<_>>())
             });
 
-        let assigner = Arc::new(Assigner::new(
+        let assigner = Arc::new(Assigner::single_group(
             Box::new(mock_pool),
             test_entrypoints(),
             2,
@@ -1590,11 +1754,11 @@ mod tests {
         let a1 = assigner.clone();
         let a2 = assigner.clone();
         let h1 = tokio::spawn(async move {
-            a1.assign_work(address(10), u64::MAX, GasFees::default())
+            a1.assign_work(None, address(10), u64::MAX, GasFees::default())
                 .await
         });
         let h2 = tokio::spawn(async move {
-            a2.assign_work(address(11), u64::MAX, GasFees::default())
+            a2.assign_work(None, address(11), u64::MAX, GasFees::default())
                 .await
         });
 
@@ -1615,7 +1779,8 @@ mod tests {
     async fn test_locked_suspect_not_reassigned() {
         let ops = create_test_ops(&[address(1)]);
         let mock_pool = mock_pool_with_suspects(ops, vec![address(1)]);
-        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
 
         let first = assign_expect_default(&assigner, address(10)).await;
         assert!(first.is_isolation);
@@ -1629,10 +1794,12 @@ mod tests {
         // the suspect op has zero fees and doesn't meet the fee requirement
         let ops = create_test_ops(&[address(1)]);
         let mock_pool = mock_pool_with_suspects(ops, vec![address(1)]);
-        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
 
         let result = assigner
             .assign_work(
+                None,
                 address(10),
                 u64::MAX,
                 GasFees {
@@ -1665,7 +1832,8 @@ mod tests {
             });
         // num_signers deliberately small and distinct from max_pool_ops_per_request
         // so a regression back to `num_signers` would be caught.
-        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 2, 1024, 10, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), test_entrypoints(), 2, 1024, 10, 0.50);
         let _ = assign_default(&assigner, address(0)).await;
 
         assert_eq!(
@@ -1733,54 +1901,345 @@ mod tests {
             .collect()
     }
 
-    /// Mapping layout: one assigner per entry point over a pool holding work for two entry
-    /// points. A builder of one entry point must never be handed the other's work, however
-    /// many cycles run and however the work is spread.
+    const TEST_ENTRY_POINT_3: Address = Address::new([0xCC; 20]);
+
+    fn info(address: Address) -> EntrypointInfo {
+        EntrypointInfo {
+            address,
+            filter_id: None,
+        }
+    }
+
+    fn group(
+        entry_point: EntryPointVersion,
+        infos: Vec<EntrypointInfo>,
+        num_workers: usize,
+    ) -> WorkerGroup {
+        WorkerGroup {
+            entry_point: Some(entry_point),
+            infos,
+            num_workers,
+        }
+    }
+
+    /// A pool holding `(entry point, ops, suspect senders)` for any number of entry points.
+    fn mock_pool_eps(eps: Vec<(Address, Vec<PoolOperation>, Vec<Address>)>) -> MockPool {
+        let eps = Arc::new(eps);
+        let eps_clone = eps.clone();
+        let mut mock_pool = MockPool::new();
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(move |ep, _, _, _| {
+                Ok(eps_clone
+                    .iter()
+                    .filter(|(address, _, _)| *address == ep)
+                    .flat_map(|(_, ops, suspects)| {
+                        ops.iter().map(|op| {
+                            let mut summary: PoolOperationSummary = op.into();
+                            summary.suspect = suspects.contains(&op.uo.sender());
+                            summary
+                        })
+                    })
+                    .collect())
+            });
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .returning(move |ep, hashes| {
+                Ok(eps
+                    .iter()
+                    .filter(|(address, _, _)| *address == ep)
+                    .flat_map(|(_, ops, _)| ops.iter())
+                    .filter(|op| hashes.contains(&op.uo.hash()))
+                    .cloned()
+                    .collect())
+            });
+        mock_pool
+    }
+
+    async fn assign_group(
+        assigner: &Assigner,
+        entry_point: EntryPointVersion,
+        builder: Address,
+    ) -> AssignmentResult {
+        assigner
+            .assign_work(Some(entry_point), builder, u64::MAX, GasFees::default())
+            .await
+            .unwrap()
+    }
+
+    /// Mapping layout: one assigner with a group per entry point over a pool holding work for
+    /// two entry points. A builder of one group must never be handed the other's work,
+    /// however many cycles run and however the work is spread.
     #[tokio::test]
-    async fn test_per_entry_point_assigners_never_cross_entry_points() {
+    async fn test_worker_groups_never_cross_entry_points() {
         let senders_1: Vec<Address> = (1..=6).map(address).collect();
         let senders_2: Vec<Address> = (11..=16).map(address).collect();
         let ops_1 = create_test_ops_for_entrypoint(&senders_1, TEST_ENTRY_POINT);
         let ops_2 = create_test_ops_for_entrypoint(&senders_2, TEST_ENTRY_POINT_2);
-        let [info_1, info_2]: [EntrypointInfo; 2] = two_entrypoints().try_into().unwrap();
-
-        let assigner_1 = Assigner::new(
-            Box::new(mock_pool_two_eps(ops_1.clone(), ops_2.clone())),
-            vec![info_1],
-            2,
-            1024,
-            1024,
-            0.5,
-        );
-        let assigner_2 = Assigner::new(
+        let assigner = Assigner::new(
             Box::new(mock_pool_two_eps(ops_1, ops_2)),
-            vec![info_2],
-            2,
+            vec![
+                group(EntryPointVersion::V0_6, vec![info(TEST_ENTRY_POINT)], 2),
+                group(EntryPointVersion::V0_7, vec![info(TEST_ENTRY_POINT_2)], 2),
+            ],
             1024,
             1024,
             0.5,
-        );
+        )
+        .unwrap();
         let builders_1 = [address(101), address(102)];
         let builders_2 = [address(201), address(202)];
 
-        let mut assigned = 0;
+        let mut assigned = [0, 0];
         for _ in 0..20 {
-            for (assigner, builders, expected) in [
-                (&assigner_1, &builders_1, TEST_ENTRY_POINT),
-                (&assigner_2, &builders_2, TEST_ENTRY_POINT_2),
-            ] {
+            for (i, (entry_point, builders, expected)) in [
+                (EntryPointVersion::V0_6, &builders_1, TEST_ENTRY_POINT),
+                (EntryPointVersion::V0_7, &builders_2, TEST_ENTRY_POINT_2),
+            ]
+            .into_iter()
+            .enumerate()
+            {
                 for builder in builders {
                     if let AssignmentResult::Assigned(work) =
-                        assign_default(assigner, *builder).await
+                        assign_group(&assigner, entry_point, *builder).await
                     {
                         assert_eq!(work.entry_point, expected);
-                        assigned += 1;
+                        assigned[i] += 1;
                     }
                     assigner.release_all(*builder);
                 }
             }
         }
-        assert!(assigned > 0, "expected some work to be assigned");
+        assert!(
+            assigned.iter().all(|n| *n > 0),
+            "expected both groups to receive work, got {assigned:?}"
+        );
+    }
+
+    /// A sender locked by one group's builder is not assignable to another group's builder
+    /// until the lock is released: sender locks are shared across entry points.
+    #[tokio::test]
+    async fn test_sender_lock_shared_across_worker_groups() {
+        let shared_sender = address(1);
+        let ops_1 = create_test_ops_for_entrypoint(&[shared_sender], TEST_ENTRY_POINT);
+        let ops_2 = create_test_ops_for_entrypoint(&[shared_sender], TEST_ENTRY_POINT_2);
+        let assigner = Assigner::new(
+            Box::new(mock_pool_two_eps(ops_1, ops_2)),
+            vec![
+                group(EntryPointVersion::V0_6, vec![info(TEST_ENTRY_POINT)], 2),
+                group(EntryPointVersion::V0_7, vec![info(TEST_ENTRY_POINT_2)], 2),
+            ],
+            1024,
+            1024,
+            0.5,
+        )
+        .unwrap();
+        let builder_1 = address(101);
+        let builder_2 = address(201);
+
+        let work =
+            expect_assigned(assign_group(&assigner, EntryPointVersion::V0_6, builder_1).await);
+        assert_eq!(work.entry_point, TEST_ENTRY_POINT);
+        assert_eq!(work.operations[0].uo.sender(), shared_sender);
+
+        // the sender is locked by the v0.6 builder, so the v0.7 builder gets nothing
+        assert!(matches!(
+            assign_group(&assigner, EntryPointVersion::V0_7, builder_2).await,
+            AssignmentResult::NoOperations
+        ));
+
+        // once released, the v0.7 builder can take it
+        assigner.release_all(builder_1);
+        let work =
+            expect_assigned(assign_group(&assigner, EntryPointVersion::V0_7, builder_2).await);
+        assert_eq!(work.entry_point, TEST_ENTRY_POINT_2);
+        assert_eq!(work.operations[0].uo.sender(), shared_sender);
+    }
+
+    /// Isolation capacity is per group: `max(1, num_workers / 2)` of each group's own
+    /// workers, not a shared pool of slots.
+    #[tokio::test]
+    async fn test_isolation_limit_per_worker_group() {
+        // v0.6: 2 workers -> 1 isolation slot; 2 suspects + 1 normal op
+        let ops_1 =
+            create_test_ops_for_entrypoint(&[address(1), address(2), address(3)], TEST_ENTRY_POINT);
+        // v0.7: 4 workers -> 2 isolation slots; 3 suspects + 1 normal op
+        let ops_2 = create_test_ops_for_entrypoint(
+            &[address(11), address(12), address(13), address(14)],
+            TEST_ENTRY_POINT_2,
+        );
+        let assigner = Assigner::new(
+            Box::new(mock_pool_eps(vec![
+                (TEST_ENTRY_POINT, ops_1, vec![address(1), address(2)]),
+                (
+                    TEST_ENTRY_POINT_2,
+                    ops_2,
+                    vec![address(11), address(12), address(13)],
+                ),
+            ])),
+            vec![
+                group(EntryPointVersion::V0_6, vec![info(TEST_ENTRY_POINT)], 2),
+                group(EntryPointVersion::V0_7, vec![info(TEST_ENTRY_POINT_2)], 4),
+            ],
+            1024,
+            1024,
+            0.5,
+        )
+        .unwrap();
+
+        let is_isolation = |result: AssignmentResult| expect_assigned(result).is_isolation;
+
+        // v0.6 uses its single slot, then falls back to normal work
+        assert!(is_isolation(
+            assign_group(&assigner, EntryPointVersion::V0_6, address(101)).await
+        ));
+        assert!(!is_isolation(
+            assign_group(&assigner, EntryPointVersion::V0_6, address(102)).await
+        ));
+
+        // v0.7 still has both of its slots, despite v0.6 holding one
+        assert!(is_isolation(
+            assign_group(&assigner, EntryPointVersion::V0_7, address(201)).await
+        ));
+        assert!(is_isolation(
+            assign_group(&assigner, EntryPointVersion::V0_7, address(202)).await
+        ));
+        assert!(!is_isolation(
+            assign_group(&assigner, EntryPointVersion::V0_7, address(203)).await
+        ));
+
+        // releasing a v0.6 builder frees only a v0.6 slot
+        assigner.release_all(address(101));
+        assert!(is_isolation(
+            assign_group(&assigner, EntryPointVersion::V0_6, address(101)).await
+        ));
+    }
+
+    /// Starvation tracking is per group: cycles run by another group's workers don't count
+    /// towards this group's starvation threshold.
+    #[tokio::test]
+    async fn test_starvation_counters_per_worker_group() {
+        // v0.6 group serves EP1 (10 ops) and EP2 (2 ops) with 4 workers: threshold 2 cycles
+        let ep1_ops = create_test_ops_for_entrypoint(
+            &(10..20).map(address).collect::<Vec<_>>(),
+            TEST_ENTRY_POINT,
+        );
+        let ep2_ops =
+            create_test_ops_for_entrypoint(&[address(20), address(21)], TEST_ENTRY_POINT_2);
+        // v0.7 group serves EP3
+        let ep3_ops = create_test_ops_for_entrypoint(&[address(30)], TEST_ENTRY_POINT_3);
+        let assigner = Assigner::new(
+            Box::new(mock_pool_eps(vec![
+                (TEST_ENTRY_POINT, ep1_ops, vec![]),
+                (TEST_ENTRY_POINT_2, ep2_ops, vec![]),
+                (TEST_ENTRY_POINT_3, ep3_ops, vec![]),
+            ])),
+            vec![
+                group(
+                    EntryPointVersion::V0_6,
+                    vec![info(TEST_ENTRY_POINT), info(TEST_ENTRY_POINT_2)],
+                    4,
+                ),
+                group(EntryPointVersion::V0_7, vec![info(TEST_ENTRY_POINT_3)], 4),
+            ],
+            1024,
+            1024,
+            0.5,
+        )
+        .unwrap();
+
+        async fn cycle(assigner: &Assigner, entry_point: EntryPointVersion) -> Address {
+            let work = expect_assigned(assign_group(assigner, entry_point, address(0)).await);
+            assigner.release_all(address(0));
+            work.entry_point
+        }
+
+        assert_eq!(
+            cycle(&assigner, EntryPointVersion::V0_6).await,
+            TEST_ENTRY_POINT
+        );
+        // many v0.7 cycles must not push EP2 past the v0.6 group's threshold
+        for _ in 0..5 {
+            assert_eq!(
+                cycle(&assigner, EntryPointVersion::V0_7).await,
+                TEST_ENTRY_POINT_3
+            );
+        }
+        assert_eq!(
+            cycle(&assigner, EntryPointVersion::V0_6).await,
+            TEST_ENTRY_POINT
+        );
+        // the third v0.6 cycle force-selects EP2, as with a dedicated assigner
+        assert_eq!(
+            cycle(&assigner, EntryPointVersion::V0_6).await,
+            TEST_ENTRY_POINT_2
+        );
+    }
+
+    #[tokio::test]
+    async fn test_new_rejects_invalid_worker_groups() {
+        let new = |groups| Assigner::new(Box::new(MockPool::new()), groups, 10, 10, 0.5);
+        let legacy = |infos| WorkerGroup {
+            entry_point: None,
+            infos,
+            num_workers: 2,
+        };
+
+        assert!(new(vec![]).is_err(), "no groups");
+        assert!(
+            new(vec![
+                group(EntryPointVersion::V0_6, vec![info(TEST_ENTRY_POINT)], 2),
+                group(EntryPointVersion::V0_6, vec![info(TEST_ENTRY_POINT_2)], 2),
+            ])
+            .is_err(),
+            "duplicate entry point"
+        );
+        assert!(
+            new(vec![group(EntryPointVersion::V0_6, vec![], 2)]).is_err(),
+            "empty infos"
+        );
+        assert!(
+            new(vec![
+                legacy(vec![info(TEST_ENTRY_POINT)]),
+                group(EntryPointVersion::V0_7, vec![info(TEST_ENTRY_POINT_2)], 2),
+            ])
+            .is_err(),
+            "legacy mixed with per-entry-point groups"
+        );
+        assert!(
+            new(vec![
+                group(EntryPointVersion::V0_6, vec![info(TEST_ENTRY_POINT)], 2),
+                group(EntryPointVersion::V0_7, vec![info(TEST_ENTRY_POINT)], 2),
+            ])
+            .is_err(),
+            "entrypoint in two groups"
+        );
+
+        let assigner = new(vec![group(
+            EntryPointVersion::V0_6,
+            vec![info(TEST_ENTRY_POINT)],
+            2,
+        )])
+        .unwrap();
+        assert!(
+            assigner
+                .assign_work(
+                    Some(EntryPointVersion::V0_7),
+                    address(1),
+                    u64::MAX,
+                    GasFees::default()
+                )
+                .await
+                .is_err(),
+            "unknown group"
+        );
+        assert!(
+            assigner
+                .assign_work(None, address(1), u64::MAX, GasFees::default())
+                .await
+                .is_err(),
+            "legacy group not configured"
+        );
     }
 
     fn create_test_ops_for_entrypoint(
@@ -1845,7 +2304,7 @@ mod tests {
     }
 
     fn test_assigner_with_empty_pool() -> Assigner {
-        Assigner::new(
+        Assigner::single_group(
             Box::new(MockPool::new()),
             test_entrypoints(),
             4,
@@ -1980,7 +2439,8 @@ mod tests {
         let mock_pool = mock_pool_two_eps(ep1_ops, ep2_ops);
 
         // High starvation ratio so starvation prevention doesn't interfere
-        let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
 
         // Cycle 1: Both unseen (last_selected=0). Tertiary tiebreak by config order keeps EP1 first.
         let r1 = assign_cycle(&assigner, address(0)).await;
@@ -2074,7 +2534,8 @@ mod tests {
             ep2_ops,
             vec![address(3)],
         );
-        let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 2, 1024, 1024, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), two_entrypoints(), 2, 1024, 1024, 0.50);
 
         let mut entry_points = Vec::new();
         for i in 0..4 {
@@ -2125,7 +2586,8 @@ mod tests {
         let mock_pool = mock_pool_two_eps(ep1_ops, ep2_ops);
 
         // 4 signers = threshold of 2 cycles
-        let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 0.50);
 
         // Cycle 1: EP1 should be selected (more ops)
         let result = assign_cycle(&assigner, address(0)).await;
@@ -2191,7 +2653,8 @@ mod tests {
                 }
             });
 
-        let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
 
         let result = assign_expect_default(&assigner, address(0)).await;
 
@@ -2249,7 +2712,8 @@ mod tests {
                     .collect::<Vec<_>>())
             });
 
-        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
 
         // Request with required_fees=(50, 5)
         // Only ops with max_fee >= 50 and priority_fee >= 5 should be eligible
@@ -2260,7 +2724,7 @@ mod tests {
 
         let assignment = expect_assigned(
             assigner
-                .assign_work(address(0), u64::MAX, required_fees)
+                .assign_work(None, address(0), u64::MAX, required_fees)
                 .await
                 .unwrap(),
         );
@@ -2292,7 +2756,8 @@ mod tests {
         let mock_pool = mock_pool_two_eps(ep1_ops, ep2_ops);
 
         // High starvation ratio so starvation prevention doesn't interfere
-        let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
 
         // First assignment: EP2 has more ops so it should be selected
         let result = assign_expect_default(&assigner, address(0)).await;
@@ -2360,7 +2825,8 @@ mod tests {
                     .collect())
             });
 
-        let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
 
         // First: assign and confirm to establish pin
         let result = assign_expect_default(&assigner, address(0)).await;
@@ -2387,7 +2853,8 @@ mod tests {
 
         let mock_pool = mock_pool_two_eps(ep1_ops, ep2_ops);
 
-        let assigner = Assigner::new(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), two_entrypoints(), 4, 1024, 1024, 100.0);
 
         // First assignment: EP2 has more ops so it should be selected
         let result = assign_expect_default(&assigner, address(0)).await;
@@ -2422,7 +2889,8 @@ mod tests {
                 Ok(low_fee_ops.iter().map(|op| op.into()).collect::<Vec<_>>())
             });
 
-        let assigner = Assigner::new(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
+        let assigner =
+            Assigner::single_group(Box::new(mock_pool), test_entrypoints(), 4, 10, 10, 0.50);
 
         // Request with high fee requirements - no ops should be eligible
         let required_fees = GasFees {
@@ -2431,7 +2899,7 @@ mod tests {
         };
 
         let result = assigner
-            .assign_work(address(0), u64::MAX, required_fees)
+            .assign_work(None, address(0), u64::MAX, required_fees)
             .await
             .unwrap();
 
