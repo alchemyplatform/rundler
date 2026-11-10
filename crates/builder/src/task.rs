@@ -372,7 +372,8 @@ where
         }
 
         // One assigner per worker group: a single shared group in the legacy layout, one
-        // group per entry point in the mapping layout.
+        // group per entry point in the mapping layout. In the mapping layout sender locks are
+        // per entry point, so ops from the same sender on two entry points are not serialized.
         let groups = plan_workers(&infos_by_entry_point, &self.args.worker_layout)?;
         let groups: Vec<(WorkerGroup, Arc<Assigner>)> = groups
             .into_iter()
