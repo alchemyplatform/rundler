@@ -352,6 +352,7 @@ The mapping file is a JSON array with one entry per signer key:
 - Addresses and KMS key ids must be unique, and for each entry point the three groups must have the same number of keys.
 - Rundler locks one funding key, and for each entry point registers the first `N` keys of that entry point and group in file order, where `N` comes from `--signer.counts`. It refuses to start if a key's KMS address differs from the address in the file.
 - Only append new entries to the file. Reordering or changing existing entries moves keys between entry points or groups.
+- The `admin list-signers`, `fund-signers` and `defund-signers` commands don't support the mapping layout yet and refuse to run with `--signer.layout mapping`.
 
 When funding is enabled, Rundler will run a background process that will fund keys whose balance has fallen below `fund_below` with a transaction from the funding key that increases their balance to `fund_to`.
 
