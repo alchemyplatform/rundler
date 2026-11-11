@@ -30,6 +30,7 @@ pub(crate) async fn create_wallet_from_key_ids(
     chain_id: u64,
 ) -> Result<EthereumWallet> {
     let mut wallet = EthereumWallet::default();
+    #[allow(deprecated)] // keep the pinned SDK behavior version
     let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
     let client = aws_sdk_kms::Client::new(&config);
 
@@ -43,7 +44,28 @@ pub(crate) async fn create_wallet_from_key_ids(
     Ok(wallet)
 }
 
+/// Create one signer per key id, in order. Each signer's address is derived from its
+/// KMS public key.
+pub(crate) async fn create_signers_from_key_ids(
+    key_ids: Vec<String>,
+    chain_id: u64,
+) -> Result<Vec<AwsSigner>> {
+    #[allow(deprecated)] // keep the pinned SDK behavior version
+    let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
+    let client = aws_sdk_kms::Client::new(&config);
+
+    let mut signers = Vec::with_capacity(key_ids.len());
+    for key_id in key_ids {
+        let signer = AwsSigner::new(client.clone(), key_id, Some(chain_id))
+            .await
+            .context("should create aws kms signer")?;
+        signers.push(signer);
+    }
+    Ok(signers)
+}
+
 pub(crate) async fn create_signer_from_key_id(key_id: String, chain_id: u64) -> Result<AwsSigner> {
+    #[allow(deprecated)] // keep the pinned SDK behavior version
     let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
     let client = aws_sdk_kms::Client::new(&config);
     Ok(
@@ -84,6 +106,7 @@ impl LockingKmsSigner {
         redis_uri: String,
         ttl_millis: u64,
     ) -> Result<Self> {
+        #[allow(deprecated)] // keep the pinned SDK behavior version
         let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
         let client = aws_sdk_kms::Client::new(&config);
 

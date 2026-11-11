@@ -38,6 +38,17 @@ The proposer limits the amount of UO gas that it will attempt to put into a sing
 
 The maximum gas usage of each UO is a function of its `preVerificationGas`, `verificationGasLimit`, and `callGasLimit`.
 
+On chains that charge a minimum fraction of the transaction gas limit (e.g. Avalanche charges at least half), an oversized gas limit costs the bundler gas. When the chain spec enables `v06_bundle_gas_limit_from_simulation`, v0.6 UOs with a paymaster are sized to what EntryPoint v0.6 can require, instead of the static `5 * verificationGasLimit + callGasLimit + 5000` upper bound:
+
+- `verificationGasLimit` for validation (account, factory and paymaster share it).
+- `inner = callGasLimit + verificationGasLimit + ceil((callGasLimit + verificationGasLimit) / 63) + 5000`: the `gasleft()` check before `innerHandleOp` (AA95), plus the 63/64 margin so the account call and the post-op inside `innerHandleOp` get their full limits.
+- `ceil(inner / 63)` for the 63/64 gas forwarded to the external `innerHandleOp` call.
+- A fixed `5000` for entry point overhead not covered by the static pre-verification gas. It is measured with the Avalanche chain spec (`transaction_intrinsic_gas` of 24000, `per_user_op_v0_6_gas` of 21000).
+- Copying the call data into `innerHandleOp` memory (~`9w + w²/512` for `w` words) is covered by the static pre-verification gas through `per_user_op_word_gas`, which needs to be at least 17.
+- Only when simulation shows the paymaster returns a context: `verificationGasLimit + ceil(verificationGasLimit / 63) + 5000` for the post-op retry in `postOpReverted` mode.
+
+The pre-simulation gas limit filter uses the same sizing without the post-op retry. Precheck and estimation check that a UO fits in a bundle with the same sizing including the post-op retry, the largest the builder can use, so any UO they accept can be bundled. v0.6 UOs without a paymaster keep the static limit.
+
 A UO in [reservoir mode](./glamsterdam_pvg.md#reservoir-mode) (Glamsterdam) is always bundled alone, with a gas limit of exactly `2^24 + R`, its state-gas reservoir. Before it is sent, the bundle is simulated with `eth_simulateV1` at that gas limit.
 
 ### 2nd Simulation and Rejection
@@ -101,6 +112,18 @@ The Assigner component is responsible for coordinating work distribution among w
 3. **Virtual Entrypoints**: Supports multiple configurations per entry point address via `filter_id`, creating "virtual entrypoints" that workers can build for independently
 
 4. **Single-op bundles**: Suspect operations (isolation) and [reservoir-mode](./glamsterdam_pvg.md#reservoir-mode) operations are assigned alone, from their own bounded sets of workers, and stay alone in fee-bump replacements
+
+### Per-EntryPoint signer pools
+
+With `--signer.layout mapping` (see [CLI docs](../cli.md#signer-mapping)), workers and signers are split by entry point instead of being shared:
+
+- The signer manager registers each key with the entry point it is mapped to. Workers lease with `lease_signer_for(entry_point)`, which never returns another entry point's key.
+- Each enabled entry point gets `--signer.counts[ep]` workers, which form one worker group in the shared Assigner. A worker only receives its group's (address, filter_id) configurations, and selection, isolation capacity and starvation prevention are tracked per group, scaled to the group's worker count.
+- Sender locks stay shared across all groups, as in the legacy layout: a sender with ops on two entry points is bundled by at most one builder at a time.
+- After the Assigner hands out work and before a bundle is built, the worker checks that the work is for its own entry point and that its leased signer belongs to it (`SignerLease::ensure_entry_point`). A mismatch is refused, logged and counted in `signer_entry_point_mismatch`.
+- The delegation sender, which never calls an entry point, borrows a free key from the entry point pool with the most free keys.
+
+Pool usage is exported as `signer_pool_size`, `signer_pool_leased` and `signer_pool_exhausted`, labelled by entry point. `builder_signer_layout` shows which layout a builder runs.
 
 ### Proposers
 

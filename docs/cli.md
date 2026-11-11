@@ -99,7 +99,7 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
 - `--enabled_entry_points`: Enabled entry point versions. (default: `v0.7`)
   - env: _ENABLED_ENTRY_POINTS_
   - Options: `v0.6, v0.7, v0.8, v0.9`
-- `--num_signers`: Number of signers (and workers) to use for bundle building. Each worker handles all configured entrypoints via the shared signer architecture. (default: `1`)
+- `--num_signers`: Number of signers (and workers) to use for bundle building. Each worker handles all configured entrypoints via the shared signer architecture. Only used with `--signer.layout legacy`; with `mapping`, `--signer.counts` sets the workers per entry point. (default: `1`)
   - env: _NUM_SIGNERS_
   - NOTE: Workers share signers and dynamically select entrypoints based on mempool state. See [builder architecture](./architecture/builder.md#signer-sharing-architecture) for details.
 - `--da_gas_tracking_enabled`: Enable the DA gas tracking feature of the mempool (default: `false`)
@@ -315,6 +315,12 @@ List of command line options for configuring the Builder.
   - env: _SIGNER_FUNDING_TXN_PRIORITY_FEE_MULTIPLIER_
 - `--signer.funding_txn_base_fee_multiplier`: During funding, this is the multiplier to apply to the network base fee (default: `2.0`)
   - env: _SIGNER_FUNDING_TXN_BASE_FEE_MULTIPLIER_
+- `--signer.layout`: How signer keys are assigned to bundle workers: `legacy` or `mapping`. See [Signer mapping](#signer-mapping). (default: `legacy`)
+  - env: _SIGNER_LAYOUT_
+- `--signer.mapping_path`: Path to the signer mapping file, local or `s3://`. Required with `--signer.layout mapping`.
+  - env: _SIGNER_MAPPING_PATH_
+- `--signer.counts`: Signers (and workers) per entry point, e.g. `v0.6=6,v0.7=20,v0.8=4,v0.9=2`. Every enabled entry point needs a count of at least 1, and no count may be set for a disabled one. Required with `--signer.layout mapping`.
+  - env: _SIGNER_COUNTS_
 
 ### Signing schemes
 
@@ -340,6 +346,25 @@ If `--signer.enable_kms_funding` is set this scheme will be enabled. It will loo
    - Else, the first group is always used
 2. `private_keys`: Private keys for the subkeys. The same list applies regardless of which KMS key is locked.
 3. `mnemonic`: Supports a `mnemonic` from which multiple subkeys can be derived. The same `mnemonic` applies regardless of which KMS key is locked
+
+#### Signer mapping
+
+With `--signer.layout mapping`, every signer key is pinned to one entry point by a mapping file, so a key only ever sends bundles to that entry point. It requires `--signer.enable_kms_funding`, exactly three funding keys in `--signer.aws_kms_key_ids`, `--signer.mapping_path` and `--signer.counts`. `--num_signers` and `--signer.aws_kms_grouped_keys` are ignored.
+
+The mapping file is a JSON array with one entry per signer key:
+
+```json
+[
+  { "address": "0x7E5F…", "kmsKeyId": "…", "entryPoint": "v0.7", "fundingGroup": "a" }
+]
+```
+
+- `entryPoint` is one of `v0.6`, `v0.7`, `v0.8`, `v0.9`.
+- `fundingGroup` is `a`, `b` or `c`: the 1st, 2nd or 3rd funding key in `--signer.aws_kms_key_ids`.
+- Addresses and KMS key ids must be unique, and for each entry point the three groups must have the same number of keys.
+- Rundler locks one funding key, and for each entry point registers the first `N` keys of that entry point and group in file order, where `N` comes from `--signer.counts`. It refuses to start if a key's KMS address differs from the address in the file.
+- Only append new entries to the file. Reordering or changing existing entries moves keys between entry points or groups.
+- The `admin list-signers`, `fund-signers` and `defund-signers` commands don't support the mapping layout yet and refuse to run with `--signer.layout mapping`.
 
 When funding is enabled, Rundler will run a background process that will fund keys whose balance has fallen below `fund_below` with a transaction from the funding key that increases their balance to `fund_to`.
 

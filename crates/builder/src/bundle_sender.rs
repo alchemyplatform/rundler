@@ -24,9 +24,10 @@ use async_trait::async_trait;
 use mockall::automock;
 use rand::Rng;
 use rundler_provider::FeeEstimator;
+use rundler_signer::mapping::entry_point_name;
 use rundler_task::TaskSpawner;
 use rundler_types::{
-    UserOperation,
+    EntryPointVersion, UserOperation,
     builder::BundlingMode,
     chain::ChainSpec,
     pool::{AddressUpdate, BundleOutcome, NewHead, Pool},
@@ -97,6 +98,9 @@ pub(crate) struct BundleSenderImpl<T, C> {
     /// Outlives the bundle state machine: it is a property of the endpoint, not
     /// of any one bundle attempt, so state resets must not clear it.
     rate_limit_backoff: RateLimitBackoff,
+    /// The only entry point this builder may send bundles to (mapping layout), or `None`
+    /// if it may send to any entry point (legacy layout).
+    entry_point: Option<EntryPointVersion>,
 }
 
 pub enum BundleSenderAction {
@@ -323,6 +327,7 @@ where
         settings: Settings,
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
         provider_event_signal: Arc<ProviderEventSignal>,
+        entry_point: Option<EntryPointVersion>,
     ) -> Self {
         Self {
             builder_tag,
@@ -339,6 +344,7 @@ where
             event_sender,
             provider_event_signal,
             rate_limit_backoff: RateLimitBackoff::default(),
+            entry_point,
         }
     }
 
@@ -940,7 +946,12 @@ where
         };
         let assignment = self
             .assigner
-            .assign_work(self.sender_eoa, state.block_number(), required_op_fees)
+            .assign_work(
+                self.entry_point,
+                self.sender_eoa,
+                state.block_number(),
+                required_op_fees,
+            )
             .await?;
 
         let result = match assignment {
@@ -957,7 +968,9 @@ where
                 // Build and send bundle. Keep this as a single result path so assigner
                 // cleanup runs for all outcomes, including hard errors.
                 let proposer_key = (entry_point, filter_id.clone());
-                if let Some(proposer) = self.proposers.get(&proposer_key) {
+                if let Err(e) = self.check_entry_point(&state.transaction_tracker, entry_point) {
+                    Err(e)
+                } else if let Some(proposer) = self.proposers.get(&proposer_key) {
                     // Clear condition_not_met once make_bundle completes (success or
                     // NoOperationsAfterFeeFilter), and keep it set for hard failures so the
                     // next attempt still re-checks conditions.
@@ -1026,6 +1039,28 @@ where
         }
 
         result
+    }
+
+    /// In the mapping layout, refuse to build a bundle for any entry point other than this
+    /// builder's own, and check that the leased signer belongs to it. A no-op in the
+    /// legacy layout.
+    fn check_entry_point(&self, tracker: &T, entry_point: Address) -> anyhow::Result<()> {
+        let Some(expected) = self.entry_point else {
+            return Ok(());
+        };
+        let actual = self.chain_spec.entry_point_version(entry_point);
+        if actual != Some(expected) {
+            error!(
+                "Builder {} serves entry point {} but was assigned work for {entry_point:?}",
+                self.builder_tag,
+                entry_point_name(expected)
+            );
+            anyhow::bail!(
+                "builder for entry point {} was assigned work for {entry_point:?}",
+                entry_point_name(expected)
+            );
+        }
+        tracker.ensure_entry_point(expected)
     }
 
     /// Sends a bundle using BundleData from the type-erased proposer.
@@ -1941,7 +1976,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        assigner::{AssignmentResult, EntrypointInfo},
+        assigner::{AssignmentResult, EntrypointInfo, WorkerGroup},
         bundle_proposer::{BundleData, MockBundleProposerT, RevertOutcome},
         bundle_sender::{BundleSenderImpl, MockTrigger},
         transaction_tracker::MockTransactionTracker,
@@ -2710,13 +2745,151 @@ mod tests {
         // If assignment cleanup ran on error, another builder can immediately claim the same sender.
         let next_assignment = sender
             .assigner
-            .assign_work(Address::from([0xAA; 20]), u64::MAX, GasFees::default())
+            .assign_work(
+                sender.entry_point,
+                Address::from([0xAA; 20]),
+                u64::MAX,
+                GasFees::default(),
+            )
             .await
             .unwrap();
         assert!(
             matches!(next_assignment, AssignmentResult::Assigned(_)),
             "assignment lock should be released after proposer lookup error"
         );
+    }
+
+    /// A sender in the `entry_point` worker group whose assigner serves only v0.6, for the
+    /// entry point check tests.
+    fn v06_sender(
+        mock_proposer: MockBundleProposerT,
+        entry_point: Option<EntryPointVersion>,
+    ) -> BundleSenderImpl<MockTransactionTracker, Arc<MockPool>> {
+        let mut mock_pool = MockPool::new();
+        mock_pool
+            .expect_get_ops_summaries()
+            .returning(|_, _, _, _| {
+                Ok(vec![pool_op_summary(
+                    ENTRY_POINT_ADDRESS_V0_6,
+                    Address::from([9; 20]),
+                )])
+            });
+        mock_pool
+            .expect_get_ops_by_hashes()
+            .returning(|_, _| Ok(vec![demo_pool_op()]));
+
+        let entrypoints = vec![EntrypointInfo {
+            address: ENTRY_POINT_ADDRESS_V0_6,
+            filter_id: None,
+        }];
+        let mut proposers: HashMap<ProposerKey, Box<dyn BundleProposerT>> = HashMap::new();
+        proposers.insert((ENTRY_POINT_ADDRESS_V0_6, None), Box::new(mock_proposer));
+
+        new_sender_with_group(mock_pool, entry_point, entrypoints, proposers)
+    }
+
+    fn tracker_with_state() -> MockTransactionTracker {
+        let mut mock_tracker = MockTransactionTracker::new();
+        mock_tracker.expect_get_state().returning(|| {
+            Ok(TrackerState {
+                nonce: 1,
+                balance: U256::ZERO,
+                required_fees: None,
+            })
+        });
+        mock_tracker
+    }
+
+    #[tokio::test]
+    async fn test_builder_refuses_work_for_another_entry_point() {
+        let mut mock_trigger = MockTrigger::new();
+        mock_trigger.expect_last_block().return_const(new_head(0));
+        // No make_bundle or ensure_entry_point expectations: calling either would panic.
+        let mut sender = v06_sender(MockBundleProposerT::new(), Some(EntryPointVersion::V0_7));
+
+        let mut state = SenderMachineState::new(mock_trigger, tracker_with_state());
+        let err = sender
+            .send_bundle(&mut state, 0)
+            .await
+            .expect_err("should refuse work for another entry point");
+        assert!(
+            err.to_string().contains("was assigned work for"),
+            "unexpected error: {err:#}"
+        );
+
+        // The assignment was released, so another builder can take the same sender.
+        let next_assignment = sender
+            .assigner
+            .assign_work(
+                sender.entry_point,
+                Address::from([0xAA; 20]),
+                u64::MAX,
+                GasFees::default(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(next_assignment, AssignmentResult::Assigned(_)));
+    }
+
+    #[tokio::test]
+    async fn test_builder_refuses_signer_of_another_entry_point() {
+        let mut mock_trigger = MockTrigger::new();
+        mock_trigger.expect_last_block().return_const(new_head(0));
+        let mut mock_tracker = tracker_with_state();
+        mock_tracker
+            .expect_ensure_entry_point()
+            .times(1)
+            .returning(|_| Err(anyhow::anyhow!("signer belongs to entry point v0.7")));
+        let mut sender = v06_sender(MockBundleProposerT::new(), Some(EntryPointVersion::V0_6));
+
+        let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
+        let err = sender
+            .send_bundle(&mut state, 0)
+            .await
+            .expect_err("should refuse a signer of another entry point");
+        assert!(
+            err.to_string().contains("v0.7"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_builder_with_matching_entry_point_builds() {
+        let mut mock_trigger = MockTrigger::new();
+        mock_trigger.expect_last_block().return_const(new_head(0));
+        let mut mock_tracker = tracker_with_state();
+        mock_tracker
+            .expect_ensure_entry_point()
+            .withf(|ep| *ep == EntryPointVersion::V0_6)
+            .times(1)
+            .returning(|_| Ok(()));
+        let mut mock_proposer = MockBundleProposerT::new();
+        mock_proposer.expect_make_bundle().times(1).returning(|_| {
+            Box::pin(async { Err(BundleProposerError::NoOperationsAfterFeeFilter) })
+        });
+        let mut sender = v06_sender(mock_proposer, Some(EntryPointVersion::V0_6));
+
+        let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
+        let result = sender.send_bundle(&mut state, 0).await.unwrap();
+        assert!(matches!(
+            result,
+            SendBundleAttemptResult::NoOperationsAfterFeeFilter
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_legacy_builder_skips_entry_point_check() {
+        let mut mock_trigger = MockTrigger::new();
+        mock_trigger.expect_last_block().return_const(new_head(0));
+        // No ensure_entry_point expectation: the legacy builder must not call it.
+        let mut mock_proposer = MockBundleProposerT::new();
+        mock_proposer.expect_make_bundle().times(1).returning(|_| {
+            Box::pin(async { Err(BundleProposerError::NoOperationsAfterFeeFilter) })
+        });
+        let mut sender = v06_sender(mock_proposer, None);
+
+        let mut state = SenderMachineState::new(mock_trigger, tracker_with_state());
+        sender.send_bundle(&mut state, 0).await.unwrap();
     }
 
     #[tokio::test]
@@ -2756,7 +2929,12 @@ mod tests {
         // Pre-lock and confirm sender to simulate an existing in-flight bundle.
         let initial_assignment = match sender_impl
             .assigner
-            .assign_work(sender, u64::MAX, GasFees::default())
+            .assign_work(
+                sender_impl.entry_point,
+                sender,
+                u64::MAX,
+                GasFees::default(),
+            )
             .await
             .unwrap()
         {
@@ -2779,7 +2957,12 @@ mod tests {
         // Confirmed sender lock should remain while pending tx exists.
         let reassignment = sender_impl
             .assigner
-            .assign_work(Address::from([0xAA; 20]), u64::MAX, GasFees::default())
+            .assign_work(
+                sender_impl.entry_point,
+                Address::from([0xAA; 20]),
+                u64::MAX,
+                GasFees::default(),
+            )
             .await
             .unwrap();
         assert!(
@@ -2836,7 +3019,12 @@ mod tests {
         // Pre-lock and confirm the sender to simulate an existing in-flight bundle.
         match sender_impl
             .assigner
-            .assign_work(sender, u64::MAX, GasFees::default())
+            .assign_work(
+                sender_impl.entry_point,
+                sender,
+                u64::MAX,
+                GasFees::default(),
+            )
             .await
             .unwrap()
         {
@@ -2870,7 +3058,12 @@ mod tests {
         // The confirmed lock must survive: another builder cannot claim the in-flight sender.
         let reassignment = sender_impl
             .assigner
-            .assign_work(Address::from([0xAA; 20]), u64::MAX, GasFees::default())
+            .assign_work(
+                sender_impl.entry_point,
+                Address::from([0xAA; 20]),
+                u64::MAX,
+                GasFees::default(),
+            )
             .await
             .unwrap();
         assert!(
@@ -3639,7 +3832,7 @@ mod tests {
             broadcast::channel(1).0.subscribe(),
             MockTransactionTracker::new(),
             Box::new(TestFeeEstimator),
-            Arc::new(Assigner::new(
+            Arc::new(Assigner::single_group(
                 Box::new(pool.clone()),
                 entrypoints,
                 4, // num_signers
@@ -3658,11 +3851,24 @@ mod tests {
             },
             broadcast::channel(1000).0,
             Arc::new(ProviderEventSignal::default()),
+            None,
         )
     }
 
     fn new_sender_with_entrypoints(
         mock_pool: MockPool,
+        entrypoints: Vec<EntrypointInfo>,
+        proposers: HashMap<ProposerKey, Box<dyn BundleProposerT>>,
+    ) -> BundleSenderImpl<MockTransactionTracker, Arc<MockPool>> {
+        new_sender_with_group(mock_pool, None, entrypoints, proposers)
+    }
+
+    /// A sender in the worker group for `entry_point` (`None` for the legacy group), whose
+    /// assigner serves `entrypoints` for that group. The entrypoints need not match the
+    /// group's entry point, which lets tests simulate misrouted work.
+    fn new_sender_with_group(
+        mock_pool: MockPool,
+        entry_point: Option<EntryPointVersion>,
         entrypoints: Vec<EntrypointInfo>,
         proposers: HashMap<ProposerKey, Box<dyn BundleProposerT>>,
     ) -> BundleSenderImpl<MockTransactionTracker, Arc<MockPool>> {
@@ -3675,14 +3881,20 @@ mod tests {
             broadcast::channel(1).0.subscribe(),
             MockTransactionTracker::new(),
             Box::new(TestFeeEstimator),
-            Arc::new(Assigner::new(
-                Box::new(pool.clone()),
-                entrypoints,
-                4, // num_signers
-                1024,
-                1024,
-                0.50,
-            )),
+            Arc::new(
+                Assigner::new(
+                    Box::new(pool.clone()),
+                    vec![WorkerGroup {
+                        entry_point,
+                        infos: entrypoints,
+                        num_workers: 4,
+                    }],
+                    1024,
+                    1024,
+                    0.50,
+                )
+                .unwrap(),
+            ),
             Arc::new(proposers),
             pool,
             Settings {
@@ -3694,6 +3906,7 @@ mod tests {
             },
             broadcast::channel(1000).0,
             Arc::new(ProviderEventSignal::default()),
+            entry_point,
         )
     }
 

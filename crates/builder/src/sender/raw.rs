@@ -158,4 +158,25 @@ mod tests {
             ));
         }
     }
+
+    #[test]
+    fn promotes_tx_validation_rejection_only_when_flagged() {
+        for (flag, terminal) in [(true, true), (false, false)] {
+            let sender = RawTransactionSender::new(
+                MockEvmProvider::new(),
+                false,
+                ChainSpec {
+                    tx_validation_rejection_is_terminal: flag,
+                    ..Default::default()
+                },
+            );
+            let error =
+                sender.map_provider_error(rpc_error_response(-32100, "transaction rejected"));
+            assert_eq!(
+                matches!(error, TxSenderError::TerminalRpcError { .. }),
+                terminal,
+                "flag: {flag}"
+            );
+        }
+    }
 }
