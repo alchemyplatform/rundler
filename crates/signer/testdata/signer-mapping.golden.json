@@ -1,0 +1,146 @@
+[
+  {
+    "address": "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000000",
+    "entryPoint": "v0.7",
+    "fundingGroup": "a"
+  },
+  {
+    "address": "0x2B5AD5c4795c026514f8317c7a215E218DcCD6cF",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000001",
+    "entryPoint": "v0.6",
+    "fundingGroup": "a"
+  },
+  {
+    "address": "0x6813Eb9362372EEF6200f3b1dbC3f819671cBA69",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000002",
+    "entryPoint": "v0.8",
+    "fundingGroup": "a"
+  },
+  {
+    "address": "0x1efF47bc3a10a45D4B230B5d10E37751FE6AA718",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000003",
+    "entryPoint": "v0.9",
+    "fundingGroup": "a"
+  },
+  {
+    "address": "0xe1AB8145F7E55DC933d51a18c793F901A3A0b276",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000004",
+    "entryPoint": "v0.7",
+    "fundingGroup": "a"
+  },
+  {
+    "address": "0xE57bFE9F44b819898F47BF37E5AF72a0783e1141",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000005",
+    "entryPoint": "v0.6",
+    "fundingGroup": "a"
+  },
+  {
+    "address": "0xd41c057fd1c78805AAC12B0A94a405c0461A6FBb",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000006",
+    "entryPoint": "v0.8",
+    "fundingGroup": "a"
+  },
+  {
+    "address": "0xF1F6619B38A98d6De0800F1DefC0a6399eB6d30C",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000007",
+    "entryPoint": "v0.9",
+    "fundingGroup": "a"
+  },
+  {
+    "address": "0xF7Edc8FA1eCc32967F827C9043FcAe6ba73afA5c",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000008",
+    "entryPoint": "v0.7",
+    "fundingGroup": "b"
+  },
+  {
+    "address": "0x4CCeBa2d7D2B4fdcE4304d3e09a1fea9fbEb1528",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000009",
+    "entryPoint": "v0.6",
+    "fundingGroup": "b"
+  },
+  {
+    "address": "0x3DA8D322CB2435dA26E9C9fEE670f9fB7Fe74E49",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000010",
+    "entryPoint": "v0.8",
+    "fundingGroup": "b"
+  },
+  {
+    "address": "0xDbc23AE43a150ff8884B02Cea117b22D1c3b9796",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000011",
+    "entryPoint": "v0.9",
+    "fundingGroup": "b"
+  },
+  {
+    "address": "0x68E527780872cda0216Ba0d8fBD58b67a5D5e351",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000012",
+    "entryPoint": "v0.7",
+    "fundingGroup": "b"
+  },
+  {
+    "address": "0x5A83529ff76Ac5723A87008c4D9B436AD4CA7d28",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000013",
+    "entryPoint": "v0.6",
+    "fundingGroup": "b"
+  },
+  {
+    "address": "0x8735015837bD10e05d9cf5EA43A2486Bf4Be156F",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000014",
+    "entryPoint": "v0.8",
+    "fundingGroup": "b"
+  },
+  {
+    "address": "0xfaE394561e33e242c551d15D4625309EA4c0B97f",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000015",
+    "entryPoint": "v0.9",
+    "fundingGroup": "b"
+  },
+  {
+    "address": "0x252Dae0A4b9d9b80F504F6418acd2d364C0c59cD",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000016",
+    "entryPoint": "v0.7",
+    "fundingGroup": "c"
+  },
+  {
+    "address": "0x79196B90D1E952C5A43d4847CAA08d50b967c34A",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000017",
+    "entryPoint": "v0.6",
+    "fundingGroup": "c"
+  },
+  {
+    "address": "0x4bd1280852Cadb002734647305AFC1db7ddD6Acb",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000018",
+    "entryPoint": "v0.8",
+    "fundingGroup": "c"
+  },
+  {
+    "address": "0x811da72aCA31e56F770Fc33DF0e45fD08720E157",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000019",
+    "entryPoint": "v0.9",
+    "fundingGroup": "c"
+  },
+  {
+    "address": "0x157bFBEcd023fD6384daD2Bded5DAD7e27Bf92E4",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000020",
+    "entryPoint": "v0.7",
+    "fundingGroup": "c"
+  },
+  {
+    "address": "0x37dA28C050E3c0A1c0aC3BE97913EC038783dA4C",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000021",
+    "entryPoint": "v0.6",
+    "fundingGroup": "c"
+  },
+  {
+    "address": "0x3Bc8287F1D872df4217283b7920D363F13Cf39D8",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000022",
+    "entryPoint": "v0.8",
+    "fundingGroup": "c"
+  },
+  {
+    "address": "0xf4e2B0fcbd0DC4b326d8A52B718A7bb43BdBd072",
+    "kmsKeyId": "00000000-0000-4000-8000-000000000023",
+    "entryPoint": "v0.9",
+    "fundingGroup": "c"
+  }
+]

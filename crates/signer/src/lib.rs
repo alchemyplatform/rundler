@@ -44,6 +44,8 @@ mod manager;
 use manager::FundingSignerManager;
 pub use manager::{CachedAccountState, SignerLease, SignerManager};
 
+pub mod mapping;
+
 pub mod utils;
 
 /// Settings for locking KMS keys
