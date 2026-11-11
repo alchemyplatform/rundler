@@ -77,6 +77,8 @@ pub use traits::*;
 
 /// Transaction request type for all networks.
 pub type TransactionRequest = alloy_rpc_types_eth::TransactionRequest;
+/// Simulation request that preserves network-specific RPC fields.
+pub type SimulationTransactionRequest = WithOtherFields<TransactionRequest>;
 /// Transaction receipt type for all networks.
 pub type TransactionReceipt = alloy_rpc_types_any::AnyTransactionReceipt;
 /// Transaction type for all networks.

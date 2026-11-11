@@ -48,7 +48,7 @@ use crate::{
     AggregatorOut, AggregatorSimOut, AlloyProvider, BlockHashOrNumber, BundleHandler, DAGasOracle,
     DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait,
     ExecutionResult, HandleOpsOut, ProviderResult, SignatureAggregator, SimulationProvider,
-    TransactionRequest,
+    SimulationTransactionRequest, TransactionRequest,
 };
 
 /// Entry point provider for v0.6
@@ -387,7 +387,7 @@ where
     fn get_tracer_simulate_validation_call(
         &self,
         user_op: UserOperation,
-    ) -> ProviderResult<(TransactionRequest, StateOverride)> {
+    ) -> ProviderResult<(SimulationTransactionRequest, StateOverride)> {
         let da_gas = user_op
             .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
             .try_into()
@@ -398,7 +398,10 @@ where
             .from(SIMULATION_SENDER)
             .gas(self.max_verification_gas.saturating_add(da_gas))
             .into_transaction_request();
-        Ok((call.inner, StateOverride::default()))
+        Ok((
+            super::validation_simulation_request(call, &self.chain_spec, self.max_verification_gas),
+            StateOverride::default(),
+        ))
     }
 
     #[instrument(skip_all)]
@@ -407,24 +410,15 @@ where
         user_op: UserOperation,
         block_id: Option<BlockId>,
     ) -> ProviderResult<Result<ValidationOutput, ValidationRevert>> {
-        let da_gas = user_op
-            .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
-            .try_into()
-            .unwrap_or(u64::MAX);
+        let (tx, _) = self.get_tracer_simulate_validation_call(user_op)?;
+        let mut call = self.i_entry_point.provider().call(tx);
+        if let Some(block_id) = block_id {
+            call = call.block(block_id);
+        }
 
-        let blockless = self
-            .i_entry_point
-            .simulateValidation(user_op.into())
-            .from(SIMULATION_SENDER)
-            .gas(self.max_verification_gas.saturating_add(da_gas));
-        let call = match block_id {
-            Some(block_id) => blockless.block(block_id),
-            None => blockless,
-        };
-
-        match call.call().await {
+        match call.await {
             Ok(_) => Err(anyhow::anyhow!("simulateValidation should always revert"))?,
-            Err(ContractError::TransportError(TransportError::ErrorResp(resp))) => {
+            Err(TransportError::ErrorResp(resp)) => {
                 if let Some(err) =
                     resp.as_decoded_interface_error::<SolContractError<IEntryPointErrors>>()
                 {

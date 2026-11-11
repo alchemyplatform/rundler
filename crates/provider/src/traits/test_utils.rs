@@ -33,8 +33,8 @@ use crate::{
     AggregatorOut, Block, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasOracleSync,
     DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider, EvmCall,
     EvmProvider as EvmProviderTrait, ExecutionResult, FeeEstimator, HandleOpsOut,
-    LatestFeeEstimate, RpcRecv, RpcSend, SignatureAggregator, SimulationProvider, Transaction,
-    TransactionReceipt, TransactionRequest,
+    LatestFeeEstimate, RpcRecv, RpcSend, SignatureAggregator, SimulationProvider,
+    SimulationTransactionRequest, Transaction, TransactionReceipt, TransactionRequest,
 };
 
 mockall::mock! {
@@ -92,7 +92,7 @@ mockall::mock! {
 
         async fn debug_trace_call(
             &self,
-            tx: TransactionRequest,
+            tx: SimulationTransactionRequest,
             block_id: Option<BlockId>,
             trace_options: GethDebugTracingCallOptions,
         ) -> ProviderResult<GethTrace>;
@@ -168,7 +168,7 @@ mockall::mock! {
         fn get_tracer_simulate_validation_call(
             &self,
             user_op: v0_6::UserOperation,
-        ) -> ProviderResult<(TransactionRequest, StateOverride)>;
+        ) -> ProviderResult<(SimulationTransactionRequest, StateOverride)>;
         async fn simulate_validation(
             &self,
             user_op: v0_6::UserOperation,
@@ -275,7 +275,7 @@ mockall::mock! {
         fn get_tracer_simulate_validation_call(
             &self,
             user_op: v0_7::UserOperation,
-        ) -> ProviderResult<(TransactionRequest, StateOverride)>;
+        ) -> ProviderResult<(SimulationTransactionRequest, StateOverride)>;
         async fn simulate_validation(
             &self,
             user_op: v0_7::UserOperation,
