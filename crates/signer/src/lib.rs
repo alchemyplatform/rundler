@@ -22,10 +22,11 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use alloy_network::{EthereumWallet, TxSigner};
+use alloy_primitives::{Address, Signature};
 use anyhow::Context;
 use rundler_provider::{DAGasOracle, EvmProvider};
 use rundler_task::TaskSpawner;
-use rundler_types::chain::ChainSpec;
+use rundler_types::{EntryPointVersion, chain::ChainSpec};
 use secrecy::SecretString;
 
 mod aws;
@@ -43,6 +44,9 @@ mod local;
 mod manager;
 use manager::FundingSignerManager;
 pub use manager::{CachedAccountState, SignerLease, SignerManager};
+
+pub mod mapping;
+use mapping::{FundingGroup, MappedSigner, SignerCounts, SignerMapping};
 
 pub mod utils;
 
@@ -115,12 +119,30 @@ pub enum SigningScheme {
         /// Funding settings
         funding_settings: FundingSettings,
     },
+    /// KMS funding keys with signers pinned to EntryPoints by a signer mapping
+    KmsFundingMapped {
+        /// Signer mapping
+        mapping: SignerMapping,
+        /// Signers per funding group for each EntryPoint
+        counts: SignerCounts,
+        /// Funding key ids; position 0/1/2 is funding group a/b/c
+        funding_key_ids: Vec<String>,
+        /// Enabled EntryPoints
+        enabled_entry_points: Vec<EntryPointVersion>,
+        /// Lock settings
+        lock_settings: Option<KmsLockingSettings>,
+        /// Funding settings
+        funding_settings: FundingSettings,
+    },
 }
 
 impl SigningScheme {
     /// Returns true if the signing scheme supports funding
     pub fn supports_funding(&self) -> bool {
-        matches!(self, SigningScheme::KmsFunding { .. })
+        matches!(
+            self,
+            SigningScheme::KmsFunding { .. } | SigningScheme::KmsFundingMapped { .. }
+        )
     }
 }
 
@@ -194,6 +216,31 @@ pub async fn new_signer_manager<
             )
             .await
         }
+        SigningScheme::KmsFundingMapped {
+            mapping,
+            counts,
+            funding_key_ids,
+            enabled_entry_points,
+            lock_settings,
+            funding_settings,
+        } => {
+            new_kms_funding_mapped_signer_manager(
+                task_spawner,
+                provider.clone(),
+                da_gas_oracle,
+                MappedSchemeArgs {
+                    mapping,
+                    counts,
+                    funding_key_ids,
+                    enabled_entry_points,
+                    lock_settings: lock_settings.as_ref(),
+                    settings: funding_settings,
+                },
+                chain_spec,
+                auto_fund,
+            )
+            .await
+        }
     }?;
 
     init_balances(&manager, &provider).await?;
@@ -214,6 +261,7 @@ fn new_private_keys_signer_manager<P: EvmProvider + 'static, T: TaskSpawner>(
         false,
         task_spawner,
         provider,
+        HashMap::new(),
     )))
 }
 
@@ -232,6 +280,7 @@ fn new_mnemonic_signer_manager<P: EvmProvider + 'static, T: TaskSpawner>(
         false,
         task_spawner,
         provider,
+        HashMap::new(),
     )))
 }
 
@@ -268,6 +317,7 @@ async fn new_kms_signer_manager<P: EvmProvider + 'static, T: TaskSpawner>(
         false,
         task_spawner,
         provider,
+        HashMap::new(),
     )))
 }
 
@@ -350,7 +400,139 @@ async fn new_kms_funding_signer_manager<
         auto_fund,
         task_spawner,
         provider,
+        HashMap::new(),
     )))
+}
+
+struct MappedSchemeArgs<'a> {
+    mapping: &'a SignerMapping,
+    counts: &'a SignerCounts,
+    funding_key_ids: &'a [String],
+    enabled_entry_points: &'a [EntryPointVersion],
+    lock_settings: Option<&'a KmsLockingSettings>,
+    settings: &'a FundingSettings,
+}
+
+async fn new_kms_funding_mapped_signer_manager<
+    P: EvmProvider + 'static,
+    T: TaskSpawner,
+    D: DAGasOracle + 'static,
+>(
+    task_spawner: &T,
+    provider: P,
+    da_gas_oracle: D,
+    args: MappedSchemeArgs<'_>,
+    chain_spec: &ChainSpec,
+    auto_fund: bool,
+) -> Result<Arc<dyn SignerManager>> {
+    let MappedSchemeArgs {
+        mapping,
+        counts,
+        funding_key_ids,
+        enabled_entry_points,
+        lock_settings,
+        settings,
+    } = args;
+    mapping
+        .validate_against(enabled_entry_points, counts, funding_key_ids)
+        .context("signer mapping does not match the signer configuration")?;
+
+    // Funding keys are tried in a/b/c order; the Redis lock decides which one this pod gets.
+    let (funding_signer, funding_key_id): (Arc<dyn TxSigner<_> + Send + Sync + 'static>, _) =
+        if let Some(lock_settings) = lock_settings {
+            let signer = LockingKmsSigner::connect(
+                task_spawner,
+                chain_spec.id,
+                funding_key_ids.to_vec(),
+                lock_settings.redis_uri.clone(),
+                lock_settings.ttl_millis,
+            )
+            .await?;
+            let key_id = signer.key_id().to_string();
+            (Arc::new(signer), key_id)
+        } else {
+            let key_id = funding_key_ids[0].clone();
+            let signer = aws::create_signer_from_key_id(key_id.clone(), chain_spec.id).await?;
+            (Arc::new(signer), key_id)
+        };
+
+    let group = FundingGroup::for_funding_key(funding_key_ids, &funding_key_id)
+        .context("locked funding key should be one of the configured funding keys")?;
+    let selected = mapping
+        .select(group, counts)
+        .context("should select signers from the signer mapping")?;
+
+    let key_ids = selected.iter().map(|s| s.kms_key_id.clone()).collect();
+    let signers = aws::create_signers_from_key_ids(key_ids, chain_spec.id).await?;
+    let (wallet, entry_points) = mapped_wallet(&selected, signers)?;
+
+    let per_entry_point = counts
+        .entries()
+        .iter()
+        .map(|(ep, n)| format!("{}: {n}", mapping::entry_point_name(*ep)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    tracing::info!(
+        "signer mapping: funding group {group} = funding key {funding_key_id} ({}); signers per entry point: {per_entry_point}",
+        funding_signer.address()
+    );
+    metrics::gauge!("signer_funding_group", "group" => group.to_string()).set(1.0);
+
+    let funder_settings = FunderSettings {
+        fund_below_balance: settings.fund_below_balance,
+        fund_to_balance: settings.fund_to_balance,
+        poll_interval: settings.poll_interval,
+        poll_max_retries: settings.poll_max_retries,
+        priority_fee_multiplier: settings.priority_fee_multiplier,
+        base_fee_multiplier: settings.base_fee_multiplier,
+        chain_spec: chain_spec.clone(),
+        multicall3_address: chain_spec.multicall3_address,
+        signer: funding_signer,
+        da_gas_oracle: Arc::new(da_gas_oracle),
+    };
+
+    Ok(Arc::new(FundingSignerManager::new(
+        chain_spec.id,
+        wallet,
+        Some(funder_settings),
+        auto_fund,
+        task_spawner,
+        provider,
+        entry_points,
+    )))
+}
+
+/// Register the selected signers, refusing any whose key does not resolve to the
+/// address written in the mapping.
+fn mapped_wallet<S>(
+    selected: &[MappedSigner],
+    signers: Vec<S>,
+) -> Result<(EthereumWallet, HashMap<Address, EntryPointVersion>)>
+where
+    S: TxSigner<Signature> + Send + Sync + 'static,
+{
+    if selected.len() != signers.len() {
+        Err(anyhow::anyhow!(
+            "expected {} signers from the mapping, got {}",
+            selected.len(),
+            signers.len()
+        ))?;
+    }
+    let mut wallet = EthereumWallet::default();
+    let mut entry_points = HashMap::new();
+    for (mapped, signer) in selected.iter().zip(signers) {
+        let actual = signer.address();
+        if actual != mapped.address {
+            Err(anyhow::anyhow!(
+                "signer mapping mismatch: KMS key {} resolves to {actual}, but the mapping says {}",
+                mapped.kms_key_id,
+                mapped.address
+            ))?;
+        }
+        entry_points.insert(actual, mapped.entry_point);
+        wallet.register_signer(signer);
+    }
+    Ok((wallet, entry_points))
 }
 
 async fn init_balances<P: EvmProvider>(
@@ -366,4 +548,86 @@ async fn init_balances<P: EvmProvider>(
     };
     manager.update_balances(balances);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy_signer_local::PrivateKeySigner;
+
+    use super::*;
+
+    const GOLDEN: &str = include_str!("../testdata/signer-mapping.golden.json");
+
+    /// The golden fixture's addresses are derived from private keys 1..=24, in file order.
+    fn golden_signer(index: usize) -> PrivateKeySigner {
+        let mut key = [0u8; 32];
+        key[31] = (index + 1) as u8;
+        PrivateKeySigner::from_slice(&key).unwrap()
+    }
+
+    fn signer_for(mapping: &SignerMapping, mapped: &MappedSigner) -> PrivateKeySigner {
+        let index = mapping
+            .signers()
+            .iter()
+            .position(|s| s.kms_key_id == mapped.kms_key_id)
+            .unwrap();
+        golden_signer(index)
+    }
+
+    #[test]
+    fn mapped_wallet_registers_selected_signers_with_tags() {
+        let mapping = SignerMapping::from_json_str(GOLDEN).unwrap();
+        let counts: SignerCounts = "v0.7=2,v0.6=1".parse().unwrap();
+        let selected = mapping.select(FundingGroup::B, &counts).unwrap();
+        let signers = selected.iter().map(|s| signer_for(&mapping, s)).collect();
+
+        let (wallet, entry_points) = mapped_wallet(&selected, signers).unwrap();
+
+        let mut registered: Vec<Address> =
+            alloy_network::NetworkWallet::<alloy_network::AnyNetwork>::signer_addresses(&wallet)
+                .collect();
+        registered.sort();
+        let mut expected: Vec<Address> = selected.iter().map(|s| s.address).collect();
+        expected.sort();
+        assert_eq!(registered, expected);
+        for s in &selected {
+            assert_eq!(entry_points.get(&s.address), Some(&s.entry_point));
+            assert_eq!(s.group, FundingGroup::B);
+        }
+    }
+
+    #[test]
+    fn mapped_wallet_rejects_wrong_key() {
+        let mapping = SignerMapping::from_json_str(GOLDEN).unwrap();
+        let counts: SignerCounts = "v0.7=2".parse().unwrap();
+        let selected = mapping.select(FundingGroup::A, &counts).unwrap();
+        // Second signer is swapped for a key that resolves to a different address.
+        let signers = vec![signer_for(&mapping, &selected[0]), golden_signer(23)];
+
+        let err = mapped_wallet(&selected, signers).unwrap_err().to_string();
+        assert!(err.contains("signer mapping mismatch"), "{err}");
+        assert!(err.contains(&selected[1].kms_key_id), "{err}");
+    }
+
+    #[test]
+    fn mapped_wallet_rejects_count_mismatch() {
+        let mapping = SignerMapping::from_json_str(GOLDEN).unwrap();
+        let selected = mapping
+            .select(FundingGroup::A, &"v0.7=2".parse().unwrap())
+            .unwrap();
+        let signers = vec![signer_for(&mapping, &selected[0])];
+        assert!(mapped_wallet(&selected, signers).is_err());
+    }
+
+    #[test]
+    fn funding_group_follows_funding_key_position() {
+        let ids = vec![
+            "fund-a".to_string(),
+            "fund-b".to_string(),
+            "fund-c".to_string(),
+        ];
+        for (id, group) in ids.iter().zip(FundingGroup::ALL) {
+            assert_eq!(FundingGroup::for_funding_key(&ids, id), Some(group));
+        }
+    }
 }

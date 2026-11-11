@@ -15,9 +15,24 @@ use std::time::Duration;
 
 use alloy_primitives::U256;
 use anyhow::{Context, bail};
-use clap::Args;
-use rundler_signer::{FundingSettings, KmsLockingSettings, SigningScheme};
+use clap::{Args, ValueEnum};
+use rundler_signer::{
+    FundingSettings, KmsLockingSettings, SigningScheme,
+    mapping::{FUNDING_GROUP_COUNT, SignerCounts, SignerMapping},
+};
+use rundler_types::EntryPointVersion;
 use secrecy::SecretString;
+
+/// How signer keys are assigned to bundle workers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum SignerLayout {
+    /// Keys are chunked by `NUM_SIGNERS` and any key may send bundles to any entry point.
+    #[default]
+    Legacy,
+    /// Keys come from a signer mapping file and each key only sends bundles to its own
+    /// entry point.
+    Mapping,
+}
 
 #[derive(Args, Debug)]
 #[command(next_help_heading = "SIGNER")]
@@ -147,6 +162,29 @@ pub struct SignerArgs {
         default_value = "2.0"
     )]
     pub funding_txn_base_fee_multiplier: f64,
+
+    /// How signer keys are assigned to bundle workers: `legacy` or `mapping`
+    #[arg(
+        long = "signer.layout",
+        name = "signer.layout",
+        env = "SIGNER_LAYOUT",
+        value_enum,
+        default_value = "legacy"
+    )]
+    pub layout: SignerLayout,
+
+    /// Path (local or s3://) to the signer mapping file. Used when `signer.layout=mapping`.
+    #[arg(
+        long = "signer.mapping_path",
+        name = "signer.mapping_path",
+        env = "SIGNER_MAPPING_PATH"
+    )]
+    pub mapping_path: Option<String>,
+
+    /// Signers per funding group for each entry point, e.g. `v0.6=6,v0.7=20,v0.8=4,v0.9=2`.
+    /// Used when `signer.layout=mapping`.
+    #[arg(long = "signer.counts", name = "signer.counts", env = "SIGNER_COUNTS")]
+    pub counts: Option<SignerCounts>,
 }
 
 impl SignerArgs {
@@ -212,14 +250,7 @@ impl SignerArgs {
                 "AWS KMS key IDs are not set and KMS funding is enabled. Please set signer.aws_kms_key_ids"
             );
         };
-        let lock_settings = if self.enable_kms_locking {
-            Some(KmsLockingSettings {
-                redis_uri: self.redis_uri.clone(),
-                ttl_millis: self.redis_lock_ttl_millis,
-            })
-        } else {
-            None
-        };
+        let lock_settings = self.lock_settings();
 
         let subkeys_by_key_id = if !self.aws_kms_grouped_keys.is_empty() {
             let num_signers =
@@ -290,14 +321,63 @@ impl SignerArgs {
         Ok(SigningScheme::KmsFunding {
             subkeys_by_key_id,
             lock_settings,
-            funding_settings: FundingSettings {
-                fund_below_balance: self.fund_below.context("Fund below balance not set")?,
-                fund_to_balance: self.fund_to.context("Fund to balance not set")?,
-                poll_interval: Duration::from_millis(self.funding_txn_poll_interval_ms),
-                poll_max_retries: self.funding_txn_poll_max_retries,
-                priority_fee_multiplier: self.funding_txn_priority_fee_multiplier,
-                base_fee_multiplier: self.funding_txn_base_fee_multiplier,
-            },
+            funding_settings: self.funding_settings()?,
+        })
+    }
+
+    /// The signing scheme for `signer.layout=mapping`.
+    ///
+    /// Requires KMS funding with exactly three funding keys (groups a, b, c in order),
+    /// and signer counts. The mapping is checked against the funding keys, the enabled
+    /// entry points and the counts before any KMS call is made.
+    pub fn mapped_signing_scheme(
+        &self,
+        mapping: SignerMapping,
+        enabled_entry_points: &[EntryPointVersion],
+    ) -> anyhow::Result<SigningScheme> {
+        if !self.enable_kms_funding {
+            bail!("SIGNER_LAYOUT=mapping requires SIGNER_ENABLE_KMS_FUNDING=true");
+        }
+        if self.aws_kms_key_ids.len() != FUNDING_GROUP_COUNT {
+            bail!(
+                "SIGNER_LAYOUT=mapping requires exactly {FUNDING_GROUP_COUNT} funding keys in SIGNER_AWS_KMS_KEY_IDS (groups a, b, c), found {}",
+                self.aws_kms_key_ids.len()
+            );
+        }
+        let counts = self
+            .counts
+            .clone()
+            .context("SIGNER_LAYOUT=mapping requires SIGNER_COUNTS")?;
+
+        mapping
+            .validate_against(enabled_entry_points, &counts, &self.aws_kms_key_ids)
+            .context("signer mapping does not match the signer configuration")?;
+
+        Ok(SigningScheme::KmsFundingMapped {
+            mapping,
+            counts,
+            funding_key_ids: self.aws_kms_key_ids.clone(),
+            enabled_entry_points: enabled_entry_points.to_vec(),
+            lock_settings: self.lock_settings(),
+            funding_settings: self.funding_settings()?,
+        })
+    }
+
+    fn lock_settings(&self) -> Option<KmsLockingSettings> {
+        self.enable_kms_locking.then(|| KmsLockingSettings {
+            redis_uri: self.redis_uri.clone(),
+            ttl_millis: self.redis_lock_ttl_millis,
+        })
+    }
+
+    fn funding_settings(&self) -> anyhow::Result<FundingSettings> {
+        Ok(FundingSettings {
+            fund_below_balance: self.fund_below.context("Fund below balance not set")?,
+            fund_to_balance: self.fund_to.context("Fund to balance not set")?,
+            poll_interval: Duration::from_millis(self.funding_txn_poll_interval_ms),
+            poll_max_retries: self.funding_txn_poll_max_retries,
+            priority_fee_multiplier: self.funding_txn_priority_fee_multiplier,
+            base_fee_multiplier: self.funding_txn_base_fee_multiplier,
         })
     }
 }

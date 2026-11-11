@@ -23,18 +23,28 @@ use alloy_network::{
     AnyNetwork, AnyTxEnvelope, EthereumWallet, NetworkWallet, TransactionBuilder, TxSigner,
 };
 use alloy_primitives::{Address, Bytes, Signature, U256};
-use metrics::Gauge;
+use metrics::{Counter, Gauge};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
 use rundler_provider::{EvmProvider, TransactionRequest};
 use rundler_task::TaskSpawner;
+use rundler_types::EntryPointVersion;
 use tokio::sync::Notify;
 
 use crate::{
     Error, Result,
     funding::{self, FunderSettings},
+    mapping::entry_point_name,
     utils,
 };
+
+/// Fixed order used to break ties between EntryPoint pools.
+const ENTRY_POINT_ORDER: [EntryPointVersion; 4] = [
+    EntryPointVersion::V0_6,
+    EntryPointVersion::V0_7,
+    EntryPointVersion::V0_8,
+    EntryPointVersion::V0_9,
+];
 
 /// Trait for a signer manager
 ///
@@ -50,8 +60,18 @@ pub trait SignerManager: Send + Sync {
     /// Wait for the number of available signers to reach the given number
     async fn wait_for_available(&self, num_required: usize) -> Result<()>;
 
-    /// Lease a signer
+    /// Lease a signer.
+    ///
+    /// If the signers are tagged with EntryPoints, the signer comes from the EntryPoint
+    /// pool with the most available signers. Use this only for work that does not send
+    /// bundles to an EntryPoint (for example 7702 delegations).
     fn lease_signer(&self) -> Option<SignerLease>;
+
+    /// Lease a signer tagged with `entry_point`.
+    ///
+    /// Returns `None` if no signer of that EntryPoint is available, even if other
+    /// EntryPoints have free signers. Untagged signers are never returned.
+    fn lease_signer_for(&self, entry_point: EntryPointVersion) -> Option<SignerLease>;
 
     /// Lease a specific signer
     fn lease_signer_by_address(&self, address: &Address) -> Option<SignerLease>;
@@ -102,26 +122,77 @@ pub struct CachedAccountState {
 pub struct SignerLease {
     signer: Arc<dyn TxSigner<Signature> + Send + Sync + 'static>,
     chain_id: u64,
+    entry_point: Option<EntryPointVersion>,
 }
 
 impl Debug for SignerLease {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Lease {{ address: {} }}", self.address())
+        match self.entry_point {
+            Some(entry_point) => write!(
+                f,
+                "Lease {{ address: {}, entry_point: {} }}",
+                self.address(),
+                entry_point_name(entry_point)
+            ),
+            None => write!(f, "Lease {{ address: {} }}", self.address()),
+        }
     }
 }
 
 impl SignerLease {
-    /// Create a new signer lease
+    /// Create a new signer lease that is not tied to an EntryPoint
     pub fn new(
         signer: Arc<dyn TxSigner<Signature> + Send + Sync + 'static>,
         chain_id: u64,
     ) -> Self {
-        Self { signer, chain_id }
+        Self {
+            signer,
+            chain_id,
+            entry_point: None,
+        }
+    }
+
+    /// Tie the lease to the EntryPoint its signer belongs to
+    pub fn with_entry_point(mut self, entry_point: Option<EntryPointVersion>) -> Self {
+        self.entry_point = entry_point;
+        self
     }
 
     /// Get the address of the signer
     pub fn address(&self) -> Address {
         self.signer.address()
+    }
+
+    /// The EntryPoint this signer belongs to, if signers are tagged
+    pub fn entry_point(&self) -> Option<EntryPointVersion> {
+        self.entry_point
+    }
+
+    /// Check that this signer may send a bundle to `entry_point`.
+    ///
+    /// Untagged signers (legacy layout) pass. A tagged signer passes only for its own
+    /// EntryPoint; a mismatch is logged, counted and returned as an error.
+    pub fn ensure_entry_point(&self, entry_point: EntryPointVersion) -> Result<()> {
+        match self.entry_point {
+            None => Ok(()),
+            Some(actual) if actual == entry_point => Ok(()),
+            Some(actual) => {
+                let expected = entry_point_name(entry_point);
+                let actual = entry_point_name(actual);
+                tracing::error!(
+                    "signer {} belongs to entry point {actual} but was asked to send to {expected}",
+                    self.address()
+                );
+                EntryPointMetrics::new_with_labels(&[("entry_point", expected)])
+                    .entry_point_mismatch
+                    .increment(1);
+                Err(Error::EntryPointMismatch {
+                    signer: self.address(),
+                    expected: expected.to_string(),
+                    actual: actual.to_string(),
+                })
+            }
+        }
     }
 
     /// Sign a transaction
@@ -178,6 +249,9 @@ pub(crate) struct FundingSignerManager {
     auto_fund: bool,
     funder_settings: Option<FunderSettings>,
     funding_notify: Arc<Notify>,
+    /// EntryPoint of each signer. Empty in the legacy layout, where any signer may
+    /// serve any EntryPoint.
+    entry_points: HashMap<Address, EntryPointVersion>,
 }
 
 #[derive(Debug, strum::EnumString, PartialEq, Eq)]
@@ -234,16 +308,40 @@ impl SignerManager for FundingSignerManager {
     fn lease_signer(&self) -> Option<SignerLease> {
         let mut statuses = self.signer_statuses.write();
 
-        let (address, status) = statuses
-            .iter_mut()
-            .find(|(_, status)| matches!(status, SignerStatus::Available))?;
+        if self.entry_points.is_empty() {
+            return self.lease_matching(&mut statuses, |_| true);
+        }
 
-        *status = SignerStatus::Leased;
+        // Tagged signers: take from the EntryPoint pool with the most free signers,
+        // ties broken in a fixed order.
+        let mut best: Option<(EntryPointVersion, usize)> = None;
+        for entry_point in ENTRY_POINT_ORDER {
+            let free = statuses
+                .iter()
+                .filter(|(address, status)| {
+                    matches!(status, SignerStatus::Available)
+                        && self.entry_points.get(*address) == Some(&entry_point)
+                })
+                .count();
+            if free > 0 && best.is_none_or(|(_, most)| free > most) {
+                best = Some((entry_point, free));
+            }
+        }
+        let (entry_point, _) = best?;
+        self.lease_matching(&mut statuses, |address| {
+            self.entry_points.get(address) == Some(&entry_point)
+        })
+    }
 
-        Some(SignerLease::new(
-            self.wallet.signer_by_address(*address)?.clone(),
-            self.chain_id,
-        ))
+    fn lease_signer_for(&self, entry_point: EntryPointVersion) -> Option<SignerLease> {
+        let mut statuses = self.signer_statuses.write();
+        let lease = self.lease_matching(&mut statuses, |address| {
+            self.entry_points.get(address) == Some(&entry_point)
+        });
+        if lease.is_none() {
+            pool_metrics(entry_point).pool_exhausted.increment(1);
+        }
+        lease
     }
 
     fn lease_signer_by_address(&self, address: &Address) -> Option<SignerLease> {
@@ -251,10 +349,7 @@ impl SignerManager for FundingSignerManager {
         let status = statuses.get_mut(address)?;
         if matches!(status, SignerStatus::Available) {
             *status = SignerStatus::Leased;
-            Some(SignerLease::new(
-                self.wallet.signer_by_address(*address)?.clone(),
-                self.chain_id,
-            ))
+            self.lease_for(*address)
         } else {
             None
         }
@@ -268,6 +363,9 @@ impl SignerManager for FundingSignerManager {
             SignerStatus::Leased => *status = SignerStatus::Available,
             SignerStatus::LeasedNeedsFunding => *status = SignerStatus::NeedsFunding,
             _ => unreachable!(),
+        }
+        if let Some(entry_point) = lease.entry_point() {
+            pool_metrics(entry_point).pool_leased.decrement(1);
         }
     }
 
@@ -327,6 +425,7 @@ impl FundingSignerManager {
         auto_fund: bool,
         task_spawner: &T,
         provider: P,
+        entry_points: HashMap<Address, EntryPointVersion>,
     ) -> Self {
         let signer_statuses = Arc::new(RwLock::new(
             NetworkWallet::<AnyNetwork>::signer_addresses(&wallet)
@@ -357,6 +456,16 @@ impl FundingSignerManager {
             );
         }
 
+        for entry_point in ENTRY_POINT_ORDER {
+            let size = entry_points
+                .values()
+                .filter(|ep| **ep == entry_point)
+                .count();
+            if size > 0 {
+                pool_metrics(entry_point).pool_size.set(size as f64);
+            }
+        }
+
         Self {
             chain_id,
             wallet,
@@ -365,7 +474,30 @@ impl FundingSignerManager {
             auto_fund,
             funder_settings,
             funding_notify,
+            entry_points,
         }
+    }
+
+    /// Lease the first available signer for which `predicate` holds.
+    fn lease_matching(
+        &self,
+        statuses: &mut HashMap<Address, SignerStatus>,
+        predicate: impl Fn(&Address) -> bool,
+    ) -> Option<SignerLease> {
+        let (address, status) = statuses.iter_mut().find(|(address, status)| {
+            matches!(status, SignerStatus::Available) && predicate(address)
+        })?;
+        *status = SignerStatus::Leased;
+        self.lease_for(*address)
+    }
+
+    fn lease_for(&self, address: Address) -> Option<SignerLease> {
+        let signer = self.wallet.signer_by_address(address)?.clone();
+        let entry_point = self.entry_points.get(&address).copied();
+        if let Some(entry_point) = entry_point {
+            pool_metrics(entry_point).pool_leased.increment(1);
+        }
+        Some(SignerLease::new(signer, self.chain_id).with_entry_point(entry_point))
     }
 
     pub(crate) fn update_signer_statuses(
@@ -416,6 +548,30 @@ pub(crate) struct SignerMetrics {
     pub(crate) account_balance: Gauge,
 }
 
+#[derive(Metrics)]
+#[metrics(scope = "signer")]
+struct SignerPoolMetrics {
+    #[metric(describe = "the number of signers registered for an entry point")]
+    pool_size: Gauge,
+    #[metric(describe = "the number of an entry point's signers currently leased")]
+    pool_leased: Gauge,
+    #[metric(describe = "the number of times a worker found no free signer for its entry point")]
+    pool_exhausted: Counter,
+}
+
+fn pool_metrics(entry_point: EntryPointVersion) -> SignerPoolMetrics {
+    SignerPoolMetrics::new_with_labels(&[("entry_point", entry_point_name(entry_point))])
+}
+
+#[derive(Metrics)]
+#[metrics(scope = "signer")]
+struct EntryPointMetrics {
+    #[metric(
+        describe = "the number of times a signer was asked to send to an entry point it does not belong to"
+    )]
+    entry_point_mismatch: Counter,
+}
+
 #[cfg(test)]
 mod tests {
     use alloy_primitives::{U256, address};
@@ -426,6 +582,22 @@ mod tests {
     use super::*;
 
     fn create_test_manager(signers: Vec<Address>) -> FundingSignerManager {
+        create_manager(signers, HashMap::new())
+    }
+
+    fn create_tagged_test_manager(
+        signers: &[(Address, EntryPointVersion)],
+    ) -> FundingSignerManager {
+        create_manager(
+            signers.iter().map(|(address, _)| *address).collect(),
+            signers.iter().copied().collect(),
+        )
+    }
+
+    fn create_manager(
+        signers: Vec<Address>,
+        entry_points: HashMap<Address, EntryPointVersion>,
+    ) -> FundingSignerManager {
         let mut wallet = EthereumWallet::default();
         for signer in signers {
             wallet.register_signer(MockTxSigner::new(signer));
@@ -447,7 +619,114 @@ mod tests {
         let task_spawner = TokioTaskExecutor::default();
         let provider = MockEvmProvider::default();
 
-        FundingSignerManager::new(1, wallet, funder_settings, true, &task_spawner, provider)
+        FundingSignerManager::new(
+            1,
+            wallet,
+            funder_settings,
+            true,
+            &task_spawner,
+            provider,
+            entry_points,
+        )
+    }
+
+    fn addr(i: u8) -> Address {
+        Address::with_last_byte(i)
+    }
+
+    const V6: EntryPointVersion = EntryPointVersion::V0_6;
+    const V7: EntryPointVersion = EntryPointVersion::V0_7;
+    const V8: EntryPointVersion = EntryPointVersion::V0_8;
+
+    #[tokio::test]
+    async fn lease_signer_for_only_returns_that_entry_point() {
+        let manager = create_tagged_test_manager(&[
+            (addr(1), V7),
+            (addr(2), V7),
+            (addr(3), V6),
+            (addr(4), V8),
+        ]);
+
+        let mut leased = Vec::new();
+        while let Some(lease) = manager.lease_signer_for(V7) {
+            assert_eq!(lease.entry_point(), Some(V7));
+            leased.push(lease.address());
+        }
+        leased.sort();
+        assert_eq!(leased, vec![addr(1), addr(2)]);
+
+        // The v0.7 pool is empty; free v0.6/v0.8 signers are not handed out instead.
+        assert!(manager.lease_signer_for(V7).is_none());
+        assert_eq!(manager.available(), 2);
+        assert_eq!(manager.lease_signer_for(V6).unwrap().address(), addr(3));
+    }
+
+    #[tokio::test]
+    async fn lease_signer_for_returns_and_reuses_within_pool() {
+        let manager = create_tagged_test_manager(&[(addr(1), V7), (addr(2), V6)]);
+        let lease = manager.lease_signer_for(V7).unwrap();
+        assert!(manager.lease_signer_for(V7).is_none());
+        manager.return_lease(lease);
+        assert_eq!(manager.lease_signer_for(V7).unwrap().address(), addr(1));
+    }
+
+    #[tokio::test]
+    async fn lease_signer_for_untagged_manager_returns_none() {
+        let manager = create_test_manager(vec![addr(1), addr(2)]);
+        assert!(manager.lease_signer_for(V7).is_none());
+        // Legacy leasing still works and leases are untagged.
+        let lease = manager.lease_signer().unwrap();
+        assert_eq!(lease.entry_point(), None);
+    }
+
+    #[tokio::test]
+    async fn lease_signer_for_skips_signers_that_need_funding() {
+        let manager = create_tagged_test_manager(&[(addr(1), V7), (addr(2), V7)]);
+        manager.update_balances(vec![(addr(1), U256::from(50)), (addr(2), U256::from(200))]);
+        assert_eq!(manager.lease_signer_for(V7).unwrap().address(), addr(2));
+        assert!(manager.lease_signer_for(V7).is_none());
+    }
+
+    #[tokio::test]
+    async fn lease_signer_picks_pool_with_most_free_signers() {
+        let manager = create_tagged_test_manager(&[
+            (addr(1), V7),
+            (addr(2), V7),
+            (addr(3), V7),
+            (addr(4), V6),
+            (addr(5), V6),
+            (addr(6), V8),
+        ]);
+        // v0.7 has 3 free.
+        assert_eq!(manager.lease_signer().unwrap().entry_point(), Some(V7));
+        // v0.7 has 2, v0.6 has 2: tie goes to v0.6 (fixed order).
+        assert_eq!(manager.lease_signer().unwrap().entry_point(), Some(V6));
+        // v0.7 has 2, v0.6 has 1.
+        assert_eq!(manager.lease_signer().unwrap().entry_point(), Some(V7));
+    }
+
+    #[tokio::test]
+    async fn lease_by_address_carries_tag() {
+        let manager = create_tagged_test_manager(&[(addr(1), V7), (addr(2), V6)]);
+        let lease = manager.lease_signer_by_address(&addr(2)).unwrap();
+        assert_eq!(lease.entry_point(), Some(V6));
+    }
+
+    #[tokio::test]
+    async fn ensure_entry_point_checks_tag() {
+        let manager = create_tagged_test_manager(&[(addr(1), V7)]);
+        let lease = manager.lease_signer_for(V7).unwrap();
+        assert!(lease.ensure_entry_point(V7).is_ok());
+        let err = lease.ensure_entry_point(V6).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::EntryPointMismatch { signer, ref expected, ref actual }
+                if signer == addr(1) && expected == "v0.6" && actual == "v0.7"
+        ));
+
+        // Untagged (legacy) leases pass for any EntryPoint.
+        let legacy = create_test_manager(vec![addr(9)]).lease_signer().unwrap();
+        assert!(legacy.ensure_entry_point(V6).is_ok());
     }
 
     #[tokio::test]
