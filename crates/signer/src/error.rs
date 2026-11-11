@@ -12,6 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_network::Network;
+use alloy_primitives::Address;
 use rundler_provider::ProviderError;
 
 /// Error type for the signer crate
@@ -26,6 +27,16 @@ pub enum Error {
     /// Provider error
     #[error("provider error: {0}")]
     ProviderError(ProviderError),
+    /// A signer was asked to send to an EntryPoint it does not belong to
+    #[error("signer {signer} belongs to entry point {actual}, not {expected}")]
+    EntryPointMismatch {
+        /// Signer address
+        signer: Address,
+        /// EntryPoint the bundle is for
+        expected: String,
+        /// EntryPoint the signer belongs to
+        actual: String,
+    },
     /// Other error
     #[error(transparent)]
     Other(#[from] anyhow::Error),
