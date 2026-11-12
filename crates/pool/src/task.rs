@@ -17,7 +17,7 @@ use anyhow::Context;
 use futures::FutureExt;
 use rundler_provider::{EntryPoint, Providers, ProvidersWithEntryPointT};
 use rundler_sim::{
-    PrecheckerImpl, Simulator,
+    PrecheckerImpl, ReservoirEstimator, Simulator, SponsoredReservoirEstimator,
     simulation::{self, UnsafeSimulator},
 };
 use rundler_task::TaskSpawnerExt;
@@ -213,6 +213,7 @@ where
                 event_sender,
                 ep_providers,
                 simulator,
+                None,
             )
         } else {
             let simulator = simulation::new_v0_6_simulator(
@@ -228,6 +229,7 @@ where
                 event_sender,
                 ep_providers,
                 simulator,
+                None,
             )
         }
     }
@@ -252,6 +254,14 @@ where
                 pool_config.entry_point_version
             ))?;
 
+        let sponsored_reservoir = pool_config.reservoir_estimation_settings.map(|settings| {
+            Arc::new(ReservoirEstimator::new(
+                self.providers.evm().clone(),
+                ep_providers.entry_point().clone(),
+                settings,
+            )) as Arc<dyn SponsoredReservoirEstimator<_>>
+        });
+
         if unsafe_mode {
             let simulator = UnsafeSimulator::new(
                 ep_providers.entry_point().clone(),
@@ -265,6 +275,7 @@ where
                 event_sender,
                 ep_providers,
                 simulator,
+                sponsored_reservoir,
             )
         } else {
             let simulator = simulation::new_v0_7_simulator(
@@ -280,10 +291,12 @@ where
                 event_sender,
                 ep_providers,
                 simulator,
+                sponsored_reservoir,
             )
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn create_mempool<T, UO, EP, S>(
         &self,
         task_spawner: &T,
@@ -292,6 +305,7 @@ where
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         ep_providers: EP,
         simulator: S,
+        sponsored_reservoir: Option<Arc<dyn SponsoredReservoirEstimator<UO>>>,
     ) -> anyhow::Result<Arc<dyn Mempool + 'static>>
     where
         T: TaskSpawnerExt,
@@ -300,13 +314,16 @@ where
         EP: ProvidersWithEntryPointT<UO = UO> + 'static,
         S: Simulator<UO = UO> + 'static,
     {
-        let prechecker = PrecheckerImpl::new(
+        let mut prechecker = PrecheckerImpl::new(
             chain_spec,
             ep_providers.evm().clone(),
             ep_providers.entry_point().clone(),
             ep_providers.fee_estimator().clone(),
             pool_config.precheck_settings,
         );
+        if let Some(sponsored_reservoir) = sponsored_reservoir {
+            prechecker = prechecker.with_sponsored_reservoir(sponsored_reservoir);
+        }
 
         let reputation = Arc::new(AddressReputation::new(
             ReputationParams::new(pool_config.reputation_tracking_enabled),

@@ -36,7 +36,7 @@ use std::{
 use alloy_primitives::{Address, B256};
 #[cfg(test)]
 use mockall::automock;
-use rundler_sim::{MempoolConfig, PrecheckSettings, SimulationSettings};
+use rundler_sim::{EstimationSettings, MempoolConfig, PrecheckSettings, SimulationSettings};
 use rundler_types::{
     EntityUpdate, EntryPointVersion, UserOperationId, UserOperationPermissions,
     UserOperationVariant,
@@ -197,6 +197,9 @@ pub struct PoolConfig {
     pub allowlist: Option<HashSet<Address>>,
     /// Settings for precheck validation
     pub precheck_settings: PrecheckSettings,
+    /// Settings for finding the state-gas reservoir a bundler-sponsored op needs at admission,
+    /// with the simulations gas estimation runs. `None` admits sponsored ops metered.
+    pub reservoir_estimation_settings: Option<EstimationSettings>,
     /// Settings for simulation validation
     pub sim_settings: SimulationSettings,
     /// Configuration for the mempool channels, by channel ID

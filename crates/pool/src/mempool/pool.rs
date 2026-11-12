@@ -673,7 +673,8 @@ where
                 // only bundleable while its budget still covers the required
                 // fee. The op's own fees are irrelevant, the bundler pays.
                 Some(sponsorship) => {
-                    U256::from(op.uo().total_gas_limit()) * U256::from(uo_fees.max_fee_per_gas)
+                    U256::from(op.po.total_gas_limit_with_reservoir())
+                        * U256::from(uo_fees.max_fee_per_gas)
                         <= sponsorship.max_cost
                 }
                 None => {
@@ -2522,6 +2523,44 @@ mod tests {
         };
         let recovered = pool.do_maintenance(2, Timestamp::from(2), None, lower_fees, 0);
         assert_eq!(recovered.candidates, 1);
+    }
+
+    #[test]
+    fn test_sponsored_reservoir_counts_toward_budget() {
+        let mut pool = pool();
+        let probe = create_sponsored_op(Address::random(), 0, U256::ZERO);
+        // The budget covers the op's own limits, but not its reservoir.
+        let cost = sponsorship_cost(&probe, CANDIDATE_TEST_FEES.max_fee_per_gas);
+        let mut po = create_sponsored_op(Address::random(), 0, cost);
+        po.reservoir_gas = Some(1_000_000);
+        let hash = pool.add_operation(po, 0, 0).unwrap();
+
+        let counts = pool.do_maintenance(1, Timestamp::from(1), None, CANDIDATE_TEST_FEES, 0);
+
+        assert_eq!(counts.candidates, 0);
+        // Budget-blocked, not ineligible: it stays in the pool until the fee falls or it expires.
+        assert!(pool.get_operation_by_hash(hash).is_some());
+        assert_eq!(pool.best_operations().count(), 1);
+    }
+
+    #[test]
+    fn test_reservoir_adds_to_gas_limit_only_when_sponsored() {
+        let mut sponsored = create_sponsored_op(Address::random(), 0, U256::MAX);
+        let limits = sponsored.uo.total_gas_limit();
+        assert_eq!(sponsored.total_gas_limit_with_reservoir(), limits);
+        sponsored.reservoir_gas = Some(1_000_000);
+        assert_eq!(
+            sponsored.total_gas_limit_with_reservoir(),
+            limits + 1_000_000
+        );
+
+        // A paying op's PVG already pays for its reservoir.
+        let mut paying = create_op(Address::random(), 0, 10);
+        paying.reservoir_gas = Some(1_000_000);
+        assert_eq!(
+            paying.total_gas_limit_with_reservoir(),
+            paying.uo.total_gas_limit()
+        );
     }
 
     #[test]

@@ -866,6 +866,9 @@ message PrecheckViolationError {
     Eip7702NonceMismatch eip_7702_nonce_mismatch = 21;
     Eip7702InvalidFactory eip_7702_invalid_factory = 22;
     ReservoirGasTooHigh reservoir_gas_too_high = 23;
+    ReservoirSearchBusy reservoir_search_busy = 24;
+    ReservoirSearchTimedOut reservoir_search_timed_out = 25;
+    ReservoirSimulationUnsupported reservoir_simulation_unsupported = 26;
   }
 }
 
@@ -938,6 +941,12 @@ message ReservoirGasTooHigh {
   bytes actual_gas = 1;
   bytes max_gas = 2;
 }
+
+message ReservoirSearchBusy {}
+
+message ReservoirSearchTimedOut {}
+
+message ReservoirSimulationUnsupported {}
 
 message Eip7702Disabled {}
 
