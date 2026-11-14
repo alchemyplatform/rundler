@@ -14,6 +14,8 @@ members = [
     "crates/types/",
     "crates/utils/"
 ]
+# Standalone crate with its own workspace and lockfile (needs forge to build)
+exclude = ["test/pvg-calibration"]
 default-members = ["bin/rundler"]
 resolver = "2"
 
