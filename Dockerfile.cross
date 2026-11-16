@@ -12,7 +12,11 @@ ARG TARGETARCH
 RUN apt-get -y update; apt-get -y install ca-certificates
 RUN update-ca-certificates
 
+RUN groupadd --gid 10001 rundler \
+    && useradd --uid 10001 --gid rundler --create-home --shell /usr/sbin/nologin rundler
+
 COPY ./dist/bin/$TARGETARCH/rundler /usr/local/bin/rundler
 
 EXPOSE 3000 8080
+USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/rundler"]
