@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, B256, Bytes, TxHash, U64, U256};
+use alloy_primitives::{Address, B256, Bytes, TxHash, U64, U256, address};
 use alloy_provider::{ext::DebugApi, network::TransactionBuilder};
 use alloy_rpc_types_eth::{
     BlockId, BlockNumberOrTag, FeeHistory, Filter, Log,
@@ -36,6 +36,20 @@ use crate::{
     AlloyProvider, Block, EvmCall, EvmProvider, ProviderResult, RpcRecv, RpcSend, Transaction,
     TransactionReceipt, TransactionRequest,
 };
+
+// Fixed addresses for the helper contracts injected via state overrides.
+//
+// The helpers are never deployed; their bytecode is supplied through an
+// `eth_call` state override, so no real account is expected at these
+// addresses. The values are arbitrary high-entropy constants. Using fixed
+// addresses (instead of a random one per call) lets forked nodes such as
+// Anvil cache the account lookup the override triggers, instead of hitting
+// their upstream RPC for a fresh address on every call.
+// See https://github.com/alchemyplatform/rundler/issues/1334.
+const GET_GAS_USED_HELPER_ADDRESS: Address = address!("5ceba03006fb593e79fc070eaf601a6ab3fe1a28");
+const GET_CODE_HASHES_HELPER_ADDRESS: Address =
+    address!("0d5202312edb90bd9c447509638e90321d2ee274");
+const GET_BALANCES_HELPER_ADDRESS: Address = address!("c6b51d33bdbe6bec9250e78cb2a1488adc0897ab");
 
 /// Evm Provider implementation using [alloy-provider](https://github.com/alloy-rs/alloy-rs)
 #[derive(Clone)]
@@ -260,7 +274,7 @@ where
             mut state_override,
         } = call;
 
-        let helper_addr = Address::random();
+        let helper_addr = GET_GAS_USED_HELPER_ADDRESS;
         let helper = GetGasUsed::new(helper_addr, &self.inner);
 
         let account = AccountOverride {
@@ -325,7 +339,7 @@ where
         mut addresses: Vec<Address>,
         block: Option<BlockId>,
     ) -> ProviderResult<B256> {
-        let helper_addr = Address::random();
+        let helper_addr = GET_CODE_HASHES_HELPER_ADDRESS;
         let helper = GetCodeHashesInstance::new(helper_addr, &self.inner);
 
         let mut overrides = StateOverride::default();
@@ -347,7 +361,7 @@ where
 
     #[instrument(skip(self))]
     async fn get_balances(&self, addresses: Vec<Address>) -> ProviderResult<Vec<(Address, U256)>> {
-        let helper_addr = Address::random();
+        let helper_addr = GET_BALANCES_HELPER_ADDRESS;
         let helper = GetBalancesInstance::new(helper_addr, &self.inner);
 
         let mut overrides = StateOverride::default();
