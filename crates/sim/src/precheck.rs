@@ -216,16 +216,21 @@ where
             violations.extend(self.check_init_code(op, &async_data, perms));
         }
         violations.extend(self.check_payer(op, &async_data));
+        // A paying op's reservoir comes from its PVG surplus; a sponsored op's (None here) from
+        // the search below.
+        let mut reservoir_gas =
+            self.reservoir_gas(op, &chain_spec, block_timestamp, &async_data, perms);
+        violations.extend(self.check_gas(op, &chain_spec, &async_data, perms, reservoir_gas));
         // A sponsored op's reservoir search is the costliest check, so it is skipped for an op
-        // that is rejected anyway.
-        let sponsored_reservoir_gas = if violations.is_empty() {
-            self.sponsored_reservoir_gas(op, perms, &chain_spec, block_hash, block_timestamp)
+        // that is rejected anyway, by the gas checks above included.
+        if violations.is_empty()
+            && let Some(sponsored_reservoir_gas) = self
+                .sponsored_reservoir_gas(op, perms, &chain_spec, block_hash, block_timestamp)
                 .await?
-        } else {
-            None
-        };
-        let reservoir_gas = sponsored_reservoir_gas
-            .or_else(|| self.reservoir_gas(op, &chain_spec, block_timestamp, &async_data, perms));
+        {
+            reservoir_gas = Some(sponsored_reservoir_gas);
+            violations.extend(self.check_reservoir_gas_limit(sponsored_reservoir_gas));
+        }
         violations.extend(self.check_reservoir_supported(
             op,
             &chain_spec,
@@ -233,7 +238,6 @@ where
             &async_data,
             reservoir_gas,
         ));
-        violations.extend(self.check_gas(op, &chain_spec, &async_data, perms, reservoir_gas));
         if !violations.is_empty() {
             Err(violations)?
         }
@@ -444,7 +448,6 @@ where
             max_bundle_execution_gas,
             max_uo_cost,
             max_reservoir_uo_cost,
-            max_reservoir_gas,
             ..
         } = self.settings;
         let AsyncData {
@@ -481,13 +484,8 @@ where
                 MIN_CALL_GAS_LIMIT,
             ));
         }
-        if let Some(reservoir_gas) = reservoir_gas
-            && reservoir_gas > max_reservoir_gas
-        {
-            violations.push(PrecheckViolation::ReservoirGasTooHigh(
-                reservoir_gas,
-                max_reservoir_gas,
-            ));
+        if let Some(violation) = reservoir_gas.and_then(|gas| self.check_reservoir_gas_limit(gas)) {
+            violations.push(violation);
         }
 
         // If the UO is bundler sponsored, skip the fee checks
@@ -555,6 +553,14 @@ where
         }
 
         violations
+    }
+
+    fn check_reservoir_gas_limit(&self, reservoir_gas: u128) -> Option<PrecheckViolation> {
+        let max_reservoir_gas = self.settings.max_reservoir_gas;
+        (reservoir_gas > max_reservoir_gas).then_some(PrecheckViolation::ReservoirGasTooHigh(
+            reservoir_gas,
+            max_reservoir_gas,
+        ))
     }
 
     fn check_payer(&self, op: &UO, async_data: &AsyncData) -> Option<PrecheckViolation> {
@@ -2071,10 +2077,12 @@ mod tests {
             assert!(matches!(result, Err(PrecheckError::Other(_))), "{result:?}");
         }
 
-        /// The search is skipped for an op already rejected (here a sender without code and
-        /// without init code): the stub panics if it is asked.
-        #[tokio::test]
-        async fn test_sponsored_reservoir_search_skipped_for_rejected_op() {
+        /// The violations of a sponsored op whose reservoir search must not run: the stub panics
+        /// if it is asked.
+        async fn rejected_sponsored_op_violations(
+            sender_code: Bytes,
+            call_gas_limit: u128,
+        ) -> Vec<PrecheckViolation> {
             let cs = ChainSpec {
                 id: 1,
                 glamsterdam_activation: rundler_types::chain::ForkActivation::Genesis,
@@ -2083,7 +2091,7 @@ mod tests {
             let mut provider = MockEvmProvider::new();
             provider
                 .expect_get_code()
-                .returning(|_, _| Ok(Bytes::new()));
+                .returning(move |_, _| Ok(sender_code.clone()));
             provider
                 .expect_get_balance()
                 .returning(|_, _| Ok(U256::from(u64::MAX)));
@@ -2104,6 +2112,7 @@ mod tests {
             )
             .with_sponsored_reservoir(Arc::new(StubSponsoredReservoir::new(None)));
             let op = create_uo_builder(&cs, EntryPointVersion::V0_7)
+                .call_gas_limit(call_gas_limit)
                 .max_fee_per_gas(0)
                 .max_priority_fee_per_gas(0)
                 .pre_verification_gas(0)
@@ -2116,10 +2125,35 @@ mod tests {
             let Err(PrecheckError::Violations(violations)) = result else {
                 panic!("expected violations");
             };
+            violations
+        }
+
+        /// The search is skipped for an op already rejected: here a sender without code and
+        /// without init code.
+        #[tokio::test]
+        async fn test_sponsored_reservoir_search_skipped_for_rejected_op() {
+            let violations =
+                rejected_sponsored_op_violations(Bytes::new(), MIN_CALL_GAS_LIMIT).await;
             assert_eq!(
                 violations,
                 vec![PrecheckViolation::SenderIsNotContractAndNoInitCode(
                     TEST_SENDER
+                )]
+            );
+        }
+
+        /// The gas checks that don't depend on the reservoir run before the search, so an op
+        /// that fails one never takes a search permit.
+        #[tokio::test]
+        async fn test_sponsored_reservoir_search_skipped_for_invalid_gas_limit() {
+            let violations =
+                rejected_sponsored_op_violations(Bytes::from_static(&[1]), MIN_CALL_GAS_LIMIT - 1)
+                    .await;
+            assert_eq!(
+                violations,
+                vec![PrecheckViolation::CallGasLimitTooLow(
+                    MIN_CALL_GAS_LIMIT - 1,
+                    MIN_CALL_GAS_LIMIT
                 )]
             );
         }

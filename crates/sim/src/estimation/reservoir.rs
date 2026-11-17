@@ -105,7 +105,7 @@ pub enum SponsoredReservoirError {
     /// The most reservoir searches are already running: retryable
     #[error("too many reservoir searches are running")]
     Busy,
-    /// The search ran past `reservoir_trace_timeout`: retryable
+    /// The run without a reservoir, or the search, ran past `reservoir_trace_timeout`: retryable
     #[error("the reservoir search timed out")]
     TimedOut,
     /// The node's `eth_simulateV1` gives calls no state-gas reservoir, so a reservoir cannot be
@@ -804,8 +804,9 @@ where
     /// PVG is zero, so it cannot carry its reservoir as a paying op does; admission finds it with
     /// the simulations estimation runs. The op is first run without a reservoir, and only if it
     /// fails is one searched for, from its net state gas up to `max_reservoir_gas`, at the call
-    /// gas limit the op was signed with. Only the search takes a permit and is timed out, so an
-    /// op that runs metered is not turned away under load.
+    /// gas limit the op was signed with. Both the run without a reservoir and the search are
+    /// bounded by `reservoir_trace_timeout`, but only the search takes a permit, so an op that
+    /// runs metered is not turned away as busy.
     ///
     /// Unlike a paying op's, the reservoir is not padded up to the reservoir threshold: that
     /// padding lets admission classify a paying op by its PVG surplus, while a sponsored op's
@@ -835,10 +836,19 @@ where
             verification_gas_limit: op.verification_gas_limit(),
             paymaster_verification_gas_limit: op.paymaster_verification_gas_limit(),
         };
-        if self
-            .reservoir_op_succeeds(&args, 0, op.call_gas_limit())
-            .await?
-        {
+        // Bounded like the search, so a slow node can't hold a simulation at the transaction gas
+        // cap for every sponsored op, but without a permit: an op that runs metered is not turned
+        // away as busy.
+        let metered = tokio::time::timeout(
+            self.settings.reservoir_trace_timeout,
+            self.reservoir_op_succeeds(&args, 0, op.call_gas_limit()),
+        )
+        .await
+        .map_err(|_| {
+            self.metrics.sponsored_reservoir_timeouts.increment(1);
+            SponsoredReservoirError::TimedOut
+        })??;
+        if metered {
             return Ok(SponsoredReservoir::Metered);
         }
 
