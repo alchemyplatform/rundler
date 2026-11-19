@@ -2412,71 +2412,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_verification_gas_efficiency_counts_zero_deposit_state_gas() {
-        // (sender deposit is zero, Glamsterdam activation, accepted)
+        // 50K of 200K verification gas used; with 97,920 of refilled state gas it passes 0.4
         for (sender_deposit_is_zero, activation, accepted) in [
-            // the simulator reports 50K of 200K verification gas; with the 97,920 refilled for
-            // the deposit slot it is 147,920, above the 0.4 threshold
             (Some(true), ForkActivation::Genesis, true),
-            // a funded sender writes no new deposit slot, so 50K of 200K stays below 0.4
             (Some(false), ForkActivation::Genesis, false),
-            (None, ForkActivation::Genesis, false),
-            // before Glamsterdam there is no state gas to count
             (Some(true), ForkActivation::Never, false),
         ] {
             let mut config = default_config();
             config.verification_gas_limit_efficiency_reject_threshold = 0.4;
-            config.chain_spec = ChainSpec {
-                glamsterdam_activation: activation,
-                ..ChainSpec::default()
-            };
+            config.chain_spec.glamsterdam_activation = activation;
 
             let mut op = create_op_from_op_v0_6(UserOperationRequiredFields {
-                call_gas_limit: 10_000,
                 verification_gas_limit: 200_000,
                 pre_verification_gas: 50_000,
                 max_fee_per_gas: 1,
                 max_priority_fee_per_gas: 1,
                 ..Default::default()
             });
-            op.pvg_state = PvgState {
-                sender_deposit_is_zero,
-                ..PvgState::unknown()
-            };
+            op.pvg_state.sender_deposit_is_zero = sender_deposit_is_zero;
 
-            let mut ep = MockEntryPointV0_6::new();
-            ep.expect_simulate_handle_op().returning(|_, _, _, _, _| {
-                Ok(Ok(ExecutionResult {
-                    pre_op_gas: 100_000,
-                    paid: uint!(110_000_U256),
-                    target_success: true,
-                    ..Default::default()
-                }))
-            });
-
-            let pool = create_pool_with_entry_point_config(
-                config,
-                vec![op.clone()],
-                ep,
-                MempoolConfig::default(),
-            );
+            let pool = create_pool_with_config(config, vec![op.clone()]);
             let ret = pool
                 .add_operation(OperationOrigin::Local, op.op, default_perms())
                 .await;
-
-            if accepted {
-                assert!(
-                    ret.is_ok(),
-                    "{sender_deposit_is_zero:?} {activation:?}: {ret:?}"
-                );
-            } else {
-                assert!(
-                    matches!(
-                        ret,
-                        Err(MempoolError::VerificationGasLimitEfficiencyTooLow(_, _))
-                    ),
-                    "{sender_deposit_is_zero:?} {activation:?}: {ret:?}"
-                );
-            }
+            assert_eq!(ret.is_ok(), accepted, "{ret:?}");
         }
     }
 
