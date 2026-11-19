@@ -198,6 +198,30 @@ pub enum PrecheckViolation {
     /// The EIP-7702 sender has too many pending transactions
     #[display("EIP-7702 auth sender has too many pending transactions: {0}. Max allowed: 1")]
     Eip7702SenderPendingTransactionCountTooHigh(u64),
+    /// The bundler-sponsored op fails without a state-gas reservoir, and too many reservoir
+    /// searches are running to find its own. Retryable.
+    #[display("too many state-gas reservoir searches are running for bundler-sponsored ops, retry")]
+    ReservoirSearchBusy,
+    /// The bundler-sponsored op fails without a state-gas reservoir, and the search for its own
+    /// timed out. Retryable.
+    #[display("the state-gas reservoir search for this bundler-sponsored op timed out, retry")]
+    ReservoirSearchTimedOut,
+    /// The bundler-sponsored op fails without a state-gas reservoir, and the node's
+    /// `eth_simulateV1` gives calls none, so its reservoir cannot be sized
+    #[display(
+        "the op fails without a state-gas reservoir, and the node's eth_simulateV1 cannot size one"
+    )]
+    ReservoirSimulationUnsupported,
+    /// A simulation that decides whether the bundler-sponsored op needs a state-gas reservoir,
+    /// or sizes it, failed (e.g. a node error). Retryable.
+    #[display("the state-gas reservoir simulation for this bundler-sponsored op failed, retry")]
+    ReservoirSimulationFailed,
+    /// The bundler-sponsored op's limits plus its state-gas reservoir, at the required fee, cost
+    /// more than its sponsorship's max cost
+    #[display(
+        "bundler-sponsored op's cost with its state-gas reservoir is {0} but its max cost is {1}"
+    )]
+    OverSponsorshipMaxCost(U256, U256),
 }
 
 /// All possible simulation violations
