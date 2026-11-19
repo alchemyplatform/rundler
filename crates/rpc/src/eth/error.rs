@@ -346,9 +346,9 @@ impl From<PrecheckViolation> for EthRpcError {
             | PrecheckViolation::Eip7702SenderPendingTransactionCountTooHigh(_) => {
                 Self::EntryPointValidationRejected(value.to_string())
             }
-            PrecheckViolation::ReservoirSearchBusy | PrecheckViolation::ReservoirSearchTimedOut => {
-                Self::PrecheckRetryable(value)
-            }
+            PrecheckViolation::ReservoirSearchBusy
+            | PrecheckViolation::ReservoirSearchTimedOut
+            | PrecheckViolation::ReservoirSimulationFailed => Self::PrecheckRetryable(value),
             _ => Self::PrecheckFailed(value),
         }
     }
@@ -607,6 +607,10 @@ mod tests {
         );
         assert_eq!(
             precheck_code(PrecheckViolation::ReservoirSearchTimedOut),
+            THROTTLED_OR_BANNED_CODE
+        );
+        assert_eq!(
+            precheck_code(PrecheckViolation::ReservoirSimulationFailed),
             THROTTLED_OR_BANNED_CODE
         );
         assert_eq!(

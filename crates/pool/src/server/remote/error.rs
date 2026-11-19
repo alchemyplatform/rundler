@@ -35,9 +35,10 @@ use super::protos::{
     MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
     MempoolError as ProtoMempoolError, MultipleRolesViolation, NotStaked,
     OperationAlreadyKnownError, OperationDropTooSoon, OperationRevert, OutOfGas, OverMaxCost,
-    PanicRevert, PaymasterBalanceTooLow, PaymasterDepositTooLow, PaymasterIsNotContract,
-    PreVerificationGasTooLow, PrecheckViolationError as ProtoPrecheckViolationError,
-    ReplacementUnderpricedError, ReservoirGasTooHigh, ReservoirSearchBusy, ReservoirSearchTimedOut,
+    OverSponsorshipMaxCost, PanicRevert, PaymasterBalanceTooLow, PaymasterDepositTooLow,
+    PaymasterIsNotContract, PreVerificationGasTooLow,
+    PrecheckViolationError as ProtoPrecheckViolationError, ReplacementUnderpricedError,
+    ReservoirGasTooHigh, ReservoirSearchBusy, ReservoirSearchTimedOut, ReservoirSimulationFailed,
     ReservoirSimulationUnsupported, SenderAddressUsedAsAlternateEntity, SenderFundsTooLow,
     SenderIsNotContractAndNoInitCode, SimulationViolationError as ProtoSimulationViolationError,
     TooManyExpectedStorageSlots, TotalGasLimitTooHigh, UnintendedRevert,
@@ -492,6 +493,21 @@ impl From<PrecheckViolation> for ProtoPrecheckViolationError {
                     ),
                 ),
             },
+            PrecheckViolation::ReservoirSimulationFailed => ProtoPrecheckViolationError {
+                violation: Some(precheck_violation_error::Violation::ReservoirSimulationFailed(
+                    ReservoirSimulationFailed {},
+                )),
+            },
+            PrecheckViolation::OverSponsorshipMaxCost(actual_cost, max_cost) => {
+                ProtoPrecheckViolationError {
+                    violation: Some(precheck_violation_error::Violation::OverSponsorshipMaxCost(
+                        OverSponsorshipMaxCost {
+                            actual_cost: actual_cost.to_proto_bytes(),
+                            max_cost: max_cost.to_proto_bytes(),
+                        },
+                    )),
+                }
+            }
         }
     }
 }
@@ -613,6 +629,15 @@ impl TryFrom<ProtoPrecheckViolationError> for PrecheckViolation {
             }
             Some(precheck_violation_error::Violation::ReservoirSimulationUnsupported(_)) => {
                 PrecheckViolation::ReservoirSimulationUnsupported
+            }
+            Some(precheck_violation_error::Violation::ReservoirSimulationFailed(_)) => {
+                PrecheckViolation::ReservoirSimulationFailed
+            }
+            Some(precheck_violation_error::Violation::OverSponsorshipMaxCost(e)) => {
+                PrecheckViolation::OverSponsorshipMaxCost(
+                    from_bytes(&e.actual_cost)?,
+                    from_bytes(&e.max_cost)?,
+                )
             }
             None => {
                 bail!("unknown proto mempool precheck violation")
@@ -1116,6 +1141,8 @@ mod tests {
             PrecheckViolation::ReservoirSearchBusy,
             PrecheckViolation::ReservoirSearchTimedOut,
             PrecheckViolation::ReservoirSimulationUnsupported,
+            PrecheckViolation::ReservoirSimulationFailed,
+            PrecheckViolation::OverSponsorshipMaxCost(U256::from(2), U256::from(1)),
         ] {
             let proto_error: ProtoMempoolError =
                 MempoolError::PrecheckViolation(violation.clone()).into();

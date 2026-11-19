@@ -212,6 +212,16 @@ pub enum PrecheckViolation {
         "the op fails without a state-gas reservoir, and the node's eth_simulateV1 cannot size one"
     )]
     ReservoirSimulationUnsupported,
+    /// A simulation that decides whether the bundler-sponsored op needs a state-gas reservoir,
+    /// or sizes it, failed (e.g. a node error). Retryable.
+    #[display("the state-gas reservoir simulation for this bundler-sponsored op failed, retry")]
+    ReservoirSimulationFailed,
+    /// The bundler-sponsored op's limits plus its state-gas reservoir, at the required fee, cost
+    /// more than its sponsorship's max cost
+    #[display(
+        "bundler-sponsored op's cost with its state-gas reservoir is {0} but its max cost is {1}"
+    )]
+    OverSponsorshipMaxCost(U256, U256),
 }
 
 /// All possible simulation violations

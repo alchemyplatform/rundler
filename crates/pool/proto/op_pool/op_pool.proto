@@ -869,6 +869,8 @@ message PrecheckViolationError {
     ReservoirSearchBusy reservoir_search_busy = 24;
     ReservoirSearchTimedOut reservoir_search_timed_out = 25;
     ReservoirSimulationUnsupported reservoir_simulation_unsupported = 26;
+    ReservoirSimulationFailed reservoir_simulation_failed = 27;
+    OverSponsorshipMaxCost over_sponsorship_max_cost = 28;
   }
 }
 
@@ -947,6 +949,13 @@ message ReservoirSearchBusy {}
 message ReservoirSearchTimedOut {}
 
 message ReservoirSimulationUnsupported {}
+
+message ReservoirSimulationFailed {}
+
+message OverSponsorshipMaxCost {
+  bytes actual_cost = 1;
+  bytes max_cost = 2;
+}
 
 message Eip7702Disabled {}
 
