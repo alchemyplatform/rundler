@@ -32,9 +32,10 @@ use rundler_contracts::v0_7::IEntryPoint::UserOperationEvent;
 use rundler_provider::{
     BundleHandler, DAGasOracleSync, DAGasProvider, EntryPoint, EvmProvider,
     GethDebugBuiltInTracerType, GethDebugTracerCallConfig, GethDebugTracerType,
-    GethDebugTracingOptions, HandleOpsOut, ProvidersWithEntryPointT, TransactionRequest,
-    decode_v0_6_handle_ops_revert, decode_v0_6_ops_from_calldata, decode_v0_7_handle_ops_revert,
-    decode_v0_7_ops_from_calldata, get_auth_list_from_transaction, simulate_call,
+    GethDebugTracingOptions, HandleOpsOut, ProvidersWithEntryPointT, StateOverride,
+    TransactionRequest, decode_v0_6_handle_ops_revert, decode_v0_6_ops_from_calldata,
+    decode_v0_7_handle_ops_revert, decode_v0_7_ops_from_calldata, get_auth_list_from_transaction,
+    reservoir_probe_call, reservoir_probe_found_reservoir, simulate_calls,
 };
 use rundler_sim::{SimulationError, SimulationResult, Simulator, ViolationError, gas};
 use rundler_types::{
@@ -614,6 +615,10 @@ struct BuilderProposerMetrics {
     stale_eip7702_auth_rejections: Counter,
     #[metric(describe = "the distribution of bundle simulation time.")]
     bundle_simulation_ms: Histogram,
+    #[metric(
+        describe = "the count of reservoir-mode bundle simulations that failed because the node's eth_simulateV1 gives calls no state-gas reservoir."
+    )]
+    reservoir_simulation_without_reservoir: Counter,
 }
 
 impl<EP, BP> BundleProposerImpl<EP, BP>
@@ -1473,8 +1478,12 @@ where
     }
 
     /// Simulates a bundle of one reservoir-mode op as it will be sent, with `eth_simulateV1`,
-    /// which gives it the transaction's state-gas reservoir (an `eth_call` on reth v2.7 gets
-    /// none). Besides `handleOps` reverting, the op is rejected if the bundler would pay for it:
+    /// which gives it the transaction's state-gas reservoir. A `ReservoirProbe` call in the same
+    /// request (so on the same node) checks that it does: if the node gives calls no reservoir,
+    /// the op would run out of gas for a reason it will not have onchain, so this returns an
+    /// error, without judging the op, and the bundle is retried.
+    ///
+    /// Besides `handleOps` reverting, the op is rejected if the bundler would pay for it:
     ///
     /// - A paying op is rejected if the gas it is charged does not cover the transaction's gas
     ///   used: the state the reservoir pays is not metered by the entry point, so PVG must pay for
@@ -1500,9 +1509,25 @@ where
             bundle_fees,
             self.settings.submission_proxy.as_ref().map(|p| p.address()),
         );
-        let result = simulate_call(self.ep_providers.evm(), tx, None, Default::default())
-            .await
-            .context("should simulate the reservoir-mode bundle")?;
+        let mut state_override = StateOverride::default();
+        let probe_tx = reservoir_probe_call(&mut state_override);
+        let mut results = simulate_calls(
+            self.ep_providers.evm(),
+            vec![probe_tx, tx],
+            None,
+            state_override,
+        )
+        .await
+        .context("should simulate the reservoir-mode bundle")?;
+        if !reservoir_probe_found_reservoir(&results[0])? {
+            self.metrics
+                .reservoir_simulation_without_reservoir
+                .increment(1);
+            anyhow::bail!(
+                "the node's eth_simulateV1 gives calls no state-gas reservoir, can't simulate the reservoir-mode bundle"
+            );
+        }
+        let result = results.remove(1);
         if !result.success {
             let revert_data = Some(result.return_data.clone());
             let decoded = match entry_point.version().abi_version() {
@@ -2941,6 +2966,8 @@ mod tests {
         /// The gas price the op is charged at (`actualGasCost = actualGasUsed × this`): zero
         /// for a bundler-sponsored op
         cost_per_gas: u128,
+        /// Whether the `ReservoirProbe` call in the same request finds a reservoir
+        reservoir_found: bool,
     }
 
     impl ReservoirSimulation {
@@ -2952,6 +2979,7 @@ mod tests {
                 op_success: true,
                 charged: 37_984_630,
                 cost_per_gas: 50,
+                reservoir_found: true,
             }
         }
 
@@ -2981,7 +3009,15 @@ mod tests {
                     }],
                 }),
             };
-            serde_json::json!([{ "calls": [call] }])
+            let probe = serde_json::json!({
+                "status": "0x1",
+                "returnData": Bytes::from(<rundler_contracts::v0_7::ReservoirProbe::probeCall
+                    as alloy_sol_types::SolCall>::abi_encode_returns(
+                    &self.reservoir_found
+                )),
+                "gasUsed": "0x6e8d",
+            });
+            serde_json::json!([{ "calls": [probe, call] }])
         }
     }
 
@@ -3005,6 +3041,17 @@ mod tests {
         simulation: ReservoirSimulation,
         perms: UserOperationPermissions,
     ) -> Bundle<UserOperation> {
+        try_make_reservoir_bundle(op, reservoir_gas, simulation, perms)
+            .await
+            .unwrap()
+    }
+
+    async fn try_make_reservoir_bundle(
+        op: UserOperation,
+        reservoir_gas: u128,
+        simulation: ReservoirSimulation,
+        perms: UserOperationPermissions,
+    ) -> BundleProposerResult<Bundle<UserOperation>> {
         mock_make_bundle_at(
             vec![MockOp {
                 op,
@@ -3030,7 +3077,6 @@ mod tests {
             Some(simulation),
         )
         .await
-        .unwrap()
     }
 
     const RESERVOIR: u128 = 37_882_800;
@@ -3063,6 +3109,33 @@ mod tests {
             }],
         );
         assert_eq!(u128::from(bundle.gas_estimate), reservoir_tx_gas());
+    }
+
+    /// The node gives the simulation no reservoir (the probe finds none): the op would run out
+    /// of gas for a reason it will not have onchain, so the bundle fails without judging it,
+    /// and is retried.
+    #[tokio::test]
+    async fn test_reservoir_mode_bundle_without_simulation_reservoir() {
+        let result = try_make_reservoir_bundle(
+            reservoir_op(),
+            RESERVOIR,
+            ReservoirSimulation {
+                reservoir_found: false,
+                // what the op would get without a reservoir: out of gas, charged less than used
+                op_success: false,
+                charged: 37_000_000,
+                ..ReservoirSimulation::passing(reservoir_tx_gas())
+            },
+            UserOperationPermissions::default(),
+        )
+        .await;
+
+        let error = result.expect_err("no reservoir should fail the bundle");
+        assert!(
+            error.to_string().contains("no state-gas reservoir")
+                || format!("{error:#}").contains("no state-gas reservoir"),
+            "unexpected error: {error:#}"
+        );
     }
 
     /// `handleOps` reverts in the simulation with a `FailedOp`: the op is rejected.
@@ -6218,9 +6291,23 @@ mod tests {
                 .times(1)
                 .returning(move |method, (payload, _)| {
                     assert_eq!(method, "eth_simulateV1");
-                    let call = &payload["blockStateCalls"][0]["calls"][0];
+                    // Validation mode (which gives calls a reservoir) at a base fee of 0
+                    assert_eq!(payload["validation"], true);
+                    let block = &payload["blockStateCalls"][0];
+                    assert_eq!(block["blockOverrides"]["baseFeePerGas"], "0x0");
+                    let calls = block["calls"].as_array().unwrap();
+                    assert_eq!(calls.len(), 2, "the probe, then the bundle");
+                    let probe_gas: U256 = serde_json::from_value(calls[0]["gas"].clone()).unwrap();
+                    assert!(
+                        probe_gas > U256::from(TX_MAX_GAS_LIMIT),
+                        "probe has a reservoir"
+                    );
+                    let call = &calls[1];
                     let gas: U256 = serde_json::from_value(call["gas"].clone()).unwrap();
                     assert_eq!(gas, U256::from(simulation.tx_gas), "simulated tx.gas");
+                    for field in ["nonce", "maxFeePerGas", "maxPriorityFeePerGas", "gasPrice"] {
+                        assert!(call.get(field).is_none(), "simulated bundle has {field}");
+                    }
                     Ok(simulation.response(entry_point_address))
                 });
         }

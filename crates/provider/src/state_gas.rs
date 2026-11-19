@@ -13,13 +13,23 @@
 
 //! Simulating calls with an EIP-8037 state-gas reservoir.
 
+use alloy_network::TransactionBuilder;
 use alloy_primitives::{Address, B256, Bytes, U64};
-use alloy_rpc_types_eth::{BlockId, BlockNumberOrTag, state::StateOverride};
+use alloy_rpc_types_eth::{
+    BlockId, BlockNumberOrTag,
+    state::{AccountOverride, StateOverride},
+};
+use alloy_sol_types::SolCall;
 use anyhow::Context;
+use rundler_contracts::v0_7::{RESERVOIR_PROBE_V0_7_DEPLOYED_BYTECODE, ReservoirProbe::probeCall};
+use rundler_types::{TX_MAX_GAS_LIMIT, constants::SIMULATION_SENDER};
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::{EvmProvider, ProviderResult, TransactionRequest};
+
+/// The reservoir a [`reservoir_probe_call`] gets: enough for the new slot it writes
+const RESERVOIR_PROBE_RESERVOIR_GAS: u64 = 200_000;
 
 /// The result of one call simulated with `eth_simulateV1`.
 #[derive(Clone, Debug)]
@@ -60,12 +70,17 @@ struct RawSimulatedCall {
     logs: Vec<SimulatedLog>,
 }
 
-/// Simulates `tx` as a transaction with `eth_simulateV1`.
+/// Simulates `tx` as a transaction with `eth_simulateV1`, so that its gas above
+/// [`TX_MAX_GAS_LIMIT`] goes to an EIP-8037 state-gas reservoir, as a transaction's does.
 ///
-/// Unlike `eth_call`, reth v2.7's `eth_simulateV1` gives a call's gas above
-/// [`TX_MAX_GAS_LIMIT`](rundler_types::TX_MAX_GAS_LIMIT) to an EIP-8037 state-gas reservoir, as a
-/// transaction gets. The block's gas limit is raised for `tx`, which `eth_simulateV1` otherwise
-/// caps a call's gas at.
+/// The simulation runs in validation mode, which applies the transaction rules, the reservoir
+/// among them: reth v2.10 gives a call no reservoir without it (reth v2.7 gave one either way).
+/// Validation mode also checks fees, nonces and balances, which are not what is simulated here:
+/// the block's base fee is set to 0 and each call's nonce and fees are dropped, so its gas price
+/// is 0, its sender needs no balance, and its nonce is the sender's next one. The block's gas
+/// limit is raised for the calls, which `eth_simulateV1` otherwise caps a call's gas at.
+///
+/// Whether a node gives calls a reservoir is checked with [`reservoir_probe_call`].
 pub async fn simulate_call<P: EvmProvider>(
     provider: &P,
     tx: TransactionRequest,
@@ -85,14 +100,19 @@ pub async fn simulate_calls<P: EvmProvider>(
     state_override: StateOverride,
 ) -> ProviderResult<Vec<SimulatedCall>> {
     let count = txs.len();
+    let txs: Vec<TransactionRequest> = txs.into_iter().map(without_nonce_and_fees).collect();
     let block_gas_limit = txs
         .iter()
         .map(|tx| tx.gas.unwrap_or_default())
         .fold(0_u64, u64::saturating_add)
         .saturating_mul(2);
     let payload = json!({
+        "validation": true,
         "blockStateCalls": [{
-            "blockOverrides": { "gasLimit": U64::from(block_gas_limit) },
+            "blockOverrides": {
+                "gasLimit": U64::from(block_gas_limit),
+                "baseFeePerGas": U64::ZERO,
+            },
             "stateOverrides": state_override,
             "calls": txs,
         }],
@@ -126,6 +146,46 @@ pub async fn simulate_calls<P: EvmProvider>(
     Ok(calls)
 }
 
+/// `tx` without its nonce and fees, see [`simulate_call`]
+fn without_nonce_and_fees(mut tx: TransactionRequest) -> TransactionRequest {
+    tx.nonce = None;
+    tx.gas_price = None;
+    tx.max_fee_per_gas = None;
+    tx.max_priority_fee_per_gas = None;
+    tx.max_fee_per_blob_gas = None;
+    tx
+}
+
+/// Adds a `ReservoirProbe` at a random address (so it cannot collide with a caller's override)
+/// to `state_override` and returns a call to it, to run in the same [`simulate_calls`] request
+/// (so on the same node) as calls that rely on a state-gas reservoir. Read its result with
+/// [`reservoir_probe_found_reservoir`].
+///
+/// The probe is its own call rather than wrapping the others, which would see what they left of
+/// the reservoir.
+pub fn reservoir_probe_call(state_override: &mut StateOverride) -> TransactionRequest {
+    let probe = Address::random();
+    state_override.insert(
+        probe,
+        AccountOverride {
+            code: Some(RESERVOIR_PROBE_V0_7_DEPLOYED_BYTECODE.clone()),
+            ..Default::default()
+        },
+    );
+    TransactionRequest::default()
+        .from(SIMULATION_SENDER)
+        .to(probe)
+        .input(Bytes::from(probeCall {}.abi_encode()).into())
+        .with_gas_limit(TX_MAX_GAS_LIMIT + RESERVOIR_PROBE_RESERVOIR_GAS)
+}
+
+/// Whether the [`reservoir_probe_call`] `result` got a state-gas reservoir
+pub fn reservoir_probe_found_reservoir(result: &SimulatedCall) -> anyhow::Result<bool> {
+    Ok(result.success
+        && probeCall::abi_decode_returns(&result.return_data)
+            .context("should decode the reservoir probe's result")?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,6 +207,35 @@ mod tests {
             "status": "0x1"
         }]
     }]"#;
+
+    #[test]
+    fn simulated_calls_drop_nonce_and_fees() {
+        let tx = TransactionRequest::default()
+            .nonce(7)
+            .max_fee_per_gas(10)
+            .max_priority_fee_per_gas(1)
+            .gas_price(5)
+            .with_gas_limit(100_000);
+        let tx = without_nonce_and_fees(tx);
+        assert_eq!(tx.nonce, None);
+        assert_eq!(tx.max_fee_per_gas, None);
+        assert_eq!(tx.max_priority_fee_per_gas, None);
+        assert_eq!(tx.gas_price, None);
+        assert_eq!(tx.gas, Some(100_000));
+    }
+
+    #[test]
+    fn reads_reservoir_probe_result() {
+        let call = |success, found: bool| SimulatedCall {
+            success,
+            return_data: probeCall::abi_encode_returns(&found).into(),
+            gas_used: 0,
+            logs: vec![],
+        };
+        assert!(reservoir_probe_found_reservoir(&call(true, true)).unwrap());
+        assert!(!reservoir_probe_found_reservoir(&call(true, false)).unwrap());
+        assert!(!reservoir_probe_found_reservoir(&call(false, true)).unwrap());
+    }
 
     #[test]
     fn parses_reth_simulate_result() {

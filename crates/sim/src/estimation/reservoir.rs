@@ -22,20 +22,15 @@ use alloy_sol_types::{SolCall, SolError};
 use anyhow::Context;
 use rundler_contracts::{
     common::EstimationTypes,
-    v0_7::{
-        IEntryPointSimulations::{simulateHandleOpCall, simulateHandleOpNoPostOpCall},
-        RESERVOIR_PROBE_V0_7_DEPLOYED_BYTECODE,
-        ReservoirProbe::probeCall,
-    },
+    v0_7::IEntryPointSimulations::{simulateHandleOpCall, simulateHandleOpNoPostOpCall},
 };
 use rundler_provider::{
-    AccountOverride, EntryPoint, EvmProvider, SimulatedCall, SimulationProvider, StateOverride,
-    TransactionRequest, simulate_call, simulate_calls,
+    EntryPoint, EvmProvider, SimulatedCall, SimulationProvider, StateOverride,
+    reservoir_probe_call, reservoir_probe_found_reservoir, simulate_call, simulate_calls,
 };
 use rundler_types::{
     GasEstimate, PvgState, TX_MAX_GAS_LIMIT, UserOperation as _,
     chain::ChainSpec,
-    constants::SIMULATION_SENDER,
     v0_7::{UserOperation, UserOperationBuilder, UserOperationOptionalGas},
 };
 use rundler_utils::guard_timer::CustomTimerGuard;
@@ -60,9 +55,6 @@ const RESERVOIR_SIMULATION_GAS_OVERHEAD: u128 = 1_000_000;
 /// transaction's intrinsic gas: 20,783 on Sepolia for v0.7 (24,304 with a paymaster). A little
 /// less, so the state gas measured stays at or above the op's.
 pub(super) const SIMULATION_UNMETERED_GAS: u128 = 20_000;
-
-/// The reservoir a `ReservoirProbe` call gets: enough for the new slot it writes
-const RESERVOIR_PROBE_RESERVOIR_GAS: u64 = 200_000;
 
 /// A transaction's intrinsic gas for calldata `input`
 pub(super) fn transaction_intrinsic_gas(chain_spec: &ChainSpec, input: &[u8]) -> u128 {
@@ -126,8 +118,8 @@ impl From<anyhow::Error> for SponsoredReservoirError {
     }
 }
 
-/// The node's `eth_simulateV1` gives calls no state-gas reservoir (geth from v1.17.8), which all
-/// of the reservoir-mode simulations rely on
+/// The node's `eth_simulateV1` gives calls no state-gas reservoir, even in validation mode (as
+/// reth v2.10 and later do for a transaction), which all of the reservoir-mode simulations rely on
 #[derive(Debug, thiserror::Error)]
 #[error("the node's eth_simulateV1 gives calls no state-gas reservoir")]
 pub struct NoSimulationReservoir;
@@ -664,11 +656,10 @@ where
     /// Simulates `simulateHandleOp` of `op` with postOp at a reservoir of `reservoir_gas` in
     /// `eth_simulateV1`, and returns its result and the transaction's intrinsic gas. A
     /// `ReservoirProbe` call in the same request checks that the node's `eth_simulateV1` gives
-    /// calls a state-gas reservoir, which all of the reservoir-mode simulations rely on (geth from
-    /// v1.17.8 gives none): a [`NoSimulationReservoir`] error if it does not. The probe is its own
-    /// call, not `simulateHandleOp`'s target, which would see what the op left of the reservoir.
-    /// At a reservoir of 0 the op uses none, so the probe is not run, and the op runs on any
-    /// node.
+    /// calls a state-gas reservoir, which all of the reservoir-mode simulations rely on: a
+    /// [`NoSimulationReservoir`] error if it does not. The probe is its own call, not
+    /// `simulateHandleOp`'s target, which would see what the op left of the reservoir. At a
+    /// reservoir of 0 the op uses none, so the probe is not run, and the op runs on any node.
     async fn simulate_op_with_probe(
         &self,
         args: &ReservoirArgs<'_>,
@@ -676,17 +667,7 @@ where
         reservoir_gas: u128,
     ) -> anyhow::Result<(SimulatedCall, u128)> {
         let mut state_override = args.state_override.clone();
-        // A random address, so a user's override cannot collide with it.
-        let probe = (reservoir_gas > 0).then(Address::random);
-        if let Some(probe) = probe {
-            state_override.insert(
-                probe,
-                AccountOverride {
-                    code: Some(RESERVOIR_PROBE_V0_7_DEPLOYED_BYTECODE.clone()),
-                    ..Default::default()
-                },
-            );
-        }
+        let probe_tx = (reservoir_gas > 0).then(|| reservoir_probe_call(&mut state_override));
         let gas = (u128::from(TX_MAX_GAS_LIMIT) + reservoir_gas)
             .try_into()
             .unwrap_or(u64::MAX);
@@ -702,7 +683,7 @@ where
             args.chain_spec,
             tx.input.input().map(|input| &input[..]).unwrap_or_default(),
         );
-        let Some(probe) = probe else {
+        let Some(probe_tx) = probe_tx else {
             let result = simulate_call(
                 &self.provider,
                 tx,
@@ -712,11 +693,6 @@ where
             .await?;
             return Ok((result, intrinsic_gas));
         };
-        let probe_tx = TransactionRequest::default()
-            .from(SIMULATION_SENDER)
-            .to(probe)
-            .input(Bytes::from(probeCall {}.abi_encode()).into())
-            .gas_limit(TX_MAX_GAS_LIMIT + RESERVOIR_PROBE_RESERVOIR_GAS);
         let mut results = simulate_calls(
             &self.provider,
             vec![probe_tx, tx],
@@ -724,11 +700,7 @@ where
             state_override,
         )
         .await?;
-        let probe_result = &results[0];
-        let reservoir_in_simulation = probe_result.success
-            && probeCall::abi_decode_returns(&probe_result.return_data)
-                .context("should decode the reservoir probe's result")?;
-        if !reservoir_in_simulation {
+        if !reservoir_probe_found_reservoir(&results[0])? {
             return Err(NoSimulationReservoir.into());
         }
         Ok((results.remove(1), intrinsic_gas))
