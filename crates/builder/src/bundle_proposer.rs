@@ -373,7 +373,7 @@ where
             .await;
         while !context.is_empty() {
             let gas_estimate = self
-                .estimate_gas_rejecting_failed_ops(&mut context, &chain_spec, bundle_fees)
+                .estimate_gas_rejecting_failed_ops(&mut context, &chain_spec, bundle_fees, base_fee)
                 .await?;
             if let Some(gas_estimate) = gas_estimate {
                 tracing::debug!(
@@ -838,6 +838,7 @@ where
                     sponsored_da_gas: required_da_gas,
                     state_gas,
                     reservoir_gas: op.reservoir_gas,
+                    sponsorship_max_cost: Some(bundler_sponsorship.max_cost),
                 });
             let gas_limit = single_op_bundle.get_bundle_gas_limit_inner(chain_spec, true);
             let buffered_gas_limit = math::uint_increase_by_percent_ceil(
@@ -1082,6 +1083,12 @@ where
                     sponsored_da_gas: po.sponsored_da_gas,
                     state_gas: po.state_gas,
                     reservoir_gas: po.op.reservoir_gas,
+                    sponsorship_max_cost: po
+                        .op
+                        .perms
+                        .bundler_sponsorship
+                        .as_ref()
+                        .map(|sponsorship| sponsorship.max_cost),
                 });
 
             // Limit by max bundle computation gas (excluding DA gas)
@@ -1195,6 +1202,12 @@ where
                     sponsored_da_gas: po.sponsored_da_gas,
                     state_gas: po.state_gas,
                     reservoir_gas: po.op.reservoir_gas,
+                    sponsorship_max_cost: po
+                        .op
+                        .perms
+                        .bundler_sponsorship
+                        .as_ref()
+                        .map(|sponsorship| sponsorship.max_cost),
                 });
         }
 
@@ -1359,6 +1372,7 @@ where
         context: &mut ProposalContext<EP::UO>,
         chain_spec: &ChainSpec,
         bundle_fees: GasFees,
+        base_fee: u128,
     ) -> BundleProposerResult<Option<u64>> {
         let (gas_limit, handle_ops_out) = if let Some(gas_limit) = context.reservoir_tx_gas() {
             // A reservoir-mode op alone: `tx.gas = 2^24 + R` exactly, so the transaction's
@@ -1378,7 +1392,7 @@ where
                 .context("reservoir-mode bundle gas limit is larger than u64::MAX")?;
             let start = Instant::now();
             let handle_ops_out = self
-                .simulate_reservoir_bundle(context, gas_limit, bundle_fees)
+                .simulate_reservoir_bundle(context, gas_limit, bundle_fees, base_fee)
                 .await?;
             self.metrics
                 .bundle_simulation_ms
@@ -1508,17 +1522,25 @@ where
 
     /// Simulates a bundle of one reservoir-mode op as it will be sent, with `eth_simulateV1`,
     /// which gives it the transaction's state-gas reservoir (an `eth_call` on reth v2.7 gets
-    /// none). Besides `handleOps` reverting, the op is rejected if the gas it is charged does not
-    /// cover the transaction's gas used: the state the reservoir pays is not metered by the entry
-    /// point, so PVG must pay for it, and a shortfall would be the bundler's loss. An op whose
-    /// own execution fails is still sent, as in a normal bundle: it is charged in full.
+    /// none). Besides `handleOps` reverting, the op is rejected if the bundler would pay for it:
+    ///
+    /// - A paying op is rejected if the gas it is charged does not cover the transaction's gas
+    ///   used: the state the reservoir pays is not metered by the entry point, so PVG must pay for
+    ///   it. An op whose own execution fails is still sent, as in a normal bundle: it is charged
+    ///   in full.
+    /// - A bundler-sponsored op is charged nothing, so the bundler pays the whole transaction. It
+    ///   is rejected if its execution fails, or if the transaction's gas used at the bundle's gas
+    ///   price exceeds the sponsorship's max cost. Its reservoir was found at admission and is
+    ///   not recomputed, so a change in state since can make it fail here.
     async fn simulate_reservoir_bundle(
         &self,
         context: &ProposalContext<EP::UO>,
         gas_limit: u64,
         bundle_fees: GasFees,
+        base_fee: u128,
     ) -> anyhow::Result<HandleOpsOut> {
         let entry_point = self.ep_providers.entry_point();
+        let sponsorship_max_cost = context.get_op_at(0)?.sponsorship_max_cost;
         let tx = entry_point.get_send_bundle_transaction(
             context.to_ops_per_aggregator(),
             context.sender_eoa,
@@ -1559,6 +1581,26 @@ where
             "Reservoir-mode bundle simulation: op success {}, charged {}, gas used {}",
             event.success, event.actualGasUsed, result.gas_used
         );
+        if let Some(max_cost) = sponsorship_max_cost {
+            if !event.success {
+                return Ok(HandleOpsOut::FailedOp(
+                    0,
+                    "bundler-sponsored reservoir-mode op fails in the bundle simulation"
+                        .to_string(),
+                ));
+            }
+            let cost = U256::from(result.gas_used) * U256::from(bundle_fees.gas_price(base_fee));
+            if cost > max_cost {
+                return Ok(HandleOpsOut::FailedOp(
+                    0,
+                    format!(
+                        "bundler-sponsored reservoir-mode op costs {cost} ({} gas), above its max cost {max_cost}",
+                        result.gas_used
+                    ),
+                ));
+            }
+            return Ok(HandleOpsOut::Success);
+        }
         if !event.success {
             warn!(
                 "Reservoir-mode op {:?} fails in the bundle simulation; sending it, as it is charged in full",
@@ -2011,6 +2053,8 @@ struct OpWithSimulation<UO> {
     state_gas: u128,
     /// The op's state-gas reservoir if it is in reservoir mode
     reservoir_gas: Option<u128>,
+    /// The bundler sponsorship's max cost, if the op is bundler-sponsored
+    sponsorship_max_cost: Option<U256>,
 }
 
 /// A struct used internally to represent the current state of a proposed bundle
@@ -2942,6 +2986,9 @@ mod tests {
         op_success: bool,
         /// The op's `actualGasUsed`
         charged: u128,
+        /// The gas price the op is charged at (`actualGasCost = actualGasUsed × this`): zero
+        /// for a bundler-sponsored op
+        cost_per_gas: u128,
     }
 
     impl ReservoirSimulation {
@@ -2952,6 +2999,7 @@ mod tests {
                 gas_used: 37_889_187,
                 op_success: true,
                 charged: 37_984_630,
+                cost_per_gas: 50,
             }
         }
 
@@ -2970,7 +3018,12 @@ mod tests {
                         "address": entry_point,
                         "topics": [UserOperationEvent::SIGNATURE_HASH, B256::ZERO, B256::ZERO, B256::ZERO],
                         "data": Bytes::from(
-                            (U256::ZERO, self.op_success, U256::ZERO, U256::from(self.charged))
+                            (
+                                U256::ZERO,
+                                self.op_success,
+                                U256::from(self.charged * self.cost_per_gas),
+                                U256::from(self.charged),
+                            )
                                 .abi_encode_params(),
                         ),
                     }],
@@ -2985,11 +3038,26 @@ mod tests {
         reservoir_gas: u128,
         simulation: ReservoirSimulation,
     ) -> Bundle<UserOperation> {
+        make_reservoir_bundle_with_perms(
+            op,
+            reservoir_gas,
+            simulation,
+            UserOperationPermissions::default(),
+        )
+        .await
+    }
+
+    async fn make_reservoir_bundle_with_perms(
+        op: UserOperation,
+        reservoir_gas: u128,
+        simulation: ReservoirSimulation,
+        perms: UserOperationPermissions,
+    ) -> Bundle<UserOperation> {
         mock_make_bundle_at(
             vec![MockOp {
                 op,
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                perms: UserOperationPermissions::default(),
+                perms,
                 reservoir_gas: Some(reservoir_gas),
             }],
             vec![],
@@ -3077,6 +3145,111 @@ mod tests {
             RESERVOIR,
             ReservoirSimulation {
                 charged: 37_000_000,
+                ..ReservoirSimulation::passing(reservoir_tx_gas())
+            },
+        )
+        .await;
+
+        assert!(bundle.ops_per_aggregator.is_empty());
+        assert_eq!(bundle.rejected_ops, vec![op]);
+    }
+
+    fn sponsored_perms(max_cost: U256) -> UserOperationPermissions {
+        UserOperationPermissions {
+            bundler_sponsorship: Some(BundlerSponsorship {
+                max_cost,
+                valid_until: u64::MAX,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// The bundle's gas price in `make_reservoir_bundle` (base fee 1000, priority fee 50)
+    const RESERVOIR_BUNDLE_GAS_PRICE: u128 = 1050;
+
+    /// A bundler-sponsored reservoir-mode op is charged nothing, so its charge is always below
+    /// the bundle's gas used: still sent, as the bundler pays within the sponsorship's max cost.
+    #[tokio::test]
+    async fn test_reservoir_mode_bundle_sponsored_op_not_held_to_charge() {
+        let op = op_with_sender_and_fees(address(1), 0, 0, 0);
+        let bundle = make_reservoir_bundle_with_perms(
+            op.clone(),
+            RESERVOIR,
+            ReservoirSimulation {
+                charged: 37_000_000,
+                cost_per_gas: 0,
+                ..ReservoirSimulation::passing(reservoir_tx_gas())
+            },
+            sponsored_perms(U256::MAX),
+        )
+        .await;
+
+        assert_eq!(bundle.ops_per_aggregator[0].user_ops, vec![op]);
+        assert!(bundle.rejected_ops.is_empty());
+    }
+
+    /// A sponsored op whose execution fails is rejected, unlike a paying op: the bundler would
+    /// pay for the failed transaction.
+    #[tokio::test]
+    async fn test_reservoir_mode_bundle_rejects_failing_sponsored_op() {
+        let op = op_with_sender_and_fees(address(1), 0, 0, 0);
+        let bundle = make_reservoir_bundle_with_perms(
+            op.clone(),
+            RESERVOIR,
+            ReservoirSimulation {
+                op_success: false,
+                cost_per_gas: 0,
+                ..ReservoirSimulation::passing(reservoir_tx_gas())
+            },
+            sponsored_perms(U256::MAX),
+        )
+        .await;
+
+        assert!(bundle.ops_per_aggregator.is_empty());
+        assert_eq!(bundle.rejected_ops, vec![op]);
+    }
+
+    /// A sponsored op is held to its max cost at the gas the simulation used and the bundle's
+    /// gas price, which here is more than its limits plus its reservoir.
+    #[tokio::test]
+    async fn test_reservoir_mode_bundle_sponsored_op_held_to_max_cost() {
+        let gas_used = 40_000_000;
+        let cost = U256::from(gas_used) * U256::from(RESERVOIR_BUNDLE_GAS_PRICE);
+        for (max_cost, sent) in [(cost, true), (cost - U256::from(1), false)] {
+            let op = op_with_sender_and_fees(address(1), 0, 0, 0);
+            let bundle = make_reservoir_bundle_with_perms(
+                op.clone(),
+                RESERVOIR,
+                ReservoirSimulation {
+                    gas_used,
+                    cost_per_gas: 0,
+                    ..ReservoirSimulation::passing(reservoir_tx_gas())
+                },
+                sponsored_perms(max_cost),
+            )
+            .await;
+
+            if sent {
+                assert_eq!(bundle.ops_per_aggregator[0].user_ops, vec![op]);
+                assert!(bundle.rejected_ops.is_empty());
+            } else {
+                assert!(bundle.ops_per_aggregator.is_empty());
+                assert_eq!(bundle.rejected_ops, vec![op]);
+            }
+        }
+    }
+
+    /// A paying op charged nothing (a zero priority fee, as the simulation's base fee is 0) is
+    /// still held to its charge: the exemption is for sponsorship, not for a zero cost.
+    #[tokio::test]
+    async fn test_reservoir_mode_bundle_zero_cost_paying_op_held_to_charge() {
+        let op = reservoir_op();
+        let bundle = make_reservoir_bundle(
+            op.clone(),
+            RESERVOIR,
+            ReservoirSimulation {
+                charged: 37_000_000,
+                cost_per_gas: 0,
                 ..ReservoirSimulation::passing(reservoir_tx_gas())
             },
         )
@@ -3975,6 +4148,7 @@ mod tests {
                         sponsored_da_gas: 100_000,
                         state_gas: 0,
                         reservoir_gas: None,
+                        sponsorship_max_cost: None,
                     },
                     OpWithSimulation {
                         op: op2.clone(),
@@ -3985,6 +4159,7 @@ mod tests {
                         sponsored_da_gas: 0,
                         state_gas: 0,
                         reservoir_gas: None,
+                        sponsorship_max_cost: None,
                     },
                 ],
                 signature: Default::default(),
@@ -4029,6 +4204,7 @@ mod tests {
                         sponsored_da_gas: 0,
                         state_gas: 0,
                         reservoir_gas: None,
+                        sponsorship_max_cost: None,
                     },
                     OpWithSimulation {
                         op: op2.clone(),
@@ -4039,6 +4215,7 @@ mod tests {
                         sponsored_da_gas: 0,
                         state_gas: 0,
                         reservoir_gas: None,
+                        sponsorship_max_cost: None,
                     },
                 ],
                 signature: Default::default(),
@@ -4077,6 +4254,7 @@ mod tests {
                         sponsored_da_gas: 0,
                         state_gas: 0,
                         reservoir_gas: None,
+                        sponsorship_max_cost: None,
                     })
                     .collect(),
                 signature: Default::default(),
@@ -4210,6 +4388,7 @@ mod tests {
                     sponsored_da_gas: 0,
                     state_gas: 0,
                     reservoir_gas: None,
+                    sponsorship_max_cost: None,
                 }],
                 signature: Default::default(),
             },
@@ -4410,6 +4589,7 @@ mod tests {
                     sponsored_da_gas: 0,
                     state_gas: 0,
                     reservoir_gas: None,
+                    sponsorship_max_cost: None,
                 }],
                 signature: Default::default(),
             },
@@ -4433,6 +4613,7 @@ mod tests {
                     sponsored_da_gas: 0,
                     state_gas: 0,
                     reservoir_gas: None,
+                    sponsorship_max_cost: None,
                 }],
                 signature: Default::default(),
             },
@@ -4467,6 +4648,7 @@ mod tests {
                     sponsored_da_gas: 0,
                     state_gas,
                     reservoir_gas: None,
+                    sponsorship_max_cost: None,
                 }],
                 signature: Default::default(),
             },

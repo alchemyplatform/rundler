@@ -564,6 +564,33 @@ pub struct UserOperationOptionalGas {
     pub paymaster_signature: Option<Bytes>,
 }
 
+impl From<&UserOperation> for UserOperationOptionalGas {
+    /// A sent op as an op with every gas field provided
+    fn from(op: &UserOperation) -> Self {
+        Self {
+            sender: op.sender,
+            nonce: op.nonce,
+            call_data: op.call_data.clone(),
+            signature: op.signature.clone(),
+            entry_point_version: op.entry_point_version,
+            call_gas_limit: Some(op.call_gas_limit),
+            verification_gas_limit: Some(op.verification_gas_limit),
+            pre_verification_gas: Some(op.pre_verification_gas),
+            max_priority_fee_per_gas: Some(op.max_priority_fee_per_gas),
+            max_fee_per_gas: Some(op.max_fee_per_gas),
+            factory: op.factory,
+            factory_data: op.factory_data.clone(),
+            paymaster: op.paymaster,
+            paymaster_verification_gas_limit: Some(op.paymaster_verification_gas_limit),
+            paymaster_post_op_gas_limit: Some(op.paymaster_post_op_gas_limit),
+            paymaster_data: op.paymaster_data.clone(),
+            eip7702_auth_address: op.authorization_tuple.as_ref().map(|auth| auth.address),
+            aggregator: UserOperationTrait::aggregator(op),
+            paymaster_signature: op.paymaster_signature.clone(),
+        }
+    }
+}
+
 impl UserOperationOptionalGas {
     /// Fill in the optional and dummy fields of the user operation with values
     /// that will cause the maximum possible calldata gas cost.

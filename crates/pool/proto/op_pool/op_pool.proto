@@ -866,6 +866,11 @@ message PrecheckViolationError {
     Eip7702NonceMismatch eip_7702_nonce_mismatch = 21;
     Eip7702InvalidFactory eip_7702_invalid_factory = 22;
     ReservoirGasTooHigh reservoir_gas_too_high = 23;
+    ReservoirSearchBusy reservoir_search_busy = 24;
+    ReservoirSearchTimedOut reservoir_search_timed_out = 25;
+    ReservoirSimulationUnsupported reservoir_simulation_unsupported = 26;
+    ReservoirSimulationFailed reservoir_simulation_failed = 27;
+    OverSponsorshipMaxCost over_sponsorship_max_cost = 28;
   }
 }
 
@@ -937,6 +942,19 @@ message OverMaxCost {
 message ReservoirGasTooHigh {
   bytes actual_gas = 1;
   bytes max_gas = 2;
+}
+
+message ReservoirSearchBusy {}
+
+message ReservoirSearchTimedOut {}
+
+message ReservoirSimulationUnsupported {}
+
+message ReservoirSimulationFailed {}
+
+message OverSponsorshipMaxCost {
+  bytes actual_cost = 1;
+  bytes max_cost = 2;
 }
 
 message Eip7702Disabled {}

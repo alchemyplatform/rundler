@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{cmp, marker::PhantomData};
+use std::{cmp, marker::PhantomData, sync::Arc};
 
 use alloy_eips::eip7702::SignedAuthorization;
 use alloy_primitives::{Address, B256, Bytes, U256};
@@ -22,7 +22,7 @@ use futures_util::TryFutureExt;
 use mockall::automock;
 use rundler_provider::{DAGasProvider, EntryPoint, EvmProvider, FeeEstimator};
 use rundler_types::{
-    EntryPointVersion, PriorityFeeMode, PvgState, UserOperation, UserOperationPermissions,
+    EntryPointVersion, GasFees, PriorityFeeMode, PvgState, UserOperation, UserOperationPermissions,
     chain::ChainSpec,
     da::DAGasData,
     pool::{MempoolError, PrecheckViolation},
@@ -31,7 +31,7 @@ use rundler_types::{
 use rundler_utils::{authorization_utils, math};
 use tracing::instrument;
 
-use crate::{gas, types::ViolationError};
+use crate::{SponsoredReservoir, SponsoredReservoirError, gas, types::ViolationError};
 
 /// The min cost of a `CALL` with nonzero value, as required by the spec.
 pub const MIN_CALL_GAS_LIMIT: u128 = 9100;
@@ -99,7 +99,21 @@ pub struct PrecheckerImpl<UO, P, E, F> {
     entry_point: E,
     settings: Settings,
     fee_estimator: F,
+    sponsored_reservoir: Option<Arc<dyn SponsoredReservoirEstimator<UO>>>,
     _uo_type: PhantomData<UO>,
+}
+
+/// Finds the state-gas reservoir a bundler-sponsored op needs at admission. A sponsored op's PVG
+/// is zero, so it cannot carry a reservoir as a paying op does.
+#[async_trait::async_trait]
+pub trait SponsoredReservoirEstimator<UO>: Send + Sync {
+    /// The reservoir `op` needs to run at its own limits
+    async fn sponsored_reservoir_gas(
+        &self,
+        op: &UO,
+        chain_spec: &ChainSpec,
+        block_hash: B256,
+    ) -> Result<SponsoredReservoir, SponsoredReservoirError>;
 }
 
 /// Precheck settings
@@ -159,6 +173,7 @@ struct AsyncData {
     sender_bytecode: Bytes,
     paymaster_exists: bool,
     payer_funds: U256,
+    bundle_fees: GasFees,
     base_fee: u128,
     min_pre_verification_gas: u128,
     da_gas_data: DAGasData,
@@ -201,8 +216,28 @@ where
         } else {
             violations.extend(self.check_init_code(op, &async_data, perms));
         }
-        let reservoir_gas =
+        violations.extend(self.check_payer(op, &async_data));
+        // A paying op's reservoir comes from its PVG surplus; a sponsored op's (None here) from
+        // the search below.
+        let mut reservoir_gas =
             self.reservoir_gas(op, &chain_spec, block_timestamp, &async_data, perms);
+        violations.extend(self.check_gas(op, &chain_spec, &async_data, perms, reservoir_gas));
+        // A sponsored op's reservoir search is the costliest check, so it is skipped for an op
+        // that is rejected anyway, by the gas checks above included.
+        if violations.is_empty()
+            && let Some(sponsored_reservoir_gas) = self
+                .sponsored_reservoir_gas(op, perms, &chain_spec, block_hash, block_timestamp)
+                .await?
+        {
+            reservoir_gas = Some(sponsored_reservoir_gas);
+            violations.extend(self.check_reservoir_gas_limit(sponsored_reservoir_gas));
+            violations.extend(self.check_sponsorship_max_cost(
+                op,
+                perms,
+                &async_data,
+                sponsored_reservoir_gas,
+            ));
+        }
         violations.extend(self.check_reservoir_supported(
             op,
             &chain_spec,
@@ -210,8 +245,6 @@ where
             &async_data,
             reservoir_gas,
         ));
-        violations.extend(self.check_gas(op, &chain_spec, &async_data, perms, reservoir_gas));
-        violations.extend(self.check_payer(op, &async_data));
         if !violations.is_empty() {
             Err(violations)?
         }
@@ -248,8 +281,18 @@ where
             entry_point,
             settings,
             fee_estimator,
+            sponsored_reservoir: None,
             _uo_type: PhantomData,
         }
+    }
+
+    /// Find a reservoir for bundler-sponsored ops that need one, on chains with reservoir mode
+    pub fn with_sponsored_reservoir(
+        mut self,
+        estimator: Arc<dyn SponsoredReservoirEstimator<UO>>,
+    ) -> Self {
+        self.sponsored_reservoir = Some(estimator);
+        self
     }
 
     fn check_init_code(
@@ -291,6 +334,53 @@ where
         violations
     }
 
+    /// The state-gas reservoir a bundler-sponsored op needs, found by simulation: its PVG is
+    /// zero, so it carries none. `None` for other ops, without reservoir mode, or if the op runs
+    /// metered (including if it fails either way, as a sponsored op is admitted without its
+    /// execution simulated). A reservoir over `max_reservoir_gas` is returned for `check_gas` to
+    /// reject.
+    ///
+    /// An op that fails without a reservoir is rejected if its reservoir cannot be found: when
+    /// the search is busy or times out (retryable), or the node's `eth_simulateV1` gives calls no
+    /// reservoir. Admitted metered, it would fail onchain at the bundler's cost. Any op is
+    /// rejected, retryably, if a simulation errors (e.g. a node error), including the first run
+    /// that decides whether it needs a reservoir.
+    async fn sponsored_reservoir_gas(
+        &self,
+        op: &UO,
+        perms: &UserOperationPermissions,
+        chain_spec: &ChainSpec,
+        block_hash: B256,
+        block_timestamp: u64,
+    ) -> Result<Option<u128>, PrecheckError> {
+        if perms.bundler_sponsorship.is_none()
+            || op.aggregator().is_some()
+            || !chain_spec.reservoir_mode_enabled_at(block_timestamp)
+        {
+            return Ok(None);
+        }
+        let Some(estimator) = &self.sponsored_reservoir else {
+            return Ok(None);
+        };
+        let violation = match estimator
+            .sponsored_reservoir_gas(op, chain_spec, block_hash)
+            .await
+        {
+            Ok(SponsoredReservoir::Reservoir(reservoir_gas)) => return Ok(Some(reservoir_gas)),
+            Ok(SponsoredReservoir::Metered | SponsoredReservoir::Fails) => return Ok(None),
+            Err(SponsoredReservoirError::Busy) => PrecheckViolation::ReservoirSearchBusy,
+            Err(SponsoredReservoirError::TimedOut) => PrecheckViolation::ReservoirSearchTimedOut,
+            Err(SponsoredReservoirError::NoSimulationReservoir(_)) => {
+                PrecheckViolation::ReservoirSimulationUnsupported
+            }
+            Err(SponsoredReservoirError::Other(error)) => {
+                tracing::warn!("sponsored op's reservoir simulation failed: {error:?}");
+                PrecheckViolation::ReservoirSimulationFailed
+            }
+        };
+        Err(PrecheckError::Violations(vec![violation]))
+    }
+
     /// The state-gas reservoir `R` if `op` is in reservoir mode, decided from what its PVG pays
     /// for: Glamsterdam is active and the op's PVG surplus over the metered requirement is at
     /// least [`gas::reservoir_threshold`], the least state gas that cannot fit under
@@ -301,7 +391,8 @@ where
     /// `test/pvg-calibration/docs/reservoir-mode-plan.md`.
     ///
     /// Aggregated and bundler-sponsored ops are not supported, and are rejected by `check` if
-    /// their PVG surplus reaches the threshold.
+    /// their PVG surplus reaches the threshold. A bundler-sponsored op's PVG is zero; its
+    /// reservoir is found by a [`SponsoredReservoirEstimator`] instead.
     fn reservoir_gas(
         &self,
         op: &UO,
@@ -369,7 +460,6 @@ where
             max_bundle_execution_gas,
             max_uo_cost,
             max_reservoir_uo_cost,
-            max_reservoir_gas,
             ..
         } = self.settings;
         let AsyncData {
@@ -407,13 +497,8 @@ where
                 MIN_CALL_GAS_LIMIT,
             ));
         }
-        if let Some(reservoir_gas) = reservoir_gas
-            && reservoir_gas > max_reservoir_gas
-        {
-            violations.push(PrecheckViolation::ReservoirGasTooHigh(
-                reservoir_gas,
-                max_reservoir_gas,
-            ));
+        if let Some(violation) = reservoir_gas.and_then(|gas| self.check_reservoir_gas_limit(gas)) {
+            violations.push(violation);
         }
 
         // If the UO is bundler sponsored, skip the fee checks
@@ -481,6 +566,32 @@ where
         }
 
         violations
+    }
+
+    fn check_reservoir_gas_limit(&self, reservoir_gas: u128) -> Option<PrecheckViolation> {
+        let max_reservoir_gas = self.settings.max_reservoir_gas;
+        (reservoir_gas > max_reservoir_gas).then_some(PrecheckViolation::ReservoirGasTooHigh(
+            reservoir_gas,
+            max_reservoir_gas,
+        ))
+    }
+
+    /// A sponsored op in reservoir mode is rejected if its sponsorship cannot pay for its limits
+    /// and its reservoir at the required fee: the pool's candidate check (`pool.rs`). Held in the
+    /// pool instead, it would never be bundled at current fees, and would take one of the
+    /// reservoir-mode op slots until it expires.
+    fn check_sponsorship_max_cost(
+        &self,
+        op: &UO,
+        perms: &UserOperationPermissions,
+        async_data: &AsyncData,
+        reservoir_gas: u128,
+    ) -> Option<PrecheckViolation> {
+        let max_cost = perms.bundler_sponsorship.as_ref()?.max_cost;
+        let fees = self.fee_estimator.required_op_fees(async_data.bundle_fees);
+        let cost =
+            U256::from(op.total_gas_limit() + reservoir_gas) * U256::from(fees.max_fee_per_gas);
+        (cost > max_cost).then_some(PrecheckViolation::OverSponsorshipMaxCost(cost, max_cost))
     }
 
     fn check_payer(&self, op: &UO, async_data: &AsyncData) -> Option<PrecheckViolation> {
@@ -604,7 +715,7 @@ where
         chain_spec: &ChainSpec,
         perms: &UserOperationPermissions,
     ) -> anyhow::Result<AsyncData> {
-        let base_fee = self.get_base_fee(block_hash).await?;
+        let (bundle_fees, base_fee) = self.get_bundle_fees(block_hash).await?;
 
         let (
             factory_exists,
@@ -632,6 +743,7 @@ where
             sender_bytecode,
             paymaster_exists,
             payer_funds,
+            bundle_fees,
             base_fee,
             min_pre_verification_gas,
             da_gas_data,
@@ -688,12 +800,10 @@ where
     }
 
     #[instrument(skip_all)]
-    async fn get_base_fee(&self, block_hash: B256) -> anyhow::Result<u128> {
-        let (_, base_fee) = self
-            .fee_estimator
+    async fn get_bundle_fees(&self, block_hash: B256) -> anyhow::Result<(GasFees, u128)> {
+        self.fee_estimator
             .required_bundle_fees(block_hash, None)
-            .await?;
-        Ok(base_fee)
+            .await
     }
 
     #[instrument(skip_all)]
@@ -792,6 +902,7 @@ mod tests {
             sender_bytecode: bytes!("abcdef"),
             paymaster_exists: true,
             payer_funds: U256::from(5_000_000),
+            bundle_fees: GasFees::default(),
             base_fee: 4_000,
             min_pre_verification_gas: 1_000,
             pvg_state: PvgState::unknown(),
@@ -1949,6 +2060,300 @@ mod tests {
                 Settings::default(),
             );
             (cs, prechecker)
+        }
+
+        /// Returns `result` for the op once, or panics if it is asked without one
+        struct StubSponsoredReservoir(
+            std::sync::Mutex<Option<Result<SponsoredReservoir, SponsoredReservoirError>>>,
+        );
+
+        impl StubSponsoredReservoir {
+            fn new(result: Option<Result<SponsoredReservoir, SponsoredReservoirError>>) -> Self {
+                Self(std::sync::Mutex::new(result))
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl SponsoredReservoirEstimator<UserOperationV07> for StubSponsoredReservoir {
+            async fn sponsored_reservoir_gas(
+                &self,
+                _op: &UserOperationV07,
+                _chain_spec: &ChainSpec,
+                _block_hash: B256,
+            ) -> Result<SponsoredReservoir, SponsoredReservoirError> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("the reservoir search should not run")
+            }
+        }
+
+        fn sponsored_perms() -> UserOperationPermissions {
+            UserOperationPermissions {
+                bundler_sponsorship: Some(rundler_types::BundlerSponsorship {
+                    max_cost: U256::MAX,
+                    valid_until: u64::MAX,
+                }),
+                ..Default::default()
+            }
+        }
+
+        async fn sponsored_reservoir_with(
+            stub: StubSponsoredReservoir,
+            perms: UserOperationPermissions,
+            glamsterdam: bool,
+        ) -> Result<Option<u128>, PrecheckError> {
+            let (cs, prechecker) = glamsterdam_prechecker(U256::ZERO);
+            let cs = if glamsterdam {
+                cs
+            } else {
+                ChainSpec {
+                    glamsterdam_activation: rundler_types::chain::ForkActivation::Never,
+                    ..cs
+                }
+            };
+            let prechecker = prechecker.with_sponsored_reservoir(Arc::new(stub));
+            let op = create_uo_builder(&cs, EntryPointVersion::V0_7).build();
+            let cs = cs.at_timestamp(0);
+            prechecker
+                .sponsored_reservoir_gas(&op, &perms, &cs, B256::ZERO, 0)
+                .await
+        }
+
+        #[tokio::test]
+        async fn test_sponsored_op_gets_reservoir() {
+            let stub =
+                StubSponsoredReservoir::new(Some(Ok(SponsoredReservoir::Reservoir(5_000_000))));
+            let reservoir = sponsored_reservoir_with(stub, sponsored_perms(), true).await;
+            assert_eq!(reservoir.unwrap(), Some(5_000_000));
+        }
+
+        #[tokio::test]
+        async fn test_sponsored_op_metered_or_failing_has_no_reservoir() {
+            for result in [SponsoredReservoir::Metered, SponsoredReservoir::Fails] {
+                let stub = StubSponsoredReservoir::new(Some(Ok(result)));
+                let reservoir = sponsored_reservoir_with(stub, sponsored_perms(), true).await;
+                assert_eq!(reservoir.unwrap(), None);
+            }
+        }
+
+        /// An op whose reservoir cannot be found is rejected with a violation of its own: the
+        /// search is busy, timed out or the node cannot size a reservoir
+        #[tokio::test]
+        async fn test_sponsored_reservoir_search_error_fails_admission() {
+            for (error, violation) in [
+                (
+                    SponsoredReservoirError::Busy,
+                    PrecheckViolation::ReservoirSearchBusy,
+                ),
+                (
+                    SponsoredReservoirError::TimedOut,
+                    PrecheckViolation::ReservoirSearchTimedOut,
+                ),
+                (
+                    SponsoredReservoirError::from(anyhow::Error::from(
+                        crate::NoSimulationReservoir,
+                    )),
+                    PrecheckViolation::ReservoirSimulationUnsupported,
+                ),
+            ] {
+                let stub = StubSponsoredReservoir::new(Some(Err(error)));
+                let result = sponsored_reservoir_with(stub, sponsored_perms(), true).await;
+                assert!(
+                    matches!(&result, Err(PrecheckError::Violations(v)) if v == &vec![violation.clone()]),
+                    "{result:?}"
+                );
+            }
+        }
+
+        /// A simulation error (e.g. the node fails the first run, which every sponsored op on a
+        /// reservoir-mode chain takes) rejects the op retryably, not with an internal error
+        #[tokio::test]
+        async fn test_sponsored_reservoir_simulation_error_is_retryable() {
+            let stub = StubSponsoredReservoir::new(Some(Err(SponsoredReservoirError::from(
+                anyhow::anyhow!("rpc error"),
+            ))));
+            let result = sponsored_reservoir_with(stub, sponsored_perms(), true).await;
+            assert!(
+                matches!(&result, Err(PrecheckError::Violations(v))
+                    if v == &vec![PrecheckViolation::ReservoirSimulationFailed]),
+                "{result:?}"
+            );
+        }
+
+        /// Prechecks a sponsored op with the given reservoir search result, at a required op max
+        /// fee of `required_max_fee`
+        async fn check_sponsored_op(
+            stub: StubSponsoredReservoir,
+            sender_code: Bytes,
+            call_gas_limit: u128,
+            perms: UserOperationPermissions,
+            required_max_fee: u128,
+        ) -> (UserOperationV07, Result<PrecheckReturn, PrecheckError>) {
+            let cs = ChainSpec {
+                id: 1,
+                glamsterdam_activation: rundler_types::chain::ForkActivation::Genesis,
+                ..Default::default()
+            };
+            let mut provider = MockEvmProvider::new();
+            provider
+                .expect_get_code()
+                .returning(move |_, _| Ok(sender_code.clone()));
+            provider
+                .expect_get_balance()
+                .returning(|_, _| Ok(U256::from(u64::MAX)));
+            let mut fee_estimator = MockFeeEstimator::new();
+            fee_estimator
+                .expect_required_bundle_fees()
+                .returning(|_, _| Ok((GasFees::default(), 0)));
+            fee_estimator
+                .expect_required_op_fees()
+                .returning(move |_| GasFees {
+                    max_fee_per_gas: required_max_fee,
+                    max_priority_fee_per_gas: 0,
+                });
+            let mut entry_point = MockEntryPointV0_7::new();
+            entry_point
+                .expect_balance_of()
+                .returning(|_, _| Ok(U256::from(u64::MAX)));
+            let prechecker = PrecheckerImpl::new(
+                cs.clone(),
+                Arc::new(provider),
+                entry_point,
+                fee_estimator,
+                Settings::default(),
+            )
+            .with_sponsored_reservoir(Arc::new(stub));
+            let op = create_uo_builder(&cs, EntryPointVersion::V0_7)
+                .call_gas_limit(call_gas_limit)
+                .max_fee_per_gas(0)
+                .max_priority_fee_per_gas(0)
+                .pre_verification_gas(0)
+                .build();
+
+            let result = prechecker.check(&op, &perms, B256::ZERO, 0).await;
+            (op, result)
+        }
+
+        /// The violations of a sponsored op whose reservoir search must not run: the stub panics
+        /// if it is asked.
+        async fn rejected_sponsored_op_violations(
+            sender_code: Bytes,
+            call_gas_limit: u128,
+        ) -> Vec<PrecheckViolation> {
+            let (_, result) = check_sponsored_op(
+                StubSponsoredReservoir::new(None),
+                sender_code,
+                call_gas_limit,
+                sponsored_perms(),
+                0,
+            )
+            .await;
+            let Err(PrecheckError::Violations(violations)) = result else {
+                panic!("expected violations");
+            };
+            violations
+        }
+
+        /// A sponsored op whose sponsorship cannot pay for its limits and its reservoir at the
+        /// required fee is rejected at admission, not held in the pool until it expires
+        #[tokio::test]
+        async fn test_sponsored_reservoir_op_over_max_cost_rejected() {
+            const RESERVOIR: u128 = 5_000_000;
+            const MAX_FEE: u128 = 10;
+            let (op, _) = check_sponsored_op(
+                StubSponsoredReservoir::new(Some(Ok(SponsoredReservoir::Reservoir(RESERVOIR)))),
+                Bytes::from_static(&[1]),
+                MIN_CALL_GAS_LIMIT,
+                sponsored_perms(),
+                MAX_FEE,
+            )
+            .await;
+            let cost = U256::from(op.total_gas_limit() + RESERVOIR) * U256::from(MAX_FEE);
+            let with_max_cost = |max_cost| UserOperationPermissions {
+                bundler_sponsorship: Some(rundler_types::BundlerSponsorship {
+                    max_cost,
+                    valid_until: u64::MAX,
+                }),
+                ..Default::default()
+            };
+
+            let (_, result) = check_sponsored_op(
+                StubSponsoredReservoir::new(Some(Ok(SponsoredReservoir::Reservoir(RESERVOIR)))),
+                Bytes::from_static(&[1]),
+                MIN_CALL_GAS_LIMIT,
+                with_max_cost(cost),
+                MAX_FEE,
+            )
+            .await;
+            assert_eq!(result.unwrap().reservoir_gas, Some(RESERVOIR));
+
+            let max_cost = cost - U256::from(1);
+            let (_, result) = check_sponsored_op(
+                StubSponsoredReservoir::new(Some(Ok(SponsoredReservoir::Reservoir(RESERVOIR)))),
+                Bytes::from_static(&[1]),
+                MIN_CALL_GAS_LIMIT,
+                with_max_cost(max_cost),
+                MAX_FEE,
+            )
+            .await;
+            let Err(PrecheckError::Violations(violations)) = result else {
+                panic!("expected violations");
+            };
+            assert_eq!(
+                violations,
+                vec![PrecheckViolation::OverSponsorshipMaxCost(cost, max_cost)]
+            );
+        }
+
+        /// The search is skipped for an op already rejected: here a sender without code and
+        /// without init code.
+        #[tokio::test]
+        async fn test_sponsored_reservoir_search_skipped_for_rejected_op() {
+            let violations =
+                rejected_sponsored_op_violations(Bytes::new(), MIN_CALL_GAS_LIMIT).await;
+            assert_eq!(
+                violations,
+                vec![PrecheckViolation::SenderIsNotContractAndNoInitCode(
+                    TEST_SENDER
+                )]
+            );
+        }
+
+        /// The gas checks that don't depend on the reservoir run before the search, so an op
+        /// that fails one never takes a search permit.
+        #[tokio::test]
+        async fn test_sponsored_reservoir_search_skipped_for_invalid_gas_limit() {
+            let violations =
+                rejected_sponsored_op_violations(Bytes::from_static(&[1]), MIN_CALL_GAS_LIMIT - 1)
+                    .await;
+            assert_eq!(
+                violations,
+                vec![PrecheckViolation::CallGasLimitTooLow(
+                    MIN_CALL_GAS_LIMIT - 1,
+                    MIN_CALL_GAS_LIMIT
+                )]
+            );
+        }
+
+        #[tokio::test]
+        async fn test_reservoir_search_only_for_sponsored_ops_with_glamsterdam() {
+            let not_sponsored = sponsored_reservoir_with(
+                StubSponsoredReservoir::new(None),
+                UserOperationPermissions::default(),
+                true,
+            )
+            .await;
+            assert_eq!(not_sponsored.unwrap(), None);
+
+            let before_glamsterdam = sponsored_reservoir_with(
+                StubSponsoredReservoir::new(None),
+                sponsored_perms(),
+                false,
+            )
+            .await;
+            assert_eq!(before_glamsterdam.unwrap(), None);
         }
 
         #[tokio::test]

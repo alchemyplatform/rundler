@@ -159,6 +159,18 @@ pub struct PreconfInfo {
 }
 
 impl PoolOperation {
+    /// The gas a bundler sponsorship's `max_cost` must cover: the op's limits, plus its
+    /// reservoir if it is sponsored. A sponsored op's PVG is zero, so its reservoir is not in
+    /// its limits; a paying op's PVG already pays for its reservoir.
+    pub fn total_gas_limit_with_reservoir(&self) -> u128 {
+        let reservoir_gas = if self.perms.bundler_sponsorship.is_some() {
+            self.reservoir_gas.unwrap_or(0)
+        } else {
+            0
+        };
+        self.uo.total_gas_limit() + reservoir_gas
+    }
+
     /// How this op's EIP-8037 state gas is paid for
     pub fn state_gas_mode(&self) -> StateGasMode {
         if self.reservoir_gas.is_some() {

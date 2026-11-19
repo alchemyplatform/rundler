@@ -36,7 +36,9 @@ For bundler-sponsored operations, each operation's `max_cost` is checked separat
 before simulation. The budget is the gas limit of a bundle transaction containing only
 that operation: execution and pre-verification costs (including estimated DA) or the
 EIP-7623 calldata floor, whichever is larger, plus the bundle transaction's 5% gas
-headroom. It is priced at the bundle's `max_fee_per_gas`, including replacement fee
+headroom. A [reservoir-mode](./glamsterdam_pvg.md#reservoir-mode) operation's reservoir
+`R`, which its PVG pays for, is added after the headroom, since its bundle carries `R`
+without the overhead multiplier. It is priced at the bundle's `max_fee_per_gas`, including replacement fee
 increases. Underpriced-operation permissions do not discount the sponsorship cost. An
 over-budget operation is skipped and remains in the pool; another operation's unused
 budget cannot cover it. This check also applies on chains without DA charges.
