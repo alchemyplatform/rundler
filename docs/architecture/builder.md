@@ -49,7 +49,7 @@ On chains that charge a minimum fraction of the transaction gas limit (e.g. Aval
 
 The pre-simulation gas limit filter uses the same sizing without the post-op retry. Precheck and estimation check that a UO fits in a bundle with the same sizing including the post-op retry, the largest the builder can use, so any UO they accept can be bundled. v0.6 UOs without a paymaster keep the static limit.
 
-A UO in [reservoir mode](./glamsterdam_pvg.md#reservoir-mode) (Glamsterdam) is always bundled alone, with a gas limit of exactly `2^24 + R`, its state-gas reservoir. Before it is sent, the bundle is simulated with `eth_simulateV1` at that gas limit.
+A UO in [reservoir mode](./glamsterdam_pvg.md#reservoir-mode) (Glamsterdam) is always bundled alone, with a gas limit of exactly `2^24 + R`, its state-gas reservoir. Before it is sent, the bundle is simulated with `eth_simulateV1` at that gas limit, in validation mode, which gives it the transaction's reservoir. A probe in the same request checks that the node does; if not, the bundle attempt fails and is retried, without rejecting the op.
 
 ### 2nd Simulation and Rejection
 
