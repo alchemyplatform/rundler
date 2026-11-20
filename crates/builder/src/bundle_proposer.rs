@@ -2968,6 +2968,8 @@ mod tests {
         cost_per_gas: u128,
         /// Whether the `ReservoirProbe` call in the same request finds a reservoir
         reservoir_found: bool,
+        /// The probe's gas used, which the node takes from its `rpc.gascap` before the bundle
+        probe_gas_used: u64,
     }
 
     impl ReservoirSimulation {
@@ -2980,6 +2982,7 @@ mod tests {
                 charged: 37_984_630,
                 cost_per_gas: 50,
                 reservoir_found: true,
+                probe_gas_used: 28_301,
             }
         }
 
@@ -3015,7 +3018,7 @@ mod tests {
                     as alloy_sol_types::SolCall>::abi_encode_returns(
                     &self.reservoir_found
                 )),
-                "gasUsed": "0x6e8d",
+                "gasUsed": format!("{:#x}", self.probe_gas_used),
             });
             serde_json::json!([{ "calls": [probe, call] }])
         }
@@ -3134,6 +3137,31 @@ mod tests {
         assert!(
             error.to_string().contains("no state-gas reservoir")
                 || format!("{error:#}").contains("no state-gas reservoir"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    /// The probe used more than its headroom, so the bundle may have been simulated with less gas
+    /// than it will have: the bundle attempt fails, and the op is not judged.
+    #[tokio::test]
+    async fn test_reservoir_mode_bundle_probe_over_headroom() {
+        let result = try_make_reservoir_bundle(
+            reservoir_op(),
+            RESERVOIR,
+            ReservoirSimulation {
+                probe_gas_used: rundler_provider::RESERVOIR_PROBE_GAS_HEADROOM + 1,
+                // what the op might get with its gas lowered: out of gas, charged less than used
+                op_success: false,
+                charged: 37_000_000,
+                ..ReservoirSimulation::passing(reservoir_tx_gas())
+            },
+            UserOperationPermissions::default(),
+        )
+        .await;
+
+        let error = result.expect_err("a probe over its headroom should fail the bundle");
+        assert!(
+            format!("{error:#}").contains("above its headroom"),
             "unexpected error: {error:#}"
         );
     }
