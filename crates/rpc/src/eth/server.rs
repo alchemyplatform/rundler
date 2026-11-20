@@ -54,28 +54,27 @@ where
         // middleware) take precedence over the legacy positional parameter.
         let rpc_permissions = ext.get::<RpcPermissions>().cloned().or(permissions);
 
-        // if permissions are not enabled, default them
-        let mut permissions = if self.permissions_enabled {
-            rpc_permissions
-                .map(|p| p.into_rundler_type(&self.chain_spec, ep_version))
-                .unwrap_or_default()
-        } else {
-            UserOperationPermissions::default()
-        };
+        // Conversions from client input run inside the guarded future so a panic in them
+        // is caught and returned as an RPC error.
+        utils::safe_call_rpc_handler("eth_sendUserOperation", async move {
+            // if permissions are not enabled, default them
+            let mut permissions = if self.permissions_enabled {
+                rpc_permissions
+                    .map(|p| p.into_rundler_type(&self.chain_spec, ep_version))
+                    .unwrap_or_default()
+            } else {
+                UserOperationPermissions::default()
+            };
 
-        // cap percentages at 100
-        permissions.underpriced_accept_pct = permissions.underpriced_accept_pct.map(|p| p.min(100));
-        permissions.underpriced_bundle_pct = permissions.underpriced_bundle_pct.map(|p| p.min(100));
+            // cap percentages at 100
+            permissions.underpriced_accept_pct =
+                permissions.underpriced_accept_pct.map(|p| p.min(100));
+            permissions.underpriced_bundle_pct =
+                permissions.underpriced_bundle_pct.map(|p| p.min(100));
 
-        utils::safe_call_rpc_handler(
-            "eth_sendUserOperation",
-            EthApi::send_user_operation(
-                self,
-                op.try_into_rundler_type(&self.chain_spec, ep_version)?,
-                entry_point,
-                permissions,
-            ),
-        )
+            let op = op.try_into_rundler_type(&self.chain_spec, ep_version)?;
+            EthApi::send_user_operation(self, op, entry_point, permissions).await
+        })
         .await
     }
 
@@ -93,15 +92,10 @@ where
             )))?
         };
 
-        utils::safe_call_rpc_handler(
-            "eth_estimateUserOperationGas",
-            EthApi::estimate_user_operation_gas(
-                self,
-                op.into_rundler_type(&self.chain_spec, ep_version),
-                entry_point,
-                state_override,
-            ),
-        )
+        utils::safe_call_rpc_handler("eth_estimateUserOperationGas", async move {
+            let op = op.into_rundler_type(&self.chain_spec, ep_version);
+            EthApi::estimate_user_operation_gas(self, op, entry_point, state_override).await
+        })
         .await
     }
 

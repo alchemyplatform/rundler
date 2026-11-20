@@ -1004,6 +1004,53 @@ mod tests {
         assert!(perms.trusted, "header permissions should take precedence");
     }
 
+    #[tokio::test]
+    async fn test_send_user_op_conversion_panic_is_caught() {
+        use http::Extensions;
+        use jsonrpsee::types::error::INTERNAL_ERROR_CODE;
+
+        use crate::{
+            eth::EthApiServer,
+            types::{RpcPermissions, RpcUserOperation},
+        };
+
+        // underpricedAcceptPct is a U64 on the wire but a u32 internally, so a value above
+        // u32::MAX panics during conversion. The conversion must run inside
+        // safe_call_rpc_handler so the panic comes back as an internal error.
+        let cs = ChainSpec {
+            id: 1,
+            ..Default::default()
+        };
+        let ep = cs.entry_point_address_v0_6;
+        let mut entry_point = MockEntryPointV0_6::default();
+        entry_point.expect_address().return_const(ep);
+
+        let api = create_api(
+            MockEvmProvider::default(),
+            entry_point,
+            MockPool::default(),
+            MockGasEstimator::default(),
+            true,
+        );
+        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
+        let rpc_uo: RpcUserOperation = UserOperationVariant::from(uo).into();
+        let permissions = RpcPermissions {
+            underpriced_accept_pct: Some(U64::from(u64::from(u32::MAX) + 1)),
+            ..Default::default()
+        };
+
+        let err = EthApiServer::send_user_operation(
+            &api,
+            &Extensions::new(),
+            rpc_uo,
+            ep,
+            Some(permissions),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), INTERNAL_ERROR_CODE);
+    }
+
     fn create_api(
         provider: MockEvmProvider,
         ep: MockEntryPointV0_6,
