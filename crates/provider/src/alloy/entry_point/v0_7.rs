@@ -54,7 +54,7 @@ use crate::{
     AggregatorOut, AggregatorSimOut, AlloyProvider, BlockHashOrNumber, BundleHandler, DAGasOracle,
     DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait,
     ExecutionResult, HandleOpsOut, ProviderResult, SignatureAggregator, SimulationProvider,
-    TransactionRequest,
+    SimulationTransactionRequest, TransactionRequest,
 };
 
 /// Entry point provider for v0.7
@@ -467,7 +467,7 @@ where
     fn get_tracer_simulate_validation_call(
         &self,
         user_op: Self::UO,
-    ) -> ProviderResult<(TransactionRequest, StateOverride)> {
+    ) -> ProviderResult<(SimulationTransactionRequest, StateOverride)> {
         let addr = *self.i_entry_point.address();
         let da_gas = user_op
             .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
@@ -496,7 +496,10 @@ where
             .from(SIMULATION_SENDER)
             .into_transaction_request();
 
-        Ok((call.inner, override_ep))
+        Ok((
+            super::validation_simulation_request(call, &self.chain_spec, self.max_verification_gas),
+            override_ep,
+        ))
     }
 
     #[instrument(skip_all)]
@@ -506,7 +509,7 @@ where
         block_id: Option<BlockId>,
     ) -> ProviderResult<Result<ValidationOutput, ValidationRevert>> {
         let (tx, overrides) = self.get_tracer_simulate_validation_call(user_op)?;
-        let mut call = self.i_entry_point.provider().call(tx.into());
+        let mut call = self.i_entry_point.provider().call(tx);
         if let Some(block_id) = block_id {
             call = call.block(block_id);
         }

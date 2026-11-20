@@ -21,7 +21,8 @@ use rundler_types::ExpectedStorage;
 use crate::{
     Block, BlockId, BlockNumberOrTag, FeeHistory, Filter, GasUsedResult,
     GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace, Log, ProviderResult, RpcRecv,
-    RpcSend, StateOverride, Transaction, TransactionReceipt, TransactionRequest,
+    RpcSend, SimulationTransactionRequest, StateOverride, Transaction, TransactionReceipt,
+    TransactionRequest,
 };
 
 /// An EVM call, a subset of a transaction that is not meant to be executed onchain, but
@@ -115,7 +116,7 @@ pub trait EvmProvider: Send + Sync {
     /// Debug trace a call
     async fn debug_trace_call(
         &self,
-        tx: TransactionRequest,
+        tx: SimulationTransactionRequest,
         block_id: Option<BlockId>,
         trace_options: GethDebugTracingCallOptions,
     ) -> ProviderResult<GethTrace>;
