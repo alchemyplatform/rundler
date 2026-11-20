@@ -11,6 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use std::time::Duration;
+
 use alloy_primitives::{Address, Bytes};
 use alloy_provider::network::AnyNetwork;
 use anyhow::Context;
@@ -20,7 +22,7 @@ use tracing::instrument;
 
 use super::DAMetrics;
 use crate::{
-    AlloyProvider, BlockHashOrNumber, DAGasOracle, DAGasOracleSync, ProviderResult,
+    AlloyProvider, BlockHashOrNumber, BlockId, DAGasOracle, DAGasOracleSync, ProviderResult,
     alloy::da::arbitrum::NodeInterface::NodeInterfaceInstance,
 };
 
@@ -31,8 +33,12 @@ use crate::{
 pub(crate) struct CachedNitroDAGasOracle<AP> {
     node_interface: NodeInterfaceInstance<AP, AnyNetwork>,
     block_data_cache: Cache<BlockHashOrNumber, NitroDAGasBlockData>,
+    latest_block_data_cache: Cache<(), NitroDAGasBlockData>,
     metrics: DAMetrics,
 }
+
+// About one block on fast Nitro chains. Concurrent bundle builds share a single call.
+const LATEST_BLOCK_DATA_TTL: Duration = Duration::from_millis(100);
 
 impl<AP> CachedNitroDAGasOracle<AP>
 where
@@ -42,6 +48,10 @@ where
         Self {
             node_interface: NodeInterfaceInstance::new(oracle_address, provider),
             block_data_cache: Cache::builder().max_capacity(100).build(),
+            latest_block_data_cache: Cache::builder()
+                .max_capacity(1)
+                .time_to_live(LATEST_BLOCK_DATA_TTL)
+                .build(),
             metrics: DAMetrics::default(),
         }
     }
@@ -84,6 +94,21 @@ where
         let block_data = self.get_cache_data(block).await?;
 
         Ok(DAGasBlockData::Nitro(block_data))
+    }
+
+    #[instrument(skip_all)]
+    async fn latest_da_block_data(&self) -> ProviderResult<Option<DAGasBlockData>> {
+        let block_data = self
+            .latest_block_data_cache
+            .try_get_with((), async {
+                self.call_oracle_contract(Address::ZERO, Bytes::new(), BlockId::latest())
+                    .await
+                    .map(|(_, block_data)| block_data)
+            })
+            .await
+            .context("failed to get latest block data")?;
+
+        Ok(Some(DAGasBlockData::Nitro(block_data)))
     }
 
     #[instrument(skip_all)]
@@ -144,7 +169,7 @@ where
         let data = Bytes::new();
         let to = Address::ZERO;
 
-        let (_, block_data) = self.call_oracle_contract(to, data, block).await?;
+        let (_, block_data) = self.call_oracle_contract(to, data, block.into()).await?;
         self.metrics
             .per_unit_l1_fee
             .set(block_data.l1_base_fee as f64);
@@ -158,7 +183,8 @@ where
         data: Bytes,
         block: BlockHashOrNumber,
     ) -> ProviderResult<NitroDAGasData> {
-        let (l1_gas_estimate, block_da_data) = self.call_oracle_contract(to, data, block).await?;
+        let (l1_gas_estimate, block_da_data) =
+            self.call_oracle_contract(to, data, block.into()).await?;
         let units = calculate_units(l1_gas_estimate, &block_da_data);
         Ok(NitroDAGasData { units })
     }
@@ -167,12 +193,12 @@ where
         &self,
         to: Address,
         data: Bytes,
-        block: BlockHashOrNumber,
+        block: BlockId,
     ) -> ProviderResult<(u128, NitroDAGasBlockData)> {
         let ret = self
             .node_interface
             .gasEstimateL1Component(to, true, data)
-            .block(block.into())
+            .block(block)
             .call()
             .await?;
 

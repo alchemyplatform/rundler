@@ -43,6 +43,13 @@ pub trait DAGasOracleSync: DAGasOracle {
     /// thus must be retrieved fresh from the DA for every block.
     async fn da_block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData>;
 
+    /// Retrieve the DA block data at the node's latest block.
+    ///
+    /// Returns `None` if the oracle does not support it.
+    async fn latest_da_block_data(&self) -> ProviderResult<Option<DAGasBlockData>> {
+        Ok(None)
+    }
+
     /// Retrieve the DA gas data for a given user operation's bytes
     ///
     /// This should not change block to block, but may change after underlying hard forks,

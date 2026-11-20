@@ -354,6 +354,7 @@ mockall::mock! {
     #[async_trait::async_trait]
     impl DAGasOracleSync for DAGasOracleSync {
         async fn da_block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData>;
+        async fn latest_da_block_data(&self) -> ProviderResult<Option<DAGasBlockData>>;
         async fn da_gas_data(
             &self,
             uo_data: Bytes,

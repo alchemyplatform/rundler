@@ -47,6 +47,8 @@ On chains that charge a minimum fraction of the transaction gas limit (e.g. Aval
 - Copying the call data into `innerHandleOp` memory (~`9w + w²/512` for `w` words) is covered by the static pre-verification gas through `per_user_op_word_gas`, which needs to be at least 17.
 - Only when simulation shows the paymaster returns a context: `verificationGasLimit + ceil(verificationGasLimit / 63) + 5000` for the post-op retry in `postOpReverted` mode.
 
+On chains with `include_da_gas_in_gas_limit` (Arbitrum Nitro), the L1 gas is charged from the transaction gas limit at inclusion. By default the DA part of the gas limit is the portion of each UO's `preVerificationGas` above its static and authorization gas, so it reflects the L1 price the UO was priced at, not the price at inclusion. When the chain spec sets `da_gas_limit_latest_buffer_percent`, the proposer also fetches DA block data at the node's latest block, in parallel with simulation (cached for 100ms and shared by concurrent builds). Each UO's DA part of the gas limit becomes `max(PVG-derived DA gas, latest DA gas * (1 + buffer))`. The buffer only applies to the bundler's own estimate, so a large `preVerificationGas` is not amplified. Bundle sizing is unchanged. The sender balance check uses this larger gas limit so the sender can afford the transaction it submits. Unused gas is not charged, and a failed fetch falls back to the PVG-derived value.
+
 The pre-simulation gas limit filter uses the same sizing without the post-op retry. Precheck and estimation check that a UO fits in a bundle with the same sizing including the post-op retry, the largest the builder can use, so any UO they accept can be bundled. v0.6 UOs without a paymaster keep the static limit.
 
 ### 2nd Simulation and Rejection

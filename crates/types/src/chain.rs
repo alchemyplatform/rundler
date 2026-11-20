@@ -92,6 +92,13 @@ pub struct ChainSpec {
     /// true if Data Availability (DA) calldata gas should be included in the gas limit
     /// only applies when da_pre_verification_gas is true
     pub include_da_gas_in_gas_limit: bool,
+    /// When set, the DA portion of a bundle transaction's gas limit is at least the DA gas at
+    /// the node's latest block, increased by this percent. Only applies when
+    /// `include_da_gas_in_gas_limit` is true and the DA oracle supports latest block data.
+    ///
+    /// On Arbitrum Nitro the L1 gas is charged from the gas limit at inclusion, and the L1 price
+    /// can rise sharply between the block a bundle is priced at and the block it lands in.
+    pub da_gas_limit_latest_buffer_percent: Option<u32>,
 
     /*
      * EIPS
@@ -227,6 +234,7 @@ impl Default for ChainSpec {
             da_gas_oracle_type: DAGasOracleType::default(),
             da_gas_oracle_contract_address: Address::ZERO,
             include_da_gas_in_gas_limit: false,
+            da_gas_limit_latest_buffer_percent: None,
             priority_fee_oracle_type: PriorityFeeOracleType::default(),
             min_max_priority_fee_per_gas: 0,
             max_max_priority_fee_per_gas: u64::MAX,

@@ -334,18 +334,36 @@ where
             self.get_balances_by_paymaster(all_paymaster_addresses, block_hash);
         let eip7702_sender_states_future = self.get_eip7702_sender_states(eip7702_senders);
 
-        let (ops_with_simulations, balances_by_paymaster, eip7702_sender_states) = tokio::join!(
+        let latest_da_block_data_future = self.get_latest_da_block_data();
+
+        let (
+            ops_with_simulations,
+            balances_by_paymaster,
+            eip7702_sender_states,
+            latest_da_block_data,
+        ) = tokio::join!(
             ops_with_simulations_future,
             balances_by_paymaster_future,
-            eip7702_sender_states_future
+            eip7702_sender_states_future,
+            latest_da_block_data_future
         );
 
         let balances_by_paymaster = balances_by_paymaster?;
         let eip7702_sender_states = eip7702_sender_states?;
-        let ops_with_simulations = ops_with_simulations
+        let mut ops_with_simulations = ops_with_simulations
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
+        if let Some(latest_da_block_data) = latest_da_block_data {
+            for (po, _) in &mut ops_with_simulations {
+                po.latest_da_gas = self.calc_latest_da_gas(
+                    &po.op,
+                    &latest_da_block_data,
+                    da_block_data.as_ref(),
+                    base_fee,
+                );
+            }
+        }
         let mut context = self
             .assemble_context(
                 sender_eoa,
@@ -598,6 +616,16 @@ struct BuilderProposerMetrics {
     bundle_simulation_failures: Counter,
     #[metric(describe = "the number of ops rejected due to a stale EIP-7702 authorization.")]
     stale_eip7702_auth_rejections: Counter,
+    #[metric(describe = "the number of failures fetching DA block data at the latest block.")]
+    latest_da_block_data_errors: Counter,
+    #[metric(
+        describe = "the DA gas at the latest block above what the op's preVerificationGas covers."
+    )]
+    latest_da_gas_shortfall: Histogram,
+    #[metric(
+        describe = "the ratio of DA gas at the latest block to DA gas at the proposal's block."
+    )]
+    latest_to_cached_da_gas_ratio: Histogram,
     #[metric(describe = "the distribution of bundle simulation time.")]
     bundle_simulation_ms: Histogram,
 }
@@ -674,6 +702,7 @@ where
             return Some(PoolOperationWithSponsoredDAGas {
                 op,
                 sponsored_da_gas: 0,
+                latest_da_gas: None,
             });
         }
 
@@ -788,6 +817,7 @@ where
         Some(PoolOperationWithSponsoredDAGas {
             op,
             sponsored_da_gas,
+            latest_da_gas: None,
         })
     }
 
@@ -840,6 +870,66 @@ where
         };
 
         Some(result)
+    }
+
+    /// Fetches DA block data at the node's latest block when the chain spec sizes the bundle
+    /// gas limit from it. Errors fall back to the PVG-derived DA gas limit.
+    async fn get_latest_da_block_data(&self) -> Option<DAGasBlockData> {
+        let chain_spec = &self.settings.chain_spec;
+        if chain_spec.da_gas_limit_latest_buffer_percent.is_none()
+            || !chain_spec.da_pre_verification_gas
+            || !chain_spec.include_da_gas_in_gas_limit
+        {
+            return None;
+        }
+        let da_gas_oracle = self.ep_providers.da_gas_oracle_sync().as_ref()?;
+        match da_gas_oracle.latest_da_block_data().await {
+            Ok(block_data) => block_data,
+            Err(e) => {
+                self.metrics.latest_da_block_data_errors.increment(1);
+                warn!("Failed to get latest DA block data, using PVG-derived DA gas limit: {e:?}");
+                None
+            }
+        }
+    }
+
+    fn calc_latest_da_gas(
+        &self,
+        op: &PoolOperation,
+        latest_da_block_data: &DAGasBlockData,
+        cached_da_block_data: Option<&DAGasBlockData>,
+        base_fee: u128,
+    ) -> Option<u128> {
+        if op.da_gas_data == DAGasData::Empty {
+            return None;
+        }
+        let da_gas_oracle = self.ep_providers.da_gas_oracle_sync().as_ref()?;
+        // TODO(bundle): assuming a bundle size of 1, matching check_fees
+        let calc = |block_data| {
+            da_gas_oracle.calc_da_gas_sync(
+                &op.da_gas_data,
+                block_data,
+                op.uo.gas_price(base_fee),
+                op.uo.extra_data_len(1),
+            )
+        };
+        let latest_da_gas = calc(latest_da_block_data);
+        if let Some(cached_da_gas) = cached_da_block_data.map(calc)
+            && cached_da_gas > 0
+        {
+            self.metrics
+                .latest_to_cached_da_gas_ratio
+                .record(latest_da_gas as f64 / cached_da_gas as f64);
+        }
+
+        let pvg_da_gas = op
+            .uo
+            .pre_verification_da_gas_limit(&self.settings.chain_spec, None);
+        self.metrics
+            .latest_da_gas_shortfall
+            .record(latest_da_gas.saturating_sub(pvg_da_gas) as f64);
+
+        Some(latest_da_gas)
     }
 
     async fn assemble_context(
@@ -976,6 +1066,7 @@ where
                     op: op.clone().into(),
                     simulation: simulation.clone(),
                     sponsored_da_gas: po.sponsored_da_gas,
+                    latest_da_gas: po.latest_da_gas,
                 });
 
             // Limit by max bundle computation gas (excluding DA gas)
@@ -1091,6 +1182,7 @@ where
                     op: op.into(),
                     simulation,
                     sponsored_da_gas: po.sponsored_da_gas,
+                    latest_da_gas: po.latest_da_gas,
                 });
         }
 
@@ -1773,6 +1865,7 @@ where
 struct PoolOperationWithSponsoredDAGas {
     op: PoolOperation,
     sponsored_da_gas: u128,
+    latest_da_gas: Option<u128>,
 }
 
 /// Chain state of an EIP-7702 sender at bundle proposal time, used to
@@ -1788,6 +1881,8 @@ struct OpWithSimulation<UO> {
     op: UO,
     simulation: SimulationResult,
     sponsored_da_gas: u128,
+    /// DA gas at the node's latest block, if `da_gas_limit_latest_buffer_percent` is set.
+    latest_da_gas: Option<u128>,
 }
 
 /// A struct used internally to represent the current state of a proposed bundle
@@ -2092,17 +2187,26 @@ impl<UO: UserOperation> ProposalContext<UO> {
 
     // Get the computation gas limit in the bundle
     fn get_bundle_computation_gas_limit(&self, chain_spec: &ChainSpec) -> u128 {
-        self.get_bundle_gas_limit_inner(chain_spec, false)
+        self.get_bundle_gas_limit_inner(chain_spec, false, None)
     }
 
-    // Get the total gas in the bundle
+    // Get the maximum cost of the bundle, used to check the sender can afford it. Includes the
+    // latest DA gas so the check covers the gas limit the transaction is sent with.
     fn get_bundle_cost(&self, chain_spec: &ChainSpec, gas_price: u128) -> U256 {
-        U256::from(self.get_bundle_gas_limit_inner(chain_spec, true)) * U256::from(gas_price)
+        U256::from(self.get_bundle_gas_limit_inner(
+            chain_spec,
+            true,
+            chain_spec.da_gas_limit_latest_buffer_percent,
+        )) * U256::from(gas_price)
     }
 
     // Get the bundle gas limit
     fn get_bundle_gas_limit(&self, chain_spec: &ChainSpec) -> u128 {
-        self.get_bundle_gas_limit_inner(chain_spec, chain_spec.include_da_gas_in_gas_limit)
+        self.get_bundle_gas_limit_inner(
+            chain_spec,
+            chain_spec.include_da_gas_in_gas_limit,
+            chain_spec.da_gas_limit_latest_buffer_percent,
+        )
     }
 
     fn bundle_overhead_bytes(&self, chain_spec: &ChainSpec) -> u128 {
@@ -2141,7 +2245,12 @@ impl<UO: UserOperation> ProposalContext<UO> {
         bundle_overhead_bytes
     }
 
-    fn get_bundle_gas_limit_inner(&self, chain_spec: &ChainSpec, include_da_gas: bool) -> u128 {
+    fn get_bundle_gas_limit_inner(
+        &self,
+        chain_spec: &ChainSpec,
+        include_da_gas: bool,
+        latest_da_buffer_percent: Option<u32>,
+    ) -> u128 {
         let mut authorization_gas = 0_u128;
         let mut standard_gas_limit = 0_u128;
         let mut calldata_floor_gas_limit = 0_u128;
@@ -2179,10 +2288,13 @@ impl<UO: UserOperation> ProposalContext<UO> {
                 calldata_floor_gas_limit.saturating_add(sim_op.op.calldata_floor_gas_limit());
 
             if include_da_gas {
-                da_gas_limit = da_gas_limit.saturating_add(
-                    sim_op.op.pre_verification_da_gas_limit(chain_spec, None)
-                        + sim_op.sponsored_da_gas,
-                );
+                let mut op_da_gas = sim_op.op.pre_verification_da_gas_limit(chain_spec, None)
+                    + sim_op.sponsored_da_gas;
+                if let (Some(pct), Some(latest)) = (latest_da_buffer_percent, sim_op.latest_da_gas)
+                {
+                    op_da_gas = op_da_gas.max(math::increase_by_percent(latest, pct));
+                }
+                da_gas_limit = da_gas_limit.saturating_add(op_da_gas);
             }
         }
 
@@ -3414,6 +3526,266 @@ mod tests {
         );
     }
 
+    /// Robinhood mainnet tx 0x6a361981f7e6b53f6a32a87b32997049e3505c0215406a933d9623dfee617f3b
+    /// reverted with AA95. The builder priced DA at block 114214791 (L1 price/unit 1,025,227 wei);
+    /// the tx landed in 114214822 (206,761,312 wei) and Nitro charged 149,012 L1 gas from its limit.
+    const RH_ONCHAIN_GAS_LIMIT: u128 = 1_644_271;
+    const RH_ONCHAIN_L1_GAS: u128 = 149_012;
+    const RH_L1_PRICE_AT_INCLUSION: u128 = 206_761_312;
+
+    /// DA gas for the Robinhood bundle at a given L1 price per unit, scaled from the on-chain charge.
+    fn rh_da_gas_at_price(l1_price: u128) -> u128 {
+        RH_ONCHAIN_L1_GAS * l1_price / RH_L1_PRICE_AT_INCLUSION
+    }
+
+    fn robinhood_aa95_context(
+        pre_verification_gas: Option<u128>,
+        latest_da_gas: Option<u128>,
+    ) -> (ChainSpec, ProposalContext<UserOperationVariant>) {
+        use alloy_sol_types::SolCall;
+        use rundler_contracts::v0_7::IEntryPoint::handleOpsCall;
+        use rundler_types::{
+            authorization::Eip7702Auth, v0_7::UserOperationBuilder as UserOperationBuilderV0_7,
+        };
+
+        let cs = ChainSpec {
+            id: 4663,
+            da_pre_verification_gas: true,
+            include_da_gas_in_gas_limit: true,
+            eip7702_enabled: true,
+            ..Default::default()
+        };
+        let hex = include_str!("../testdata/robinhood_aa95_handle_ops.hex");
+        let calldata = alloy_primitives::hex::decode(hex.trim()).unwrap();
+        let call = handleOpsCall::abi_decode(&calldata).unwrap();
+        let auth = Eip7702Auth::new_dummy(
+            4663,
+            alloy_primitives::address!("77021100bd87b7008e5e1989d0eb38555d0d0000"),
+        );
+        let mut op = UserOperationBuilderV0_7::from_packed(
+            call.ops[0].clone(),
+            &cs,
+            EntryPointVersion::V0_7,
+            Some(auth),
+        )
+        .unwrap()
+        .build();
+        assert_eq!(op.pre_verification_gas(), 83_741);
+        assert_eq!(op.call_gas_limit(), 1_344_594);
+        if let Some(pvg) = pre_verification_gas {
+            op = UserOperationBuilderV0_7::from_uo(op, &cs)
+                .pre_verification_gas(pvg)
+                .build();
+        }
+
+        let mut groups_by_aggregator = LinkedHashMap::new();
+        groups_by_aggregator.insert(
+            Address::ZERO,
+            AggregatorGroup {
+                ops_with_simulations: vec![OpWithSimulation {
+                    op: op.into(),
+                    simulation: SimulationResult::default(),
+                    sponsored_da_gas: 0,
+                    latest_da_gas,
+                }],
+                signature: Default::default(),
+            },
+        );
+        let context = ProposalContext {
+            sender_eoa: Address::ZERO,
+            groups_by_aggregator,
+            rejected_ops: vec![],
+            suspect_ops: vec![],
+            entity_updates: BTreeMap::new(),
+            bundle_expected_storage: BundleExpectedStorage::default(),
+        };
+        (cs, context)
+    }
+
+    fn buffered_gas_limit(context: &ProposalContext<UserOperationVariant>, cs: &ChainSpec) -> u128 {
+        math::increase_by_percent(
+            context.get_bundle_gas_limit(cs),
+            BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
+        )
+    }
+
+    /// The bundle fits if the gas left after Nitro deducts the L1 gas covers the computation budget.
+    fn rh_bundle_fits(context: &ProposalContext<UserOperationVariant>, cs: &ChainSpec) -> bool {
+        buffered_gas_limit(context, cs) - RH_ONCHAIN_L1_GAS
+            >= context.get_bundle_computation_gas_limit(cs)
+    }
+
+    #[test]
+    fn test_robinhood_aa95_reproduces_onchain_gas_limit() {
+        let (cs, context) = robinhood_aa95_context(None, None);
+        assert_eq!(buffered_gas_limit(&context, &cs), RH_ONCHAIN_GAS_LIMIT);
+        assert!(!rh_bundle_fits(&context, &cs));
+    }
+
+    #[test]
+    fn test_robinhood_aa95_latest_da_gas() {
+        // Price at the builder's head (block 114214791): the latest estimate is no help.
+        let (mut cs, context) = robinhood_aa95_context(None, Some(rh_da_gas_at_price(1_025_227)));
+        cs.da_gas_limit_latest_buffer_percent = Some(100);
+        assert!(!rh_bundle_fits(&context, &cs));
+
+        // Price a few blocks later (block 114214815) with a 100% buffer: the bundle fits.
+        let (mut cs, context) = robinhood_aa95_context(None, Some(rh_da_gas_at_price(122_584_163)));
+        let computation = context.get_bundle_computation_gas_limit(&cs);
+        assert!(!rh_bundle_fits(&context, &cs));
+        cs.da_gas_limit_latest_buffer_percent = Some(100);
+        assert!(rh_bundle_fits(&context, &cs));
+        // Bundle sizing is unchanged.
+        assert_eq!(context.get_bundle_computation_gas_limit(&cs), computation);
+        // The affordability check prices the gas limit the transaction is sent with.
+        assert_eq!(
+            context.get_bundle_cost(&cs, 1),
+            U256::from(context.get_bundle_gas_limit(&cs))
+        );
+        assert!(
+            context.get_bundle_gas_limit(&cs)
+                > robinhood_aa95_context(None, None)
+                    .1
+                    .get_bundle_gas_limit(&cs)
+        );
+    }
+
+    #[test]
+    fn test_latest_da_gas_does_not_amplify_pvg() {
+        let latest_da_gas = Some(10_000);
+        let (cs, context) = robinhood_aa95_context(Some(10_000_000), latest_da_gas);
+        let mut cs_with_latest = cs.clone();
+        cs_with_latest.da_gas_limit_latest_buffer_percent = Some(300);
+        assert_eq!(
+            context.get_bundle_gas_limit(&cs_with_latest),
+            context.get_bundle_gas_limit(&cs)
+        );
+    }
+
+    #[test]
+    fn test_latest_da_gas_missing_falls_back_to_pvg() {
+        let (cs, context) = robinhood_aa95_context(None, None);
+        let mut cs_with_latest = cs.clone();
+        cs_with_latest.da_gas_limit_latest_buffer_percent = Some(100);
+        assert_eq!(
+            context.get_bundle_gas_limit(&cs_with_latest),
+            context.get_bundle_gas_limit(&cs)
+        );
+    }
+
+    type MockProposer = BundleProposerImpl<
+        ProvidersWithEntryPoint<
+            UserOperation,
+            Arc<MockEvmProvider>,
+            Arc<MockEntryPointV0_6>,
+            Arc<MockDAGasOracleSync>,
+            Arc<MockFeeEstimator>,
+        >,
+        BundleProposerProviders<MockSimulator>,
+    >;
+
+    fn proposer_with_da_oracle(
+        chain_spec: ChainSpec,
+        da_oracle: MockDAGasOracleSync,
+    ) -> MockProposer {
+        let (event_sender, _) = broadcast::channel(16);
+        BundleProposerImpl::new(
+            "test".to_string(),
+            ProvidersWithEntryPoint::new(
+                Arc::new(MockEvmProvider::new()),
+                Arc::new(MockEntryPointV0_6::new()),
+                Some(Arc::new(da_oracle)),
+                Arc::new(MockFeeEstimator::new()),
+            ),
+            BundleProposerProviders::new(MockSimulator::new()),
+            Settings {
+                chain_spec,
+                target_bundle_gas: 10_000_000,
+                max_bundle_gas: 25_000_000,
+                da_gas_tracking_enabled: true,
+                max_expected_storage_slots: MAX_EXPECTED_STORAGE_SLOTS,
+                verification_gas_limit_efficiency_reject_threshold: 0.5,
+                submission_proxy: None,
+            },
+            event_sender,
+        )
+    }
+
+    fn latest_da_chain_spec(latest_buffer_percent: Option<u32>) -> ChainSpec {
+        ChainSpec {
+            da_pre_verification_gas: true,
+            include_da_gas_in_gas_limit: true,
+            da_gas_limit_latest_buffer_percent: latest_buffer_percent,
+            ..Default::default()
+        }
+    }
+
+    fn nitro_block_data() -> DAGasBlockData {
+        DAGasBlockData::Nitro(rundler_types::da::NitroDAGasBlockData {
+            l1_base_fee: 1,
+            base_fee: 1,
+        })
+    }
+
+    #[tokio::test]
+    async fn test_latest_da_block_data_disabled_makes_no_call() {
+        let mut da_oracle = MockDAGasOracleSync::new();
+        da_oracle.expect_latest_da_block_data().never();
+        let proposer = proposer_with_da_oracle(latest_da_chain_spec(None), da_oracle);
+        assert_eq!(proposer.get_latest_da_block_data().await, None);
+    }
+
+    #[tokio::test]
+    async fn test_latest_da_block_data_error_falls_back() {
+        let mut da_oracle = MockDAGasOracleSync::new();
+        da_oracle
+            .expect_latest_da_block_data()
+            .returning(|| Err(anyhow!("node down").into()));
+        let proposer = proposer_with_da_oracle(latest_da_chain_spec(Some(100)), da_oracle);
+        assert_eq!(proposer.get_latest_da_block_data().await, None);
+    }
+
+    #[tokio::test]
+    async fn test_calc_latest_da_gas() {
+        let mut da_oracle = MockDAGasOracleSync::new();
+        da_oracle
+            .expect_latest_da_block_data()
+            .returning(|| Ok(Some(nitro_block_data())));
+        da_oracle
+            .expect_calc_da_gas_sync()
+            .withf(|data, block_data, _, _| {
+                *data == DAGasData::Nitro(rundler_types::da::NitroDAGasData { units: 7 })
+                    && *block_data == nitro_block_data()
+            })
+            .returning(|_, _, _, _| 42_000);
+        let proposer = proposer_with_da_oracle(latest_da_chain_spec(Some(100)), da_oracle);
+
+        let latest = proposer.get_latest_da_block_data().await.unwrap();
+        let mut op = PoolOperation {
+            uo: op_with_sender(address(1)).into(),
+            expected_code_hash: B256::ZERO,
+            entry_point: Address::ZERO,
+            sim_block_hash: B256::ZERO,
+            sim_block_number: 0,
+            account_is_staked: false,
+            valid_time_range: ValidTimeRange::default(),
+            entity_infos: EntityInfos::default(),
+            aggregator: None,
+            da_gas_data: DAGasData::Nitro(rundler_types::da::NitroDAGasData { units: 7 }),
+            filter_id: None,
+            perms: UserOperationPermissions::default(),
+            sender_is_7702: false,
+        };
+        assert_eq!(
+            proposer.calc_latest_da_gas(&op, &latest, Some(&latest), 0),
+            Some(42_000)
+        );
+
+        // Ops without cached DA data keep the PVG-derived DA gas limit.
+        op.da_gas_data = DAGasData::Empty;
+        assert_eq!(proposer.calc_latest_da_gas(&op, &latest, None, 0), None);
+    }
+
     #[tokio::test]
     async fn test_bundle_gas_limit_da_gas() {
         let cs = ChainSpec {
@@ -3434,6 +3806,7 @@ mod tests {
                             ..Default::default()
                         },
                         sponsored_da_gas: 100_000,
+                        latest_da_gas: None,
                     },
                     OpWithSimulation {
                         op: op2.clone(),
@@ -3442,6 +3815,7 @@ mod tests {
                             ..Default::default()
                         },
                         sponsored_da_gas: 0,
+                        latest_da_gas: None,
                     },
                 ],
                 signature: Default::default(),
@@ -3484,6 +3858,7 @@ mod tests {
                             ..Default::default()
                         },
                         sponsored_da_gas: 0,
+                        latest_da_gas: None,
                     },
                     OpWithSimulation {
                         op: op2.clone(),
@@ -3492,6 +3867,7 @@ mod tests {
                             ..Default::default()
                         },
                         sponsored_da_gas: 0,
+                        latest_da_gas: None,
                     },
                 ],
                 signature: Default::default(),
@@ -3528,6 +3904,7 @@ mod tests {
                             ..Default::default()
                         },
                         sponsored_da_gas: 0,
+                        latest_da_gas: None,
                     })
                     .collect(),
                 signature: Default::default(),
@@ -3659,6 +4036,7 @@ mod tests {
                         ..Default::default()
                     },
                     sponsored_da_gas: 0,
+                    latest_da_gas: None,
                 }],
                 signature: Default::default(),
             },
@@ -3722,6 +4100,7 @@ mod tests {
                     op: op_without_authorization,
                     simulation: SimulationResult::default(),
                     sponsored_da_gas: 0,
+                    latest_da_gas: None,
                 }],
                 signature: Default::default(),
             },
@@ -3743,6 +4122,7 @@ mod tests {
                     op: op_with_authorization,
                     simulation: SimulationResult::default(),
                     sponsored_da_gas: 0,
+                    latest_da_gas: None,
                 }],
                 signature: Default::default(),
             },
