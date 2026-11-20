@@ -26,7 +26,7 @@ pub(super) struct ListSignersArgs {
 
     /// Signer arguments
     #[command(flatten)]
-    signer_args: SignerArgs,
+    pub(super) signer_args: SignerArgs,
 }
 
 pub(super) async fn list_signers(

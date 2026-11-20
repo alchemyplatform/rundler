@@ -29,7 +29,7 @@ pub(super) struct FundSignersArgs {
 
     /// Signer arguments
     #[command(flatten)]
-    signer_args: SignerArgs,
+    pub(super) signer_args: SignerArgs,
 
     /// Broadcast the funding transaction
     #[arg(short, long)]

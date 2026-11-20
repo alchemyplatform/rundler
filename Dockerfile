@@ -52,8 +52,13 @@ WORKDIR /app
 RUN apt-get -y update; apt-get -y install curl ca-certificates
 RUN update-ca-certificates
 
+RUN groupadd --gid 10001 rundler \
+    && useradd --uid 10001 --gid rundler --create-home --shell /usr/sbin/nologin rundler \
+    && chown rundler:rundler /app
+
 # Copy rundler over from the build stage
 COPY --from=builder /app/target/release/rundler /usr/local/bin
 
 EXPOSE 3000 8080
+USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/rundler"]

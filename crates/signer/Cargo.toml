@@ -12,7 +12,7 @@ publish = false
 alloy-consensus.workspace = true
 alloy-eips.workspace = true
 alloy-network.workspace = true
-alloy-primitives.workspace = true
+alloy-primitives = { workspace = true, features = ["serde"] }
 alloy-signer.workspace = true
 alloy-signer-aws.workspace = true
 alloy-signer-local = { workspace = true, features = [ "mnemonic" ] }
@@ -30,6 +30,8 @@ rundler-provider.workspace = true
 rundler-task.workspace = true
 rundler-types.workspace = true
 secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 strum.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

@@ -34,7 +34,7 @@ pub(super) struct DefundSignersArgs {
 
     /// Signer arguments
     #[command(flatten)]
-    signer_args: SignerArgs,
+    pub(super) signer_args: SignerArgs,
 
     /// Broadcast the defunding transactions
     #[arg(short, long)]

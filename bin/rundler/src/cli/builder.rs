@@ -20,17 +20,19 @@ use rundler_builder::{
     self, BloxrouteSenderArgs, BuilderEvent, BuilderEventKind, BuilderSettings, BuilderTask,
     BuilderTaskArgs, EntryPointBuilderSettings, FallbackSenderArgs, FlashbotsSenderArgs,
     LocalBuilderBuilder, PolygonPrivateArgs, RawSenderArgs, SkipReason, TransactionSenderArgs,
-    TransactionSenderKind,
+    TransactionSenderKind, WorkerLayout,
 };
 use rundler_pbh::PbhSubmissionProxy;
 use rundler_pool::RemotePoolClient;
 use rundler_provider::{AlloyNetworkConfig, Providers};
+use rundler_signer::{SigningScheme, mapping::SignerMapping};
 use rundler_sim::MempoolConfigs;
 use rundler_task::{
     TaskSpawnerExt,
     server::{connect_with_retries_shutdown, format_socket_addr},
 };
 use rundler_types::{
+    EntryPointVersion,
     chain::{ChainSpec, ContractRegistry},
     proxy::SubmissionProxy,
 };
@@ -41,8 +43,9 @@ use tokio::sync::broadcast;
 
 use super::{
     CommonArgs,
+    json::get_json_config,
     proxy::{PassThroughProxy, SubmissionProxyType},
-    signer::SignerArgs,
+    signer::{SignerArgs, SignerLayout},
 };
 
 const REQUEST_CHANNEL_CAPACITY: usize = 1024;
@@ -252,6 +255,43 @@ pub struct BuilderArgs {
 }
 
 impl BuilderArgs {
+    /// The signing scheme and worker layout for the configured `signer.layout`.
+    async fn signing_config(
+        &self,
+        enabled_entry_points: &[EntryPointVersion],
+        num_signers: u64,
+    ) -> anyhow::Result<(SigningScheme, WorkerLayout)> {
+        match self.signer_args.layout {
+            SignerLayout::Legacy => Ok((
+                self.signer_args
+                    .signing_scheme(Some(num_signers as usize))?,
+                WorkerLayout::Shared { num_signers },
+            )),
+            SignerLayout::Mapping => {
+                let path = self
+                    .signer_args
+                    .mapping_path
+                    .as_deref()
+                    .context("SIGNER_LAYOUT=mapping requires SIGNER_MAPPING_PATH")?;
+                let mapping = get_json_config::<SignerMapping>(path)
+                    .await
+                    .with_context(|| format!("should load signer mapping from {path}"))?;
+                let scheme = self
+                    .signer_args
+                    .mapped_signing_scheme(mapping, enabled_entry_points)?;
+                let counts = self
+                    .signer_args
+                    .counts
+                    .clone()
+                    .context("SIGNER_LAYOUT=mapping requires SIGNER_COUNTS")?;
+                tracing::info!(
+                    "Signer layout: mapping from {path}; NUM_SIGNERS and SIGNER_AWS_KMS_GROUPED_KEYS are ignored"
+                );
+                Ok((scheme, WorkerLayout::PerEntryPoint { counts }))
+            }
+        }
+    }
+
     /// Convert the CLI arguments into the arguments for the builder combining
     /// common and builder specific arguments.
     pub async fn to_args(
@@ -301,9 +341,9 @@ impl BuilderArgs {
         }
 
         let sender_args = self.sender_args(&chain_spec, &rpc_url)?;
-        let signing_scheme = self
-            .signer_args
-            .signing_scheme(Some(common.num_signers as usize))?;
+        let (signing_scheme, worker_layout) = self
+            .signing_config(&common.enabled_entry_points, common.num_signers)
+            .await?;
 
         let da_gas_tracking_enabled =
             super::lint_da_gas_tracking(common.da_gas_tracking_enabled, &chain_spec);
@@ -322,7 +362,7 @@ impl BuilderArgs {
         Ok(BuilderTaskArgs {
             entry_points,
             signing_scheme,
-            num_signers: common.num_signers,
+            worker_layout,
             auto_fund: true,
             unsafe_mode: common.unsafe_mode,
             rpc_url,
@@ -616,6 +656,110 @@ mod tests {
 
     fn builder_args(args: &[&str]) -> BuilderArgs {
         TestCli::parse_from(std::iter::once("test").chain(args.iter().copied())).builder
+    }
+
+    const GOLDEN_MAPPING: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../crates/signer/testdata/signer-mapping.golden.json"
+    );
+    const ALL_EPS: [EntryPointVersion; 4] = [
+        EntryPointVersion::V0_6,
+        EntryPointVersion::V0_7,
+        EntryPointVersion::V0_8,
+        EntryPointVersion::V0_9,
+    ];
+
+    /// Mapping-mode signer flags (an empty value is a boolean flag); `skip` drops a flag by
+    /// name to test missing settings.
+    fn mapping_args(counts: &str, skip: &[&str]) -> BuilderArgs {
+        let flags: Vec<(&str, &str)> = vec![
+            ("--signer.layout", "mapping"),
+            ("--signer.mapping_path", GOLDEN_MAPPING),
+            ("--signer.counts", counts),
+            ("--signer.enable_kms_funding", ""),
+            ("--signer.aws_kms_key_ids", "fund-a,fund-b,fund-c"),
+            ("--signer.fund_below", "0.05"),
+            ("--signer.fund_to", "0.1"),
+        ];
+        let args: Vec<&str> = flags
+            .into_iter()
+            .filter(|(flag, _)| !skip.contains(flag))
+            .flat_map(|(flag, value)| [flag, value])
+            .filter(|arg| !arg.is_empty())
+            .collect();
+        builder_args(&args)
+    }
+
+    #[tokio::test]
+    async fn signer_layout_defaults_to_legacy() {
+        let args = builder_args(&["--signer.private_keys", &format!("0x{}", "11".repeat(32))]);
+        assert_eq!(args.signer_args.layout, SignerLayout::Legacy);
+        let (scheme, layout) = args.signing_config(&ALL_EPS, 1).await.unwrap();
+        assert!(matches!(scheme, SigningScheme::PrivateKeys { .. }));
+        assert_eq!(layout, WorkerLayout::Shared { num_signers: 1 });
+    }
+
+    #[tokio::test]
+    async fn mapping_layout_builds_mapped_scheme() {
+        let args = mapping_args("v0.6=1,v0.7=2,v0.8=1,v0.9=1", &[]);
+        let (scheme, layout) = args.signing_config(&ALL_EPS, 32).await.unwrap();
+        let SigningScheme::KmsFundingMapped {
+            funding_key_ids,
+            counts,
+            ..
+        } = scheme
+        else {
+            panic!("expected a mapped signing scheme, got {scheme:?}");
+        };
+        assert_eq!(funding_key_ids, ["fund-a", "fund-b", "fund-c"]);
+        assert_eq!(counts.total(), 5);
+        assert_eq!(layout, WorkerLayout::PerEntryPoint { counts });
+    }
+
+    #[tokio::test]
+    async fn mapping_layout_reports_missing_settings() {
+        let counts = "v0.6=1,v0.7=1,v0.8=1,v0.9=1";
+        for (skip, message) in [
+            ("--signer.mapping_path", "requires SIGNER_MAPPING_PATH"),
+            ("--signer.counts", "requires SIGNER_COUNTS"),
+            (
+                "--signer.enable_kms_funding",
+                "requires SIGNER_ENABLE_KMS_FUNDING",
+            ),
+            (
+                "--signer.aws_kms_key_ids",
+                "requires exactly 3 funding keys",
+            ),
+        ] {
+            let err = mapping_args(counts, &[skip])
+                .signing_config(&ALL_EPS, 32)
+                .await
+                .unwrap_err();
+            assert!(
+                format!("{err:#}").contains(message),
+                "missing {skip}: unexpected error {err:#}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mapping_layout_checks_counts_against_enabled_entry_points() {
+        // v0.9 has a count but is not enabled.
+        let err = mapping_args("v0.6=1,v0.7=1,v0.8=1,v0.9=1", &[])
+            .signing_config(&ALL_EPS[..3], 32)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("v0.9, which is not enabled"),
+            "{err:#}"
+        );
+
+        // The golden fixture has 2 keys per entry point and group.
+        let err = mapping_args("v0.6=1,v0.7=3,v0.8=1,v0.9=1", &[])
+            .signing_config(&ALL_EPS, 32)
+            .await
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("asks for 3 signers"), "{err:#}");
     }
 
     fn unwrap_fallback(sender: TransactionSenderArgs) -> FallbackSenderArgs {

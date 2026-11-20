@@ -10,6 +10,10 @@ docker buildx build . -t rundler
 
 ## Run
 
+Runtime images run as the `rundler` user (UID/GID `10001:10001`). Any mounted
+configuration or credentials must be readable by this user, and mounted output
+directories must be writable by it.
+
 Sample full node docker-compose configuration:
 
 ```
