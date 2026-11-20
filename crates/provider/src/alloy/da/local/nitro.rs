@@ -270,3 +270,112 @@ fn extra_data_to_units(extra_data_len: usize) -> u128 {
         .saturating_mul(101)
         .saturating_div(100)
 }
+
+#[cfg(test)]
+mod tests {
+    use alloy_primitives::{U256, address};
+    use alloy_provider::ProviderBuilder;
+    use alloy_sol_types::SolValue;
+    use alloy_transport::mock::Asserter;
+    use rundler_types::chain::ChainSpec;
+
+    use super::*;
+    use crate::alloy::da::local::LocalBedrockDAGasOracle;
+
+    fn mocked_provider(asserter: Asserter) -> impl AlloyProvider {
+        ProviderBuilder::new()
+            .disable_recommended_fillers()
+            .network::<AnyNetwork>()
+            .connect_mocked_client(asserter)
+    }
+
+    fn nitro_oracle(asserter: &Asserter) -> CachedNitroDAGasOracle<impl AlloyProvider> {
+        CachedNitroDAGasOracle::new(
+            address!("00000000000000000000000000000000000000C8"),
+            mocked_provider(asserter.clone()),
+        )
+    }
+
+    fn push_gas_estimate(asserter: &Asserter, base_fee: u64, l1_base_fee: u64) {
+        let ret = (100_u64, U256::from(base_fee), U256::from(l1_base_fee)).abi_encode_params();
+        asserter.push_success(&Bytes::from(ret));
+    }
+
+    fn nitro_block_data(base_fee: u128, l1_base_fee: u128) -> Option<DAGasBlockData> {
+        Some(DAGasBlockData::Nitro(NitroDAGasBlockData {
+            l1_base_fee,
+            base_fee,
+        }))
+    }
+
+    #[tokio::test]
+    async fn test_latest_da_block_data_cached_within_ttl() {
+        let asserter = Asserter::new();
+        let oracle = nitro_oracle(&asserter);
+        push_gas_estimate(&asserter, 20, 200);
+
+        assert_eq!(
+            oracle.latest_da_block_data().await.unwrap(),
+            nitro_block_data(20, 200)
+        );
+        // No second response is queued, so this must be served from the cache.
+        assert_eq!(
+            oracle.latest_da_block_data().await.unwrap(),
+            nitro_block_data(20, 200)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_latest_da_block_data_concurrent_calls_share_one_request() {
+        let asserter = Asserter::new();
+        let oracle = nitro_oracle(&asserter);
+        push_gas_estimate(&asserter, 20, 200);
+
+        let (a, b) = tokio::join!(oracle.latest_da_block_data(), oracle.latest_da_block_data());
+        assert_eq!(a.unwrap(), nitro_block_data(20, 200));
+        assert_eq!(b.unwrap(), nitro_block_data(20, 200));
+    }
+
+    #[tokio::test]
+    async fn test_latest_da_block_data_refetched_after_ttl() {
+        let asserter = Asserter::new();
+        let oracle = nitro_oracle(&asserter);
+        push_gas_estimate(&asserter, 20, 200);
+        push_gas_estimate(&asserter, 20, 300);
+
+        assert_eq!(
+            oracle.latest_da_block_data().await.unwrap(),
+            nitro_block_data(20, 200)
+        );
+        tokio::time::sleep(LATEST_BLOCK_DATA_TTL * 2).await;
+        assert_eq!(
+            oracle.latest_da_block_data().await.unwrap(),
+            nitro_block_data(20, 300)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_latest_da_block_data_error_not_cached() {
+        let asserter = Asserter::new();
+        let oracle = nitro_oracle(&asserter);
+        asserter.push_failure_msg("node unavailable");
+        push_gas_estimate(&asserter, 20, 200);
+
+        assert!(oracle.latest_da_block_data().await.is_err());
+        assert_eq!(
+            oracle.latest_da_block_data().await.unwrap(),
+            nitro_block_data(20, 200)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_latest_da_block_data_unsupported_by_default() {
+        // No responses are queued: the default implementation makes no call.
+        let oracle = LocalBedrockDAGasOracle::new(
+            Address::ZERO,
+            mocked_provider(Asserter::new()),
+            &ChainSpec::default(),
+        );
+        assert_eq!(oracle.latest_da_block_data().await.unwrap(), None);
+    }
+}
