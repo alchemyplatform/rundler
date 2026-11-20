@@ -135,12 +135,17 @@ static DESCRIBE_ADMISSION: Once = Once::new();
 /// or `None` if that limit is 0.
 ///
 /// `pre_op_gas` is the simulation's pre-op gas, which includes the pre-verification gas.
+/// `refilled_state_gas` is state gas charged and refilled during validation, which the
+/// verification gas limit has to cover but `pre_op_gas` does not include.
 pub(crate) fn verification_gas_efficiency(
     uo: &UserOperationVariant,
     pre_op_gas: u128,
+    refilled_state_gas: u128,
 ) -> Option<f64> {
     efficiency(
-        pre_op_gas.saturating_sub(uo.pre_verification_gas()),
+        pre_op_gas
+            .saturating_sub(uo.pre_verification_gas())
+            .saturating_add(refilled_state_gas),
         uo.total_verification_gas_limit(),
     )
 }
@@ -332,7 +337,7 @@ mod tests {
             .into();
 
         // 50_000 pre-verification gas + 125_000 verification gas used
-        let efficiency = verification_gas_efficiency(&op, 175_000).unwrap();
+        let efficiency = verification_gas_efficiency(&op, 175_000, 0).unwrap();
         metrics::with_local_recorder(&recorder, || {
             record_admission_verification_gas_efficiency(ENTRY_POINT, &op, efficiency);
         });
@@ -366,17 +371,17 @@ mod tests {
     fn test_verification_gas_efficiency() {
         // 150_000 used of 200_000
         assert_eq!(
-            verification_gas_efficiency(&v0_6_op(false), 200_000),
+            verification_gas_efficiency(&v0_6_op(false), 200_000, 0),
             Some(0.75)
         );
         // 150_000 used of 2 * 200_000
         assert_eq!(
-            verification_gas_efficiency(&v0_6_op(true), 200_000),
+            verification_gas_efficiency(&v0_6_op(true), 200_000, 0),
             Some(0.375)
         );
         // pre-op gas below pre-verification gas
         assert_eq!(
-            verification_gas_efficiency(&v0_6_op(false), 10_000),
+            verification_gas_efficiency(&v0_6_op(false), 10_000, 0),
             Some(0.0)
         );
 
@@ -385,7 +390,7 @@ mod tests {
             v0_6::UserOperationBuilder::new(&chain_spec, Default::default())
                 .build()
                 .into();
-        assert_eq!(verification_gas_efficiency(&no_limit, 100_000), None);
+        assert_eq!(verification_gas_efficiency(&no_limit, 100_000, 0), None);
     }
 
     #[test]
@@ -395,7 +400,7 @@ mod tests {
         let op = v0_6_op(true);
 
         // 150_000 used of 2 * 200_000
-        let efficiency = verification_gas_efficiency(&op, 200_000).unwrap();
+        let efficiency = verification_gas_efficiency(&op, 200_000, 0).unwrap();
         metrics::with_local_recorder(&recorder, || {
             record_admission_verification_gas_efficiency(ENTRY_POINT, &op, efficiency);
         });
