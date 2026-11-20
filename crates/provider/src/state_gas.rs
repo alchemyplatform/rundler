@@ -179,8 +179,26 @@ pub fn reservoir_probe_call(state_override: &mut StateOverride) -> TransactionRe
         .with_gas_limit(TX_MAX_GAS_LIMIT + RESERVOIR_PROBE_RESERVOIR_GAS)
 }
 
-/// Whether the [`reservoir_probe_call`] `result` got a state-gas reservoir
+/// The most gas a [`reservoir_probe_call`] may use (it uses 28,301 on Sepolia, reth v2.10).
+///
+/// A node applies its `rpc.gascap` to an `eth_simulateV1` request as a whole: each call's gas used
+/// is taken from it, and a later call's gas limit is lowered, without an error, to what is left
+/// (reth v2.10). The probe runs first, so it takes up to this much from the calls after it.
+/// Reservoir-mode simulations therefore need an `rpc.gascap` of at least
+/// `2^24 + max_reservoir_gas + RESERVOIR_PROBE_GAS_HEADROOM`.
+pub const RESERVOIR_PROBE_GAS_HEADROOM: u64 = 100_000;
+
+/// Whether the [`reservoir_probe_call`] `result` got a state-gas reservoir.
+///
+/// An error if the probe used more than [`RESERVOIR_PROBE_GAS_HEADROOM`]: the calls after it may
+/// then have run with less gas than requested, so their results can't be trusted.
 pub fn reservoir_probe_found_reservoir(result: &SimulatedCall) -> anyhow::Result<bool> {
+    anyhow::ensure!(
+        result.gas_used <= RESERVOIR_PROBE_GAS_HEADROOM,
+        "the reservoir probe used {} gas, above its headroom of {RESERVOIR_PROBE_GAS_HEADROOM}: \
+         the calls after it may have run with less gas than requested",
+        result.gas_used
+    );
     Ok(result.success
         && probeCall::abi_decode_returns(&result.return_data)
             .context("should decode the reservoir probe's result")?)
@@ -226,15 +244,24 @@ mod tests {
 
     #[test]
     fn reads_reservoir_probe_result() {
-        let call = |success, found: bool| SimulatedCall {
+        let call = |success, found: bool, gas_used| SimulatedCall {
             success,
             return_data: probeCall::abi_encode_returns(&found).into(),
-            gas_used: 0,
+            gas_used,
             logs: vec![],
         };
-        assert!(reservoir_probe_found_reservoir(&call(true, true)).unwrap());
-        assert!(!reservoir_probe_found_reservoir(&call(true, false)).unwrap());
-        assert!(!reservoir_probe_found_reservoir(&call(false, true)).unwrap());
+        assert!(reservoir_probe_found_reservoir(&call(true, true, 28_301)).unwrap());
+        assert!(!reservoir_probe_found_reservoir(&call(true, false, 28_301)).unwrap());
+        assert!(!reservoir_probe_found_reservoir(&call(false, true, 28_301)).unwrap());
+        assert!(
+            reservoir_probe_found_reservoir(&call(true, true, RESERVOIR_PROBE_GAS_HEADROOM))
+                .unwrap()
+        );
+        // Above its headroom, the calls after it may have been given less gas
+        assert!(
+            reservoir_probe_found_reservoir(&call(true, true, RESERVOIR_PROBE_GAS_HEADROOM + 1))
+                .is_err()
+        );
     }
 
     #[test]
