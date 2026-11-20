@@ -871,7 +871,7 @@ mod tests {
     use std::sync::Arc;
 
     use alloy_primitives::{Bytes, address, bytes};
-    use rundler_provider::{MockEntryPointV0_6, MockEvmProvider, MockFeeEstimator};
+    use rundler_provider::{DepositInfo, MockEntryPointV0_6, MockEvmProvider, MockFeeEstimator};
     use rundler_types::{
         BundlerSponsorship, GasFees, UserOperation as _,
         chain::ForkActivation,
@@ -928,9 +928,13 @@ mod tests {
             .expect_get_balance()
             .returning(|_, _| Ok(U256::from(u64::MAX)));
         let mut entry_point = MockEntryPointV0_6::new();
+        // The payer funds check reads the deposit; the zero-deposit PVG term reads the v0.6 slot
         entry_point
             .expect_balance_of()
             .returning(|_, _| Ok(U256::ZERO));
+        entry_point
+            .expect_get_deposit_info()
+            .returning(|_, _| Ok(DepositInfo::default()));
         let mut fee_estimator = MockFeeEstimator::new();
         fee_estimator
             .expect_required_bundle_fees()

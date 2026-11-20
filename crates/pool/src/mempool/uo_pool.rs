@@ -14,12 +14,14 @@
 use std::{collections::HashSet, sync::Arc, time::Instant};
 
 use alloy_primitives::{Address, B256, Bytes, U256, utils::format_units};
+use alloy_sol_types::{SolCall, SolValue};
 use anyhow::Context;
-use futures::TryFutureExt;
+use futures::{FutureExt, TryFutureExt};
 use itertools::Itertools;
 use metrics::{Counter, Gauge, Histogram};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
+use rundler_contracts::v0_6::IEntryPoint;
 use rundler_provider::{
     DAGasOracleSync, EvmProvider, FeeEstimator, ProvidersWithEntryPointT, SimulationProvider,
     StateOverride,
@@ -180,6 +182,66 @@ where
             .removed_operations
             .increment(count as u64);
         self.ep_specific_metrics.removed_entities.increment(1);
+    }
+
+    /// State gas that `op` is charged inside validation but has refilled before the EntryPoint
+    /// measures `preOpGas` (EIP-8037), so the verification gas limit has to cover it while
+    /// `pre_op_gas` does not include it.
+    ///
+    /// This is a self-paying sender whose deposit slot is empty: paying `missingAccountFunds`
+    /// creates the slot and the EntryPoint taking the prefund clears it. It is only cleared if the
+    /// account paid exactly `missingAccountFunds`; one that pays more keeps a deposit, and the
+    /// state gas stays in `pre_op_gas`. That is confirmed by simulating the op and reading the
+    /// sender's deposit afterwards. Anything unknown or failing gives no credit, which keeps the
+    /// efficiency check conservative.
+    async fn validation_refilled_state_gas(
+        &self,
+        op: &UserOperationVariant,
+        sender_deposit_slot_is_zero: Option<bool>,
+        block_hash: B256,
+        block_timestamp: u64,
+    ) -> u128 {
+        if op.paymaster().is_some() || sender_deposit_slot_is_zero != Some(true) {
+            return 0;
+        }
+        let state_gas = u128::from(
+            self.config
+                .chain_spec
+                .gas_schedule_at(block_timestamp)
+                .zero_deposit_refund_gas,
+        );
+        if state_gas == 0 {
+            return 0;
+        }
+
+        // simulateHandleOp calls `target` after the op, once the EntryPoint has refunded
+        // `prefund - paid` to the sender's deposit. The deposit right after validation is
+        // therefore `final + paid - prefund`, and the prefund is the op's max gas cost.
+        let entry_point = self.ep_providers.entry_point();
+        let balance_of = IEntryPoint::balanceOfCall {
+            account: op.sender(),
+        };
+        let sim_result = entry_point
+            .simulate_handle_op(
+                op.clone().into(),
+                self.config.entry_point,
+                balance_of.abi_encode().into(),
+                block_hash.into(),
+                StateOverride::default(),
+            )
+            .await;
+        let deposit_cleared = match sim_result {
+            Ok(Ok(res)) if res.target_success => U256::abi_decode(&res.target_result)
+                .is_ok_and(|final_deposit| final_deposit + res.paid == op.max_gas_cost()),
+            other => {
+                tracing::debug!(
+                    "Could not read the deposit after validation of op {:?}, no refilled state gas credited: {other:?}",
+                    op.hash()
+                );
+                false
+            }
+        };
+        if deposit_cleared { state_gas } else { 0 }
     }
 
     async fn check_execution_gas_limit_efficiency(
@@ -680,7 +742,19 @@ where
             });
         let execution_gas_check_future =
             self.check_execution_gas_limit_efficiency(op.clone(), block_hash);
-        let (sim_result, _) = tokio::try_join!(sim_fut, execution_gas_check_future)?;
+        let refilled_state_gas_future = self
+            .validation_refilled_state_gas(
+                &op,
+                precheck_ret.pvg_state.sender_deposit_is_zero,
+                block_hash,
+                block_timestamp,
+            )
+            .map(Ok);
+        let (sim_result, _, refilled_state_gas) = tokio::try_join!(
+            sim_fut,
+            execution_gas_check_future,
+            refilled_state_gas_future
+        )?;
 
         // Check if op has more than the maximum allowed expected storage slots
         let expected_slots = sim_result.expected_storage.num_slots();
@@ -697,18 +771,6 @@ where
             .pool
             .check_associated_storage(&sim_result.associated_addresses, &op)?;
 
-        // A self-paying sender with a zero deposit creates and clears its deposit slot during
-        // validation (EIP-8037), so that state gas is refilled before `pre_op_gas` is measured
-        let refilled_state_gas = if op.paymaster().is_none()
-            && precheck_ret.pvg_state.sender_deposit_is_zero == Some(true)
-        {
-            self.config
-                .chain_spec
-                .at_timestamp(block_timestamp)
-                .zero_deposit_refund_gas()
-        } else {
-            0
-        };
         let verification_gas_efficiency = gas_metrics::verification_gas_efficiency(
             &op,
             sim_result.pre_op_gas,
@@ -740,10 +802,12 @@ where
                 let op_hash = op.hash();
                 let pre_op_gas = sim_result.pre_op_gas;
                 let pre_verification_gas = op.pre_verification_gas();
-                let verification_gas_used = pre_op_gas.saturating_sub(pre_verification_gas);
+                let verification_gas_used = pre_op_gas
+                    .saturating_sub(pre_verification_gas)
+                    .saturating_add(refilled_state_gas);
                 let total_verification_gas_limit = op.total_verification_gas_limit();
                 tracing::debug!(
-                    "Verification gas limit efficiency too low. Op hash: {op_hash:?} pre op gas: {pre_op_gas} preVerificationGas: {pre_verification_gas} verification gas used: {verification_gas_used} total verification gas limit: {total_verification_gas_limit} efficiency: {verification_gas_efficiency} required: {effective_verification_gas_limit_efficiency_reject_threshold}"
+                    "Verification gas limit efficiency too low. Op hash: {op_hash:?} pre op gas: {pre_op_gas} preVerificationGas: {pre_verification_gas} refilled state gas: {refilled_state_gas} verification gas used: {verification_gas_used} total verification gas limit: {total_verification_gas_limit} efficiency: {verification_gas_efficiency} required: {effective_verification_gas_limit_efficiency_reject_threshold}"
                 );
                 return Err(MempoolError::VerificationGasLimitEfficiencyTooLow(
                     effective_verification_gas_limit_efficiency_reject_threshold,
@@ -2062,7 +2126,7 @@ mod tests {
     #[tokio::test]
     async fn test_stake_status_not_staked() {
         let mut entrypoint = MockEntryPointV0_6::new();
-        entrypoint.expect_get_deposit_info().returning(|_| {
+        entrypoint.expect_get_deposit_info().returning(|_, _| {
             Ok(DepositInfo {
                 deposit: U256::from(1000),
                 staked: true,
@@ -2410,32 +2474,164 @@ mod tests {
         }
     }
 
+    /// What the simulateHandleOp probe of `validation_refilled_state_gas` reports
+    #[derive(Clone, Copy, Debug)]
+    enum DepositAfterValidation {
+        /// The account paid exactly `missingAccountFunds`: the deposit is back to zero
+        Cleared,
+        /// The account paid 1 wei more, so the deposit (and its slot) stayed set
+        Kept,
+        /// The probe could not read the deposit
+        Unknown,
+        /// The probe must not run at all
+        NotProbed,
+    }
+
     #[tokio::test]
     async fn test_verification_gas_efficiency_counts_zero_deposit_state_gas() {
-        // 50K of 200K verification gas used; with 97,920 of refilled state gas it passes 0.4
-        for (sender_deposit_is_zero, activation, accepted) in [
-            (Some(true), ForkActivation::Genesis, true),
-            (Some(false), ForkActivation::Genesis, false),
-            (Some(true), ForkActivation::Never, false),
+        use DepositAfterValidation::*;
+        // 50K of 200K verification gas used (0.25); with 97,920 of refilled state gas, 0.74
+        for (case, sender_deposit_is_zero, activation, paymaster, after, accepted) in [
+            (
+                "slot created and cleared",
+                Some(true),
+                ForkActivation::Genesis,
+                false,
+                Cleared,
+                true,
+            ),
+            (
+                "account overpaid",
+                Some(true),
+                ForkActivation::Genesis,
+                false,
+                Kept,
+                false,
+            ),
+            (
+                "probe failed",
+                Some(true),
+                ForkActivation::Genesis,
+                false,
+                Unknown,
+                false,
+            ),
+            (
+                "funded",
+                Some(false),
+                ForkActivation::Genesis,
+                false,
+                NotProbed,
+                false,
+            ),
+            (
+                "deposit unknown",
+                None,
+                ForkActivation::Genesis,
+                false,
+                NotProbed,
+                false,
+            ),
+            (
+                "before glamsterdam",
+                Some(true),
+                ForkActivation::Never,
+                false,
+                NotProbed,
+                false,
+            ),
+            (
+                "paymaster pays",
+                Some(true),
+                ForkActivation::Genesis,
+                true,
+                NotProbed,
+                false,
+            ),
         ] {
             let mut config = default_config();
-            config.verification_gas_limit_efficiency_reject_threshold = 0.4;
+            // v0.6 halves the threshold for a paymaster op; 0.8 keeps it at 0.4
+            config.verification_gas_limit_efficiency_reject_threshold =
+                if paymaster { 0.8 } else { 0.4 };
             config.chain_spec.glamsterdam_activation = activation;
+            config.paymaster_tracking_enabled = false;
 
+            // v0.6 doubles a paymaster op's verification gas limit, so halve it to keep 200K
+            let (verification_gas_limit, paymaster_and_data) = if paymaster {
+                (100_000, Address::repeat_byte(0x22).to_vec().into())
+            } else {
+                (200_000, Bytes::new())
+            };
             let mut op = create_op_from_op_v0_6(UserOperationRequiredFields {
-                verification_gas_limit: 200_000,
+                verification_gas_limit,
                 pre_verification_gas: 50_000,
                 max_fee_per_gas: 1,
                 max_priority_fee_per_gas: 1,
+                paymaster_and_data,
                 ..Default::default()
             });
             op.pvg_state.sender_deposit_is_zero = sender_deposit_is_zero;
 
-            let pool = create_pool_with_config(config, vec![op.clone()]);
+            // The EntryPoint refunds `prefund - paid` before the probe reads the deposit
+            let prefund = op.op.max_gas_cost();
+            let paid = U256::from(100_000);
+            let mut entry_point = MockEntryPointV0_6::new();
+            // The paymaster's deposit check at admission
+            entry_point
+                .expect_balance_of()
+                .returning(|_, _| Ok(U256::MAX));
+            let probe = entry_point.expect_simulate_handle_op();
+            match after {
+                NotProbed => {
+                    probe.never();
+                }
+                Unknown => {
+                    probe.returning(|_, _, _, _, _| {
+                        Ok(Ok(ExecutionResult {
+                            target_success: false,
+                            ..Default::default()
+                        }))
+                    });
+                }
+                Cleared | Kept => {
+                    let left = if matches!(after, Kept) {
+                        U256::from(1)
+                    } else {
+                        U256::ZERO
+                    };
+                    let final_deposit = prefund - paid + left;
+                    probe.returning(move |_, target, _, _, _| {
+                        assert_ne!(target, Address::ZERO, "the probe must read the deposit");
+                        Ok(Ok(ExecutionResult {
+                            paid,
+                            target_success: true,
+                            target_result: final_deposit.abi_encode().into(),
+                            ..Default::default()
+                        }))
+                    });
+                }
+            }
+
+            let pool = create_pool_with_entry_point_config(
+                config,
+                vec![op.clone()],
+                entry_point,
+                MempoolConfig::default(),
+            );
             let ret = pool
                 .add_operation(OperationOrigin::Local, op.op, default_perms())
                 .await;
-            assert_eq!(ret.is_ok(), accepted, "{ret:?}");
+            if accepted {
+                assert!(ret.is_ok(), "{case}: {ret:?}");
+            } else {
+                assert!(
+                    matches!(
+                        ret,
+                        Err(MempoolError::VerificationGasLimitEfficiencyTooLow(..))
+                    ),
+                    "{case}: {ret:?}"
+                );
+            }
         }
     }
 
@@ -2471,7 +2667,7 @@ mod tests {
         );
 
         let collector = MessageCollector::default();
-        let _guard = tracing::subscriber::set_default(collector.clone());
+        let _guard = collector.install();
 
         let ret = pool
             .add_operation(OperationOrigin::Local, op.op, default_perms())
@@ -2487,7 +2683,7 @@ mod tests {
             messages.iter().any(|m| m.starts_with(
                 "Verification gas limit efficiency too low. Op hash:"
             ) && m.contains(
-                "pre op gas: 100000 preVerificationGas: 50000 verification gas used: 50000 total verification gas limit: 500000 efficiency: 0.1 required: 0.25"
+                "pre op gas: 100000 preVerificationGas: 50000 refilled state gas: 0 verification gas used: 50000 total verification gas limit: 500000 efficiency: 0.1 required: 0.25"
             )),
             "missing efficiency detail log: {messages:?}"
         );
