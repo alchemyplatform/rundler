@@ -32,3 +32,6 @@ pub use server::{LocalPoolBuilder, LocalPoolHandle, RemotePoolClient};
 
 mod task;
 pub use task::{Args as PoolTaskArgs, PoolTask};
+
+#[cfg(test)]
+mod test_utils;
