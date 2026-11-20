@@ -358,6 +358,7 @@ where
             for (po, _) in &mut ops_with_simulations {
                 po.latest_da_gas = self.calc_latest_da_gas(
                     &po.op,
+                    po.sponsored_da_gas,
                     &latest_da_block_data,
                     da_block_data.as_ref(),
                     base_fee,
@@ -877,6 +878,7 @@ where
     async fn get_latest_da_block_data(&self) -> Option<DAGasBlockData> {
         let chain_spec = &self.settings.chain_spec;
         if chain_spec.da_gas_limit_latest_buffer_percent.is_none()
+            || !self.settings.da_gas_tracking_enabled
             || !chain_spec.da_pre_verification_gas
             || !chain_spec.include_da_gas_in_gas_limit
         {
@@ -896,6 +898,7 @@ where
     fn calc_latest_da_gas(
         &self,
         op: &PoolOperation,
+        sponsored_da_gas: u128,
         latest_da_block_data: &DAGasBlockData,
         cached_da_block_data: Option<&DAGasBlockData>,
         base_fee: u128,
@@ -924,7 +927,8 @@ where
 
         let pvg_da_gas = op
             .uo
-            .pre_verification_da_gas_limit(&self.settings.chain_spec, None);
+            .pre_verification_da_gas_limit(&self.settings.chain_spec, None)
+            + sponsored_da_gas;
         self.metrics
             .latest_da_gas_shortfall
             .record(latest_da_gas.saturating_sub(pvg_da_gas) as f64);
@@ -3624,12 +3628,16 @@ mod tests {
 
     #[test]
     fn test_robinhood_aa95_latest_da_gas() {
-        // Price at the builder's head (block 114214791): the latest estimate is no help.
-        let (mut cs, context) = robinhood_aa95_context(None, Some(rh_da_gas_at_price(1_025_227)));
-        cs.da_gas_limit_latest_buffer_percent = Some(100);
-        assert!(!rh_bundle_fits(&context, &cs));
+        // The L1 price was 1,025,227 at the proposal block (114214791) and 0 for the next few
+        // blocks (114214792-797). A latest read at either price does not prevent the revert.
+        for l1_price in [1_025_227, 0] {
+            let (mut cs, context) =
+                robinhood_aa95_context(None, Some(rh_da_gas_at_price(l1_price)));
+            cs.da_gas_limit_latest_buffer_percent = Some(100);
+            assert!(!rh_bundle_fits(&context, &cs));
+        }
 
-        // Price a few blocks later (block 114214815) with a 100% buffer: the bundle fits.
+        // Only a read 24 blocks past the proposal (114214815) sees enough of the ramp to fit.
         let (mut cs, context) = robinhood_aa95_context(None, Some(rh_da_gas_at_price(122_584_163)));
         let computation = context.get_bundle_computation_gas_limit(&cs);
         assert!(!rh_bundle_fits(&context, &cs));
@@ -3736,6 +3744,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_latest_da_block_data_skipped_without_da_tracking() {
+        let mut da_oracle = MockDAGasOracleSync::new();
+        da_oracle.expect_latest_da_block_data().never();
+        let mut proposer = proposer_with_da_oracle(latest_da_chain_spec(Some(100)), da_oracle);
+        proposer.settings.da_gas_tracking_enabled = false;
+        assert_eq!(proposer.get_latest_da_block_data().await, None);
+    }
+
+    #[tokio::test]
     async fn test_latest_da_block_data_error_falls_back() {
         let mut da_oracle = MockDAGasOracleSync::new();
         da_oracle
@@ -3777,13 +3794,13 @@ mod tests {
             sender_is_7702: false,
         };
         assert_eq!(
-            proposer.calc_latest_da_gas(&op, &latest, Some(&latest), 0),
+            proposer.calc_latest_da_gas(&op, 0, &latest, Some(&latest), 0),
             Some(42_000)
         );
 
         // Ops without cached DA data keep the PVG-derived DA gas limit.
         op.da_gas_data = DAGasData::Empty;
-        assert_eq!(proposer.calc_latest_da_gas(&op, &latest, None, 0), None);
+        assert_eq!(proposer.calc_latest_da_gas(&op, 0, &latest, None, 0), None);
     }
 
     #[tokio::test]

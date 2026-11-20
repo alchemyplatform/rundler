@@ -107,6 +107,9 @@ where
             })
             .await
             .context("failed to get latest block data")?;
+        self.metrics
+            .per_unit_l1_fee
+            .set(block_data.l1_base_fee as f64);
 
         Ok(Some(DAGasBlockData::Nitro(block_data)))
     }
