@@ -1475,8 +1475,11 @@ mod tests {
                         .gas_limit(gas)
                         .input(target_call_data.into())
                         .value(U256::from(op.call_gas_limit()))
-                        // (not a price: the postOp limit, for the provider mock)
-                        .gas_price(op.paymaster_post_op_gas_limit());
+                        // (not a sender: the postOp limit, for the provider mock; simulations
+                        // drop nonces and fees)
+                        .from(Address::from_word(
+                            U256::from(op.paymaster_post_op_gas_limit()).into(),
+                        ));
                     Ok((tx, state_override))
                 },
             );
@@ -1487,7 +1490,10 @@ mod tests {
             .returning(move |method, (payload, _)| {
                 assert_eq!(method, "eth_simulateV1");
                 counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // Validation mode (which gives calls a reservoir) at a base fee of 0
+                assert_eq!(payload["validation"], true);
                 let block = &payload["blockStateCalls"][0];
+                assert_eq!(block["blockOverrides"]["baseFeePerGas"], "0x0");
                 let calls = block["calls"].as_array().unwrap();
                 // a `ReservoirProbe` call first, with the op itself
                 let probe = (calls.len() == 2).then(|| {
@@ -1526,7 +1532,8 @@ mod tests {
                     // the op itself, with postOp, and the probe
                     assert!(!skip_post_op);
                     let call_gas_limit: u128 = tx.value.unwrap().to();
-                    let post_op_gas_limit = tx.gas_price.unwrap();
+                    let post_op_gas_limit: u128 =
+                        U256::from_be_slice(tx.from.unwrap().as_slice()).to();
                     let success = call_gas_limit >= need && model.post_op_succeeds;
                     let op = simulated_op(
                         success,
