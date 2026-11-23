@@ -37,6 +37,14 @@ use crate::{
     TransactionReceipt, TransactionRequest,
 };
 
+/// A block whose header has `gas_limit`, for mocking `EvmProvider::get_block`
+pub fn block_with_gas_limit(gas_limit: u64) -> Block {
+    let mut block =
+        alloy_rpc_types_eth::Block::<crate::AnyRpcTransaction, crate::AnyRpcHeader>::default();
+    block.header.inner.gas_limit = gas_limit;
+    Block::new(crate::WithOtherFields::new(block))
+}
+
 mockall::mock! {
     pub EvmProvider {}
 

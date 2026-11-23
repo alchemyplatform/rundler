@@ -179,6 +179,9 @@ struct AsyncData {
     da_gas_data: DAGasData,
     pvg_state: PvgState,
     eip7702_authority_data: Option<Eip7702AuthorityData>,
+    /// The gas limit of the block checked against, loaded only where reservoir mode is enabled:
+    /// it bounds the reservoir (see [`gas::max_reservoir_gas`])
+    block_gas_limit: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -207,7 +210,7 @@ where
     ) -> Result<PrecheckReturn, PrecheckError> {
         let chain_spec = self.chain_spec.for_bundle_inclusion_after(block_timestamp);
         let async_data = self
-            .load_async_data(op, block_hash, &chain_spec, perms)
+            .load_async_data(op, block_hash, block_timestamp, &chain_spec, perms)
             .await?;
         let mut violations: Vec<PrecheckViolation> = vec![];
 
@@ -230,7 +233,7 @@ where
                 .await?
         {
             reservoir_gas = Some(sponsored_reservoir_gas);
-            violations.extend(self.check_reservoir_gas_limit(sponsored_reservoir_gas));
+            violations.extend(self.check_reservoir_gas_limit(sponsored_reservoir_gas, &async_data));
             violations.extend(self.check_sponsorship_max_cost(
                 op,
                 perms,
@@ -497,7 +500,9 @@ where
                 MIN_CALL_GAS_LIMIT,
             ));
         }
-        if let Some(violation) = reservoir_gas.and_then(|gas| self.check_reservoir_gas_limit(gas)) {
+        if let Some(violation) =
+            reservoir_gas.and_then(|gas| self.check_reservoir_gas_limit(gas, async_data))
+        {
             violations.push(violation);
         }
 
@@ -568,8 +573,19 @@ where
         violations
     }
 
-    fn check_reservoir_gas_limit(&self, reservoir_gas: u128) -> Option<PrecheckViolation> {
-        let max_reservoir_gas = self.settings.max_reservoir_gas;
+    /// A reservoir above `--max_reservoir_gas`, or one that would make the bundle's `tx.gas`
+    /// larger than the block gas limit, so that it could never be included
+    fn check_reservoir_gas_limit(
+        &self,
+        reservoir_gas: u128,
+        async_data: &AsyncData,
+    ) -> Option<PrecheckViolation> {
+        let max_reservoir_gas = match async_data.block_gas_limit {
+            Some(block_gas_limit) => {
+                gas::max_reservoir_gas(self.settings.max_reservoir_gas, block_gas_limit)
+            }
+            None => self.settings.max_reservoir_gas,
+        };
         (reservoir_gas > max_reservoir_gas).then_some(PrecheckViolation::ReservoirGasTooHigh(
             reservoir_gas,
             max_reservoir_gas,
@@ -712,10 +728,13 @@ where
         &self,
         op: &UO,
         block_hash: B256,
+        block_timestamp: u64,
         chain_spec: &ChainSpec,
         perms: &UserOperationPermissions,
     ) -> anyhow::Result<AsyncData> {
         let (bundle_fees, base_fee) = self.get_bundle_fees(block_hash).await?;
+        let reservoir_mode = self.chain_spec.reservoir_mode_enabled_at(block_timestamp)
+            && self.settings.max_reservoir_gas > 0;
 
         let (
             factory_exists,
@@ -724,6 +743,7 @@ where
             payer_funds,
             (min_pre_verification_gas, da_gas_data, pvg_state),
             eip7702_authority_data,
+            block_gas_limit,
         ) = tokio::try_join!(
             self.is_contract(op.factory()),
             self.get_bytecode(op.sender()),
@@ -736,7 +756,8 @@ where
                 base_fee,
                 perms
             ),
-            self.get_eip7702_authority_data(op)
+            self.get_eip7702_authority_data(op),
+            self.get_block_gas_limit(reservoir_mode, block_hash)
         )?;
         Ok(AsyncData {
             factory_exists,
@@ -749,7 +770,22 @@ where
             da_gas_data,
             pvg_state,
             eip7702_authority_data,
+            block_gas_limit,
         })
+    }
+
+    #[instrument(skip_all)]
+    async fn get_block_gas_limit(
+        &self,
+        reservoir_mode: bool,
+        block_hash: B256,
+    ) -> anyhow::Result<Option<u64>> {
+        if !reservoir_mode {
+            return Ok(None);
+        }
+        gas::load_block_gas_limit(&self.provider, block_hash)
+            .await
+            .map(Some)
     }
 
     async fn get_bytecode(&self, address: Address) -> anyhow::Result<Bytes> {
@@ -908,6 +944,7 @@ mod tests {
             pvg_state: PvgState::unknown(),
             da_gas_data: DAGasData::Empty,
             eip7702_authority_data: None,
+            block_gas_limit: None,
         }
     }
 
@@ -927,6 +964,9 @@ mod tests {
         provider
             .expect_get_balance()
             .returning(|_, _| Ok(U256::from(u64::MAX)));
+        provider
+            .expect_get_block()
+            .returning(|_| Ok(Some(rundler_provider::block_with_gas_limit(200_000_000))));
         let mut entry_point = MockEntryPointV0_6::new();
         entry_point
             .expect_balance_of()
@@ -1807,6 +1847,42 @@ mod tests {
         )));
     }
 
+    /// A reservoir that would make the bundle's `tx.gas` larger than the block gas limit is
+    /// rejected even below `--max_reservoir_gas`: such a bundle could never be included.
+    #[test]
+    fn test_reservoir_gas_above_block_gas_limit() {
+        let cs = glamsterdam();
+        let settings = Settings {
+            max_reservoir_gas: 60_000_000,
+            ..Default::default()
+        };
+        let prechecker = v0_7_prechecker(&cs, settings);
+        let mut async_data = get_test_async_data();
+        async_data.base_fee = 1_000;
+        async_data.payer_funds = U256::MAX;
+        // A 60M-gas block holds a reservoir of at most 60M - 2^24
+        async_data.block_gas_limit = Some(60_000_000);
+        let check = |reservoir_gas| {
+            prechecker.check_gas(
+                &v0_7_op(&cs, 1_000 + reservoir_gas),
+                &cs,
+                &async_data,
+                &UserOperationPermissions::default(),
+                Some(reservoir_gas),
+            )
+        };
+        assert!(
+            check(50_000_000).contains(&PrecheckViolation::ReservoirGasTooHigh(
+                50_000_000, 43_222_784
+            ))
+        );
+        assert!(
+            !check(43_222_784)
+                .iter()
+                .any(|v| matches!(v, PrecheckViolation::ReservoirGasTooHigh(..)))
+        );
+    }
+
     /// A reservoir-mode op is checked against `max_reservoir_uo_cost`, not `max_uo_cost`.
     #[test]
     fn test_reservoir_mode_cost_cap() {
@@ -2203,6 +2279,9 @@ mod tests {
             provider
                 .expect_get_balance()
                 .returning(|_, _| Ok(U256::from(u64::MAX)));
+            provider
+                .expect_get_block()
+                .returning(|_| Ok(Some(rundler_provider::block_with_gas_limit(200_000_000))));
             let mut fee_estimator = MockFeeEstimator::new();
             fee_estimator
                 .expect_required_bundle_fees()

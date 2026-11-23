@@ -1380,6 +1380,8 @@ mod tests {
         post_op_succeeds: bool,
         /// Whether the node's `eth_simulateV1` gives calls a reservoir
         reservoir_in_simulation: bool,
+        /// The gas limit of the block estimated at, which bounds the reservoir
+        block_gas_limit: u64,
     }
 
     impl OpModel {
@@ -1391,6 +1393,8 @@ mod tests {
                 peak_state_gas: state_gas,
                 post_op_succeeds: true,
                 reservoir_in_simulation: true,
+                // Sepolia's (~199M) is well above 2^24 + max_reservoir_gas
+                block_gas_limit: 200_000_000,
             }
         }
 
@@ -1454,6 +1458,11 @@ mod tests {
         Arc<std::sync::atomic::AtomicUsize>,
     ) {
         let (mut entry, mut provider) = create_base_config();
+        provider.expect_get_block().returning(move |_| {
+            Ok(Some(rundler_provider::block_with_gas_limit(
+                model.block_gas_limit,
+            )))
+        });
         entry
             .expect_get_state_gas_simulate_handle_op_call()
             .returning(
@@ -1515,6 +1524,12 @@ mod tests {
                 let tx: TransactionRequest =
                     serde_json::from_value(calls[calls.len() - 1].clone()).unwrap();
                 let gas = tx.gas.unwrap();
+                // No reservoir search goes beyond what a block holds
+                assert!(
+                    gas <= model.block_gas_limit,
+                    "simulated tx.gas {gas} above the block gas limit {}",
+                    model.block_gas_limit
+                );
                 let block_gas_limit: U256 =
                     serde_json::from_value(block["blockOverrides"]["gasLimit"].clone()).unwrap();
                 assert!(block_gas_limit >= U256::from(gas), "block gas limit");
@@ -1953,6 +1968,40 @@ mod tests {
         ));
     }
 
+    /// On a chain whose block gas limit leaves less room than `--max_reservoir_gas`, the
+    /// reservoir is capped at the block gas limit less 2^24: a bundle with `tx.gas = 2^24 + R`
+    /// above the block gas limit could never be included.
+    #[tokio::test]
+    async fn test_reservoir_mode_capped_by_block_gas_limit() {
+        // A 24 kB deploy needs ~37.9M of state gas: more than a 50M block holds
+        let (entry, provider, _) = reservoir_mocks(OpModel {
+            block_gas_limit: 50_000_000,
+            ..deploy_24kb()
+        });
+
+        let error = run_reservoir(entry, provider, reservoir_settings())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                GasEstimationError::StateGasTooLarge(state_gas, 33_222_784)
+                    if state_gas > 33_222_784
+            ),
+            "{error:?}"
+        );
+
+        // In a 60M block (mainnet) it fits: R up to 43,222,784
+        let (entry, provider, _) = reservoir_mocks(OpModel {
+            block_gas_limit: 60_000_000,
+            ..deploy_24kb()
+        });
+        let estimate = run_reservoir(entry, provider, reservoir_settings())
+            .await
+            .unwrap();
+        assert!(estimate.pre_verification_gas < 43_222_784 + 1_000_000);
+    }
+
     /// State below the threshold after a failed metered estimate (the metered call gas limit
     /// needs more than the state itself): the reservoir is padded to the threshold, so the op is
     /// still classified as reservoir mode at admission.
@@ -2135,6 +2184,25 @@ mod tests {
         // Reported over max_reservoir_gas, for admission to reject
         assert!(
             matches!(reservoir, SponsoredReservoir::Reservoir(gas) if gas > 60_000_000),
+            "{reservoir:?}"
+        );
+    }
+
+    /// A sponsored op's reservoir is searched only up to what the block gas limit allows, and
+    /// one that needs more is reported above it, for admission to reject.
+    #[tokio::test]
+    async fn test_sponsored_op_capped_by_block_gas_limit() {
+        let (entry, provider, _) = reservoir_mocks(OpModel {
+            block_gas_limit: 50_000_000,
+            ..OpModel::new(25_908, 40_000_000)
+        });
+
+        let reservoir = run_sponsored(entry, provider, reservoir_settings(), buffered(25_908))
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(reservoir, SponsoredReservoir::Reservoir(gas) if gas > 33_222_784),
             "{reservoir:?}"
         );
     }

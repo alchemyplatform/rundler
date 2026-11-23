@@ -225,9 +225,23 @@ where
             return Err(metered_error);
         };
 
+        let max_reservoir_gas = match self.max_reservoir_gas(args.block_hash).await {
+            Ok(max_reservoir_gas) => max_reservoir_gas,
+            Err(error) => {
+                tracing::warn!("reservoir mode: {error:#}");
+                return Err(metered_error);
+            }
+        };
+        if max_reservoir_gas == 0 {
+            tracing::debug!("reservoir mode: the block gas limit leaves no room for a reservoir");
+            return Err(metered_error);
+        }
+
         let _timer = CustomTimerGuard::new(self.metrics.reservoir_trace_ms.clone());
         let deadline = tokio::time::Instant::now() + self.settings.reservoir_trace_timeout;
-        let measured = tokio::time::timeout_at(deadline, self.simulate_state_gas(&args)).await;
+        let measured =
+            tokio::time::timeout_at(deadline, self.simulate_state_gas(&args, max_reservoir_gas))
+                .await;
         let state_gas = match measured {
             Ok(Ok(Some(state_gas))) => state_gas,
             // The op fails even with the most reservoir and call gas: a genuine failure.
@@ -253,15 +267,17 @@ where
             ..
         } = args;
         let max_bundle_execution_gas = self.settings.max_bundle_execution_gas;
-        let max_reservoir_gas = u128::from(self.settings.max_reservoir_gas);
         if state_gas > max_reservoir_gas {
             return Err(GasEstimationError::StateGasTooLarge(
                 state_gas,
                 max_reservoir_gas,
             ));
         }
-        let found =
-            tokio::time::timeout_at(deadline, self.reservoir_and_call_gas(&args, state_gas)).await;
+        let found = tokio::time::timeout_at(
+            deadline,
+            self.reservoir_and_call_gas(&args, state_gas, max_reservoir_gas),
+        )
+        .await;
         let (op_reservoir_gas, call_gas_limit) = match found {
             Ok(Ok(Some(found))) => found,
             Ok(Ok(None)) => return Err(metered_error),
@@ -380,9 +396,9 @@ where
         &self,
         args: &ReservoirArgs<'_>,
         state_gas: u128,
+        max_reservoir_gas: u128,
     ) -> anyhow::Result<Option<(u128, u128)>> {
         let max_call_gas = self.reservoir_max_call_gas(args);
-        let max_reservoir_gas = u128::from(self.settings.max_reservoir_gas);
         // With the net state alone, any peak above it spills into the call gas limit.
         let (reservoir_gas, call_gas) = match self
             .reservoir_call_gas_search(args, state_gas, max_call_gas)
@@ -611,12 +627,16 @@ where
     /// and limits it gets: refunds (e.g. for cleared slots) lower the gas used, so `S` errs low
     /// for an op that clears state. On Sepolia it is within about 5,000 above the traced `S`
     /// otherwise. `None` if the op fails even with the most reservoir and call gas.
-    async fn simulate_state_gas(&self, args: &ReservoirArgs<'_>) -> anyhow::Result<Option<u128>> {
+    async fn simulate_state_gas(
+        &self,
+        args: &ReservoirArgs<'_>,
+        max_reservoir_gas: u128,
+    ) -> anyhow::Result<Option<u128>> {
         let call_gas_limit = self.reservoir_max_call_gas(args);
         let post_op_gas_limit = args.op.paymaster_post_op_gas_limit.unwrap_or(0);
         let op = self.reservoir_copy(args, call_gas_limit, post_op_gas_limit);
         let (result, intrinsic_gas) = self
-            .simulate_op_with_probe(args, op, u128::from(self.settings.max_reservoir_gas))
+            .simulate_op_with_probe(args, op, max_reservoir_gas)
             .await?;
         let entry_point = *self.entry_point.address();
         let event = user_operation_event(&result.logs, entry_point);
@@ -731,6 +751,16 @@ where
             return Err(NoSimulationReservoir.into());
         }
         Ok((results.remove(1), intrinsic_gas))
+    }
+
+    /// The most reservoir an op can carry at `block_hash`: `--max_reservoir_gas`, capped so the
+    /// bundle's `tx.gas` fits in the block gas limit (see [`gas::max_reservoir_gas`])
+    async fn max_reservoir_gas(&self, block_hash: B256) -> anyhow::Result<u128> {
+        let block_gas_limit = gas::load_block_gas_limit(&self.provider, block_hash).await?;
+        Ok(gas::max_reservoir_gas(
+            u128::from(self.settings.max_reservoir_gas),
+            block_gas_limit,
+        ))
     }
 
     /// Counts an estimation simulation that failed because the node gives calls no reservoir
@@ -887,11 +917,11 @@ where
         args: &ReservoirArgs<'_>,
     ) -> anyhow::Result<SponsoredReservoir> {
         let call_gas_limit = args.full_op.call_gas_limit();
-        let Some(state_gas) = self.simulate_state_gas(args).await? else {
+        let max_reservoir_gas = self.max_reservoir_gas(args.block_hash).await?;
+        let Some(state_gas) = self.simulate_state_gas(args, max_reservoir_gas).await? else {
             tracing::debug!("sponsored op fails with the most reservoir and call gas");
             return Ok(SponsoredReservoir::Fails);
         };
-        let max_reservoir_gas = u128::from(self.settings.max_reservoir_gas);
         if state_gas > max_reservoir_gas {
             return Ok(SponsoredReservoir::Reservoir(state_gas));
         }
