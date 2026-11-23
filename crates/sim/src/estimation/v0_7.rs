@@ -1641,7 +1641,19 @@ mod tests {
         sender_deposit_is_zero: bool,
     ) -> Option<u128> {
         let chain_spec = reservoir_chain_spec();
-        let (_, full_op) = reservoir_op(&chain_spec, settings);
+        let (op, _) = reservoir_op(&chain_spec, settings);
+        admitted_reservoir_gas_with_deposit_op(estimate, settings, sender_deposit_is_zero, &op)
+    }
+
+    /// As [`admitted_reservoir_gas_with_deposit`], for the estimated `op`
+    fn admitted_reservoir_gas_with_deposit_op(
+        estimate: &GasEstimate,
+        settings: &Settings,
+        sender_deposit_is_zero: bool,
+        op: &UserOperationOptionalGas,
+    ) -> Option<u128> {
+        let chain_spec = reservoir_chain_spec();
+        let (_, full_op) = reservoir_full_op(op.clone(), &chain_spec, settings);
         let op = UserOperationBuilder::from_uo(full_op, &chain_spec)
             .pre_verification_gas(estimate.pre_verification_gas)
             .call_gas_limit(estimate.call_gas_limit)
@@ -1960,6 +1972,46 @@ mod tests {
             error,
             GasEstimationError::StateGasTooLarge(70_000_000, 60_000_000)
         ));
+    }
+
+    /// An op whose PVG is set by the calldata floor (EIP-7623) pays the floor whatever its
+    /// deposit, so a funded sender's surplus is no larger than a zero-deposit one's: the check
+    /// must price the floor as admission does, or it would reject such an op below the max.
+    #[tokio::test]
+    async fn test_reservoir_mode_max_for_a_calldata_floor_bound_op() {
+        let settings = reservoir_settings();
+        let mut op = demo_user_op_optional_gas(None);
+        op.sender = RESERVOIR_SENDER;
+        op.call_data = Bytes::from(vec![0xab_u8; 20_000]);
+        let run = |settings: Settings| {
+            let (entry, provider, _) = reservoir_mocks(deploy_24kb());
+            run_reservoir_op(entry, provider, settings, op.clone(), Some(false))
+        };
+        let estimate = run(settings).await.unwrap();
+        let funded_reservoir_gas =
+            admitted_reservoir_gas_with_deposit_op(&estimate, &settings, false, &op).unwrap();
+        assert_eq!(
+            admitted_reservoir_gas_with_deposit_op(&estimate, &settings, true, &op),
+            Some(funded_reservoir_gas)
+        );
+        assert_eq!(funded_reservoir_gas, u128::from(DEPLOY_24KB_STATE_GAS));
+        let with_max = |max_reservoir_gas: u128| Settings {
+            max_reservoir_gas: max_reservoir_gas.try_into().unwrap(),
+            ..settings
+        };
+
+        // At a max of exactly its surplus the estimate is returned; one less, it is not
+        let capped = run(with_max(funded_reservoir_gas)).await.unwrap();
+        assert_eq!(capped.pre_verification_gas, estimate.pre_verification_gas);
+        let error = run(with_max(funded_reservoir_gas - 1)).await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                GasEstimationError::StateGasTooLarge(gas, max)
+                    if gas == funded_reservoir_gas && max == funded_reservoir_gas - 1
+            ),
+            "{error:?}"
+        );
     }
 
     /// The estimate's PVG prices the zero-deposit refund write whatever the sender's deposit is,

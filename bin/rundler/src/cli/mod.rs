@@ -94,9 +94,7 @@ pub async fn run() -> anyhow::Result<()> {
     aggregator::instantiate_aggregators(&opt.common, &mut cs, &providers);
 
     tracing::info!("Chain spec: {:#?}", cs);
-    // Only estimation and admission use `max_reservoir_gas`: the builder alone and admin
-    // commands are not checked
-    if !matches!(opt.command, Command::Admin(_) | Command::Builder(_)) {
+    if checks_max_reservoir_gas(&opt.command) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .context("system clock should be after the unix epoch")?
@@ -992,8 +990,9 @@ where
 /// Checks `--max_reservoir_gas` against the chain's latest block gas limit, on a chain with
 /// reservoir mode: a reservoir-mode bundle has `tx.gas = 2^24 + R`, which must fit in a block, so
 /// a larger reservoir could be estimated and admitted but never included (see
-/// [`rundler_sim::gas::max_reservoir_gas_for_block_gas_limit`]). Fails once Glamsterdam is active,
-/// and warns before, since the gas limit may change by then.
+/// [`rundler_sim::gas::max_reservoir_gas_for_block_gas_limit`]). Fails whenever Glamsterdam is
+/// configured, also before it activates: a rundler started before the fork keeps running through
+/// it, and is not checked again.
 ///
 /// If the latest block cannot be read, it fails only if Glamsterdam is active at `now` (unix
 /// seconds): before that, a node that is down at startup does not stop rundler.
@@ -1023,15 +1022,16 @@ async fn check_max_reservoir_gas<E: EvmProvider>(
             return Ok(());
         }
     };
-    let active = chain_spec.reservoir_mode_enabled_at(block.header.timestamp);
     match max_reservoir_gas_violation(max_reservoir_gas, block.header.gas_limit) {
-        Some(message) if active => bail!(message),
-        Some(message) => {
-            tracing::warn!("{message} (Glamsterdam is not active yet)");
-            Ok(())
-        }
+        Some(message) => bail!(message),
         None => Ok(()),
     }
+}
+
+/// Whether `command` estimates or admits user operations, the only places `max_reservoir_gas` is
+/// used, so that [`check_max_reservoir_gas`] applies: not the builder alone, nor admin commands
+fn checks_max_reservoir_gas(command: &Command) -> bool {
+    !matches!(command, Command::Admin(_) | Command::Builder(_))
 }
 
 /// Why `max_reservoir_gas` does not fit a chain whose latest block has `block_gas_limit`, if it
@@ -1040,7 +1040,7 @@ fn max_reservoir_gas_violation(max_reservoir_gas: u64, block_gas_limit: u64) -> 
     let max = rundler_sim::gas::max_reservoir_gas_for_block_gas_limit(block_gas_limit);
     (max_reservoir_gas > max).then(|| {
         format!(
-            "max_reservoir_gas ({max_reservoir_gas}) is too large for the chain's block gas limit ({block_gas_limit}): a reservoir-mode bundle has tx.gas = {TX_MAX_GAS_LIMIT} + its reservoir, which must fit in a block, with a margin for the gas limit falling by 1/1024. Set max_reservoir_gas to at most {max}"
+            "max_reservoir_gas ({max_reservoir_gas}) is too large for the chain's block gas limit ({block_gas_limit}): a reservoir-mode bundle has tx.gas = {TX_MAX_GAS_LIMIT} + its reservoir, which must fit in a block, with a margin for the gas limit falling in the next block. Set max_reservoir_gas to at most {max}, or lower: a reservoir near it needs a block with little state gas used before it"
         )
     })
 }
@@ -1239,12 +1239,36 @@ mod tests {
             .unwrap_err();
     }
 
+    /// A rundler started before the fork keeps running through it without another check, so a
+    /// scheduled Glamsterdam is checked as strictly as an active one
     #[tokio::test]
-    async fn startup_check_warns_before_glamsterdam() {
-        let scheduled = chain_spec(ForkActivation::Timestamp(NOW + 1));
+    async fn startup_check_fails_before_glamsterdam_too() {
+        let scheduled = chain_spec(ForkActivation::Timestamp(NOW + 1_000_000));
         check_max_reservoir_gas(&scheduled, 60_000_000, &node(60_000_000), NOW)
             .await
+            .unwrap_err();
+        check_max_reservoir_gas(&scheduled, 43_164_191, &node(60_000_000), NOW)
+            .await
             .unwrap();
+    }
+
+    /// Only the commands that estimate or admit ops are checked
+    #[test]
+    fn startup_check_commands() {
+        let command = |args: &[&str]| {
+            Cli::try_parse_from(
+                ["rundler"]
+                    .iter()
+                    .chain(args)
+                    .chain(&["--node_http", "http://localhost:8545"]),
+            )
+            .unwrap()
+            .command
+        };
+        for checked in ["node", "pool", "rpc", "backend"] {
+            assert!(checks_max_reservoir_gas(&command(&[checked])), "{checked}");
+        }
+        assert!(!checks_max_reservoir_gas(&command(&["builder"])));
     }
 
     /// Without reservoir mode, the node is not asked (the mock has no expectations)

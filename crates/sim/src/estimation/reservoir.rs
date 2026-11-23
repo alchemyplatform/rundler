@@ -254,6 +254,9 @@ where
         } = args;
         let max_bundle_execution_gas = self.settings.max_bundle_execution_gas;
         let max_reservoir_gas = u128::from(self.settings.max_reservoir_gas);
+        // An early bound on the op's state alone. The final check below also counts the PVG
+        // surplus admission sees beyond the reservoir, so an op just under this can still be
+        // rejected there, after its searches, against a lower effective limit.
         if state_gas > max_reservoir_gas {
             return Err(GasEstimationError::StateGasTooLarge(
                 state_gas,
@@ -350,8 +353,10 @@ where
         // Admission takes the whole PVG surplus as the reservoir. It can be more than
         // `reservoir_gas`: the PVG above prices the zero-deposit refund write whatever the
         // sender's deposit is, while admission requires it only if the deposit is zero. So check
-        // the surplus admission sees with the sender funded; otherwise an estimate within 97,920
-        // of `--max_reservoir_gas` is rejected at admission. (Admission's surplus can still
+        // the surplus admission sees with the sender funded; otherwise an estimate within
+        // `zero_deposit_refund_gas` (97,920 by default) of `--max_reservoir_gas` is rejected at
+        // admission. The difference is less for an op whose PVG is set by the calldata floor
+        // (which absorbs the term), and none for a paymaster op. (Admission's surplus can still
         // differ slightly for other reasons: the op's real signature and paymaster data, an
         // EIP-7702 authority's state or DA gas changing by then.)
         let pre_verification_gas = base_pvg + reservoir_gas;

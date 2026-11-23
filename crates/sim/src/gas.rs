@@ -29,10 +29,11 @@ use tracing::instrument;
 /// A reservoir-mode bundle has `tx.gas = 2^24 + R`. Under EIP-8037 a transaction's whole gas
 /// limit, its reservoir included, must fit in the block's gas limit less the state gas already
 /// used in the block (alloy-evm's block executor), so a larger reservoir could never be
-/// included. The bundle lands in a later block, whose gas limit may be up to 1/1024 of its
-/// parent's lower, so one such step is left as a margin: it covers the next block only, and the
-/// startup check that uses this is not repeated while rundler runs, so a gas limit that keeps
-/// falling is not caught until restart. On a chain with 60M blocks this is 43,164,191.
+/// included. The bundle lands in a later block, whose gas limit may be lower by less than 1/1024
+/// of its parent's, so `block_gas_limit / 1024` is left as a margin (1 gas more than needed). It
+/// covers the next block only, and the startup check that uses this is not repeated while
+/// rundler runs, so a gas limit that keeps falling is not caught until restart. On a chain with
+/// 60M blocks this is 43,164,191.
 pub fn max_reservoir_gas_for_block_gas_limit(block_gas_limit: u64) -> u64 {
     (block_gas_limit - block_gas_limit / GAS_LIMIT_BOUND_DIVISOR).saturating_sub(TX_MAX_GAS_LIMIT)
 }
