@@ -1201,7 +1201,7 @@ mod tests {
         let state = setup(HashMap::from([(ep, pool)]));
 
         let collector = MessageCollector::default();
-        let _guard = tracing::subscriber::set_default(collector.clone());
+        let _guard = collector.install();
 
         let ret = state
             .handle
@@ -1235,7 +1235,7 @@ mod tests {
         let state = setup(HashMap::from([(op.entry_point(), pool)]));
 
         let collector = MessageCollector::default();
-        let _guard = tracing::subscriber::set_default(collector.clone());
+        let _guard = collector.install();
 
         let ret = state
             .handle

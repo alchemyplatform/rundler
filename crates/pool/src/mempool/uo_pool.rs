@@ -2427,7 +2427,7 @@ mod tests {
         );
 
         let collector = MessageCollector::default();
-        let _guard = tracing::subscriber::set_default(collector.clone());
+        let _guard = collector.install();
 
         let ret = pool
             .add_operation(OperationOrigin::Local, op.op, default_perms())
