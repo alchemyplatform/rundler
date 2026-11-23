@@ -486,14 +486,38 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
             .saturating_sub(self.authorization_state_discount(chain_spec, state))
     }
 
+    /// Whether the sender pays for itself (no paymaster) and its EntryPoint deposit storage slot
+    /// is empty, so the EntryPoint creates that slot when it writes the sender's deposit.
+    /// `Some(false)` with a paymaster, which pays and receives the refund instead; `None` when the
+    /// deposit is unknown.
+    ///
+    /// The single rule behind both deposit-slot state gas terms (EIP-8037), each of which decides
+    /// what unknown means:
+    /// - [`Self::state_pre_verification_gas`] prices the refund write after metering, which
+    ///   re-creates the slot. Unknown is priced as empty, the worst case.
+    /// - Pool admission credits the state gas that validation is charged and refilled for
+    ///   creating and clearing the slot. Unknown gets no credit, which keeps the verification gas
+    ///   efficiency check conservative.
+    fn self_paying_sender_deposit_slot_is_empty(&self, state: &PvgState) -> Option<bool> {
+        if self.paymaster().is_some() {
+            Some(false)
+        } else {
+            state.sender_deposit_is_zero
+        }
+    }
+
     /// Returns extra pre-verification gas that depends on on-chain state: unmetered state gas
     /// the EntryPoint spends for this user operation (EIP-8037). 0 when the gas schedule has
     /// no such term.
     ///
-    /// A sender paying for itself (no paymaster) whose EntryPoint deposit is zero (or unknown)
-    /// at bundle start: the refund write after metering re-creates the deposit slot.
+    /// A sender paying for itself whose EntryPoint deposit slot is empty (or unknown) at bundle
+    /// start (see [`Self::self_paying_sender_deposit_slot_is_empty`]): the refund write after
+    /// metering re-creates the deposit slot.
     fn state_pre_verification_gas(&self, chain_spec: &ChainSpec, state: &PvgState) -> u128 {
-        if self.paymaster().is_none() && state.sender_deposit_is_zero.unwrap_or(true) {
+        if self
+            .self_paying_sender_deposit_slot_is_empty(state)
+            .unwrap_or(true)
+        {
             chain_spec.zero_deposit_refund_gas()
         } else {
             0
@@ -1192,6 +1216,36 @@ mod glamsterdam_tests {
         assert_eq!(predicted(&ops, &spec, &PvgState::unknown()), p);
         // Exactly the refund write per op on top of a prefunded sender.
         assert_eq!(p - predicted(&ops, &spec, &PREFUNDED), 2 * 97_920);
+    }
+
+    #[test]
+    fn self_paying_sender_deposit_slot_is_empty() {
+        let spec = glamsterdam_spec();
+        let self_paying = fixture_ops(
+            include_str!("testdata/glamsterdam_devnet8/self_pay_zero_deposit_n2.hex"),
+            &spec,
+            false,
+        );
+        let sponsored = fixture_ops(
+            include_str!("testdata/glamsterdam_devnet8/paymaster_n1.hex"),
+            &spec,
+            false,
+        );
+        for deposit in [Some(true), Some(false), None] {
+            let state = PvgState {
+                sender_deposit_is_zero: deposit,
+                authority: None,
+            };
+            assert_eq!(
+                self_paying[0].self_paying_sender_deposit_slot_is_empty(&state),
+                deposit
+            );
+            // A paymaster pays and receives the refund, whatever the sender's deposit
+            assert_eq!(
+                sponsored[0].self_paying_sender_deposit_slot_is_empty(&state),
+                Some(false)
+            );
+        }
     }
 
     #[test]

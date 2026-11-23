@@ -124,7 +124,12 @@ pub struct ChainSpec {
     pub call_data_word_gas: u64,
     /// Unmetered gas of the EntryPoint's refund write for a self-paying sender whose deposit is
     /// zero at bundle start: the write re-creates the deposit slot after the EntryPoint stops
-    /// metering
+    /// metering.
+    ///
+    /// Pool admission also uses it as the state gas such a sender is charged and refilled inside
+    /// validation (the slot is created when it pays `missingAccountFunds` and cleared when the
+    /// EntryPoint takes the prefund), which the verification gas efficiency check credits. Both
+    /// are one fresh storage slot today, so overriding this value changes both.
     pub zero_deposit_refund_gas: u64,
 
     /*

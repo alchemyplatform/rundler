@@ -28,7 +28,7 @@ use rundler_provider::{
 };
 use rundler_sim::{MempoolConfig, Prechecker, Simulator};
 use rundler_types::{
-    Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, GasFees, UserOperation,
+    Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, GasFees, PvgState, UserOperation,
     UserOperationId, UserOperationPermissions, UserOperationVariant, ValidationRevert,
     entry_point_metrics::{self, AaErrorStage},
     pool::{
@@ -187,18 +187,20 @@ where
     /// State gas that `op` is charged inside validation but has refilled before the EntryPoint
     /// measures `preOpGas` (EIP-8037), if the pre-validation state allows it; 0 otherwise.
     ///
-    /// This is a self-paying sender whose deposit slot is empty: paying `missingAccountFunds`
-    /// creates the slot and the EntryPoint taking the prefund clears it. A zero prefund means
-    /// nothing is paid and no slot is created. The slot is only cleared if the account paid
-    /// exactly `missingAccountFunds`, which [`Self::check_handle_op`] still has to confirm.
+    /// This is a self-paying sender whose deposit slot is empty
+    /// ([`UserOperation::self_paying_sender_deposit_slot_is_empty`]; unknown gets no credit):
+    /// paying `missingAccountFunds` creates the slot and the EntryPoint taking the prefund clears
+    /// it. A zero prefund means nothing is paid and no slot is created. That guard is specific to
+    /// the credit: the PVG term keeps pricing a zero-fee op, since estimation may run with
+    /// placeholder fees. The slot is only cleared if the account paid exactly
+    /// `missingAccountFunds`, which [`Self::check_handle_op`] still has to confirm.
     fn refilled_state_gas_candidate(
         &self,
         op: &UserOperationVariant,
-        sender_deposit_slot_is_zero: Option<bool>,
+        pvg_state: &PvgState,
         block_timestamp: u64,
     ) -> u128 {
-        if op.paymaster().is_some()
-            || sender_deposit_slot_is_zero != Some(true)
+        if op.self_paying_sender_deposit_slot_is_empty(pvg_state) != Some(true)
             || op.max_gas_cost().is_zero()
         {
             return 0;
@@ -809,11 +811,8 @@ where
                 }
                 MempoolError::from(error)
             });
-        let refill_candidate = self.refilled_state_gas_candidate(
-            &op,
-            precheck_ret.pvg_state.sender_deposit_is_zero,
-            block_timestamp,
-        );
+        let refill_candidate =
+            self.refilled_state_gas_candidate(&op, &precheck_ret.pvg_state, block_timestamp);
         let handle_op_future = self.check_handle_op(&op, refill_candidate, block_hash);
         let (sim_result, refilled_state_gas) = tokio::try_join!(sim_fut, handle_op_future)?;
 
