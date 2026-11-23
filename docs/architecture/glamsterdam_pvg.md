@@ -54,4 +54,12 @@ A full-transaction revert (e.g. AA95, or a failed validation at bundle time) cha
 
 Requirements: the node's `eth_simulateV1` must give calls a state-gas reservoir (reth v2.7 does; geth from v1.17.8 does not), which a `ReservoirProbe` checks, and its `rpc.gascap` must allow calls of `2^24 + --max_reservoir_gas`. No EIP-8037 tracing is needed.
 
+`--max_reservoir_gas` must fit the chain's block gas limit. Under EIP-8037 a transaction's whole gas limit, its reservoir included, must fit in the block's gas limit less the state gas already used in the block (alloy-evm's block executor), and admission takes the op's whole PVG surplus, at most `--max_reservoir_gas`, as the bundle's reservoir. So a bundle with `tx.gas = 2^24 + --max_reservoir_gas` must fit in a block: above that, an op could be estimated and admitted but its bundle never included. Rundler does not check this against the chain, so set it per chain with headroom:
+
+- **Headroom for a falling gas limit:** a block's gas limit can be lower than its parent's by less than 1/1024, about 58.6k per block on 60M.
+- **Headroom for other transactions' state gas:** a bundle with a reservoir near the limit only fits in a block where little state gas has been used before it.
+- **Values:** Ethereum mainnet's 60M blocks allow at most `60M − 60M/1024 − 2^24` = 43,164,191; use about 40M, which leaves ~3.2M of headroom. The 60M default suits Sepolia (~199M blocks). Revisit the setting if a chain's gas limit changes.
+
+Known edge near the limit: estimation checks the op's reservoir `R` against `--max_reservoir_gas`, but admission checks the whole PVG surplus, which can be larger than `R`. The estimate always prices the zero-deposit refund write (`zero_deposit_refund_gas`, 97,920 by default) and the op's calldata at its worst case, while admission prices the op as sent and the write only for a zero deposit. So an op estimated within about 98k of the max can be rejected at admission with `ReservoirGasTooHigh`.
+
 Metrics: `gas_estimator.reservoir_{fallbacks,estimates,fallbacks_busy}`, `reservoir_trace_ms`, `reservoir_state_gas`, `reservoir_peak_searches` and `reservoir_simulation_without_reservoir`; `op_pool.num_reservoir_ops_added` and `op_pool.num_reservoir_ops`; `builder.reservoir_bundles_mined`, `reservoir_bundle_reservoir_gas`, `reservoir_bundle_charged_gas` and `reservoir_bundle_gas_used` (margin = charged - used).
