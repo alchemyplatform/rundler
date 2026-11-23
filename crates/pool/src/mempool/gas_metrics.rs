@@ -124,7 +124,7 @@ pub(crate) fn record_mined_op_gas_efficiency(
 #[metrics(scope = "op_pool")]
 struct AdmissionGasMetrics {
     #[metric(
-        describe = "the fraction of the verification gas limit an op used in pool admission simulation, on the scale of verification_gas_limit_efficiency_reject_threshold: v0.6 ops with a paymaster are measured against one verification gas limit, so can exceed 1. has_7702_auth means the op carried an authorization, not necessarily a first delegation."
+        describe = "the fraction of the verification gas limit an op used in pool admission simulation, on the scale of verification_gas_limit_efficiency_reject_threshold: v0.6 ops with a paymaster are measured against one verification gas limit, so can exceed 1. On Glamsterdam a self-paying op's value includes the deposit slot credit (97,920 gas), as the check counts it. has_7702_auth means the op carried an authorization, not necessarily a first delegation."
     )]
     admission_verification_gas_efficiency: Histogram,
 }
@@ -135,12 +135,18 @@ static DESCRIBE_ADMISSION: Once = Once::new();
 /// or `None` if that limit is 0.
 ///
 /// `pre_op_gas` is the simulation's pre-op gas, which includes the pre-verification gas.
+/// `credit` is verification gas counted as used on top of what `pre_op_gas` shows: state gas
+/// the verification gas limit may have to cover but `pre_op_gas` does not include (see
+/// `UoPool::verification_efficiency_credit`).
 pub(crate) fn verification_gas_efficiency(
     uo: &UserOperationVariant,
     pre_op_gas: u128,
+    credit: u128,
 ) -> Option<f64> {
     efficiency(
-        pre_op_gas.saturating_sub(uo.pre_verification_gas()),
+        pre_op_gas
+            .saturating_sub(uo.pre_verification_gas())
+            .saturating_add(credit),
         uo.total_verification_gas_limit(),
     )
 }
@@ -332,7 +338,7 @@ mod tests {
             .into();
 
         // 50_000 pre-verification gas + 125_000 verification gas used
-        let efficiency = verification_gas_efficiency(&op, 175_000).unwrap();
+        let efficiency = verification_gas_efficiency(&op, 175_000, 0).unwrap();
         metrics::with_local_recorder(&recorder, || {
             record_admission_verification_gas_efficiency(ENTRY_POINT, &op, efficiency);
         });
@@ -366,18 +372,23 @@ mod tests {
     fn test_verification_gas_efficiency() {
         // 150_000 used of 200_000
         assert_eq!(
-            verification_gas_efficiency(&v0_6_op(false), 200_000),
+            verification_gas_efficiency(&v0_6_op(false), 200_000, 0),
             Some(0.75)
         );
         // 150_000 used of 2 * 200_000
         assert_eq!(
-            verification_gas_efficiency(&v0_6_op(true), 200_000),
+            verification_gas_efficiency(&v0_6_op(true), 200_000, 0),
             Some(0.375)
         );
         // pre-op gas below pre-verification gas
         assert_eq!(
-            verification_gas_efficiency(&v0_6_op(false), 10_000),
+            verification_gas_efficiency(&v0_6_op(false), 10_000, 0),
             Some(0.0)
+        );
+        // 150_000 used plus a 30_000 credit, of 200_000
+        assert_eq!(
+            verification_gas_efficiency(&v0_6_op(false), 200_000, 30_000),
+            Some(0.9)
         );
 
         let chain_spec = ChainSpec::default();
@@ -385,7 +396,7 @@ mod tests {
             v0_6::UserOperationBuilder::new(&chain_spec, Default::default())
                 .build()
                 .into();
-        assert_eq!(verification_gas_efficiency(&no_limit, 100_000), None);
+        assert_eq!(verification_gas_efficiency(&no_limit, 100_000, 0), None);
     }
 
     #[test]
@@ -395,7 +406,7 @@ mod tests {
         let op = v0_6_op(true);
 
         // 150_000 used of 2 * 200_000
-        let efficiency = verification_gas_efficiency(&op, 200_000).unwrap();
+        let efficiency = verification_gas_efficiency(&op, 200_000, 0).unwrap();
         metrics::with_local_recorder(&recorder, || {
             record_admission_verification_gas_efficiency(ENTRY_POINT, &op, efficiency);
         });
