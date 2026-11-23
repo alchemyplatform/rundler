@@ -324,6 +324,7 @@ where
             op.max_fill(chain_spec).calldata_floor_gas_limit(chain_spec),
             self.settings
                 .verification_gas_limit_efficiency_reject_threshold,
+            op_with_gas.verification_efficiency_credit(chain_spec),
         );
         // State charged to the reservoir before the op runs, which the simulations cannot see:
         // a new EIP-7702 authority is applied by state override, not by processing the

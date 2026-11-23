@@ -392,6 +392,7 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
                 da_gas,
                 self.calldata_floor_gas_limit(chain_spec),
                 thresh,
+                self.verification_efficiency_credit(chain_spec),
             )
         } else {
             execution_pvg + da_gas
@@ -521,6 +522,24 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
         }
     }
 
+    /// Verification gas the pool's efficiency check may count as used on top of what this
+    /// operation meters: the state gas of creating the sender's deposit slot, for any sender
+    /// paying for itself (see [`Self::zero_deposit_slot_state_gas`]). 0 with a paymaster, and 0
+    /// when the gas schedule has no such term.
+    ///
+    /// Admission cannot tell whether a verification gas limit was sized for an empty deposit
+    /// slot, so it credits every self-paying operation whatever the deposit state, and anything
+    /// relying on the efficiency check's minimum, such as the calldata floor, has to assume the
+    /// same. Unlike admission, this does not require a non-zero prefund, since estimation may
+    /// price an operation with placeholder fees of 0.
+    fn verification_efficiency_credit(&self, chain_spec: &ChainSpec) -> u128 {
+        if self.paymaster().is_none() {
+            chain_spec.zero_deposit_refund_gas()
+        } else {
+            0
+        }
+    }
+
     /// Returns extra pre-verification gas that depends on on-chain state: unmetered state gas
     /// the EntryPoint spends for this user operation (EIP-8037). 0 when the gas schedule has
     /// no such term.
@@ -557,19 +576,28 @@ pub fn bundle_per_uo_shared_gas(chain_spec: &ChainSpec, bundle_size: usize) -> u
 }
 
 /// Handle EIP-7623 calldata floor gas increase
+///
+/// The op's lowest payment counts the verification gas the pool's efficiency check guarantees it
+/// uses: `threshold × verification gas limit`, less `verification_efficiency_credit`, the gas that
+/// check credits on top of what the op meters (see
+/// [`UserOperation::verification_efficiency_credit`]).
 pub fn increase_required_pvg_with_calldata_floor_gas<UO: UserOperation>(
     op_with_limits: &UO,
     max_required_pvg_without_da: u128,
     da_gas: u128,
     required_calldata_floor_gas_limit: u128,
     verification_gas_limit_efficiency_reject_threshold: f64,
+    verification_efficiency_credit: u128,
 ) -> u128 {
+    let lowest_verification_gas = (op_with_limits.total_verification_gas_limit() as f64
+        * op_with_limits.effective_verification_gas_limit_efficiency_reject_threshold(
+            verification_gas_limit_efficiency_reject_threshold,
+        )
+        - verification_efficiency_credit as f64)
+        .max(0.0);
     let lowest_gas_usage = (max_required_pvg_without_da as f64
         + op_with_limits.execution_gas_limit() as f64 * 0.1
-        + op_with_limits.total_verification_gas_limit() as f64
-            * op_with_limits.effective_verification_gas_limit_efficiency_reject_threshold(
-                verification_gas_limit_efficiency_reject_threshold,
-            )) as u128;
+        + lowest_verification_gas) as u128;
     let required_pvg_without_da = if lowest_gas_usage < required_calldata_floor_gas_limit {
         max_required_pvg_without_da + (required_calldata_floor_gas_limit - lowest_gas_usage)
     } else {
@@ -1128,7 +1156,9 @@ mod glamsterdam_tests {
     use crate::{
         EntryPointVersion,
         chain::ForkActivation,
-        v0_7::{UserOperation as UserOperationV0_7, UserOperationBuilder},
+        v0_7::{
+            UserOperation as UserOperationV0_7, UserOperationBuilder, UserOperationRequiredFields,
+        },
     };
 
     const DEVNET_CHAIN_ID: u64 = 7091047534;
@@ -1271,6 +1301,116 @@ mod glamsterdam_tests {
             self_paying[0].zero_deposit_slot_state_gas(&ChainSpec::default(), &PvgState::unknown()),
             0
         );
+    }
+
+    /// A self-paying op with `call_data_len` non-zero bytes of call data and no execution gas,
+    /// and the same op with a paymaster
+    fn floor_ops(
+        spec: &ChainSpec,
+        verification_gas_limit: u128,
+        call_data_len: usize,
+    ) -> (UserOperationV0_7, UserOperationV0_7) {
+        let required = || UserOperationRequiredFields {
+            sender: Address::repeat_byte(0x11),
+            nonce: U256::ZERO,
+            call_data: vec![1; call_data_len].into(),
+            call_gas_limit: 0,
+            verification_gas_limit,
+            pre_verification_gas: 0,
+            max_priority_fee_per_gas: 1,
+            max_fee_per_gas: 1,
+            signature: Bytes::new(),
+        };
+        let self_paying =
+            UserOperationBuilder::new(spec, EntryPointVersion::V0_7, required()).build();
+        let sponsored = UserOperationBuilder::new(spec, EntryPointVersion::V0_7, required())
+            .paymaster(Address::repeat_byte(0x22), 50_000, 0, Bytes::new())
+            .build();
+        (self_paying, sponsored)
+    }
+
+    #[test]
+    fn verification_efficiency_credit() {
+        let spec = glamsterdam_spec();
+        let (self_paying, sponsored) = floor_ops(&spec, 200_000, 0);
+        assert_eq!(self_paying.verification_efficiency_credit(&spec), 97_920);
+        assert_eq!(sponsored.verification_efficiency_credit(&spec), 0);
+        assert_eq!(
+            self_paying.verification_efficiency_credit(&ChainSpec::default()),
+            0
+        );
+    }
+
+    #[test]
+    fn calldata_floor_assumes_the_efficiency_credit() {
+        let spec = glamsterdam_spec();
+        // 0.5 keeps threshold × limit exact in f64
+        let threshold = 0.5;
+        // A set deposit slot leaves out the refund-write term, to isolate the credit
+        let base = |op: &UserOperationV0_7| {
+            op.required_pre_verification_gas(&spec, 1, 0, None, &PREFUNDED)
+        };
+        // The required PVG with the floor, with and without the op's credit
+        let with_and_without = |op: &UserOperationV0_7| {
+            let floor = op.calldata_floor_gas_limit(&spec);
+            let credit = op.verification_efficiency_credit(&spec);
+            (
+                increase_required_pvg_with_calldata_floor_gas(
+                    op,
+                    base(op),
+                    0,
+                    floor,
+                    threshold,
+                    credit,
+                ),
+                increase_required_pvg_with_calldata_floor_gas(op, base(op), 0, floor, threshold, 0),
+            )
+        };
+
+        // The floor binds and 0.5 × 400K is above the credit: exactly the credit more
+        let (self_paying, sponsored) = floor_ops(&spec, 400_000, 10_000);
+        let (with, without) = with_and_without(&self_paying);
+        assert!(without > base(&self_paying), "the floor must bind");
+        assert_eq!(with - without, 97_920);
+        // A paymaster op gets no credit
+        let (with, without) = with_and_without(&sponsored);
+        assert_eq!(with, without);
+
+        // 0.5 × 100K is below the credit: the verification gas counted stops at 0
+        let (self_paying, _) = floor_ops(&spec, 100_000, 10_000);
+        let (with, without) = with_and_without(&self_paying);
+        assert_eq!(with - without, 50_000);
+
+        // The floor does not bind: no change
+        let (self_paying, _) = floor_ops(&spec, 400_000, 0);
+        assert_eq!(
+            with_and_without(&self_paying),
+            (base(&self_paying), base(&self_paying))
+        );
+    }
+
+    #[test]
+    fn estimation_and_precheck_require_the_same_floor_pvg() {
+        let spec = glamsterdam_spec();
+        let (self_paying, sponsored) = floor_ops(&spec, 400_000, 10_000);
+        for op in [&self_paying, &sponsored] {
+            for state in [PREFUNDED, PvgState::unknown()] {
+                // As gas estimation computes it: the PVG without the floor, then the floor
+                let estimated = increase_required_pvg_with_calldata_floor_gas(
+                    op,
+                    op.required_pre_verification_gas(&spec, 1, 0, None, &state),
+                    0,
+                    op.calldata_floor_gas_limit(&spec),
+                    0.4,
+                    op.verification_efficiency_credit(&spec),
+                );
+                // As precheck, the pool and the builder compute it
+                assert_eq!(
+                    estimated,
+                    op.required_pre_verification_gas(&spec, 1, 0, Some(0.4), &state)
+                );
+            }
+        }
     }
 
     #[test]

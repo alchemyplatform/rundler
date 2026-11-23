@@ -223,6 +223,7 @@ where
                     .calldata_floor_gas_limit(&chain_spec),
                 self.settings
                     .verification_gas_limit_efficiency_reject_threshold,
+                op_with_gas.verification_efficiency_credit(&chain_spec),
             )
         };
 

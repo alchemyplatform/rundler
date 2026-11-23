@@ -191,8 +191,8 @@ where
     /// it), but it is refilled before the EntryPoint measures `preOpGas`. Admission cannot tell
     /// whether an op's limit was sized for an empty slot, since the deposit may have changed since
     /// the op was estimated, so every self-paying op gets the credit. Such an op may reserve up to
-    /// `credit / threshold` more verification gas than it uses. The calldata floor has to assume
-    /// the same credit.
+    /// `credit / threshold` more verification gas than it uses. The calldata floor assumes the
+    /// same credit (see [`UserOperation::verification_efficiency_credit`]).
     ///
     /// 0 with a paymaster, which pays instead, and with a zero prefund, where nothing is paid.
     fn verification_efficiency_credit(
