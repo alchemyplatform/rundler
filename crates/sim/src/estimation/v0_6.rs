@@ -581,8 +581,8 @@ mod tests {
         common::EstimationTypes::*, v0_6::UserOperation as ContractUserOperation,
     };
     use rundler_provider::{
-        ExecutionResult, GasUsedResult, MockEntryPointV0_6, MockEvmProvider, MockFeeEstimator,
-        ProviderError,
+        DepositInfo, ExecutionResult, GasUsedResult, MockEntryPointV0_6, MockEvmProvider,
+        MockFeeEstimator, ProviderError,
     };
     use rundler_types::{
         GasFees, PvgState,
@@ -1526,9 +1526,12 @@ mod tests {
                     ..Default::default()
                 }))
             });
-        entry
-            .expect_balance_of()
-            .returning(move |_, _| Ok(sender_deposit));
+        entry.expect_get_deposit_info().returning(move |_, _| {
+            Ok(DepositInfo {
+                deposit: sender_deposit,
+                ..Default::default()
+            })
+        });
 
         let (base_entry, base_provider) = create_base_config();
         let (_, settings) = create_estimator(base_entry, base_provider);

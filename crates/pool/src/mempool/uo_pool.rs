@@ -2047,7 +2047,7 @@ mod tests {
     #[tokio::test]
     async fn test_stake_status_not_staked() {
         let mut entrypoint = MockEntryPointV0_6::new();
-        entrypoint.expect_get_deposit_info().returning(|_| {
+        entrypoint.expect_get_deposit_info().returning(|_, _| {
             Ok(DepositInfo {
                 deposit: U256::from(1000),
                 staked: true,

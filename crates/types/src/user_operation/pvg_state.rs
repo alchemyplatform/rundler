@@ -21,8 +21,9 @@ use serde::{Deserialize, Serialize};
 /// authorization. Unknown values (`None`) are priced as the worst case.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PvgState {
-    /// Whether the sender's EntryPoint deposit is zero. Only matters for operations without a
-    /// paymaster, where the sender pays and its deposit receives the refund.
+    /// Whether the sender's EntryPoint deposit storage slot is zero. Only matters for operations
+    /// without a paymaster, where the sender pays and its deposit receives the refund. On v0.6 the
+    /// slot also holds the sender's stake, so a staked sender with no deposit is `Some(false)`.
     pub sender_deposit_is_zero: Option<bool>,
     /// State of the EIP-7702 authority (the sender). Only matters for operations with an
     /// authorization tuple.

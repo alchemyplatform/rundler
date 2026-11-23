@@ -104,8 +104,12 @@ pub trait EntryPoint: Send + Sync {
     async fn balance_of(&self, address: Address, block_id: Option<BlockId>)
     -> ProviderResult<U256>;
 
-    /// Get the deposit info for an address
-    async fn get_deposit_info(&self, address: Address) -> ProviderResult<DepositInfo>;
+    /// Get the deposit info for an address, at `block_id` or the latest block
+    async fn get_deposit_info(
+        &self,
+        address: Address,
+        block_id: Option<BlockId>,
+    ) -> ProviderResult<DepositInfo>;
 
     /// Get the balances of a list of addresses in order
     async fn get_balances(&self, addresses: Vec<Address>) -> ProviderResult<Vec<U256>>;
