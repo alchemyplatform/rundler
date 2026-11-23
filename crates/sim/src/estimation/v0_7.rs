@@ -486,7 +486,10 @@ where
             buffered_verification_gas_limit,
             self.settings.max_verification_gas,
         );
-        buffered_verification_gas_limit.min(self.settings.max_verification_gas)
+        let verification_gas_limit =
+            buffered_verification_gas_limit.min(self.settings.max_verification_gas);
+        tracing::debug!("verification_gas_limit: {verification_gas_limit}");
+        verification_gas_limit
     }
 
     #[instrument(skip_all)]
@@ -1130,6 +1133,22 @@ mod tests {
         sender_deposit: U256,
         charge_gas_limit_via_pvg: bool,
     ) -> u128 {
+        let mut optional_op = demo_user_op_optional_gas(None);
+        optional_op.call_gas_limit = Some(10000);
+        optional_op.verification_gas_limit = Some(10000);
+        glamsterdam_estimate(sender_deposit, charge_gas_limit_via_pvg, optional_op)
+            .await
+            .0
+            .pre_verification_gas
+    }
+
+    /// Estimates `optional_op` on Glamsterdam with a sender deposit of `sender_deposit`, and
+    /// returns the estimate with the chain spec it was made under
+    async fn glamsterdam_estimate(
+        sender_deposit: U256,
+        charge_gas_limit_via_pvg: bool,
+        optional_op: UserOperationOptionalGas,
+    ) -> (GasEstimate, ChainSpec) {
         let (mut entry, mut provider) = create_base_config();
         provider
             .expect_get_latest_block_hash_number_and_timestamp()
@@ -1160,17 +1179,13 @@ mod tests {
             charge_gas_limit_via_pvg,
             ..ChainSpec::default()
         };
-        let estimator = create_custom_estimator(chain_spec, provider, entry, settings);
+        let estimator = create_custom_estimator(chain_spec.clone(), provider, entry, settings);
 
-        let mut optional_op = demo_user_op_optional_gas(None);
-        optional_op.call_gas_limit = Some(10000);
-        optional_op.verification_gas_limit = Some(10000);
-
-        estimator
+        let estimate = estimator
             .estimate_op_gas(optional_op, StateOverride::default())
             .await
-            .unwrap()
-            .pre_verification_gas
+            .unwrap();
+        (estimate, chain_spec)
     }
 
     #[tokio::test]
@@ -1182,6 +1197,46 @@ mod tests {
             let funded = glamsterdam_estimated_pvg(funded_deposit, charge_gas_limit_via_pvg).await;
             assert_eq!(zero - funded, 97_920);
         }
+    }
+
+    #[tokio::test]
+    async fn test_glamsterdam_floor_pvg_covers_precheck() {
+        // A calldata-heavy self-paying op: the calldata floor sets its PVG, which has to assume
+        // the efficiency check's deposit slot credit as precheck's required PVG does
+        let mut optional_op = demo_user_op_optional_gas(None);
+        optional_op.call_data = vec![1; 10_000].into();
+        optional_op.call_gas_limit = Some(10_000);
+        optional_op.verification_gas_limit = Some(400_000);
+        let (estimate, chain_spec) =
+            glamsterdam_estimate(U256::ZERO, false, optional_op.clone()).await;
+
+        // The op as sent with the estimate, priced as precheck prices it
+        let (_, settings) = create_estimator(create_base_config().0, MockEvmProvider::new());
+        let spec = chain_spec.for_bundle_inclusion_after(0);
+        let op = optional_op
+            .into_user_operation_builder(
+                &spec,
+                settings.max_bundle_execution_gas,
+                settings.max_verification_gas,
+                settings.max_paymaster_verification_gas,
+            )
+            .pre_verification_gas(estimate.pre_verification_gas)
+            .build();
+        let state = PvgState {
+            sender_deposit_is_zero: Some(true),
+            authority: None,
+        };
+        let threshold = settings.verification_gas_limit_efficiency_reject_threshold;
+        let required = op.required_pre_verification_gas(&spec, 1, 0, Some(threshold), &state);
+        assert!(
+            required > op.required_pre_verification_gas(&spec, 1, 0, None, &state),
+            "the floor must bind"
+        );
+        assert!(
+            estimate.pre_verification_gas >= required,
+            "estimated {} below precheck's {required}",
+            estimate.pre_verification_gas
+        );
     }
 
     #[tokio::test]

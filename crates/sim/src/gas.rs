@@ -167,8 +167,9 @@ pub async fn calc_required_pre_verification_gas<UO: UserOperation, E: DAGasProvi
 /// Reads the on-chain state that the state-dependent part of pre-verification gas depends on
 /// (see [`UserOperation::state_pre_verification_gas`]).
 ///
-/// Reads only what applies to `op`: the sender's EntryPoint deposit when it has no paymaster,
-/// and the sender's code, nonce and balance when it carries an EIP-7702 authorization. Makes no
+/// Reads only what applies to `op`: whether the sender's EntryPoint deposit slot is empty when
+/// it has no paymaster (`getDepositInfo` on v0.6, whose slot also holds the stake, `balanceOf`
+/// later), and the sender's code, nonce and balance when it carries an EIP-7702 authorization. Makes no
 /// calls and returns [`PvgState::unknown`] when no gas schedule of the chain has state-dependent terms.
 #[instrument(skip_all)]
 pub async fn load_pvg_state<UO, P, E>(
@@ -415,6 +416,8 @@ mod tests {
         )
         .build();
 
+        // read at the block asked for, which is the simulated block in precheck
+        let block = Some(BlockId::hash(B256::repeat_byte(0x42)));
         for (case, info, slot_is_zero) in [
             ("staked", deposit_info(true, 1_000), false),
             ("unlocked, not withdrawn", deposit_info(false, 1_000), false),
@@ -430,10 +433,10 @@ mod tests {
                 .returning(|_, _| Ok(U256::ZERO));
             entry_point
                 .expect_get_deposit_info()
-                .withf(|address, _| *address == SENDER)
+                .withf(move |address, at| *address == SENDER && *at == block)
                 .returning(move |_, _| Ok(info.clone()));
 
-            let state = load_pvg_state(&spec, &MockEvmProvider::new(), &entry_point, &op, None)
+            let state = load_pvg_state(&spec, &MockEvmProvider::new(), &entry_point, &op, block)
                 .await
                 .unwrap();
             assert_eq!(state.sender_deposit_is_zero, Some(slot_is_zero), "{case}");
