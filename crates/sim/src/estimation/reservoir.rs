@@ -371,13 +371,18 @@ where
                     ..pvg_state
                 },
             );
+        // (At least `reservoir_gas` itself, as a safety net: the funded requirement is not
+        // expected to exceed the PVG without the reservoir.)
         let admitted_reservoir_gas = pre_verification_gas
             .saturating_sub(lowest_required_pvg)
             .max(reservoir_gas);
         if admitted_reservoir_gas > max_reservoir_gas {
+            // Reported as the op's reservoir against what is left of the max for it, so the
+            // error's "state gas" is the op's own, not the zero-deposit term
+            let unmetered_surplus = admitted_reservoir_gas - reservoir_gas;
             return Err(GasEstimationError::StateGasTooLarge(
-                admitted_reservoir_gas,
-                max_reservoir_gas,
+                reservoir_gas,
+                max_reservoir_gas.saturating_sub(unmetered_surplus),
             ));
         }
 

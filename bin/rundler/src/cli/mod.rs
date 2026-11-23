@@ -94,9 +94,14 @@ pub async fn run() -> anyhow::Result<()> {
     aggregator::instantiate_aggregators(&opt.common, &mut cs, &providers);
 
     tracing::info!("Chain spec: {:#?}", cs);
-    // Admin commands don't estimate, admit or bundle ops
-    if !matches!(opt.command, Command::Admin(_)) {
-        check_max_reservoir_gas(&cs, &opt.common, providers.evm()).await?;
+    // Only estimation and admission use `max_reservoir_gas`: the builder alone and admin
+    // commands are not checked
+    if !matches!(opt.command, Command::Admin(_) | Command::Builder(_)) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .context("system clock should be after the unix epoch")?
+            .as_secs();
+        check_max_reservoir_gas(&cs, opt.common.max_reservoir_gas, providers.evm(), now).await?;
     }
     if cs.glamsterdam_activation != ForkActivation::Never {
         tracing::info!(
@@ -989,21 +994,37 @@ where
 /// a larger reservoir could be estimated and admitted but never included (see
 /// [`rundler_sim::gas::max_reservoir_gas_for_block_gas_limit`]). Fails once Glamsterdam is active,
 /// and warns before, since the gas limit may change by then.
+///
+/// If the latest block cannot be read, it fails only if Glamsterdam is active at `now` (unix
+/// seconds): before that, a node that is down at startup does not stop rundler.
 async fn check_max_reservoir_gas<E: EvmProvider>(
     chain_spec: &ChainSpec,
-    common: &CommonArgs,
+    max_reservoir_gas: u64,
     evm: &E,
+    now: u64,
 ) -> anyhow::Result<()> {
-    if chain_spec.glamsterdam_activation == ForkActivation::Never || common.max_reservoir_gas == 0 {
+    if chain_spec.glamsterdam_activation == ForkActivation::Never || max_reservoir_gas == 0 {
         return Ok(());
     }
     let block = evm
         .get_block(rundler_provider::BlockNumberOrTag::Latest.into())
         .await
-        .context("should load the latest block to check max_reservoir_gas")?
-        .context("latest block not found")?;
+        .map_err(anyhow::Error::from)
+        .and_then(|block| block.context("latest block not found"));
+    let block = match block {
+        Ok(block) => block,
+        Err(error) if chain_spec.reservoir_mode_enabled_at(now) => {
+            return Err(error.context("should load the latest block to check max_reservoir_gas"));
+        }
+        Err(error) => {
+            tracing::warn!(
+                "could not check max_reservoir_gas against the block gas limit (Glamsterdam is not active yet): {error:#}"
+            );
+            return Ok(());
+        }
+    };
     let active = chain_spec.reservoir_mode_enabled_at(block.header.timestamp);
-    match max_reservoir_gas_violation(common.max_reservoir_gas, block.header.gas_limit) {
+    match max_reservoir_gas_violation(max_reservoir_gas, block.header.gas_limit) {
         Some(message) if active => bail!(message),
         Some(message) => {
             tracing::warn!("{message} (Glamsterdam is not active yet)");
@@ -1169,5 +1190,93 @@ mod tests {
         assert!(max_reservoir_gas_violation(43_164_192, 60_000_000).is_some());
         // Sepolia's ~199M blocks fit the default
         assert_eq!(max_reservoir_gas_violation(60_000_000, 199_414_639), None);
+    }
+
+    const NOW: u64 = 1_800_000_000;
+
+    fn chain_spec(glamsterdam_activation: ForkActivation) -> ChainSpec {
+        ChainSpec {
+            glamsterdam_activation,
+            ..Default::default()
+        }
+    }
+
+    /// A node whose latest block has `gas_limit`, at `NOW`
+    fn node(gas_limit: u64) -> rundler_provider::MockEvmProvider {
+        let mut evm = rundler_provider::MockEvmProvider::new();
+        evm.expect_get_block().times(1).returning(move |_| {
+            Ok(Some(rundler_provider::block_with_gas_limit_and_timestamp(
+                gas_limit, NOW,
+            )))
+        });
+        evm
+    }
+
+    /// A node that fails to return the latest block
+    fn failing_node() -> rundler_provider::MockEvmProvider {
+        let mut evm = rundler_provider::MockEvmProvider::new();
+        evm.expect_get_block()
+            .times(1)
+            .returning(|_| Err(anyhow::anyhow!("node down").into()));
+        evm
+    }
+
+    #[tokio::test]
+    async fn startup_check_fails_once_glamsterdam_is_active() {
+        let active = chain_spec(ForkActivation::Genesis);
+        let error = check_max_reservoir_gas(&active, 60_000_000, &node(60_000_000), NOW)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("at most 43164191"), "{error}");
+        check_max_reservoir_gas(&active, 43_164_191, &node(60_000_000), NOW)
+            .await
+            .unwrap();
+
+        // Activated by timestamp, at or before the latest block
+        let activated = chain_spec(ForkActivation::Timestamp(NOW));
+        check_max_reservoir_gas(&activated, 60_000_000, &node(60_000_000), NOW)
+            .await
+            .unwrap_err();
+    }
+
+    #[tokio::test]
+    async fn startup_check_warns_before_glamsterdam() {
+        let scheduled = chain_spec(ForkActivation::Timestamp(NOW + 1));
+        check_max_reservoir_gas(&scheduled, 60_000_000, &node(60_000_000), NOW)
+            .await
+            .unwrap();
+    }
+
+    /// Without reservoir mode, the node is not asked (the mock has no expectations)
+    #[tokio::test]
+    async fn startup_check_skipped_without_reservoir_mode() {
+        let evm = rundler_provider::MockEvmProvider::new();
+        check_max_reservoir_gas(&chain_spec(ForkActivation::Never), 60_000_000, &evm, NOW)
+            .await
+            .unwrap();
+        check_max_reservoir_gas(&chain_spec(ForkActivation::Genesis), 0, &evm, NOW)
+            .await
+            .unwrap();
+    }
+
+    /// A node error stops startup only once Glamsterdam is active (by the clock)
+    #[tokio::test]
+    async fn startup_check_node_error() {
+        check_max_reservoir_gas(
+            &chain_spec(ForkActivation::Genesis),
+            60_000_000,
+            &failing_node(),
+            NOW,
+        )
+        .await
+        .unwrap_err();
+        check_max_reservoir_gas(
+            &chain_spec(ForkActivation::Timestamp(NOW + 1)),
+            60_000_000,
+            &failing_node(),
+            NOW,
+        )
+        .await
+        .unwrap();
     }
 }

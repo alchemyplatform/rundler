@@ -1981,16 +1981,18 @@ mod tests {
         };
 
         // A max between the two: the estimate would pass with a zero deposit and be rejected at
-        // admission for a funded sender, so it is not returned
+        // admission for a funded sender, so it is not returned. The error reports the op's own
+        // reservoir (its state gas S) against the max less the zero-deposit term, one short.
         let (entry, provider, _) = reservoir_mocks(deploy_24kb());
         let error = run_reservoir(entry, provider, with_max(funded_reservoir_gas - 1))
             .await
             .unwrap_err();
+        let state_gas = u128::from(DEPLOY_24KB_STATE_GAS);
         assert!(
             matches!(
                 error,
                 GasEstimationError::StateGasTooLarge(gas, max)
-                    if gas == funded_reservoir_gas && max == funded_reservoir_gas - 1
+                    if gas == state_gas && max == state_gas - 1
             ),
             "{error:?}"
         );

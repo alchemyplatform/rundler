@@ -30,8 +30,9 @@ use tracing::instrument;
 /// limit, its reservoir included, must fit in the block's gas limit less the state gas already
 /// used in the block (alloy-evm's block executor), so a larger reservoir could never be
 /// included. The bundle lands in a later block, whose gas limit may be up to 1/1024 of its
-/// parent's lower, so one such step is left as a margin. On a chain with 60M blocks this is
-/// 43,164,191.
+/// parent's lower, so one such step is left as a margin: it covers the next block only, and the
+/// startup check that uses this is not repeated while rundler runs, so a gas limit that keeps
+/// falling is not caught until restart. On a chain with 60M blocks this is 43,164,191.
 pub fn max_reservoir_gas_for_block_gas_limit(block_gas_limit: u64) -> u64 {
     (block_gas_limit - block_gas_limit / GAS_LIMIT_BOUND_DIVISOR).saturating_sub(TX_MAX_GAS_LIMIT)
 }
@@ -247,6 +248,19 @@ async fn authority_state<UO: UserOperation, P: EvmProvider>(
 
 #[cfg(test)]
 mod tests {
+    use alloy_primitives::{Address, Bytes, U256, bytes};
+    use rundler_provider::{MockEntryPointV0_7, MockEvmProvider};
+    use rundler_types::{
+        EntryPointVersion,
+        authorization::Eip7702Auth,
+        chain::ForkActivation,
+        v0_7::{
+            UserOperation as UserOperationV0_7, UserOperationBuilder, UserOperationRequiredFields,
+        },
+    };
+
+    use super::*;
+
     #[test]
     fn max_reservoir_gas_fits_the_next_block() {
         // Mainnet: 2^24 + R must fit in the next block, whose gas limit may be 58,593 lower
@@ -260,19 +274,6 @@ mod tests {
         assert_eq!(super::max_reservoir_gas_for_block_gas_limit(16_777_216), 0);
         assert_eq!(super::max_reservoir_gas_for_block_gas_limit(10_000_000), 0);
     }
-
-    use alloy_primitives::{Address, Bytes, U256, bytes};
-    use rundler_provider::{MockEntryPointV0_7, MockEvmProvider};
-    use rundler_types::{
-        EntryPointVersion,
-        authorization::Eip7702Auth,
-        chain::ForkActivation,
-        v0_7::{
-            UserOperation as UserOperationV0_7, UserOperationBuilder, UserOperationRequiredFields,
-        },
-    };
-
-    use super::*;
 
     const SENDER: Address = Address::repeat_byte(0x11);
 
