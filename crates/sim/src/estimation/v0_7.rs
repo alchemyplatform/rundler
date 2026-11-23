@@ -1631,6 +1631,15 @@ mod tests {
     /// Admission's classification of the estimated op: its PVG surplus over the metered
     /// requirement (with a zero deposit, the larger requirement), if in reservoir mode.
     fn admitted_reservoir_gas(estimate: &GasEstimate, settings: &Settings) -> Option<u128> {
+        admitted_reservoir_gas_with_deposit(estimate, settings, true)
+    }
+
+    /// As [`admitted_reservoir_gas`], for a sender whose EntryPoint deposit is zero or not
+    fn admitted_reservoir_gas_with_deposit(
+        estimate: &GasEstimate,
+        settings: &Settings,
+        sender_deposit_is_zero: bool,
+    ) -> Option<u128> {
         let chain_spec = reservoir_chain_spec();
         let (_, full_op) = reservoir_op(&chain_spec, settings);
         let op = UserOperationBuilder::from_uo(full_op, &chain_spec)
@@ -1644,7 +1653,7 @@ mod tests {
             0,
             Some(settings.verification_gas_limit_efficiency_reject_threshold),
             &PvgState {
-                sender_deposit_is_zero: Some(true),
+                sender_deposit_is_zero: Some(sender_deposit_is_zero),
                 authority: None,
             },
         );
@@ -1951,6 +1960,52 @@ mod tests {
             error,
             GasEstimationError::StateGasTooLarge(70_000_000, 60_000_000)
         ));
+    }
+
+    /// The estimate's PVG prices the zero-deposit refund write whatever the sender's deposit is,
+    /// so admission sees a larger surplus (the bundle's reservoir) for a funded sender. That
+    /// surplus is what must fit under `--max_reservoir_gas`, or admission would reject the
+    /// estimate.
+    #[tokio::test]
+    async fn test_reservoir_mode_max_covers_a_funded_senders_surplus() {
+        let settings = reservoir_settings();
+        let (entry, provider, _) = reservoir_mocks(deploy_24kb());
+        let estimate = run_reservoir(entry, provider, settings).await.unwrap();
+        let zero_deposit_reservoir_gas = admitted_reservoir_gas(&estimate, &settings).unwrap();
+        let funded_reservoir_gas =
+            admitted_reservoir_gas_with_deposit(&estimate, &settings, false).unwrap();
+        assert_eq!(funded_reservoir_gas - zero_deposit_reservoir_gas, 97_920);
+        let with_max = |max_reservoir_gas: u128| Settings {
+            max_reservoir_gas: max_reservoir_gas.try_into().unwrap(),
+            ..settings
+        };
+
+        // A max between the two: the estimate would pass with a zero deposit and be rejected at
+        // admission for a funded sender, so it is not returned
+        let (entry, provider, _) = reservoir_mocks(deploy_24kb());
+        let error = run_reservoir(entry, provider, with_max(funded_reservoir_gas - 1))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                GasEstimationError::StateGasTooLarge(gas, max)
+                    if gas == funded_reservoir_gas && max == funded_reservoir_gas - 1
+            ),
+            "{error:?}"
+        );
+
+        // At a max of exactly the funded surplus, the same estimate is returned
+        let (entry, provider, _) = reservoir_mocks(deploy_24kb());
+        let capped = run_reservoir(entry, provider, with_max(funded_reservoir_gas))
+            .await
+            .unwrap();
+        assert_eq!(capped.pre_verification_gas, estimate.pre_verification_gas);
+        assert_eq!(capped.call_gas_limit, estimate.call_gas_limit);
+        assert_eq!(
+            capped.verification_gas_limit,
+            estimate.verification_gas_limit
+        );
     }
 
     /// State below the threshold after a failed metered estimate (the metered call gas limit

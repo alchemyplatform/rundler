@@ -94,6 +94,10 @@ pub async fn run() -> anyhow::Result<()> {
     aggregator::instantiate_aggregators(&opt.common, &mut cs, &providers);
 
     tracing::info!("Chain spec: {:#?}", cs);
+    // Admin commands don't estimate, admit or bundle ops
+    if !matches!(opt.command, Command::Admin(_)) {
+        check_max_reservoir_gas(&cs, &opt.common, providers.evm()).await?;
+    }
     if cs.glamsterdam_activation != ForkActivation::Never {
         tracing::info!(
             "Glamsterdam activation: {:?}, pre-Glamsterdam gas schedule: {:?}, Glamsterdam gas schedule: {:?}",
@@ -980,6 +984,46 @@ where
     }
 }
 
+/// Checks `--max_reservoir_gas` against the chain's latest block gas limit, on a chain with
+/// reservoir mode: a reservoir-mode bundle has `tx.gas = 2^24 + R`, which must fit in a block, so
+/// a larger reservoir could be estimated and admitted but never included (see
+/// [`rundler_sim::gas::max_reservoir_gas_for_block_gas_limit`]). Fails once Glamsterdam is active,
+/// and warns before, since the gas limit may change by then.
+async fn check_max_reservoir_gas<E: EvmProvider>(
+    chain_spec: &ChainSpec,
+    common: &CommonArgs,
+    evm: &E,
+) -> anyhow::Result<()> {
+    if chain_spec.glamsterdam_activation == ForkActivation::Never || common.max_reservoir_gas == 0 {
+        return Ok(());
+    }
+    let block = evm
+        .get_block(rundler_provider::BlockNumberOrTag::Latest.into())
+        .await
+        .context("should load the latest block to check max_reservoir_gas")?
+        .context("latest block not found")?;
+    let active = chain_spec.reservoir_mode_enabled_at(block.header.timestamp);
+    match max_reservoir_gas_violation(common.max_reservoir_gas, block.header.gas_limit) {
+        Some(message) if active => bail!(message),
+        Some(message) => {
+            tracing::warn!("{message} (Glamsterdam is not active yet)");
+            Ok(())
+        }
+        None => Ok(()),
+    }
+}
+
+/// Why `max_reservoir_gas` does not fit a chain whose latest block has `block_gas_limit`, if it
+/// does not
+fn max_reservoir_gas_violation(max_reservoir_gas: u64, block_gas_limit: u64) -> Option<String> {
+    let max = rundler_sim::gas::max_reservoir_gas_for_block_gas_limit(block_gas_limit);
+    (max_reservoir_gas > max).then(|| {
+        format!(
+            "max_reservoir_gas ({max_reservoir_gas}) is too large for the chain's block gas limit ({block_gas_limit}): a reservoir-mode bundle has tx.gas = {TX_MAX_GAS_LIMIT} + its reservoir, which must fit in a block, with a margin for the gas limit falling by 1/1024. Set max_reservoir_gas to at most {max}"
+        )
+    })
+}
+
 pub fn construct_providers(
     args: &CommonArgs,
     chain_spec: &ChainSpec,
@@ -1109,4 +1153,21 @@ async fn load_configs(
     };
 
     Ok((mempool_configs, builders_config))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn max_reservoir_gas_must_fit_the_block_gas_limit() {
+        // Mainnet's 60M blocks hold a reservoir of at most 43,164,191: the 60M default is too
+        // large, and the message says what fits
+        let message = max_reservoir_gas_violation(60_000_000, 60_000_000).unwrap();
+        assert!(message.contains("at most 43164191"), "{message}");
+        assert_eq!(max_reservoir_gas_violation(43_164_191, 60_000_000), None);
+        assert!(max_reservoir_gas_violation(43_164_192, 60_000_000).is_some());
+        // Sepolia's ~199M blocks fit the default
+        assert_eq!(max_reservoir_gas_violation(60_000_000, 199_414_639), None);
+    }
 }

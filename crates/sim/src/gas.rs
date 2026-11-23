@@ -18,9 +18,27 @@ use rundler_provider::{
     BlockHashOrNumber, BlockId, DAGasProvider, EntryPoint, EvmProvider, FeeEstimator,
     ProviderResult,
 };
-use rundler_types::{AuthorityState, PvgState, UserOperation, chain::ChainSpec, da::DAGasData};
+use rundler_types::{
+    AuthorityState, PvgState, TX_MAX_GAS_LIMIT, UserOperation, chain::ChainSpec, da::DAGasData,
+};
 use rundler_utils::guard_timer::CustomTimerGuard;
 use tracing::instrument;
+
+/// The largest `--max_reservoir_gas` a chain whose latest block has `block_gas_limit` can carry.
+///
+/// A reservoir-mode bundle has `tx.gas = 2^24 + R`. Under EIP-8037 a transaction's whole gas
+/// limit, its reservoir included, must fit in the block's gas limit less the state gas already
+/// used in the block (alloy-evm's block executor), so a larger reservoir could never be
+/// included. The bundle lands in a later block, whose gas limit may be up to 1/1024 of its
+/// parent's lower, so one such step is left as a margin. On a chain with 60M blocks this is
+/// 43,164,191.
+pub fn max_reservoir_gas_for_block_gas_limit(block_gas_limit: u64) -> u64 {
+    (block_gas_limit - block_gas_limit / GAS_LIMIT_BOUND_DIVISOR).saturating_sub(TX_MAX_GAS_LIMIT)
+}
+
+/// A block's gas limit may change by less than 1/1024 of its parent's (the yellow paper's gas
+/// limit bound divisor)
+const GAS_LIMIT_BOUND_DIVISOR: u64 = 1024;
 
 /// The smallest preVerificationGas surplus (PVG minus the metered requirement) that puts a user
 /// operation in [`StateGasMode::Reservoir`](rundler_types::StateGasMode): the least state gas
@@ -229,6 +247,20 @@ async fn authority_state<UO: UserOperation, P: EvmProvider>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn max_reservoir_gas_fits_the_next_block() {
+        // Mainnet: 2^24 + R must fit in the next block, whose gas limit may be 58,593 lower
+        assert_eq!(
+            super::max_reservoir_gas_for_block_gas_limit(60_000_000),
+            43_164_191
+        );
+        // Sepolia (~199M) leaves room for the default --max_reservoir_gas of 60M
+        assert!(super::max_reservoir_gas_for_block_gas_limit(199_414_639) > 60_000_000);
+        // No reservoir in a block at or below the transaction gas cap
+        assert_eq!(super::max_reservoir_gas_for_block_gas_limit(16_777_216), 0);
+        assert_eq!(super::max_reservoir_gas_for_block_gas_limit(10_000_000), 0);
+    }
+
     use alloy_primitives::{Address, Bytes, U256, bytes};
     use rundler_provider::{MockEntryPointV0_7, MockEvmProvider};
     use rundler_types::{

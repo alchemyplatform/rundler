@@ -347,9 +347,36 @@ where
                 "reservoir mode: needs a reservoir of {needed_reservoir_gas}, threshold {final_threshold}, reservoir padded to {reservoir_gas}"
             );
         }
-        if reservoir_gas > max_reservoir_gas {
+        // Admission takes the whole PVG surplus as the reservoir. It can be more than
+        // `reservoir_gas`: the PVG above prices the zero-deposit refund write whatever the
+        // sender's deposit is, while admission requires it only if the deposit is zero. So check
+        // the surplus admission sees with the sender funded; otherwise an estimate within 97,920
+        // of `--max_reservoir_gas` is rejected at admission. (Admission's surplus can still
+        // differ slightly for other reasons: the op's real signature and paymaster data, an
+        // EIP-7702 authority's state or DA gas changing by then.)
+        let pre_verification_gas = base_pvg + reservoir_gas;
+        let lowest_required_pvg = UserOperationBuilder::from_uo(op_with_gas.clone(), chain_spec)
+            .pre_verification_gas(pre_verification_gas)
+            .build()
+            .required_pre_verification_gas(
+                chain_spec,
+                1,
+                da_gas,
+                Some(
+                    self.settings
+                        .verification_gas_limit_efficiency_reject_threshold,
+                ),
+                &PvgState {
+                    sender_deposit_is_zero: Some(false),
+                    ..pvg_state
+                },
+            );
+        let admitted_reservoir_gas = pre_verification_gas
+            .saturating_sub(lowest_required_pvg)
+            .max(reservoir_gas);
+        if admitted_reservoir_gas > max_reservoir_gas {
             return Err(GasEstimationError::StateGasTooLarge(
-                reservoir_gas,
+                admitted_reservoir_gas,
                 max_reservoir_gas,
             ));
         }
@@ -361,7 +388,7 @@ where
         );
 
         Ok(GasEstimate {
-            pre_verification_gas: base_pvg + reservoir_gas,
+            pre_verification_gas,
             call_gas_limit,
             verification_gas_limit,
             paymaster_verification_gas_limit: op
