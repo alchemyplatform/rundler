@@ -37,7 +37,7 @@ pub(crate) struct RpcUserOperation {
     call_data: Bytes,
     call_gas_limit: U128,
     verification_gas_limit: U128,
-    pre_verification_gas: U256,
+    pre_verification_gas: U128,
     max_priority_fee_per_gas: U128,
     max_fee_per_gas: U128,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -87,7 +87,7 @@ impl From<UserOperation> for RpcUserOperation {
             call_data: op.call_data,
             call_gas_limit: U128::from(op.call_gas_limit),
             verification_gas_limit: U128::from(op.verification_gas_limit),
-            pre_verification_gas: U256::from(op.pre_verification_gas),
+            pre_verification_gas: U128::from(op.pre_verification_gas),
             max_priority_fee_per_gas: U128::from(op.max_priority_fee_per_gas),
             max_fee_per_gas: U128::from(op.max_fee_per_gas),
             factory: op.factory.map(|f| f.to_vec().into()),
@@ -189,7 +189,7 @@ pub(crate) struct RpcUserOperationOptionalGas {
     call_data: Bytes,
     call_gas_limit: Option<U128>,
     verification_gas_limit: Option<U128>,
-    pre_verification_gas: Option<U256>,
+    pre_verification_gas: Option<U128>,
     max_priority_fee_per_gas: Option<U128>,
     max_fee_per_gas: Option<U128>,
     factory: Option<Address>,
@@ -253,5 +253,56 @@ impl From<GasEstimate> for RpcGasEstimate {
                 .paymaster_verification_gas_limit
                 .map(|x| U128::from(x)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rundler_types::UserOperation as _;
+    use serde_json::{Value, json};
+
+    use super::*;
+
+    fn op_json(pre_verification_gas: &str) -> Value {
+        json!({
+            "sender": Address::ZERO,
+            "nonce": "0x0",
+            "callData": "0x",
+            "callGasLimit": "0x1",
+            "verificationGasLimit": "0x1",
+            "preVerificationGas": pre_verification_gas,
+            "maxPriorityFeePerGas": "0x1",
+            "maxFeePerGas": "0x1",
+            "signature": "0x",
+        })
+    }
+
+    #[test]
+    fn user_operation_rejects_pre_verification_gas_over_u128() {
+        let max = serde_json::from_value::<RpcUserOperation>(op_json(
+            "0xffffffffffffffffffffffffffffffff",
+        ))
+        .unwrap();
+        let op =
+            UserOperation::try_from_rpc_type(max, &ChainSpec::default(), EntryPointVersion::V0_7)
+                .unwrap();
+        assert_eq!(op.pre_verification_gas(), u128::MAX);
+
+        assert!(
+            serde_json::from_value::<RpcUserOperation>(op_json(
+                "0x100000000000000000000000000000000"
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn user_operation_optional_gas_rejects_pre_verification_gas_over_u128() {
+        assert!(
+            serde_json::from_value::<RpcUserOperationOptionalGas>(op_json(
+                "0x100000000000000000000000000000000"
+            ))
+            .is_err()
+        );
     }
 }
