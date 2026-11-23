@@ -16,20 +16,20 @@ use std::{collections::HashSet, sync::Arc, time::Instant};
 use alloy_primitives::{Address, B256, Bytes, U256, utils::format_units};
 use alloy_sol_types::{SolCall, SolValue};
 use anyhow::Context;
-use futures::{FutureExt, TryFutureExt};
+use futures::TryFutureExt;
 use itertools::Itertools;
 use metrics::{Counter, Gauge, Histogram};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
 use rundler_contracts::v0_6::IEntryPoint;
 use rundler_provider::{
-    DAGasOracleSync, EvmProvider, FeeEstimator, ProvidersWithEntryPointT, SimulationProvider,
-    StateOverride,
+    DAGasOracleSync, EvmProvider, ExecutionResult, FeeEstimator, ProviderResult,
+    ProvidersWithEntryPointT, SimulationProvider, StateOverride,
 };
 use rundler_sim::{MempoolConfig, Prechecker, Simulator};
 use rundler_types::{
     Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, GasFees, UserOperation,
-    UserOperationId, UserOperationPermissions, UserOperationVariant,
+    UserOperationId, UserOperationPermissions, UserOperationVariant, ValidationRevert,
     entry_point_metrics::{self, AaErrorStage},
     pool::{
         BundleOutcome, MempoolError, PaymasterMetadata, PoolOperation, PoolOperationStatus,
@@ -185,52 +185,131 @@ where
     }
 
     /// State gas that `op` is charged inside validation but has refilled before the EntryPoint
-    /// measures `preOpGas` (EIP-8037), so the verification gas limit has to cover it while
-    /// `pre_op_gas` does not include it.
+    /// measures `preOpGas` (EIP-8037), if the pre-validation state allows it; 0 otherwise.
     ///
     /// This is a self-paying sender whose deposit slot is empty: paying `missingAccountFunds`
-    /// creates the slot and the EntryPoint taking the prefund clears it. It is only cleared if the
-    /// account paid exactly `missingAccountFunds`; one that pays more keeps a deposit, and the
-    /// state gas stays in `pre_op_gas`. That is confirmed by simulating the op and reading the
-    /// sender's deposit afterwards. Anything unknown or failing gives no credit, which keeps the
-    /// efficiency check conservative.
-    async fn validation_refilled_state_gas(
+    /// creates the slot and the EntryPoint taking the prefund clears it. A zero prefund means
+    /// nothing is paid and no slot is created. The slot is only cleared if the account paid
+    /// exactly `missingAccountFunds`, which [`Self::check_handle_op`] still has to confirm.
+    fn refilled_state_gas_candidate(
         &self,
         op: &UserOperationVariant,
         sender_deposit_slot_is_zero: Option<bool>,
-        block_hash: B256,
         block_timestamp: u64,
     ) -> u128 {
-        if op.paymaster().is_some() || sender_deposit_slot_is_zero != Some(true) {
+        if op.paymaster().is_some()
+            || sender_deposit_slot_is_zero != Some(true)
+            || op.max_gas_cost().is_zero()
+        {
             return 0;
         }
-        let state_gas = u128::from(
+        u128::from(
             self.config
                 .chain_spec
                 .gas_schedule_at(block_timestamp)
                 .zero_deposit_refund_gas,
-        );
-        if state_gas == 0 {
-            return 0;
+        )
+    }
+
+    /// The gas price and execution gas limit the execution gas limit efficiency check needs, or
+    /// `None` when it does not run for `op`.
+    fn execution_efficiency_inputs(&self, op: &UserOperationVariant) -> Option<(u128, u128)> {
+        if self.config.execution_gas_limit_efficiency_reject_threshold <= 0.0 {
+            return None;
+        }
+        // Node clients set base_fee to 0 during eth_call.
+        // Geth: https://github.com/ethereum/go-ethereum/blob/a5fe7353cff959d6fcfcdd9593de19056edb9bdb/internal/ethapi/api.go#L1202
+        // Reth: https://github.com/paradigmxyz/reth/blob/4d3b35dbd24c3a5c6b1a4f7bd86b1451e8efafcc/crates/rpc/rpc-eth-api/src/helpers/call.rs#L1098
+        // Arb-geth: https://github.com/OffchainLabs/go-ethereum/blob/54adef6e3fbea263e770c578047fd38842b8e17f/internal/ethapi/api.go#L1126
+        let gas_price = op.gas_price(0);
+        if gas_price == 0 {
+            // Can't calculate efficiency without gas price, fail open.
+            return None;
+        }
+        let execution_gas_limit = match op {
+            // For v0.6 only use the call gas limit as post op gas limit is always set to VGL*2
+            // whether or not the UO is using a post op. Can cause the efficiency check to fail.
+            UserOperationVariant::V0_6(op) => op.call_gas_limit(),
+            UserOperationVariant::V0_7(op) => op.execution_gas_limit(),
+        };
+        if execution_gas_limit == 0 {
+            return None; // No call gas limit, not useful, but not a failure here.
+        }
+        Some((gas_price, execution_gas_limit))
+    }
+
+    /// Runs the one `simulateHandleOp` that admission needs, if any, for two checks: the
+    /// execution gas limit efficiency check, and confirming a refilled state gas candidate
+    /// (see [`Self::refilled_state_gas_candidate`]). The candidate only adds a `target` call that
+    /// reads the sender's deposit, which runs after `paid` and `pre_op_gas` are computed, so one
+    /// simulation serves both.
+    ///
+    /// Returns the refilled state gas to credit: `refill_candidate` if the deposit is confirmed
+    /// back to zero after validation, else 0.
+    async fn check_handle_op(
+        &self,
+        op: &UserOperationVariant,
+        refill_candidate: u128,
+        block_hash: B256,
+    ) -> MempoolResult<u128> {
+        let execution_inputs = self.execution_efficiency_inputs(op);
+        if execution_inputs.is_none() && refill_candidate == 0 {
+            return Ok(0);
         }
 
-        // simulateHandleOp calls `target` after the op, once the EntryPoint has refunded
-        // `prefund - paid` to the sender's deposit. The deposit right after validation is
-        // therefore `final + paid - prefund`, and the prefund is the op's max gas cost.
-        let entry_point = self.ep_providers.entry_point();
-        let balance_of = IEntryPoint::balanceOfCall {
-            account: op.sender(),
+        let (target, target_call_data) = if refill_candidate > 0 {
+            let balance_of = IEntryPoint::balanceOfCall {
+                account: op.sender(),
+            };
+            (self.config.entry_point, balance_of.abi_encode().into())
+        } else {
+            (Address::ZERO, Bytes::new())
         };
-        let sim_result = entry_point
+        let sim_result = self
+            .ep_providers
+            .entry_point()
             .simulate_handle_op(
                 op.clone().into(),
-                self.config.entry_point,
-                balance_of.abi_encode().into(),
+                target,
+                target_call_data,
                 block_hash.into(),
                 StateOverride::default(),
             )
             .await;
-        let deposit_cleared = match sim_result {
+
+        if let Some((gas_price, execution_gas_limit)) = execution_inputs {
+            self.check_execution_gas_limit_efficiency(
+                op,
+                &sim_result,
+                gas_price,
+                execution_gas_limit,
+            )?;
+        }
+
+        if refill_candidate > 0 && Self::deposit_cleared_after_validation(op, &sim_result) {
+            Ok(refill_candidate)
+        } else {
+            Ok(0)
+        }
+    }
+
+    /// Whether the sender's deposit is zero right after validation, from a `simulateHandleOp`
+    /// whose target read `balanceOf(sender)`.
+    ///
+    /// The target runs after the op, once the EntryPoint has refunded `prefund - paid` to the
+    /// deposit, so the deposit right after validation is `final + paid - prefund`, and the
+    /// prefund is the op's max gas cost.
+    ///
+    /// Known gap: execution runs between validation and the read. An account that overpays by
+    /// `x` in validation and withdraws exactly `x` in execution (`withdrawTo` only reaches the
+    /// sender's own deposit, so the account has to do it itself) looks cleared and is credited
+    /// state gas that is already in `pre_op_gas`. A deposit added during execution, or a
+    /// reverted execution, only withholds the credit.
+    fn deposit_cleared_after_validation(
+        op: &UserOperationVariant,
+        sim_result: &ProviderResult<Result<ExecutionResult, ValidationRevert>>,
+    ) -> bool {
+        match sim_result {
             Ok(Ok(res)) if res.target_success => U256::abi_decode(&res.target_result)
                 .is_ok_and(|final_deposit| final_deposit + res.paid == op.max_gas_cost()),
             other => {
@@ -240,85 +319,51 @@ where
                 );
                 false
             }
-        };
-        if deposit_cleared { state_gas } else { 0 }
+        }
     }
 
-    async fn check_execution_gas_limit_efficiency(
+    fn check_execution_gas_limit_efficiency(
         &self,
-        op: UserOperationVariant,
-        block_hash: B256,
+        op: &UserOperationVariant,
+        sim_result: &ProviderResult<Result<ExecutionResult, ValidationRevert>>,
+        gas_price: u128,
+        execution_gas_limit: u128,
     ) -> MempoolResult<()> {
-        // Check call gas limit efficiency only if needed
-        if self.config.execution_gas_limit_efficiency_reject_threshold > 0.0 {
-            // Node clients set base_fee to 0 during eth_call.
-            // Geth: https://github.com/ethereum/go-ethereum/blob/a5fe7353cff959d6fcfcdd9593de19056edb9bdb/internal/ethapi/api.go#L1202
-            // Reth: https://github.com/paradigmxyz/reth/blob/4d3b35dbd24c3a5c6b1a4f7bd86b1451e8efafcc/crates/rpc/rpc-eth-api/src/helpers/call.rs#L1098
-            // Arb-geth: https://github.com/OffchainLabs/go-ethereum/blob/54adef6e3fbea263e770c578047fd38842b8e17f/internal/ethapi/api.go#L1126
-            let gas_price = op.gas_price(0);
-
-            if gas_price == 0 {
-                // Can't calculate efficiency without gas price, fail open.
-                return Ok(());
+        match sim_result {
+            Err(e) => {
+                tracing::error!(
+                    "Failed to simulate handle op for gas limit efficiency check, failing open: {:?}",
+                    e
+                );
             }
-
-            let execution_gas_limit = match &op {
-                // For v0.6 only use the call gas limit as post op gas limit is always set to VGL*2
-                // whether or not the UO is using a post op. Can cause the efficiency check to fail.
-                UserOperationVariant::V0_6(op) => op.call_gas_limit(),
-                UserOperationVariant::V0_7(op) => op.execution_gas_limit(),
-            };
-            if execution_gas_limit == 0 {
-                return Ok(()); // No call gas limit, not useful, but not a failure here.
+            Ok(Err(e)) => {
+                tracing::debug!(
+                    "Validation error during gas limit efficiency check, failing open: {:?}",
+                    e
+                );
             }
+            Ok(Ok(execution_res)) => {
+                let total_gas_used: u128 = (execution_res.paid / U256::from(gas_price))
+                    .try_into()
+                    .context("total gas used should fit in u128")?;
 
-            let op_hash = op.hash();
-            let sim_result = self
-                .ep_providers
-                .entry_point()
-                .simulate_handle_op(
-                    op.into(),
-                    Address::ZERO,
-                    Bytes::new(),
-                    block_hash.into(),
-                    StateOverride::default(),
-                )
-                .await;
-            match sim_result {
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to simulate handle op for gas limit efficiency check, failing open: {:?}",
-                        e
-                    );
-                }
-                Ok(Err(e)) => {
+                let execution_gas_used = total_gas_used - execution_res.pre_op_gas;
+
+                let execution_gas_efficiency =
+                    execution_gas_used as f64 / execution_gas_limit as f64;
+                if execution_gas_efficiency
+                    < self.config.execution_gas_limit_efficiency_reject_threshold
+                {
+                    let op_hash = op.hash();
+                    let pre_op_gas = execution_res.pre_op_gas;
+                    let required = self.config.execution_gas_limit_efficiency_reject_threshold;
                     tracing::debug!(
-                        "Validation error during gas limit efficiency check, failing open: {:?}",
-                        e
+                        "Execution gas limit efficiency too low. Op hash: {op_hash:?} total gas used: {total_gas_used} pre op gas: {pre_op_gas} execution gas used: {execution_gas_used} execution gas limit: {execution_gas_limit} efficiency: {execution_gas_efficiency} required: {required}"
                     );
-                }
-                Ok(Ok(execution_res)) => {
-                    let total_gas_used: u128 = (execution_res.paid / U256::from(gas_price))
-                        .try_into()
-                        .context("total gas used should fit in u128")?;
-
-                    let execution_gas_used = total_gas_used - execution_res.pre_op_gas;
-
-                    let execution_gas_efficiency =
-                        execution_gas_used as f64 / execution_gas_limit as f64;
-                    if execution_gas_efficiency
-                        < self.config.execution_gas_limit_efficiency_reject_threshold
-                    {
-                        let pre_op_gas = execution_res.pre_op_gas;
-                        let required = self.config.execution_gas_limit_efficiency_reject_threshold;
-                        tracing::debug!(
-                            "Execution gas limit efficiency too low. Op hash: {op_hash:?} total gas used: {total_gas_used} pre op gas: {pre_op_gas} execution gas used: {execution_gas_used} execution gas limit: {execution_gas_limit} efficiency: {execution_gas_efficiency} required: {required}"
-                        );
-                        return Err(MempoolError::ExecutionGasLimitEfficiencyTooLow(
-                            self.config.execution_gas_limit_efficiency_reject_threshold,
-                            execution_gas_efficiency,
-                        ));
-                    }
+                    return Err(MempoolError::ExecutionGasLimitEfficiencyTooLow(
+                        self.config.execution_gas_limit_efficiency_reject_threshold,
+                        execution_gas_efficiency,
+                    ));
                 }
             }
         }
@@ -740,21 +785,13 @@ where
                 }
                 MempoolError::from(error)
             });
-        let execution_gas_check_future =
-            self.check_execution_gas_limit_efficiency(op.clone(), block_hash);
-        let refilled_state_gas_future = self
-            .validation_refilled_state_gas(
-                &op,
-                precheck_ret.pvg_state.sender_deposit_is_zero,
-                block_hash,
-                block_timestamp,
-            )
-            .map(Ok);
-        let (sim_result, _, refilled_state_gas) = tokio::try_join!(
-            sim_fut,
-            execution_gas_check_future,
-            refilled_state_gas_future
-        )?;
+        let refill_candidate = self.refilled_state_gas_candidate(
+            &op,
+            precheck_ret.pvg_state.sender_deposit_is_zero,
+            block_timestamp,
+        );
+        let handle_op_future = self.check_handle_op(&op, refill_candidate, block_hash);
+        let (sim_result, refilled_state_gas) = tokio::try_join!(sim_fut, handle_op_future)?;
 
         // Check if op has more than the maximum allowed expected storage slots
         let expected_slots = sim_result.expected_storage.num_slots();
@@ -2491,64 +2528,22 @@ mod tests {
     async fn test_verification_gas_efficiency_counts_zero_deposit_state_gas() {
         use DepositAfterValidation::*;
         // 50K of 200K verification gas used (0.25); with 97,920 of refilled state gas, 0.74
-        for (case, sender_deposit_is_zero, activation, paymaster, after, accepted) in [
-            (
-                "slot created and cleared",
-                Some(true),
-                ForkActivation::Genesis,
-                false,
-                Cleared,
-                true,
-            ),
-            (
-                "account overpaid",
-                Some(true),
-                ForkActivation::Genesis,
-                false,
-                Kept,
-                false,
-            ),
-            (
-                "probe failed",
-                Some(true),
-                ForkActivation::Genesis,
-                false,
-                Unknown,
-                false,
-            ),
-            (
-                "funded",
-                Some(false),
-                ForkActivation::Genesis,
-                false,
-                NotProbed,
-                false,
-            ),
-            (
-                "deposit unknown",
-                None,
-                ForkActivation::Genesis,
-                false,
-                NotProbed,
-                false,
-            ),
-            (
-                "before glamsterdam",
-                Some(true),
-                ForkActivation::Never,
-                false,
-                NotProbed,
-                false,
-            ),
-            (
-                "paymaster pays",
-                Some(true),
-                ForkActivation::Genesis,
-                true,
-                NotProbed,
-                false,
-            ),
-        ] {
+        let genesis = ForkActivation::Genesis;
+        // (case, deposit slot empty, glamsterdam, paymaster, max fee per gas, probe, accepted)
+        #[rustfmt::skip]
+        let cases = [
+            ("slot created and cleared", Some(true), genesis, false, 1, Cleared, true),
+            ("account overpaid", Some(true), genesis, false, 1, Kept, false),
+            ("probe failed", Some(true), genesis, false, 1, Unknown, false),
+            ("funded", Some(false), genesis, false, 1, NotProbed, false),
+            ("deposit unknown", None, genesis, false, 1, NotProbed, false),
+            ("before glamsterdam", Some(true), ForkActivation::Never, false, 1, NotProbed, false),
+            ("paymaster pays", Some(true), genesis, true, 1, NotProbed, false),
+            // nothing to pay, so no slot is created
+            ("zero prefund", Some(true), genesis, false, 0, NotProbed, false),
+        ];
+        for (case, sender_deposit_is_zero, activation, paymaster, max_fee, after, accepted) in cases
+        {
             let mut config = default_config();
             // v0.6 halves the threshold for a paymaster op; 0.8 keeps it at 0.4
             config.verification_gas_limit_efficiency_reject_threshold =
@@ -2565,8 +2560,8 @@ mod tests {
             let mut op = create_op_from_op_v0_6(UserOperationRequiredFields {
                 verification_gas_limit,
                 pre_verification_gas: 50_000,
-                max_fee_per_gas: 1,
-                max_priority_fee_per_gas: 1,
+                max_fee_per_gas: max_fee,
+                max_priority_fee_per_gas: max_fee,
                 paymaster_and_data,
                 ..Default::default()
             });
@@ -2628,6 +2623,73 @@ mod tests {
                     matches!(
                         ret,
                         Err(MempoolError::VerificationGasLimitEfficiencyTooLow(..))
+                    ),
+                    "{case}: {ret:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execution_check_and_deposit_probe_share_one_handle_op_simulation() {
+        // 100K call gas; prefund = 1 * (50K PVG + 100K CGL + 200K VGL) = 350K
+        for (case, paid, accepted) in [
+            // 80K of 100K execution gas used; the deposit is back to zero after validation
+            ("both pass", 180_000_u64, true),
+            // 10K of 100K execution gas used
+            ("execution too low", 110_000, false),
+        ] {
+            let mut config = default_config();
+            config.verification_gas_limit_efficiency_reject_threshold = 0.4;
+            config.execution_gas_limit_efficiency_reject_threshold = 0.5;
+            config.chain_spec.glamsterdam_activation = ForkActivation::Genesis;
+
+            let mut op = create_op_from_op_v0_6(UserOperationRequiredFields {
+                call_gas_limit: 100_000,
+                verification_gas_limit: 200_000,
+                pre_verification_gas: 50_000,
+                max_fee_per_gas: 1,
+                max_priority_fee_per_gas: 1,
+                ..Default::default()
+            });
+            op.pvg_state.sender_deposit_is_zero = Some(true);
+
+            let entry_point_address = config.entry_point;
+            let paid = U256::from(paid);
+            let final_deposit = op.op.max_gas_cost() - paid;
+            let mut entry_point = MockEntryPointV0_6::new();
+            entry_point.expect_simulate_handle_op().times(1).returning(
+                move |_, target, _, _, _| {
+                    assert_eq!(
+                        target, entry_point_address,
+                        "the shared call reads the deposit"
+                    );
+                    Ok(Ok(ExecutionResult {
+                        pre_op_gas: 100_000,
+                        paid,
+                        target_success: true,
+                        target_result: final_deposit.abi_encode().into(),
+                        ..Default::default()
+                    }))
+                },
+            );
+
+            let pool = create_pool_with_entry_point_config(
+                config,
+                vec![op.clone()],
+                entry_point,
+                MempoolConfig::default(),
+            );
+            let ret = pool
+                .add_operation(OperationOrigin::Local, op.op, default_perms())
+                .await;
+            if accepted {
+                assert!(ret.is_ok(), "{case}: {ret:?}");
+            } else {
+                assert!(
+                    matches!(
+                        ret,
+                        Err(MempoolError::ExecutionGasLimitEfficiencyTooLow(..))
                     ),
                     "{case}: {ret:?}"
                 );
