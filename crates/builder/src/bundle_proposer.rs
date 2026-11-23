@@ -35,7 +35,7 @@ use rundler_provider::{
     GethDebugTracingOptions, HandleOpsOut, ProvidersWithEntryPointT, StateOverride,
     TransactionRequest, decode_v0_6_handle_ops_revert, decode_v0_6_ops_from_calldata,
     decode_v0_7_handle_ops_revert, decode_v0_7_ops_from_calldata, get_auth_list_from_transaction,
-    reservoir_probe_call, reservoir_probe_found_reservoir, simulate_calls,
+    simulate_call_after_reservoir_probe,
 };
 use rundler_sim::{SimulationError, SimulationResult, Simulator, ViolationError, gas};
 use rundler_types::{
@@ -1509,17 +1509,15 @@ where
             bundle_fees,
             self.settings.submission_proxy.as_ref().map(|p| p.address()),
         );
-        let mut state_override = StateOverride::default();
-        let probe_tx = reservoir_probe_call(&mut state_override);
-        let mut results = simulate_calls(
+        let probed = simulate_call_after_reservoir_probe(
             self.ep_providers.evm(),
-            vec![probe_tx, tx],
+            tx,
             None,
-            state_override,
+            StateOverride::default(),
         )
         .await
         .context("should simulate the reservoir-mode bundle")?;
-        if !reservoir_probe_found_reservoir(&results[0])? {
+        if !probed.found_reservoir {
             self.metrics
                 .reservoir_simulation_without_reservoir
                 .increment(1);
@@ -1527,7 +1525,7 @@ where
                 "the node's eth_simulateV1 gives calls no state-gas reservoir, can't simulate the reservoir-mode bundle"
             );
         }
-        let result = results.remove(1);
+        let result = probed.call;
         if !result.success {
             let revert_data = Some(result.return_data.clone());
             let decoded = match entry_point.version().abi_version() {
@@ -6333,6 +6331,17 @@ mod tests {
                     let call = &calls[1];
                     let gas: U256 = serde_json::from_value(call["gas"].clone()).unwrap();
                     assert_eq!(gas, U256::from(simulation.tx_gas), "simulated tx.gas");
+                    // Room for the bundle after the probe, and no more: a node rejects an
+                    // override above its block gas limit and its `rpc.gascap`
+                    let block_gas_limit: U256 =
+                        serde_json::from_value(block["blockOverrides"]["gasLimit"].clone())
+                            .unwrap();
+                    assert_eq!(
+                        block_gas_limit,
+                        probe_gas.max(gas)
+                            + U256::from(rundler_provider::RESERVOIR_PROBE_GAS_HEADROOM),
+                        "block gas limit"
+                    );
                     for field in ["nonce", "maxFeePerGas", "maxPriorityFeePerGas", "gasPrice"] {
                         assert!(call.get(field).is_none(), "simulated bundle has {field}");
                     }

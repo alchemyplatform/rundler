@@ -49,8 +49,8 @@ pub use alloy_serde::WithOtherFields;
 pub use fees::new_fee_estimator;
 mod state_gas;
 pub use state_gas::{
-    RESERVOIR_PROBE_GAS_HEADROOM, SimulatedCall, SimulatedLog, reservoir_probe_call,
-    reservoir_probe_found_reservoir, simulate_call, simulate_calls,
+    ProbedCall, RESERVOIR_PROBE_GAS_HEADROOM, SimulatedCall, SimulatedLog, simulate_call,
+    simulate_call_after_reservoir_probe,
 };
 mod traits;
 pub mod transaction;

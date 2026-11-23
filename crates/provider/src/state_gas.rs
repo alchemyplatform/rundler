@@ -77,35 +77,97 @@ struct RawSimulatedCall {
 /// among them: reth v2.10 gives a call no reservoir without it (reth v2.7 gave one either way).
 /// Validation mode also checks fees, nonces and balances, which are not what is simulated here:
 /// the block's base fee is set to 0 and each call's nonce and fees are dropped, so its gas price
-/// is 0, its sender needs no balance, and its nonce is the sender's next one. The block's gas
-/// limit is raised for the calls, which `eth_simulateV1` otherwise caps a call's gas at.
+/// is 0, its sender needs no balance, and its nonce is the sender's next one.
 ///
-/// Whether a node gives calls a reservoir is checked with [`reservoir_probe_call`].
+/// The simulated block's gas limit is set to the call's gas, since `eth_simulateV1` caps a call's
+/// gas at it. No higher: a node rejects a block gas limit override above both its live block gas
+/// limit and its `rpc.gascap` (reth v2.10), before running any call.
+///
+/// Whether a node gives calls a reservoir is checked with [`simulate_call_after_reservoir_probe`].
 pub async fn simulate_call<P: EvmProvider>(
     provider: &P,
     tx: TransactionRequest,
     block_id: Option<BlockId>,
     state_override: StateOverride,
 ) -> ProviderResult<SimulatedCall> {
-    let mut calls = simulate_calls(provider, vec![tx], block_id, state_override).await?;
+    let block_gas_limit = tx.gas.unwrap_or_default();
+    let mut calls = simulate_block(
+        provider,
+        vec![tx],
+        block_gas_limit,
+        block_id,
+        state_override,
+    )
+    .await?;
     Ok(calls.remove(0))
 }
 
-/// As [`simulate_call`], for `txs` run one after the other in one block, in one request (so on
-/// one node).
-pub async fn simulate_calls<P: EvmProvider>(
+/// The result of [`simulate_call_after_reservoir_probe`].
+#[derive(Clone, Debug)]
+pub struct ProbedCall {
+    /// Whether the `ReservoirProbe` got a state-gas reservoir. If not, the node's `eth_simulateV1`
+    /// gives calls none, and `call` ran without one.
+    pub found_reservoir: bool,
+    /// The simulated call.
+    pub call: SimulatedCall,
+}
+
+/// As [`simulate_call`], after a `ReservoirProbe` call in the same request (so on the same node)
+/// that checks whether the node's `eth_simulateV1` gives calls a state-gas reservoir, which `tx`
+/// relies on.
+///
+/// The probe is its own call rather than wrapping `tx`, which would see what `tx` left of the
+/// reservoir. It runs first, and the block's gas limit is the larger of the two calls' gas plus
+/// [`RESERVOIR_PROBE_GAS_HEADROOM`], which covers what the probe uses: `tx` gets its full gas,
+/// and the override stays within the `rpc.gascap` that reservoir-mode simulations require.
+///
+/// An error if the probe used more than [`RESERVOIR_PROBE_GAS_HEADROOM`]: `tx` may then have run
+/// with less gas than requested, so its result can't be trusted.
+pub async fn simulate_call_after_reservoir_probe<P: EvmProvider>(
+    provider: &P,
+    tx: TransactionRequest,
+    block_id: Option<BlockId>,
+    mut state_override: StateOverride,
+) -> ProviderResult<ProbedCall> {
+    let probe = reservoir_probe_call(&mut state_override);
+    let block_gas_limit =
+        probed_block_gas_limit(probe.gas.unwrap_or_default(), tx.gas.unwrap_or_default());
+    let mut calls = simulate_block(
+        provider,
+        vec![probe, tx],
+        block_gas_limit,
+        block_id,
+        state_override,
+    )
+    .await?;
+    let call = calls.remove(1);
+    let found_reservoir = reservoir_probe_found_reservoir(&calls[0])?;
+    Ok(ProbedCall {
+        found_reservoir,
+        call,
+    })
+}
+
+/// The block gas limit for a reservoir probe with `probe_gas` followed by a call with `tx_gas`:
+/// the call needs its gas left after what the probe used, at most
+/// [`RESERVOIR_PROBE_GAS_HEADROOM`].
+fn probed_block_gas_limit(probe_gas: u64, tx_gas: u64) -> u64 {
+    probe_gas
+        .max(tx_gas)
+        .saturating_add(RESERVOIR_PROBE_GAS_HEADROOM)
+}
+
+/// Simulates `txs` one after the other in one block with a gas limit of `block_gas_limit`, in one
+/// `eth_simulateV1` request (so on one node), see [`simulate_call`].
+async fn simulate_block<P: EvmProvider>(
     provider: &P,
     txs: Vec<TransactionRequest>,
+    block_gas_limit: u64,
     block_id: Option<BlockId>,
     state_override: StateOverride,
 ) -> ProviderResult<Vec<SimulatedCall>> {
     let count = txs.len();
     let txs: Vec<TransactionRequest> = txs.into_iter().map(without_nonce_and_fees).collect();
-    let block_gas_limit = txs
-        .iter()
-        .map(|tx| tx.gas.unwrap_or_default())
-        .fold(0_u64, u64::saturating_add)
-        .saturating_mul(2);
     let payload = json!({
         "validation": true,
         "blockStateCalls": [{
@@ -157,13 +219,9 @@ fn without_nonce_and_fees(mut tx: TransactionRequest) -> TransactionRequest {
 }
 
 /// Adds a `ReservoirProbe` at a random address (so it cannot collide with a caller's override)
-/// to `state_override` and returns a call to it, to run in the same [`simulate_calls`] request
-/// (so on the same node) as calls that rely on a state-gas reservoir. Read its result with
+/// to `state_override` and returns a call to it. Read its result with
 /// [`reservoir_probe_found_reservoir`].
-///
-/// The probe is its own call rather than wrapping the others, which would see what they left of
-/// the reservoir.
-pub fn reservoir_probe_call(state_override: &mut StateOverride) -> TransactionRequest {
+fn reservoir_probe_call(state_override: &mut StateOverride) -> TransactionRequest {
     let probe = Address::random();
     state_override.insert(
         probe,
@@ -179,20 +237,20 @@ pub fn reservoir_probe_call(state_override: &mut StateOverride) -> TransactionRe
         .with_gas_limit(TX_MAX_GAS_LIMIT + RESERVOIR_PROBE_RESERVOIR_GAS)
 }
 
-/// The most gas a [`reservoir_probe_call`] may use (it uses 28,301 on Sepolia, reth v2.10).
+/// The most gas a reservoir probe may use (it uses 28,301 on Sepolia, reth v2.10).
 ///
 /// A node applies its `rpc.gascap` to an `eth_simulateV1` request as a whole: each call's gas used
 /// is taken from it, and a later call's gas limit is lowered, without an error, to what is left
-/// (reth v2.10). The probe runs first, so it takes up to this much from the calls after it.
-/// Reservoir-mode simulations therefore need an `rpc.gascap` of at least
-/// `2^24 + max_reservoir_gas + RESERVOIR_PROBE_GAS_HEADROOM`.
+/// (reth v2.10). The probe runs first, so it takes up to this much from the call after it, and
+/// the simulated block's gas limit includes it. Reservoir-mode simulations therefore need an
+/// `rpc.gascap` of at least `2^24 + max_reservoir_gas + RESERVOIR_PROBE_GAS_HEADROOM`.
 pub const RESERVOIR_PROBE_GAS_HEADROOM: u64 = 100_000;
 
 /// Whether the [`reservoir_probe_call`] `result` got a state-gas reservoir.
 ///
-/// An error if the probe used more than [`RESERVOIR_PROBE_GAS_HEADROOM`]: the calls after it may
-/// then have run with less gas than requested, so their results can't be trusted.
-pub fn reservoir_probe_found_reservoir(result: &SimulatedCall) -> anyhow::Result<bool> {
+/// An error if the probe used more than [`RESERVOIR_PROBE_GAS_HEADROOM`]: the call after it may
+/// then have run with less gas than requested, so its result can't be trusted.
+fn reservoir_probe_found_reservoir(result: &SimulatedCall) -> anyhow::Result<bool> {
     anyhow::ensure!(
         result.gas_used <= RESERVOIR_PROBE_GAS_HEADROOM,
         "the reservoir probe used {} gas, above its headroom of {RESERVOIR_PROBE_GAS_HEADROOM}: \
@@ -261,6 +319,40 @@ mod tests {
         assert!(
             reservoir_probe_found_reservoir(&call(true, true, RESERVOIR_PROBE_GAS_HEADROOM + 1))
                 .is_err()
+        );
+    }
+
+    /// The block gas limit of a probed simulation stays within the `rpc.gascap` that reservoir
+    /// mode requires (`2^24 + max_reservoir_gas + RESERVOIR_PROBE_GAS_HEADROOM`) at the largest
+    /// reservoir, and leaves the call its full gas after the probe. A node rejects an override
+    /// above both its block gas limit and its cap.
+    #[test]
+    fn probed_block_gas_limit_fits_the_required_gas_cap() {
+        let probe_gas = TX_MAX_GAS_LIMIT + RESERVOIR_PROBE_RESERVOIR_GAS;
+        for max_reservoir_gas in [
+            RESERVOIR_PROBE_RESERVOIR_GAS,
+            10_000_000,
+            60_000_000,
+            1_000_000_000,
+        ] {
+            let required_gas_cap =
+                TX_MAX_GAS_LIMIT + max_reservoir_gas + RESERVOIR_PROBE_GAS_HEADROOM;
+            for reservoir_gas in [0, max_reservoir_gas / 2, max_reservoir_gas] {
+                let tx_gas = TX_MAX_GAS_LIMIT + reservoir_gas;
+                let block_gas_limit = probed_block_gas_limit(probe_gas, tx_gas);
+                assert!(
+                    block_gas_limit <= required_gas_cap,
+                    "{block_gas_limit} > {required_gas_cap} (R {reservoir_gas})"
+                );
+                assert!(block_gas_limit >= probe_gas);
+                assert!(block_gas_limit >= tx_gas + RESERVOIR_PROBE_GAS_HEADROOM);
+            }
+        }
+        // Codex's mainnet example: max_reservoir_gas 60M, R 10M. The previous sizing,
+        // 2 * (probe + call), sent 87,508,864.
+        assert_eq!(
+            probed_block_gas_limit(probe_gas, TX_MAX_GAS_LIMIT + 10_000_000),
+            26_877_216
         );
     }
 

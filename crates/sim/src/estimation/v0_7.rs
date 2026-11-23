@@ -1665,7 +1665,16 @@ mod tests {
                 let gas = tx.gas.unwrap();
                 let block_gas_limit: U256 =
                     serde_json::from_value(block["blockOverrides"]["gasLimit"].clone()).unwrap();
-                assert!(block_gas_limit >= U256::from(gas), "block gas limit");
+                // The call's gas, plus the probe's headroom after a probe: no more, since a
+                // node rejects an override above its block gas limit and its `rpc.gascap`
+                let expected_block_gas_limit = if calls.len() == 2 {
+                    let probe_gas: U256 = serde_json::from_value(calls[0]["gas"].clone()).unwrap();
+                    probe_gas.max(U256::from(gas))
+                        + U256::from(rundler_provider::RESERVOIR_PROBE_GAS_HEADROOM)
+                } else {
+                    U256::from(gas)
+                };
+                assert_eq!(block_gas_limit, expected_block_gas_limit, "block gas limit");
                 let reservoir_gas = u128::from(gas.saturating_sub(TX_MAX_GAS_LIMIT));
                 let need = model.call_gas_need(reservoir_gas);
                 let skip_post_op = tx.to.unwrap().to().unwrap().0[19] == 1;

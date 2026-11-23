@@ -25,8 +25,8 @@ use rundler_contracts::{
     v0_7::IEntryPointSimulations::{simulateHandleOpCall, simulateHandleOpNoPostOpCall},
 };
 use rundler_provider::{
-    EntryPoint, EvmProvider, SimulatedCall, SimulationProvider, StateOverride,
-    reservoir_probe_call, reservoir_probe_found_reservoir, simulate_call, simulate_calls,
+    EntryPoint, EvmProvider, SimulatedCall, SimulationProvider, StateOverride, simulate_call,
+    simulate_call_after_reservoir_probe,
 };
 use rundler_types::{
     GasEstimate, PvgState, TX_MAX_GAS_LIMIT, UserOperation as _,
@@ -666,8 +666,6 @@ where
         op: UserOperation,
         reservoir_gas: u128,
     ) -> anyhow::Result<(SimulatedCall, u128)> {
-        let mut state_override = args.state_override.clone();
-        let probe_tx = (reservoir_gas > 0).then(|| reservoir_probe_call(&mut state_override));
         let gas = (u128::from(TX_MAX_GAS_LIMIT) + reservoir_gas)
             .try_into()
             .unwrap_or(u64::MAX);
@@ -677,13 +675,13 @@ where
             Address::ZERO,
             Bytes::new(),
             gas,
-            state_override,
+            args.state_override.clone(),
         )?;
         let intrinsic_gas = transaction_intrinsic_gas(
             args.chain_spec,
             tx.input.input().map(|input| &input[..]).unwrap_or_default(),
         );
-        let Some(probe_tx) = probe_tx else {
+        if reservoir_gas == 0 {
             let result = simulate_call(
                 &self.provider,
                 tx,
@@ -692,18 +690,18 @@ where
             )
             .await?;
             return Ok((result, intrinsic_gas));
-        };
-        let mut results = simulate_calls(
+        }
+        let probed = simulate_call_after_reservoir_probe(
             &self.provider,
-            vec![probe_tx, tx],
+            tx,
             Some(args.block_hash.into()),
             state_override,
         )
         .await?;
-        if !reservoir_probe_found_reservoir(&results[0])? {
+        if !probed.found_reservoir {
             return Err(NoSimulationReservoir.into());
         }
-        Ok((results.remove(1), intrinsic_gas))
+        Ok((probed.call, intrinsic_gas))
     }
 
     /// Counts an estimation simulation that failed because the node gives calls no reservoir
