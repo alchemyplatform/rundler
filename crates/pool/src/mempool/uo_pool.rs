@@ -214,7 +214,9 @@ where
     /// The gas price and execution gas limit the execution gas limit efficiency check needs, or
     /// `None` when it does not run for `op`.
     fn execution_efficiency_inputs(&self, op: &UserOperationVariant) -> Option<(u128, u128)> {
-        if self.config.execution_gas_limit_efficiency_reject_threshold <= 0.0 {
+        let threshold = self.config.execution_gas_limit_efficiency_reject_threshold;
+        // A NaN threshold never rejects, so it is off like 0.0
+        if threshold.is_nan() || threshold <= 0.0 {
             return None;
         }
         // Node clients set base_fee to 0 during eth_call.
@@ -300,18 +302,40 @@ where
     /// deposit, so the deposit right after validation is `final + paid - prefund`, and the
     /// prefund is the op's max gas cost.
     ///
-    /// Known gap: execution runs between validation and the read. An account that overpays by
-    /// `x` in validation and withdraws exactly `x` in execution (`withdrawTo` only reaches the
-    /// sender's own deposit, so the account has to do it itself) looks cleared and is credited
-    /// state gas that is already in `pre_op_gas`. A deposit added during execution, or a
-    /// reverted execution, only withholds the credit.
+    /// Known gap: execution runs between validation and the read, and a successful execution can
+    /// move the deposit. An account that overpays by `x` in validation and takes `x` back during
+    /// execution looks cleared, and is credited state gas that is already in `pre_op_gas`. Only
+    /// the account can do that (`withdrawTo` only reaches the caller's own deposit; on v0.6 a
+    /// nested `handleOps` can also move it). A deposit added during execution only withholds the
+    /// credit, and a reverted execution rolls its changes back, so the read is then exact. On
+    /// v0.7 and later, rundler's own `EntryPointSimulations` could return the deposit right after
+    /// validation and close the gap; v0.6 would need a tracer.
     fn deposit_cleared_after_validation(
         op: &UserOperationVariant,
         sim_result: &ProviderResult<Result<ExecutionResult, ValidationRevert>>,
     ) -> bool {
         match sim_result {
-            Ok(Ok(res)) if res.target_success => U256::abi_decode(&res.target_result)
-                .is_ok_and(|final_deposit| final_deposit + res.paid == op.max_gas_cost()),
+            Ok(Ok(res)) if res.target_success => match U256::abi_decode(&res.target_result) {
+                Ok(final_deposit) => {
+                    let prefund = op.max_gas_cost();
+                    let cleared = final_deposit + res.paid == prefund;
+                    if !cleared {
+                        tracing::debug!(
+                            "Deposit of op {:?} not back to zero after validation (final deposit {final_deposit} + paid {} != prefund {prefund}), no refilled state gas credited",
+                            op.hash(),
+                            res.paid
+                        );
+                    }
+                    cleared
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        "Could not decode the deposit after validation of op {:?}, no refilled state gas credited: {e:?}",
+                        op.hash()
+                    );
+                    false
+                }
+            },
             other => {
                 tracing::debug!(
                     "Could not read the deposit after validation of op {:?}, no refilled state gas credited: {other:?}",
