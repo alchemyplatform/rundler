@@ -91,9 +91,17 @@ pub(crate) struct ReservoirArgs<'a> {
 pub enum SponsoredReservoir {
     /// The op runs metered, within its own limits
     Metered,
-    /// The op runs only with a reservoir of this much gas. It may exceed `max_reservoir_gas`, for
-    /// admission to reject.
+    /// The op runs only with a reservoir of this much gas, at most the cap below
     Reservoir(u128),
+    /// The op needs a reservoir of at least `reservoir_gas`, more than the most it can carry at
+    /// this block (`--max_reservoir_gas`, capped so the bundle fits in the block, see
+    /// [`gas::max_reservoir_gas`]): admission rejects it.
+    TooLarge {
+        /// The reservoir the op needs, at least
+        reservoir_gas: u128,
+        /// The most reservoir an op can carry at this block
+        max_reservoir_gas: u128,
+    },
     /// The op fails even with the most reservoir: admitted metered, as any sponsored op whose
     /// execution fails (its sponsor pays for the failure, within its max cost)
     Fails,
@@ -225,10 +233,23 @@ where
             return Err(metered_error);
         };
 
-        let max_reservoir_gas = match self.max_reservoir_gas(args.block_hash).await {
-            Ok(max_reservoir_gas) => max_reservoir_gas,
-            Err(error) => {
+        let _timer = CustomTimerGuard::new(self.metrics.reservoir_trace_ms.clone());
+        let deadline = tokio::time::Instant::now() + self.settings.reservoir_trace_timeout;
+        let max_reservoir_gas = match tokio::time::timeout_at(
+            deadline,
+            self.max_reservoir_gas(args.block_hash),
+        )
+        .await
+        {
+            Ok(Ok(max_reservoir_gas)) => max_reservoir_gas,
+            Ok(Err(error)) => {
+                self.metrics.reservoir_block_gas_limit_errors.increment(1);
                 tracing::warn!("reservoir mode: {error:#}");
+                return Err(metered_error);
+            }
+            Err(_) => {
+                self.metrics.reservoir_block_gas_limit_errors.increment(1);
+                tracing::warn!("reservoir mode: reading the block gas limit timed out");
                 return Err(metered_error);
             }
         };
@@ -236,9 +257,6 @@ where
             tracing::debug!("reservoir mode: the block gas limit leaves no room for a reservoir");
             return Err(metered_error);
         }
-
-        let _timer = CustomTimerGuard::new(self.metrics.reservoir_trace_ms.clone());
-        let deadline = tokio::time::Instant::now() + self.settings.reservoir_trace_timeout;
         let measured =
             tokio::time::timeout_at(deadline, self.simulate_state_gas(&args, max_reservoir_gas))
                 .await;
@@ -363,9 +381,34 @@ where
                 "reservoir mode: needs a reservoir of {needed_reservoir_gas}, threshold {final_threshold}, reservoir padded to {reservoir_gas}"
             );
         }
-        if reservoir_gas > max_reservoir_gas {
+        // Admission takes the whole PVG surplus as the reservoir, and the bundle's `tx.gas` is
+        // 2^24 plus that. It can be more than `reservoir_gas`: the PVG above prices the
+        // zero-deposit refund write whatever the sender's deposit is, while admission requires it
+        // only if the deposit is zero. Check the largest surplus admission can see, with the
+        // sender funded, so an estimate is never rejected at admission for its reservoir.
+        let pre_verification_gas = base_pvg + reservoir_gas;
+        let lowest_required_pvg = UserOperationBuilder::from_uo(op_with_gas.clone(), chain_spec)
+            .pre_verification_gas(pre_verification_gas)
+            .build()
+            .required_pre_verification_gas(
+                chain_spec,
+                1,
+                da_gas,
+                Some(
+                    self.settings
+                        .verification_gas_limit_efficiency_reject_threshold,
+                ),
+                &PvgState {
+                    sender_deposit_is_zero: Some(false),
+                    ..pvg_state
+                },
+            );
+        let admitted_reservoir_gas = pre_verification_gas
+            .saturating_sub(lowest_required_pvg)
+            .max(reservoir_gas);
+        if admitted_reservoir_gas > max_reservoir_gas {
             return Err(GasEstimationError::StateGasTooLarge(
-                reservoir_gas,
+                admitted_reservoir_gas,
                 max_reservoir_gas,
             ));
         }
@@ -377,7 +420,7 @@ where
         );
 
         Ok(GasEstimate {
-            pre_verification_gas: base_pvg + reservoir_gas,
+            pre_verification_gas,
             call_gas_limit,
             verification_gas_limit,
             paymaster_verification_gas_limit: op
@@ -923,7 +966,10 @@ where
             return Ok(SponsoredReservoir::Fails);
         };
         if state_gas > max_reservoir_gas {
-            return Ok(SponsoredReservoir::Reservoir(state_gas));
+            return Ok(SponsoredReservoir::TooLarge {
+                reservoir_gas: state_gas,
+                max_reservoir_gas,
+            });
         }
         let passes =
             |reservoir_gas| self.reservoir_op_succeeds(args, reservoir_gas, call_gas_limit);
@@ -951,12 +997,17 @@ where
             Some(args.block_hash.into()),
         )
         .await?;
-        Ok(SponsoredReservoir::Reservoir(
-            reservoir_gas
-                + args
-                    .full_op
-                    .authorization_state_gas(args.chain_spec, &pvg_state),
-        ))
+        let reservoir_gas = reservoir_gas
+            + args
+                .full_op
+                .authorization_state_gas(args.chain_spec, &pvg_state);
+        if reservoir_gas > max_reservoir_gas {
+            return Ok(SponsoredReservoir::TooLarge {
+                reservoir_gas,
+                max_reservoir_gas,
+            });
+        }
+        Ok(SponsoredReservoir::Reservoir(reservoir_gas))
     }
 }
 

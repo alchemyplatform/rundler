@@ -234,6 +234,10 @@ struct Metrics {
         describe = "the count of reservoir-mode estimates that failed because the node's eth_simulateV1 gives calls no state-gas reservoir."
     )]
     reservoir_simulation_without_reservoir: Counter,
+    #[metric(
+        describe = "the count of reservoir-mode estimates that failed because the block gas limit could not be read."
+    )]
+    reservoir_block_gas_limit_errors: Counter,
 }
 
 /// Names of the estimation eth_call histograms, without the global metrics prefix.

@@ -25,15 +25,25 @@ use rundler_types::{
 use rundler_utils::guard_timer::CustomTimerGuard;
 use tracing::instrument;
 
-/// The most state-gas reservoir a reservoir-mode op can carry in a block with `block_gas_limit`:
-/// `max_reservoir_gas` (`--max_reservoir_gas`), and at most the block gas limit less
-/// [`TX_MAX_GAS_LIMIT`]. Under EIP-8037 a transaction's whole gas limit, its reservoir included,
-/// must fit in the block's gas limit less the state gas already used in the block (alloy-evm's
-/// block executor), so a bundle with `tx.gas = 2^24 + R` above the block gas limit can never be
-/// included. Estimation and admission both cap the reservoir with this.
+/// The most state-gas reservoir a reservoir-mode op can carry when the latest block has
+/// `block_gas_limit`: `max_reservoir_gas` (`--max_reservoir_gas`), and at most the next block's
+/// lowest possible gas limit less [`TX_MAX_GAS_LIMIT`].
+///
+/// Under EIP-8037 a transaction's whole gas limit, its reservoir included, must fit in the
+/// block's gas limit less the state gas already used in the block (alloy-evm's block executor),
+/// so a bundle with `tx.gas = 2^24 + R` above the block gas limit can never be included. The
+/// bundle lands in a later block, whose gas limit may be up to 1/1024 of its parent's lower, so
+/// one such step is left as a margin. Estimation and admission both cap the reservoir with this.
 pub fn max_reservoir_gas(max_reservoir_gas: u128, block_gas_limit: u64) -> u128 {
-    max_reservoir_gas.min(u128::from(block_gas_limit.saturating_sub(TX_MAX_GAS_LIMIT)))
+    let next_block_gas_limit = block_gas_limit - block_gas_limit / GAS_LIMIT_BOUND_DIVISOR;
+    max_reservoir_gas.min(u128::from(
+        next_block_gas_limit.saturating_sub(TX_MAX_GAS_LIMIT),
+    ))
 }
+
+/// A block's gas limit may change by less than 1/1024 of its parent's (the yellow paper's gas
+/// limit bound divisor)
+const GAS_LIMIT_BOUND_DIVISOR: u64 = 1024;
 
 /// The gas limit of the block `block_hash`, for [`max_reservoir_gas`]
 pub async fn load_block_gas_limit<P: EvmProvider>(
@@ -257,8 +267,9 @@ async fn authority_state<UO: UserOperation, P: EvmProvider>(
 mod tests {
     #[test]
     fn max_reservoir_gas_fits_the_block_gas_limit() {
-        // A 60M-gas chain: 2^24 + R must fit in the block, so R is at most 60M - 2^24
-        assert_eq!(super::max_reservoir_gas(60_000_000, 60_000_000), 43_222_784);
+        // A 60M-gas chain: 2^24 + R must fit in the next block, whose gas limit may be 58,593
+        // lower, so R is at most 60M - 58,593 - 2^24
+        assert_eq!(super::max_reservoir_gas(60_000_000, 60_000_000), 43_164_191);
         // A larger block (Sepolia: ~199M) leaves --max_reservoir_gas as the limit
         assert_eq!(
             super::max_reservoir_gas(60_000_000, 199_414_639),

@@ -1646,6 +1646,15 @@ mod tests {
     /// Admission's classification of the estimated op: its PVG surplus over the metered
     /// requirement (with a zero deposit, the larger requirement), if in reservoir mode.
     fn admitted_reservoir_gas(estimate: &GasEstimate, settings: &Settings) -> Option<u128> {
+        admitted_reservoir_gas_with_deposit(estimate, settings, true)
+    }
+
+    /// As [`admitted_reservoir_gas`], for a sender whose EntryPoint deposit is zero or not
+    fn admitted_reservoir_gas_with_deposit(
+        estimate: &GasEstimate,
+        settings: &Settings,
+        sender_deposit_is_zero: bool,
+    ) -> Option<u128> {
         let chain_spec = reservoir_chain_spec();
         let (_, full_op) = reservoir_op(&chain_spec, settings);
         let op = UserOperationBuilder::from_uo(full_op, &chain_spec)
@@ -1659,7 +1668,7 @@ mod tests {
             0,
             Some(settings.verification_gas_limit_efficiency_reject_threshold),
             &PvgState {
-                sender_deposit_is_zero: Some(true),
+                sender_deposit_is_zero: Some(sender_deposit_is_zero),
                 authority: None,
             },
         );
@@ -1968,12 +1977,27 @@ mod tests {
         ));
     }
 
+    /// The block gas limit whose cap ([`gas::max_reservoir_gas`] at `max_reservoir_gas` 60M) is
+    /// exactly `max_reservoir_gas`
+    fn block_gas_limit_for_cap(max_reservoir_gas: u128) -> u64 {
+        let (mut low, mut high) = (TX_MAX_GAS_LIMIT, 1_000_000_000_u64);
+        while low < high {
+            let mid = low + (high - low) / 2;
+            if gas::max_reservoir_gas(60_000_000, mid) < max_reservoir_gas {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        assert_eq!(gas::max_reservoir_gas(60_000_000, low), max_reservoir_gas);
+        low
+    }
+
     /// On a chain whose block gas limit leaves less room than `--max_reservoir_gas`, the
-    /// reservoir is capped at the block gas limit less 2^24: a bundle with `tx.gas = 2^24 + R`
-    /// above the block gas limit could never be included.
+    /// reservoir is capped so the bundle's `tx.gas = 2^24 + R` fits in the next block.
     #[tokio::test]
     async fn test_reservoir_mode_capped_by_block_gas_limit() {
-        // A 24 kB deploy needs ~37.9M of state gas: more than a 50M block holds
+        // A 24 kB deploy needs ~37.9M of state gas: more than a 50M block holds (33,173,956)
         let (entry, provider, _) = reservoir_mocks(OpModel {
             block_gas_limit: 50_000_000,
             ..deploy_24kb()
@@ -1985,21 +2009,69 @@ mod tests {
         assert!(
             matches!(
                 error,
-                GasEstimationError::StateGasTooLarge(state_gas, 33_222_784)
-                    if state_gas > 33_222_784
+                GasEstimationError::StateGasTooLarge(state_gas, 33_173_956)
+                    if state_gas > 33_173_956
             ),
             "{error:?}"
         );
 
-        // In a 60M block (mainnet) it fits: R up to 43,222,784
+        // In a 60M block (mainnet) it fits, R at most 43,164,191 whatever the sender's deposit
         let (entry, provider, _) = reservoir_mocks(OpModel {
             block_gas_limit: 60_000_000,
             ..deploy_24kb()
         });
-        let estimate = run_reservoir(entry, provider, reservoir_settings())
-            .await
-            .unwrap();
-        assert!(estimate.pre_verification_gas < 43_222_784 + 1_000_000);
+        let settings = reservoir_settings();
+        let estimate = run_reservoir(entry, provider, settings).await.unwrap();
+        for sender_deposit_is_zero in [true, false] {
+            let reservoir_gas =
+                admitted_reservoir_gas_with_deposit(&estimate, &settings, sender_deposit_is_zero)
+                    .unwrap();
+            assert!(reservoir_gas >= u128::from(DEPLOY_24KB_STATE_GAS));
+            assert!(reservoir_gas <= 43_164_191, "{reservoir_gas}");
+        }
+    }
+
+    /// The estimate's PVG prices the zero-deposit refund write whatever the sender's deposit is,
+    /// so admission sees a larger surplus (the bundle's reservoir) for a funded sender. That
+    /// surplus is what must fit under the cap, or admission would reject the estimate.
+    #[tokio::test]
+    async fn test_reservoir_mode_cap_covers_a_funded_senders_surplus() {
+        let settings = reservoir_settings();
+        let (entry, provider, _) = reservoir_mocks(deploy_24kb());
+        let estimate = run_reservoir(entry, provider, settings).await.unwrap();
+        let zero_deposit_reservoir_gas = admitted_reservoir_gas(&estimate, &settings).unwrap();
+        let funded_reservoir_gas =
+            admitted_reservoir_gas_with_deposit(&estimate, &settings, false).unwrap();
+        assert_eq!(funded_reservoir_gas - zero_deposit_reservoir_gas, 97_920);
+
+        // A cap between the two: the estimate would pass with a zero deposit and be rejected at
+        // admission for a funded sender, so it is not returned
+        let (entry, provider, _) = reservoir_mocks(OpModel {
+            block_gas_limit: block_gas_limit_for_cap(funded_reservoir_gas - 1),
+            ..deploy_24kb()
+        });
+        let error = run_reservoir(entry, provider, settings).await.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                GasEstimationError::StateGasTooLarge(gas, max)
+                    if gas == funded_reservoir_gas && max == funded_reservoir_gas - 1
+            ),
+            "{error:?}"
+        );
+
+        // At a cap of exactly the funded surplus, the same estimate is returned
+        let (entry, provider, _) = reservoir_mocks(OpModel {
+            block_gas_limit: block_gas_limit_for_cap(funded_reservoir_gas),
+            ..deploy_24kb()
+        });
+        let capped = run_reservoir(entry, provider, settings).await.unwrap();
+        assert_eq!(capped.pre_verification_gas, estimate.pre_verification_gas);
+        assert_eq!(capped.call_gas_limit, estimate.call_gas_limit);
+        assert_eq!(
+            capped.verification_gas_limit,
+            estimate.verification_gas_limit
+        );
     }
 
     /// State below the threshold after a failed metered estimate (the metered call gas limit
@@ -2183,7 +2255,13 @@ mod tests {
 
         // Reported over max_reservoir_gas, for admission to reject
         assert!(
-            matches!(reservoir, SponsoredReservoir::Reservoir(gas) if gas > 60_000_000),
+            matches!(
+                reservoir,
+                SponsoredReservoir::TooLarge {
+                    reservoir_gas,
+                    max_reservoir_gas: 60_000_000,
+                } if reservoir_gas > 60_000_000
+            ),
             "{reservoir:?}"
         );
     }
@@ -2202,7 +2280,13 @@ mod tests {
             .unwrap();
 
         assert!(
-            matches!(reservoir, SponsoredReservoir::Reservoir(gas) if gas > 33_222_784),
+            matches!(
+                reservoir,
+                SponsoredReservoir::TooLarge {
+                    reservoir_gas,
+                    max_reservoir_gas: 33_173_956,
+                } if reservoir_gas > 33_173_956
+            ),
             "{reservoir:?}"
         );
     }
