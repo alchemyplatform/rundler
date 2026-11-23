@@ -10,17 +10,25 @@ Besides the schedule values in [Chain Specification](./chain_spec.md#glamsterdam
 
 `UserOperation::required_pre_verification_gas(.., &PvgState)` applies two terms to the execution gas, before the calldata floor top-up:
 
-- **Zero-deposit refund write**, `state_pre_verification_gas`: adds `zero_deposit_refund_gas` (97,920). A self-paying op (no paymaster) whose sender has a zero EntryPoint deposit has that deposit taken to the prefund and back to zero during validation. The refund in `_postExecution` then re-creates the slot after the EntryPoint stops metering, at the price of a new storage slot. This happens once per sender per bundle; rundler charges every op whose sender's deposit is zero, which overcharges a second op from the same sender in one bundle.
+- **Zero-deposit refund write**, `state_pre_verification_gas`: adds `zero_deposit_refund_gas` (97,920). A self-paying op (no paymaster) whose sender's EntryPoint deposit slot is empty has that deposit taken to the prefund and back to zero during validation. The refund in `_postExecution` then re-creates the slot after the EntryPoint stops metering, at the price of a new storage slot. This happens once per sender per bundle; rundler charges every op whose sender's deposit is zero, which overcharges a second op from the same sender in one bundle.
 - **EIP-7702 authority state**, `authorization_state_discount`: `authorization_gas_limit` is the worst case, `eip7702_authorization_gas` (235,606, an authority that does not exist). If the authority exists, `eip7702_authorization_new_account_gas` (183,600) is subtracted. If it already has code, `eip7702_authorization_delegation_gas` (35,190) is subtracted as well, leaving 16,816.
 
-`PvgState` holds the sender's deposit (is it zero?) and the authority state (`Missing`, `NoCode`, `HasCode`). Unknown values are priced as the worst case. Before Glamsterdam all four fields are 0, so both terms are 0. On a chain without an activation no state is read.
+`PvgState` holds the sender's deposit (is its slot empty?) and the authority state (`Missing`, `NoCode`, `HasCode`). On v0.6 the deposit slot also holds the stake (`deposit | staked | stake`), so `load_pvg_state` reads `getDepositInfo` there and reports a staked sender with no deposit as set; from v0.7 on `deposit` has its own slot and `balanceOf` is read. Unknown values are priced as the worst case. Before Glamsterdam all four fields are 0, so both terms are 0. On a chain without an activation no state is read.
+
+## Deposit slot during validation
+
+The same slot costs a self-paying sender state gas inside validation too. When its deposit slot is empty, paying `missingAccountFunds` in `validateUserOp` creates the slot, which is 97,920 of state gas charged within `verificationGasLimit`. The EntryPoint clears the slot again when it takes the prefund, which refills that gas before it measures `preOpGas`. So the verification gas limit has to cover gas that `preOpGas` never shows. Rundler accounts for it in three places, each with `zero_deposit_refund_gas`:
+
+- **Gas estimation** adds it to the verification gas limit, before the buffer, when the sender's slot is empty or unknown (`UserOperation::zero_deposit_slot_state_gas`). The verification gas search runs a self-paying op with zero fees, so the account pays nothing there: `deposit_transfer_overhead` covers the transfer, and this term the slot.
+- **Pool admission** counts it as used in the verification gas efficiency check for every self-paying op with a non-zero prefund, at the simulated block's schedule (`UoPool::verification_efficiency_credit`). It does not read the deposit. An op may have been estimated while its slot was empty, and the slot filled since (for example by the refund of the sender's previous op), and admission cannot tell. The cost is that a self-paying op can reserve up to `97,920 / threshold` more verification gas than it uses: bundle space, not money.
+- **The calldata floor** counts `threshold × verificationGasLimit`, less that credit, as the least verification gas a self-paying op uses (`UserOperation::verification_efficiency_credit`, see [EIP-7623 Handling](./eip7623.md)), so a credited op still pays its share of the floor.
 
 ## Where the state is read
 
 | Component | When | State read |
 | --- | --- | --- |
-| Gas estimation (`sim/src/estimation`) | `eth_estimateUserOperationGas` | latest block, without the user's state override |
-| Precheck (`sim/src/precheck.rs`) | pool admission | latest block; the `PvgState` is kept on the pool entry |
+| Gas estimation (`sim/src/estimation`) | `eth_estimateUserOperationGas` | latest block, without the user's state override; also sizes the verification gas limit for an empty deposit slot |
+| Precheck (`sim/src/precheck.rs`) | pool admission | the block the pool simulates validation at; the `PvgState` is kept on the pool entry |
 | Pool maintenance (`pool/src/mempool/pool.rs`) | every block | the state captured at precheck |
 | Builder (`builder/src/bundle_proposer.rs`) | each bundle proposal | the bundle's block: PVG is re-checked on L1 too, and the zero-deposit gas is added to the bundle gas limit |
 
