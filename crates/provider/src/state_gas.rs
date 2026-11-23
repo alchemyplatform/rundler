@@ -79,9 +79,10 @@ struct RawSimulatedCall {
 /// the block's base fee is set to 0 and each call's nonce and fees are dropped, so its gas price
 /// is 0, its sender needs no balance, and its nonce is the sender's next one.
 ///
-/// The simulated block's gas limit is set to the call's gas, since `eth_simulateV1` caps a call's
-/// gas at it. No higher: a node rejects a block gas limit override above both its live block gas
-/// limit and its `rpc.gascap` (reth v2.10), before running any call.
+/// The simulated block's gas limit is set to the call's gas: a call whose gas is above what is
+/// left of the block's gas limit fails (reth v2.10). No higher: a node rejects a block gas limit
+/// override above both its live block gas limit and its `rpc.gascap`, before running any call.
+/// `tx` must have a gas limit.
 ///
 /// Whether a node gives calls a reservoir is checked with [`simulate_call_after_reservoir_probe`].
 pub async fn simulate_call<P: EvmProvider>(
@@ -90,7 +91,7 @@ pub async fn simulate_call<P: EvmProvider>(
     block_id: Option<BlockId>,
     state_override: StateOverride,
 ) -> ProviderResult<SimulatedCall> {
-    let block_gas_limit = tx.gas.unwrap_or_default();
+    let block_gas_limit = tx.gas.context("a simulated call needs a gas limit")?;
     let mut calls = simulate_block(
         provider,
         vec![tx],
@@ -129,9 +130,9 @@ pub async fn simulate_call_after_reservoir_probe<P: EvmProvider>(
     block_id: Option<BlockId>,
     mut state_override: StateOverride,
 ) -> ProviderResult<ProbedCall> {
+    let tx_gas = tx.gas.context("a simulated call needs a gas limit")?;
     let probe = reservoir_probe_call(&mut state_override);
-    let block_gas_limit =
-        probed_block_gas_limit(probe.gas.unwrap_or_default(), tx.gas.unwrap_or_default());
+    let block_gas_limit = probed_block_gas_limit(probe.gas.unwrap_or_default(), tx_gas);
     let mut calls = simulate_block(
         provider,
         vec![probe, tx],
@@ -243,7 +244,8 @@ fn reservoir_probe_call(state_override: &mut StateOverride) -> TransactionReques
 /// is taken from it, and a later call's gas limit is lowered, without an error, to what is left
 /// (reth v2.10). The probe runs first, so it takes up to this much from the call after it, and
 /// the simulated block's gas limit includes it. Reservoir-mode simulations therefore need an
-/// `rpc.gascap` of at least `2^24 + max_reservoir_gas + RESERVOIR_PROBE_GAS_HEADROOM`.
+/// `rpc.gascap` of at least `2^24 + max_reservoir_gas + RESERVOIR_PROBE_GAS_HEADROOM`, with
+/// `max_reservoir_gas` counted as at least the probe's own reservoir (200,000).
 pub const RESERVOIR_PROBE_GAS_HEADROOM: u64 = 100_000;
 
 /// Whether the [`reservoir_probe_call`] `result` got a state-gas reservoir.
@@ -323,20 +325,23 @@ mod tests {
     }
 
     /// The block gas limit of a probed simulation stays within the `rpc.gascap` that reservoir
-    /// mode requires (`2^24 + max_reservoir_gas + RESERVOIR_PROBE_GAS_HEADROOM`) at the largest
-    /// reservoir, and leaves the call its full gas after the probe. A node rejects an override
-    /// above both its block gas limit and its cap.
+    /// mode requires (`2^24 + max_reservoir_gas + RESERVOIR_PROBE_GAS_HEADROOM`, with
+    /// `max_reservoir_gas` counted as at least the probe's reservoir) at the largest reservoir,
+    /// and leaves the call its full gas after the probe. A node rejects an override above both its
+    /// block gas limit and its cap.
     #[test]
     fn probed_block_gas_limit_fits_the_required_gas_cap() {
         let probe_gas = TX_MAX_GAS_LIMIT + RESERVOIR_PROBE_RESERVOIR_GAS;
         for max_reservoir_gas in [
+            50_000,
             RESERVOIR_PROBE_RESERVOIR_GAS,
             10_000_000,
             60_000_000,
             1_000_000_000,
         ] {
-            let required_gas_cap =
-                TX_MAX_GAS_LIMIT + max_reservoir_gas + RESERVOIR_PROBE_GAS_HEADROOM;
+            let required_gas_cap = TX_MAX_GAS_LIMIT
+                + max_reservoir_gas.max(RESERVOIR_PROBE_RESERVOIR_GAS)
+                + RESERVOIR_PROBE_GAS_HEADROOM;
             for reservoir_gas in [0, max_reservoir_gas / 2, max_reservoir_gas] {
                 let tx_gas = TX_MAX_GAS_LIMIT + reservoir_gas;
                 let block_gas_limit = probed_block_gas_limit(probe_gas, tx_gas);
@@ -348,12 +353,29 @@ mod tests {
                 assert!(block_gas_limit >= tx_gas + RESERVOIR_PROBE_GAS_HEADROOM);
             }
         }
-        // Codex's mainnet example: max_reservoir_gas 60M, R 10M. The previous sizing,
-        // 2 * (probe + call), sent 87,508,864.
+        // A 60M-block chain with max_reservoir_gas 60M and R 10M: the previous sizing,
+        // 2 * (probe + call), sent 87,508,864, above both the block gas limit and the cap.
         assert_eq!(
             probed_block_gas_limit(probe_gas, TX_MAX_GAS_LIMIT + 10_000_000),
             26_877_216
         );
+    }
+
+    /// A call without a gas limit is an error, not a simulation with a block gas limit of 0
+    #[tokio::test]
+    async fn simulated_call_needs_a_gas_limit() {
+        // No expectations: the provider must not be called
+        let provider = crate::MockEvmProvider::new();
+        let tx = TransactionRequest::default().to(Address::ZERO);
+        let error = simulate_call(&provider, tx.clone(), None, StateOverride::default())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("needs a gas limit"), "{error}");
+        let error =
+            simulate_call_after_reservoir_probe(&provider, tx, None, StateOverride::default())
+                .await
+                .unwrap_err();
+        assert!(error.to_string().contains("needs a gas limit"), "{error}");
     }
 
     #[test]
