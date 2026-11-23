@@ -31,7 +31,7 @@ use rundler_provider::{
     StateOverride,
 };
 use rundler_types::{
-    GasEstimate, UserOperation as _,
+    GasEstimate, PvgState, UserOperation as _,
     chain::ChainSpec,
     v0_7::{UserOperation, UserOperationBuilder, UserOperationOptionalGas},
 };
@@ -40,7 +40,7 @@ use tokio::join;
 use tracing::instrument;
 
 use super::{
-    GasEstimationError, Metrics, Settings,
+    GasEstimationError, Metrics, Settings, VerificationGasLimit,
     estimate_verification_gas::{EstimateGasArgs, VerificationGasEstimatorSpecialization},
     reservoir::{self, ReservoirArgs, ReservoirEstimator},
 };
@@ -136,13 +136,8 @@ where
             self.metrics.pvg_estimate_ms.clone(),
         );
 
-        let verification_gas_future = self.estimate_verification_gas(
-            &op,
-            &full_op,
-            block_hash,
-            &chain_spec,
-            state_override.clone(),
-        );
+        let verification_gas_future =
+            self.estimate_verification_gas(&op, &full_op, block_hash, state_override.clone());
 
         let paymaster_verification_gas_future = self.estimate_paymaster_verification_gas(
             &op,
@@ -177,7 +172,12 @@ where
 
         let da_gas = da_gas_result.map_err(GasEstimationError::from)?;
         let pvg_state = pvg_state_result.map_err(anyhow::Error::from)?;
-        let verification_gas_limit = verification_gas_limit_result?;
+        let verification_gas_limit = self.finalize_verification_gas_limit(
+            verification_gas_limit_result?,
+            &full_op,
+            &chain_spec,
+            &pvg_state,
+        );
         let paymaster_verification_gas_limit = paymaster_verification_gas_limit_result?;
 
         // An op whose execution plus state gas does not fit under the 2^24 cap fails the
@@ -431,16 +431,15 @@ where
         optional_op: &UserOperationOptionalGas,
         full_op: &UserOperation,
         block_hash: B256,
-        chain_spec: &ChainSpec,
         state_override: StateOverride,
-    ) -> Result<u128, GasEstimationError> {
+    ) -> Result<VerificationGasLimit, GasEstimationError> {
         // if set and non-zero, don't estimate
         if let Some(vl) = optional_op.verification_gas_limit
             && vl != 0
         {
             // No need to do an extra simulation here, if the user provides a value that is
             // insufficient it will cause a revert during call gas estimation (or simulation).
-            return Ok(vl);
+            return Ok(VerificationGasLimit::Provided(vl));
         }
 
         let _timer = CustomTimerGuard::new(self.metrics.vgl_estimate_ms.clone());
@@ -450,10 +449,30 @@ where
             .verification_gas_estimator
             .estimate_verification_gas(full_op, block_hash, state_override)
             .await?;
-        let verification_gas_limit = if full_op.paymaster().is_none() {
-            verification_gas_limit + chain_spec.deposit_transfer_overhead()
-        } else {
-            verification_gas_limit
+
+        tracing::debug!(
+            "searched verification_gas_limit: {verification_gas_limit} took {:?}ms",
+            now.elapsed().as_millis()
+        );
+
+        Ok(VerificationGasLimit::Searched(verification_gas_limit))
+    }
+
+    /// The verification gas limit to return: the caller's as is, or the searched gas plus what
+    /// the search does not see (see [`super::unsearched_verification_gas`]) and a 10% buffer,
+    /// capped at the max verification gas
+    fn finalize_verification_gas_limit(
+        &self,
+        verification_gas_limit: VerificationGasLimit,
+        full_op: &UserOperation,
+        chain_spec: &ChainSpec,
+        pvg_state: &PvgState,
+    ) -> u128 {
+        let verification_gas_limit = match verification_gas_limit {
+            VerificationGasLimit::Provided(vl) => return vl,
+            VerificationGasLimit::Searched(vl) => {
+                vl + super::unsearched_verification_gas(full_op, chain_spec, pvg_state)
+            }
         };
 
         let buffered_verification_gas_limit = math::increase_by_percent(
@@ -466,16 +485,7 @@ where
             buffered_verification_gas_limit,
             self.settings.max_verification_gas,
         );
-        let verification_gas_limit =
-            buffered_verification_gas_limit.min(self.settings.max_verification_gas);
-
-        tracing::debug!(
-            "verification_gas_limit: {} took {:?}ms",
-            verification_gas_limit,
-            now.elapsed().as_millis()
-        );
-
-        Ok(verification_gas_limit)
+        buffered_verification_gas_limit.min(self.settings.max_verification_gas)
     }
 
     #[instrument(skip_all)]
@@ -815,7 +825,7 @@ use rundler_contracts::{
     },
 };
 #[cfg(test)]
-use rundler_types::{PvgState, TX_MAX_GAS_LIMIT};
+use rundler_types::TX_MAX_GAS_LIMIT;
 
 #[cfg(test)]
 use super::{
@@ -952,6 +962,82 @@ mod tests {
 
             entry_point_version: EntryPointVersion::V0_7,
         }
+    }
+
+    #[test]
+    fn test_verification_gas_limit_adds_zero_deposit_slot_state_gas() {
+        let (entry, provider) = create_base_config();
+        let (estimator, settings) = create_estimator(entry, provider);
+        let glamsterdam = ChainSpec {
+            glamsterdam_activation: ForkActivation::Genesis,
+            ..Default::default()
+        }
+        .at_timestamp(0)
+        .into_owned();
+        let full_op = |paymaster: Option<Address>| {
+            let mut op = demo_user_op_optional_gas(Some(10000));
+            op.paymaster = paymaster;
+            op.into_user_operation_builder(
+                &glamsterdam,
+                settings.max_bundle_execution_gas,
+                settings.max_verification_gas,
+                settings.max_paymaster_verification_gas,
+            )
+            .build()
+        };
+        let self_paying = full_op(None);
+        let sponsored = full_op(Some(Address::repeat_byte(0x22)));
+        let searched = 10_000;
+        let finalize = |op: &UserOperation, spec: &ChainSpec, deposit_is_zero: Option<bool>| {
+            let state = PvgState {
+                sender_deposit_is_zero: deposit_is_zero,
+                authority: None,
+            };
+            estimator.finalize_verification_gas_limit(
+                VerificationGasLimit::Searched(searched),
+                op,
+                spec,
+                &state,
+            )
+        };
+        let buffered = |gas: u128| {
+            math::increase_by_percent(gas, super::super::VERIFICATION_GAS_BUFFER_PERCENT)
+        };
+        let overhead = glamsterdam.deposit_transfer_overhead();
+
+        // A self-paying sender whose deposit slot is empty, or unknown, creates the slot
+        // in validation
+        for deposit_is_zero in [Some(true), None] {
+            assert_eq!(
+                finalize(&self_paying, &glamsterdam, deposit_is_zero),
+                buffered(searched + overhead + 97_920)
+            );
+        }
+        // A funded sender's slot is already set
+        assert_eq!(
+            finalize(&self_paying, &glamsterdam, Some(false)),
+            buffered(searched + overhead)
+        );
+        // A paymaster pays: no deposit transfer and no sender deposit slot
+        assert_eq!(
+            finalize(&sponsored, &glamsterdam, Some(true)),
+            buffered(searched)
+        );
+        // No state gas before Glamsterdam
+        assert_eq!(
+            finalize(&self_paying, &ChainSpec::default(), Some(true)),
+            buffered(searched + ChainSpec::default().deposit_transfer_overhead())
+        );
+        // A caller-supplied limit is used as is
+        assert_eq!(
+            estimator.finalize_verification_gas_limit(
+                VerificationGasLimit::Provided(50_000),
+                &self_paying,
+                &glamsterdam,
+                &PvgState::unknown(),
+            ),
+            50_000
+        );
     }
 
     #[tokio::test]
