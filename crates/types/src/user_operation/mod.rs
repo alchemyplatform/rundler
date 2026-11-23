@@ -522,16 +522,17 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
         }
     }
 
-    /// Verification gas the pool's efficiency check may count as used on top of what this
+    /// Verification gas the pool's efficiency check counts as used on top of what this
     /// operation meters: the state gas of creating the sender's deposit slot, for any sender
     /// paying for itself (see [`Self::zero_deposit_slot_state_gas`]). 0 with a paymaster, and 0
     /// when the gas schedule has no such term.
     ///
-    /// Admission cannot tell whether a verification gas limit was sized for an empty deposit
-    /// slot, so it credits every self-paying operation whatever the deposit state, and anything
-    /// relying on the efficiency check's minimum, such as the calldata floor, has to assume the
-    /// same. Unlike admission, this does not require a non-zero prefund, since estimation may
-    /// price an operation with placeholder fees of 0.
+    /// Gas estimation adds that state gas to the verification gas limit when the sender's slot
+    /// is empty, and admission cannot tell whether a limit was sized for an empty slot: the slot
+    /// may have filled since the operation was estimated. So the credit goes to every self-paying
+    /// operation, whatever its deposit state or fees, which lets it reserve up to
+    /// `credit / threshold` more verification gas than it uses. Anything relying on the
+    /// efficiency check's minimum, such as the calldata floor, has to assume the same credit.
     fn verification_efficiency_credit(&self, chain_spec: &ChainSpec) -> u128 {
         if self.paymaster().is_none() {
             chain_spec.zero_deposit_refund_gas()

@@ -124,7 +124,7 @@ pub(crate) fn record_mined_op_gas_efficiency(
 #[metrics(scope = "op_pool")]
 struct AdmissionGasMetrics {
     #[metric(
-        describe = "the fraction of the verification gas limit an op used in pool admission simulation, on the scale of verification_gas_limit_efficiency_reject_threshold: v0.6 ops with a paymaster are measured against one verification gas limit, so can exceed 1. On Glamsterdam a self-paying op's value includes the deposit slot credit (97,920 gas), as the check counts it. has_7702_auth means the op carried an authorization, not necessarily a first delegation."
+        describe = "the fraction of the verification gas limit an op used in pool admission simulation, on the scale of verification_gas_limit_efficiency_reject_threshold: v0.6 ops with a paymaster are measured against one verification gas limit, so can exceed 1. Once Glamsterdam is active or scheduled, a self-paying op's value includes the deposit slot credit (97,920 gas), as the check counts it, so it can exceed 1 as well. has_7702_auth means the op carried an authorization, not necessarily a first delegation."
     )]
     admission_verification_gas_efficiency: Histogram,
 }

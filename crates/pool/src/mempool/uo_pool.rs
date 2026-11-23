@@ -182,32 +182,24 @@ where
         self.ep_specific_metrics.removed_entities.increment(1);
     }
 
-    /// Verification gas the efficiency check counts as used on top of what `op` metered: on
-    /// Glamsterdam, the state gas of creating the sender's EntryPoint deposit slot (EIP-8037).
+    /// Verification gas the efficiency check counts as used on top of what `op` metered: the
+    /// state gas of creating a self-paying sender's EntryPoint deposit slot (see
+    /// [`UserOperation::verification_efficiency_credit`]).
     ///
-    /// A self-paying sender whose deposit slot is empty creates the slot when it pays
-    /// `missingAccountFunds` inside validation, and the EntryPoint clears it again when it takes
-    /// the prefund. That state gas has to fit in the verification gas limit (gas estimation adds
-    /// it), but it is refilled before the EntryPoint measures `preOpGas`. Admission cannot tell
-    /// whether an op's limit was sized for an empty slot, since the deposit may have changed since
-    /// the op was estimated, so every self-paying op gets the credit. Such an op may reserve up to
-    /// `credit / threshold` more verification gas than it uses. The calldata floor assumes the
-    /// same credit (see [`UserOperation::verification_efficiency_credit`]).
-    ///
-    /// 0 with a paymaster, which pays instead, and with a zero prefund, where nothing is paid.
+    /// It is priced with the schedule gas estimation and the calldata floor use, the bundle
+    /// inclusion schedule, so that an op rundler estimated is credited what its estimate added:
+    /// before a scheduled fork that already includes the slot. For the same reason it does not
+    /// depend on the prefund, as a bundler-sponsored op without fees is estimated like any other.
     fn verification_efficiency_credit(
         &self,
         op: &UserOperationVariant,
         block_timestamp: u64,
     ) -> u128 {
-        if op.paymaster().is_some() || op.max_gas_cost().is_zero() {
-            return 0;
-        }
-        u128::from(
-            self.config
+        op.verification_efficiency_credit(
+            &self
+                .config
                 .chain_spec
-                .gas_schedule_at(block_timestamp)
-                .zero_deposit_refund_gas,
+                .for_bundle_inclusion_after(block_timestamp),
         )
     }
 
@@ -2496,12 +2488,15 @@ mod tests {
             // admission cannot tell how the limit was sized, so a funded sender is credited too
             ("funded slot", Some(false), genesis, false, 1, 200_000, true),
             ("deposit unknown", None, genesis, false, 1, 200_000, true),
+            // a bundler-sponsored op without fees is estimated with the slot like any other
+            ("zero prefund", Some(true), genesis, false, 0, 200_000, true),
+            // the pool's block (timestamp 0) is before the fork, but gas estimation already
+            // prices the slot for bundle inclusion after it
+            ("before a scheduled fork", Some(true), ForkActivation::Timestamp(100), false, 1, 200_000, true),
             // (50K + 97,920) / 400K is below 0.4
             ("limit beyond the credit", Some(true), genesis, false, 1, 400_000, false),
-            ("before glamsterdam", Some(true), ForkActivation::Never, false, 1, 200_000, false),
+            ("no glamsterdam", Some(true), ForkActivation::Never, false, 1, 200_000, false),
             ("paymaster pays", Some(true), genesis, true, 1, 200_000, false),
-            // nothing is paid, so no slot is created
-            ("zero prefund", Some(true), genesis, false, 0, 200_000, false),
         ];
         for (case, deposit_is_zero, activation, paymaster, max_fee, vgl, accepted) in cases {
             let mut config = default_config();
