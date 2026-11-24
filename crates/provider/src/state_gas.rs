@@ -14,7 +14,7 @@
 //! Simulating calls with an EIP-8037 state-gas reservoir.
 
 use alloy_network::TransactionBuilder;
-use alloy_primitives::{Address, B256, Bytes, U64};
+use alloy_primitives::{Address, B256, Bytes, U64, U256};
 use alloy_rpc_types_eth::{
     BlockId, BlockNumberOrTag,
     state::{AccountOverride, StateOverride},
@@ -70,14 +70,33 @@ struct RawSimulatedCall {
     logs: Vec<SimulatedLog>,
 }
 
+/// What the calls of a simulation pay for their gas.
+///
+/// Simulations run in validation mode (see [`simulate_call`]), which checks each call's fees
+/// against the block's base fee and its sender's balance against its gas at its fee cap. Either
+/// way, each call's nonce is dropped, so it is its sender's next one: a sender can have
+/// transactions pending that the simulated block does not include.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SimulatedFees {
+    /// Nothing: the block's base fee is set to 0 and each call's fees are dropped, so its gas
+    /// price is 0 and its sender needs no balance. For a simulation whose sender is not the one
+    /// that will pay (estimation and admission), or on a chain whose node's base fee check a
+    /// bundle cannot meet (`bundle_simulation_omit_gas_fees`).
+    Zero,
+    /// The calls' own fees, at the base fee the node computes for the simulated block, as the
+    /// transaction will pay them onchain: `GASPRICE`, `BASEFEE` and the EntryPoint's gas price
+    /// are what it will see. The sender must hold its gas at its fee cap, and a fee cap below
+    /// the base fee fails the request before any call runs
+    /// ([`ProviderError::is_base_fee_too_low`](crate::ProviderError::is_base_fee_too_low)).
+    AsSent,
+}
+
 /// Simulates `tx` as a transaction with `eth_simulateV1`, so that its gas above
 /// [`TX_MAX_GAS_LIMIT`] goes to an EIP-8037 state-gas reservoir, as a transaction's does.
 ///
 /// The simulation runs in validation mode, which applies the transaction rules, the reservoir
 /// among them: reth v2.10 gives a call no reservoir without it (reth v2.7 gave one either way).
-/// Validation mode also checks fees, nonces and balances, which are not what is simulated here:
-/// the block's base fee is set to 0 and each call's nonce and fees are dropped, so its gas price
-/// is 0, its sender needs no balance, and its nonce is the sender's next one.
+/// Validation mode also checks fees, nonces and balances, which `fees` sets up.
 ///
 /// The simulated block's gas limit is set to the call's gas: a call whose gas is above what is
 /// left of the block's gas limit fails (reth v2.10). No higher: a node rejects a block gas limit
@@ -90,6 +109,7 @@ pub async fn simulate_call<P: EvmProvider>(
     tx: TransactionRequest,
     block_id: Option<BlockId>,
     state_override: StateOverride,
+    fees: SimulatedFees,
 ) -> ProviderResult<SimulatedCall> {
     let block_gas_limit = tx.gas.context("a simulated call needs a gas limit")?;
     let mut calls = simulate_block(
@@ -98,6 +118,7 @@ pub async fn simulate_call<P: EvmProvider>(
         block_gas_limit,
         block_id,
         state_override,
+        fees,
     )
     .await?;
     Ok(calls.remove(0))
@@ -122,6 +143,10 @@ pub struct ProbedCall {
 /// [`RESERVOIR_PROBE_GAS_HEADROOM`], which covers what the probe uses: `tx` gets its full gas,
 /// and the override stays within the `rpc.gascap` that reservoir-mode simulations require.
 ///
+/// With [`SimulatedFees::AsSent`], the probe pays `tx`'s fees, so it passes the node's checks
+/// against the base fee as `tx` does, from a sender of its own that a state override funds, so
+/// it leaves `tx`'s sender's balance and nonce as they are.
+///
 /// An error if the probe used more than [`RESERVOIR_PROBE_GAS_HEADROOM`]: `tx` may then have run
 /// with less gas than requested, so its result can't be trusted.
 pub async fn simulate_call_after_reservoir_probe<P: EvmProvider>(
@@ -129,9 +154,10 @@ pub async fn simulate_call_after_reservoir_probe<P: EvmProvider>(
     tx: TransactionRequest,
     block_id: Option<BlockId>,
     mut state_override: StateOverride,
+    fees: SimulatedFees,
 ) -> ProviderResult<ProbedCall> {
     let tx_gas = tx.gas.context("a simulated call needs a gas limit")?;
-    let probe = reservoir_probe_call(&mut state_override);
+    let probe = reservoir_probe_call(&mut state_override, &tx, fees);
     let block_gas_limit = probed_block_gas_limit(probe.gas.unwrap_or_default(), tx_gas);
     let mut calls = simulate_block(
         provider,
@@ -139,6 +165,7 @@ pub async fn simulate_call_after_reservoir_probe<P: EvmProvider>(
         block_gas_limit,
         block_id,
         state_override,
+        fees,
     )
     .await?;
     let call = calls.remove(1);
@@ -166,16 +193,21 @@ async fn simulate_block<P: EvmProvider>(
     block_gas_limit: u64,
     block_id: Option<BlockId>,
     state_override: StateOverride,
+    fees: SimulatedFees,
 ) -> ProviderResult<Vec<SimulatedCall>> {
     let count = txs.len();
-    let txs: Vec<TransactionRequest> = txs.into_iter().map(without_nonce_and_fees).collect();
+    let txs: Vec<TransactionRequest> = txs.into_iter().map(|tx| simulated_tx(tx, fees)).collect();
+    let block_overrides = match fees {
+        SimulatedFees::Zero => {
+            json!({ "gasLimit": U64::from(block_gas_limit), "baseFeePerGas": U64::ZERO })
+        }
+        // The node's base fee for the simulated block
+        SimulatedFees::AsSent => json!({ "gasLimit": U64::from(block_gas_limit) }),
+    };
     let payload = json!({
         "validation": true,
         "blockStateCalls": [{
-            "blockOverrides": {
-                "gasLimit": U64::from(block_gas_limit),
-                "baseFeePerGas": U64::ZERO,
-            },
+            "blockOverrides": block_overrides,
             "stateOverrides": state_override,
             "calls": txs,
         }],
@@ -209,20 +241,34 @@ async fn simulate_block<P: EvmProvider>(
     Ok(calls)
 }
 
-/// `tx` without its nonce and fees, see [`simulate_call`]
-fn without_nonce_and_fees(mut tx: TransactionRequest) -> TransactionRequest {
+/// `tx` as it is simulated: without its nonce, and without its fees if `fees` is
+/// [`SimulatedFees::Zero`]
+fn simulated_tx(mut tx: TransactionRequest, fees: SimulatedFees) -> TransactionRequest {
     tx.nonce = None;
-    tx.gas_price = None;
-    tx.max_fee_per_gas = None;
-    tx.max_priority_fee_per_gas = None;
-    tx.max_fee_per_blob_gas = None;
+    match fees {
+        SimulatedFees::Zero => {
+            tx.gas_price = None;
+            tx.max_fee_per_gas = None;
+            tx.max_priority_fee_per_gas = None;
+            tx.max_fee_per_blob_gas = None;
+        }
+        SimulatedFees::AsSent => {}
+    }
     tx
 }
 
 /// Adds a `ReservoirProbe` at a random address (so it cannot collide with a caller's override)
-/// to `state_override` and returns a call to it. Read its result with
+/// to `state_override` and returns a call to it, run before `tx`. Read its result with
 /// [`reservoir_probe_found_reservoir`].
-fn reservoir_probe_call(state_override: &mut StateOverride) -> TransactionRequest {
+///
+/// With [`SimulatedFees::AsSent`], the call pays `tx`'s fees, from a random sender that
+/// `state_override` funds well beyond them: what the probe pays is not what is simulated, and a
+/// chain may charge a sender more up front than its gas at its fee cap.
+fn reservoir_probe_call(
+    state_override: &mut StateOverride,
+    tx: &TransactionRequest,
+    fees: SimulatedFees,
+) -> TransactionRequest {
     let probe = Address::random();
     state_override.insert(
         probe,
@@ -231,11 +277,28 @@ fn reservoir_probe_call(state_override: &mut StateOverride) -> TransactionReques
             ..Default::default()
         },
     );
-    TransactionRequest::default()
-        .from(SIMULATION_SENDER)
+    let gas = TX_MAX_GAS_LIMIT + RESERVOIR_PROBE_RESERVOIR_GAS;
+    let mut call = TransactionRequest::default()
         .to(probe)
         .input(Bytes::from(probeCall {}.abi_encode()).into())
-        .with_gas_limit(TX_MAX_GAS_LIMIT + RESERVOIR_PROBE_RESERVOIR_GAS)
+        .with_gas_limit(gas);
+    match fees {
+        SimulatedFees::Zero => call.from(SIMULATION_SENDER),
+        SimulatedFees::AsSent => {
+            let sender = Address::random();
+            state_override.insert(
+                sender,
+                AccountOverride {
+                    balance: Some(U256::from(u128::MAX)),
+                    ..Default::default()
+                },
+            );
+            call.gas_price = tx.gas_price;
+            call.max_fee_per_gas = tx.max_fee_per_gas;
+            call.max_priority_fee_per_gas = tx.max_priority_fee_per_gas;
+            call.from(sender)
+        }
+    }
 }
 
 /// The most gas a reservoir probe may use (it uses 28,301 on Sepolia, reth v2.10).
@@ -287,19 +350,140 @@ mod tests {
     }]"#;
 
     #[test]
-    fn simulated_calls_drop_nonce_and_fees() {
+    fn simulated_calls_drop_the_nonce_and_zero_fees() {
         let tx = TransactionRequest::default()
             .nonce(7)
             .max_fee_per_gas(10)
             .max_priority_fee_per_gas(1)
             .gas_price(5)
             .with_gas_limit(100_000);
-        let tx = without_nonce_and_fees(tx);
-        assert_eq!(tx.nonce, None);
-        assert_eq!(tx.max_fee_per_gas, None);
-        assert_eq!(tx.max_priority_fee_per_gas, None);
-        assert_eq!(tx.gas_price, None);
-        assert_eq!(tx.gas, Some(100_000));
+        let zero = simulated_tx(tx.clone(), SimulatedFees::Zero);
+        assert_eq!(zero.nonce, None);
+        assert_eq!(zero.max_fee_per_gas, None);
+        assert_eq!(zero.max_priority_fee_per_gas, None);
+        assert_eq!(zero.gas_price, None);
+        assert_eq!(zero.gas, Some(100_000));
+        let as_sent = simulated_tx(tx, SimulatedFees::AsSent);
+        assert_eq!(as_sent.nonce, None);
+        assert_eq!(as_sent.max_fee_per_gas, Some(10));
+        assert_eq!(as_sent.max_priority_fee_per_gas, Some(1));
+        assert_eq!(as_sent.gas_price, Some(5));
+        assert_eq!(as_sent.gas, Some(100_000));
+    }
+
+    const MAX_FEE: u128 = 2_000_000_000;
+    const PRIORITY_FEE: u128 = 100_000_000;
+
+    fn tx_with_fees(sender: Address) -> TransactionRequest {
+        TransactionRequest::default()
+            .from(sender)
+            .to(Address::repeat_byte(2))
+            .nonce(7)
+            .max_fee_per_gas(MAX_FEE)
+            .max_priority_fee_per_gas(PRIORITY_FEE)
+            .with_gas_limit(TX_MAX_GAS_LIMIT + 1_000_000)
+    }
+
+    /// An `eth_simulateV1` result of a probe that found a reservoir, then a call that succeeded
+    fn probed_result() -> serde_json::Value {
+        let probe = json!({
+            "status": "0x1",
+            "returnData": Bytes::from(probeCall::abi_encode_returns(&true)),
+            "gasUsed": "0x6e8d",
+        });
+        let call = json!({ "status": "0x1", "returnData": "0x", "gasUsed": "0x5208" });
+        json!([{ "calls": [probe, call] }])
+    }
+
+    /// The calls and state overrides of an `eth_simulateV1` request
+    fn simulated_calls(payload: &serde_json::Value) -> (Vec<TransactionRequest>, StateOverride) {
+        let block = &payload["blockStateCalls"][0];
+        let calls = serde_json::from_value(block["calls"].clone()).unwrap();
+        let state_override = serde_json::from_value(block["stateOverrides"].clone()).unwrap();
+        (calls, state_override)
+    }
+
+    /// As sent, the probe and the call pay the call's fees at the node's base fee for the
+    /// simulated block, and the probe has a sender of its own, funded for at least its gas at
+    /// that fee cap
+    #[tokio::test]
+    async fn probed_simulation_pays_the_fees_as_sent() {
+        let sender = Address::repeat_byte(1);
+        let mut provider = crate::MockEvmProvider::new();
+        provider
+            .expect_request::<(serde_json::Value, BlockId), serde_json::Value>()
+            .times(1)
+            .returning(move |method, (payload, _)| {
+                assert_eq!(method, "eth_simulateV1");
+                assert_eq!(payload["validation"], true);
+                let block_overrides = &payload["blockStateCalls"][0]["blockOverrides"];
+                assert!(block_overrides.get("baseFeePerGas").is_none());
+                let (calls, state_override) = simulated_calls(&payload);
+                let [probe, call] = &calls[..] else {
+                    panic!("expected the probe and the call, got {calls:?}");
+                };
+                for tx in [probe, call] {
+                    assert_eq!(tx.nonce, None);
+                    assert_eq!(tx.max_fee_per_gas, Some(MAX_FEE));
+                    assert_eq!(tx.max_priority_fee_per_gas, Some(PRIORITY_FEE));
+                }
+                assert_eq!(call.from, Some(sender));
+                assert!(!state_override.contains_key(&sender));
+                let probe_sender = probe.from.unwrap();
+                assert_ne!(probe_sender, sender);
+                let probe_balance = state_override[&probe_sender].balance.unwrap();
+                assert!(probe_balance >= U256::from(probe.gas.unwrap()) * U256::from(MAX_FEE));
+                Ok(probed_result())
+            });
+        let probed = simulate_call_after_reservoir_probe(
+            &provider,
+            tx_with_fees(sender),
+            None,
+            StateOverride::default(),
+            SimulatedFees::AsSent,
+        )
+        .await
+        .unwrap();
+        assert!(probed.found_reservoir);
+        assert!(probed.call.success);
+    }
+
+    /// With zero fees, the block's base fee is 0, the calls carry no fees and the probe's sender
+    /// needs no balance
+    #[tokio::test]
+    async fn probed_simulation_with_zero_fees() {
+        let mut provider = crate::MockEvmProvider::new();
+        provider
+            .expect_request::<(serde_json::Value, BlockId), serde_json::Value>()
+            .times(1)
+            .returning(|_, (payload, _)| {
+                let block_overrides = &payload["blockStateCalls"][0]["blockOverrides"];
+                assert_eq!(block_overrides["baseFeePerGas"], "0x0");
+                let (calls, state_override) = simulated_calls(&payload);
+                for tx in &calls {
+                    assert_eq!(tx.nonce, None);
+                    assert_eq!(tx.max_fee_per_gas, None);
+                    assert_eq!(tx.max_priority_fee_per_gas, None);
+                    assert_eq!(tx.gas_price, None);
+                }
+                assert_eq!(calls[0].from, Some(SIMULATION_SENDER));
+                // Only the probe's code: no sender is funded
+                let probe = *calls[0].to.unwrap().to().unwrap();
+                assert_eq!(state_override.len(), 1);
+                assert!(state_override[&probe].code.is_some());
+                assert_eq!(state_override[&probe].balance, None);
+                Ok(probed_result())
+            });
+        let probed = simulate_call_after_reservoir_probe(
+            &provider,
+            tx_with_fees(Address::repeat_byte(1)),
+            None,
+            StateOverride::default(),
+            SimulatedFees::Zero,
+        )
+        .await
+        .unwrap();
+        assert!(probed.found_reservoir);
     }
 
     #[test]
@@ -367,14 +551,25 @@ mod tests {
         // No expectations: the provider must not be called
         let provider = crate::MockEvmProvider::new();
         let tx = TransactionRequest::default().to(Address::ZERO);
-        let error = simulate_call(&provider, tx.clone(), None, StateOverride::default())
-            .await
-            .unwrap_err();
+        let error = simulate_call(
+            &provider,
+            tx.clone(),
+            None,
+            StateOverride::default(),
+            SimulatedFees::Zero,
+        )
+        .await
+        .unwrap_err();
         assert!(error.to_string().contains("needs a gas limit"), "{error}");
-        let error =
-            simulate_call_after_reservoir_probe(&provider, tx, None, StateOverride::default())
-                .await
-                .unwrap_err();
+        let error = simulate_call_after_reservoir_probe(
+            &provider,
+            tx,
+            None,
+            StateOverride::default(),
+            SimulatedFees::Zero,
+        )
+        .await
+        .unwrap_err();
         assert!(error.to_string().contains("needs a gas limit"), "{error}");
     }
 

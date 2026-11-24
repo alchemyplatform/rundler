@@ -202,7 +202,8 @@ pub struct ChainSpec {
     /// amount of time, before a new block is not received.
     pub bundle_max_send_interval_millis: u64,
     /// True if the bundle validation `eth_call` should be sent without
-    /// `maxFeePerGas`/`maxPriorityFeePerGas` fee caps.
+    /// `maxFeePerGas`/`maxPriorityFeePerGas` fee caps, and a reservoir-mode bundle's
+    /// `eth_simulateV1` run at a gas price of 0.
     pub bundle_simulation_omit_gas_fees: bool,
     /// True if the bundle gas limit for v0.6 user operations with a paymaster should be sized
     /// from simulation (only reserving the post-op retry gas when the paymaster requires a

@@ -25,8 +25,8 @@ use rundler_contracts::{
     v0_7::IEntryPointSimulations::{simulateHandleOpCall, simulateHandleOpNoPostOpCall},
 };
 use rundler_provider::{
-    EntryPoint, EvmProvider, SimulatedCall, SimulationProvider, StateOverride, simulate_call,
-    simulate_call_after_reservoir_probe,
+    EntryPoint, EvmProvider, SimulatedCall, SimulatedFees, SimulationProvider, StateOverride,
+    simulate_call, simulate_call_after_reservoir_probe,
 };
 use rundler_types::{
     GasEstimate, PvgState, TX_MAX_GAS_LIMIT, UserOperation as _,
@@ -687,6 +687,7 @@ where
                 tx,
                 Some(args.block_hash.into()),
                 state_override,
+                SimulatedFees::Zero,
             )
             .await?;
             return Ok((result, intrinsic_gas));
@@ -696,6 +697,7 @@ where
             tx,
             Some(args.block_hash.into()),
             state_override,
+            SimulatedFees::Zero,
         )
         .await?;
         if !probed.found_reservoir {
@@ -743,6 +745,7 @@ where
             tx,
             Some(args.block_hash.into()),
             state_override,
+            SimulatedFees::Zero,
         )
         .await?)
     }
