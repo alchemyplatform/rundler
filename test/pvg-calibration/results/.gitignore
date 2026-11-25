@@ -1,0 +1,3 @@
+# Raw run reports and logs; commit summaries only
+*.json
+*.log
