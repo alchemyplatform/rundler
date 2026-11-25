@@ -36,7 +36,7 @@ use std::{
 use alloy_primitives::{Address, B256};
 #[cfg(test)]
 use mockall::automock;
-use rundler_sim::{MempoolConfig, PrecheckSettings, SimulationSettings};
+use rundler_sim::{EstimationSettings, MempoolConfig, PrecheckSettings, SimulationSettings};
 use rundler_types::{
     EntityUpdate, EntryPointVersion, UserOperationId, UserOperationPermissions,
     UserOperationVariant,
@@ -181,6 +181,11 @@ pub struct PoolConfig {
     pub entry_point_version: EntryPointVersion,
     /// The maximum number of operations an unstaked sender can have in the mempool
     pub same_sender_mempool_count: usize,
+    /// The maximum number of reservoir-mode operations in the mempool. Each one is bundled alone
+    /// and reserves a full 2^24 of execution gas in its block.
+    pub max_reservoir_ops: usize,
+    /// The maximum number of reservoir-mode operations a sender can have in the mempool
+    pub max_reservoir_ops_per_sender: usize,
     /// The minimum fee bump required to replace an operation in the mempool
     /// Applies to both priority fee and fee. Expressed as an integer percentage value
     pub min_replacement_fee_increase_percentage: u32,
@@ -192,6 +197,9 @@ pub struct PoolConfig {
     pub allowlist: Option<HashSet<Address>>,
     /// Settings for precheck validation
     pub precheck_settings: PrecheckSettings,
+    /// Settings for finding the state-gas reservoir a bundler-sponsored op needs at admission,
+    /// with the simulations gas estimation runs. `None` admits sponsored ops metered.
+    pub reservoir_estimation_settings: Option<EstimationSettings>,
     /// Settings for simulation validation
     pub sim_settings: SimulationSettings,
     /// Configuration for the mempool channels, by channel ID
@@ -307,6 +315,7 @@ mod tests {
             filter_id: None,
             perms: UserOperationPermissions::default(),
             sender_is_7702: false,
+            reservoir_gas: None,
         };
 
         let entities = po.entities().collect::<Vec<_>>();

@@ -11,7 +11,11 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use alloy_primitives::{Address, B256, hex};
 use anyhow::{Context, bail};
@@ -150,6 +154,8 @@ enum SendBundleAttemptResult {
     NonceTooLow,
     // The submission endpoint is rate limiting us
     RateLimited,
+    // The triggering block has no timestamp, so its gas schedule is unknown. Nothing was built.
+    NoBlockTimestamp,
 }
 
 impl SendBundleAttemptResult {
@@ -168,6 +174,7 @@ impl SendBundleAttemptResult {
             // Rejected while building, so the submission endpoint never saw a request.
             Self::SimulationUnderpriced
             | Self::RateLimited
+            | Self::NoBlockTimestamp
             | Self::NoOperationsInitially
             | Self::NoOperationsAfterFeeFilter
             | Self::NoOperationsAfterSimulation => false,
@@ -541,6 +548,20 @@ where
                 );
                 state.simulation_underpriced();
             }
+            Ok(SendBundleAttemptResult::NoBlockTimestamp) => {
+                // Release locks only when nothing is pending (continuing)
+                if state.transaction_tracker.num_pending_transactions() == 0 {
+                    self.assigner.release_all(self.sender_eoa);
+                }
+                warn!(
+                    "No timestamp for block {}, can't select its gas schedule, skipping until the next trigger",
+                    state.block_hash()
+                );
+                state.retry_on_next_trigger(anyhow::anyhow!(
+                    "no timestamp for block {}, can't select its gas schedule",
+                    state.block_hash()
+                ));
+            }
             Ok(SendBundleAttemptResult::ReplacementUnderpriced) => {
                 // Release locks only when nothing is pending (continuing)
                 if state.transaction_tracker.num_pending_transactions() == 0 {
@@ -651,11 +672,17 @@ where
                         self.increment_counter("builder_bundle_gas_used", &pinned, used);
                     }
                     if let Some((entry_point, _)) = &pinned {
+                        let now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
                         bundle_metrics::record_mined_bundle(
                             *entry_point,
                             !self.chain_spec.da_pre_verification_gas
                                 || self.chain_spec.include_da_gas_in_gas_limit,
+                            self.chain_spec.reservoir_mode_enabled_at(now),
                             is_success,
+                            gas_limit,
                             gas_used,
                             gas_price,
                             &user_op_events,
@@ -894,6 +921,10 @@ where
         state: &mut SenderMachineState<T, TRIG>,
         fee_increase_count: u64,
     ) -> anyhow::Result<SendBundleAttemptResult> {
+        let Some(block_timestamp) = state.block_timestamp() else {
+            return Ok(SendBundleAttemptResult::NoBlockTimestamp);
+        };
+
         // Get tracker state first to pass required_fees to assign_work
         let TrackerState {
             nonce,
@@ -950,6 +981,7 @@ where
                             sender_eoa: self.sender_eoa,
                             nonce,
                             block_hash: state.block_hash(),
+                            block_timestamp,
                             max_bundle_fee: balance,
                             bundle_fees,
                             base_fee,
@@ -977,6 +1009,17 @@ where
                         // `condition_not_met` set for the next attempt.
                         Err(BundleProposerError::SimulationUnderpriced) => {
                             Ok(SendBundleAttemptResult::SimulationUnderpriced)
+                        }
+                        // The node rejected the bundle's simulation as it would the
+                        // transaction's submission, so it is handled as that would be
+                        Err(BundleProposerError::InsufficientFunds) => {
+                            self.increment_counter_ep(
+                                "builder_bundle_txn_insufficient_funds",
+                                entry_point,
+                                1,
+                            );
+                            error!("Bundle simulation insufficient funds");
+                            Ok(SendBundleAttemptResult::InsufficientFunds)
                         }
                         Err(e) => Err(anyhow::anyhow!("Failed to make bundle: {e:?}")),
                     }
@@ -1479,9 +1522,15 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
     // replace, so `fee_increase_count` is left alone. `condition_not_met` is preserved
     // because the rebuild still needs to re-check conditions.
     fn simulation_underpriced(&mut self) {
-        self.send_result(SendBundleResult::Error(anyhow::anyhow!(
+        self.retry_on_next_trigger(anyhow::anyhow!(
             "bundle validation call rejected as underpriced"
-        )));
+        ));
+    }
+
+    // Nothing was submitted: report the error and rebuild on the next trigger, keeping the
+    // fee increase count, underpriced info and `condition_not_met`.
+    fn retry_on_next_trigger(&mut self, error: anyhow::Error) {
+        self.send_result(SendBundleResult::Error(error));
 
         self.inner = match &self.inner {
             InnerState::Building(s) => InnerState::Building(BuildingState {
@@ -1491,7 +1540,7 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
             }),
             _ => {
                 panic!(
-                    "invalid state transition, simulation_underpriced called when not in building state"
+                    "invalid state transition, retry_on_next_trigger called when not in building state"
                 )
             }
         }
@@ -1564,6 +1613,10 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
 
     fn block_hash(&self) -> B256 {
         self.trigger.last_block().block_hash
+    }
+
+    fn block_timestamp(&self) -> Option<u64> {
+        self.trigger.last_block().block_timestamp
     }
 
     fn send_result(&mut self, result: SendBundleResult) {
@@ -1866,6 +1919,7 @@ impl BundleSenderTrigger {
             last_block: NewHead {
                 block_hash: B256::ZERO,
                 block_number: 0,
+                block_timestamp: None,
                 address_updates: vec![],
             },
         })
@@ -2090,6 +2144,74 @@ mod tests {
 
         // the accepted submission was recorded in the provider-health window
         assert_eq!(sender.provider_event_signal.observations(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_send_bundle_skips_block_without_timestamp() {
+        let Mocks {
+            mut mock_proposer_t,
+            mut mock_tracker,
+            mut mock_trigger,
+            mut mock_pool,
+        } = new_mocks();
+
+        mock_trigger.expect_last_block().return_const(NewHead {
+            block_timestamp: None,
+            ..new_head(0)
+        });
+        // no work is assigned or built without a gas schedule
+        mock_tracker.expect_get_state().times(0);
+        mock_pool.expect_get_ops_summaries().times(0);
+        mock_proposer_t.expect_make_bundle().times(0);
+
+        let mut sender = new_sender(mock_proposer_t, mock_pool);
+        let mut state = SenderMachineState::new(mock_trigger, mock_tracker);
+
+        let result = sender.send_bundle(&mut state, 0).await.unwrap();
+        assert!(matches!(result, SendBundleAttemptResult::NoBlockTimestamp));
+    }
+
+    #[tokio::test]
+    async fn test_missing_block_timestamp_keeps_pending_replacement() {
+        let Mocks {
+            mock_proposer_t,
+            mut mock_tracker,
+            mut mock_trigger,
+            mock_pool,
+        } = new_mocks();
+
+        mock_trigger.expect_last_block().return_const(NewHead {
+            block_timestamp: None,
+            ..new_head(0)
+        });
+        mock_tracker
+            .expect_num_pending_transactions()
+            .return_const(1_usize);
+        // the in-flight transaction stays tracked so it can still be replaced
+        mock_tracker.expect_reset().times(0);
+        mock_tracker.expect_abandon().times(0);
+
+        let mut sender = new_sender(mock_proposer_t, mock_pool);
+        let inner = BuildingState {
+            wait_for_trigger: false,
+            fee_increase_count: 1,
+            underpriced_info: None,
+        };
+        let mut state = new_state_with(mock_trigger, mock_tracker, InnerState::Building(inner));
+
+        sender
+            .handle_building_state(&mut state, inner)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            state.inner,
+            InnerState::Building(BuildingState {
+                wait_for_trigger: true,
+                fee_increase_count: 1,
+                underpriced_info: None,
+            })
+        ));
     }
 
     #[tokio::test]
@@ -2764,6 +2886,28 @@ mod tests {
             result,
             SendBundleAttemptResult::NoOperationsAfterFeeFilter
         ));
+    }
+
+    /// The node rejected a bundle's simulation because the sender cannot pay for its gas (a
+    /// reservoir-mode bundle's simulation pays the bundle's fees): handled as the transaction's
+    /// submission would be.
+    #[tokio::test]
+    async fn test_bundle_simulation_insufficient_funds() {
+        let mut mock_trigger = MockTrigger::new();
+        mock_trigger.expect_last_block().return_const(new_head(0));
+        let mut mock_proposer = MockBundleProposerT::new();
+        mock_proposer
+            .expect_make_bundle()
+            .times(1)
+            .returning(|_| Box::pin(async { Err(BundleProposerError::InsufficientFunds) }));
+        let mut sender = v06_sender(mock_proposer, None);
+
+        let mut state = SenderMachineState::new(mock_trigger, tracker_with_state());
+        let result = sender.send_bundle(&mut state, 0).await.unwrap();
+        assert!(
+            matches!(result, SendBundleAttemptResult::InsufficientFunds),
+            "{result:?}"
+        );
     }
 
     #[tokio::test]
@@ -3843,6 +3987,7 @@ mod tests {
         NewHead {
             block_number,
             block_hash: B256::ZERO,
+            block_timestamp: Some(0),
             address_updates: vec![],
         }
     }
@@ -3851,6 +3996,7 @@ mod tests {
         NewHead {
             block_number,
             block_hash: B256::ZERO,
+            block_timestamp: Some(0),
             address_updates: vec![AddressUpdate {
                 address: Address::ZERO,
                 nonce: Some(0),
@@ -3883,6 +4029,7 @@ mod tests {
             gas_limit: 0,
             bundler_sponsorship_max_cost: None,
             suspect: false,
+            reservoir: false,
         }
     }
 
@@ -3944,6 +4091,7 @@ mod tests {
             filter_id: None,
             perms: UserOperationPermissions::default(),
             sender_is_7702: false,
+            reservoir_gas: None,
         }
     }
 }

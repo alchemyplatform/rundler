@@ -107,8 +107,12 @@ pub trait EntryPoint: Send + Sync {
     async fn balance_of(&self, address: Address, block_id: Option<BlockId>)
     -> ProviderResult<U256>;
 
-    /// Get the deposit info for an address
-    async fn get_deposit_info(&self, address: Address) -> ProviderResult<DepositInfo>;
+    /// Get the deposit info for an address, at `block_id` or the latest block
+    async fn get_deposit_info(
+        &self,
+        address: Address,
+        block_id: Option<BlockId>,
+    ) -> ProviderResult<DepositInfo>;
 
     /// Get the balances of a list of addresses in order
     async fn get_balances(&self, addresses: Vec<Address>) -> ProviderResult<Vec<U256>>;
@@ -216,6 +220,31 @@ pub trait SimulationProvider: Send + Sync {
         &self,
         user_op: Self::UO,
     ) -> ProviderResult<(SimulationTransactionRequest, StateOverride)>;
+
+    /// Construct a `simulateHandleOp` call (`simulateHandleOpNoPostOp` if `skip_post_op`) whose
+    /// trace gives the op's EIP-8037 state gas. The entry point calls `target` with
+    /// `target_call_data` after the op, unless `target` is zero.
+    ///
+    /// `gas` is the call's gas limit. Whether a call gets a state-gas reservoir for its gas above
+    /// `TX_MAX_GAS_LIMIT` depends on the client: without one, the op's state is charged within
+    /// its own gas limits and within `gas`, so size both for execution and state.
+    /// State that the simulation contract itself would create is pre-set in the override, so the
+    /// traced state gas is the op's own.
+    ///
+    /// The returned override is `state_override` (the caller's) merged with the simulation's own,
+    /// per account.
+    ///
+    /// Errors on entry points without a non-reverting simulation (v0.6), whose state a top-level
+    /// revert would undo.
+    fn get_state_gas_simulate_handle_op_call(
+        &self,
+        op: Self::UO,
+        skip_post_op: bool,
+        target: Address,
+        target_call_data: Bytes,
+        gas: u64,
+        state_override: StateOverride,
+    ) -> ProviderResult<(TransactionRequest, StateOverride)>;
 
     /// Call the entry point contract's `simulateValidation` function.
     async fn simulate_validation(

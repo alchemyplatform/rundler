@@ -199,6 +199,9 @@ pub enum SkipReason {
     TransactionSizeLimit,
     /// UO uses an unsupported aggregator
     UnsupportedAggregator(Address),
+    /// UO is in reservoir mode (bundled alone above the 2^24 transaction gas cap), but was
+    /// offered alongside other ops
+    ReservoirMode,
     /// Other reason, typically internal errors
     Other {
         /// Description of the reason

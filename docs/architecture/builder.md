@@ -36,7 +36,9 @@ For bundler-sponsored operations, each operation's `max_cost` is checked separat
 before simulation. The budget is the gas limit of a bundle transaction containing only
 that operation: execution and pre-verification costs (including estimated DA) or the
 EIP-7623 calldata floor, whichever is larger, plus the bundle transaction's 5% gas
-headroom. It is priced at the bundle's `max_fee_per_gas`, including replacement fee
+headroom. A [reservoir-mode](./glamsterdam_pvg.md#reservoir-mode) operation's reservoir
+`R`, which its PVG pays for, is added after the headroom, since its bundle carries `R`
+without the overhead multiplier. It is priced at the bundle's `max_fee_per_gas`, including replacement fee
 increases. Underpriced-operation permissions do not discount the sponsorship cost. An
 over-budget operation is skipped and remains in the pool; another operation's unused
 budget cannot cover it. This check also applies on chains without DA charges.
@@ -60,6 +62,8 @@ On chains that charge a minimum fraction of the transaction gas limit (e.g. Aval
 - Only when simulation shows the paymaster returns a context: `verificationGasLimit + ceil(verificationGasLimit / 63) + 5000` for the post-op retry in `postOpReverted` mode.
 
 The pre-simulation gas limit filter uses the same sizing without the post-op retry. Precheck and estimation check that a UO fits in a bundle with the same sizing including the post-op retry, the largest the builder can use, so any UO they accept can be bundled. v0.6 UOs without a paymaster keep the static limit.
+
+A UO in [reservoir mode](./glamsterdam_pvg.md#reservoir-mode) (Glamsterdam) is always bundled alone, with a gas limit of exactly `2^24 + R`, its state-gas reservoir. Before it is sent, the bundle is simulated with `eth_simulateV1` at that gas limit, in validation mode, which gives it the transaction's reservoir. A probe in the same request checks that the node does; if not, the bundle attempt fails and is retried, without rejecting the op. The simulation pays the bundle's fees at the next block's base fee, as the transaction will, so the op sees the gas price and base fee it will see onchain. A fee cap below that base fee (`eth_simulateV1` error `-38012`) is handled as in [underpriced bundle validation](#underpriced-bundle-validation), and a sender that cannot pay for the bundle's gas at its fee cap (`-38014`) as an insufficient-funds submission.
 
 ### 2nd Simulation and Rejection
 
@@ -120,6 +124,8 @@ The Assigner component is responsible for coordinating work distribution among w
    - Releases assignments when bundles complete
 
 3. **Virtual Entrypoints**: Supports multiple configurations per entry point address via `filter_id`, creating "virtual entrypoints" that workers can build for independently
+
+4. **Single-op bundles**: Suspect operations (isolation) and [reservoir-mode](./glamsterdam_pvg.md#reservoir-mode) operations are assigned alone, from their own bounded sets of workers, and stay alone in fee-bump replacements
 
 ### Per-EntryPoint signer pools
 
@@ -187,8 +193,9 @@ instead would reset the transaction tracker and count a failed bundle on every a
 
 Chains where the check cannot be satisfied can set the `bundle_simulation_omit_gas_fees`
 chain spec option, which sends the validation call without fee caps and skips the node's
-fee validation. This only affects the validation call; the submitted bundle transaction
-always carries its real fee caps.
+fee validation. It also has a reservoir-mode bundle's `eth_simulateV1` run at a gas price
+of 0. This only affects these simulations; the submitted bundle transaction always carries
+its real fee caps.
 
 ### Cancellations
 

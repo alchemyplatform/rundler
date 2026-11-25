@@ -12,11 +12,33 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_primitives::B256;
+use futures_util::future;
 use metrics::Histogram;
-use rundler_provider::{BlockHashOrNumber, DAGasProvider, FeeEstimator};
-use rundler_types::{UserOperation, chain::ChainSpec, da::DAGasData};
+use rundler_provider::{
+    BlockHashOrNumber, BlockId, DAGasProvider, EntryPoint, EvmProvider, FeeEstimator,
+    ProviderResult,
+};
+use rundler_types::{
+    AuthorityState, EntryPointVersion, PvgState, UserOperation, chain::ChainSpec, da::DAGasData,
+};
 use rundler_utils::guard_timer::CustomTimerGuard;
 use tracing::instrument;
+
+/// The smallest preVerificationGas surplus (PVG minus the metered requirement) that puts a user
+/// operation in [`StateGasMode::Reservoir`](rundler_types::StateGasMode): the least state gas
+/// that does not fit under `max_bundle_execution_gas` next to the op's own computation gas.
+///
+/// Estimation, admission and the builder all classify with this one function, so they cannot
+/// disagree about an op's mode. At least 1, so an op without state is never in reservoir mode.
+pub fn reservoir_threshold<UO: UserOperation>(
+    op: &UO,
+    chain_spec: &ChainSpec,
+    max_bundle_execution_gas: u128,
+) -> u128 {
+    max_bundle_execution_gas
+        .saturating_sub(op.bundle_computation_gas_limit(chain_spec, Some(1)))
+        .saturating_add(1)
+}
 
 /// Estimates only the DA gas portion for the given user operation
 ///
@@ -111,6 +133,7 @@ pub async fn calc_required_pre_verification_gas<UO: UserOperation, E: DAGasProvi
     block_hash: B256,
     base_fee: u128,
     verification_efficiency_accept_threshold: f64,
+    pvg_state: &PvgState,
 ) -> anyhow::Result<(u128, DAGasData)> {
     // TODO(bundle): assuming a bundle size of 1
     let bundle_size = 1;
@@ -135,7 +158,334 @@ pub async fn calc_required_pre_verification_gas<UO: UserOperation, E: DAGasProvi
             bundle_size,
             da_gas,
             Some(verification_efficiency_accept_threshold),
+            pvg_state,
         ),
         uo_data,
     ))
+}
+
+/// Reads the on-chain state that the state-dependent part of pre-verification gas depends on
+/// (see [`UserOperation::state_pre_verification_gas`]).
+///
+/// Reads only what applies to `op`: whether the sender's EntryPoint deposit slot is empty when
+/// it has no paymaster (`getDepositInfo` on v0.6, whose slot also holds the stake, `balanceOf`
+/// later), and the sender's code, nonce and balance when it carries an EIP-7702 authorization. Makes no
+/// calls and returns [`PvgState::unknown`] when no gas schedule of the chain has state-dependent terms.
+#[instrument(skip_all)]
+pub async fn load_pvg_state<UO, P, E>(
+    chain_spec: &ChainSpec,
+    provider: &P,
+    entry_point: &E,
+    op: &UO,
+    block: Option<BlockId>,
+) -> ProviderResult<PvgState>
+where
+    UO: UserOperation,
+    P: EvmProvider,
+    E: EntryPoint,
+{
+    if !chain_spec.pvg_may_depend_on_state() {
+        return Ok(PvgState::unknown());
+    }
+    let (sender_deposit_is_zero, authority) = future::try_join(
+        sender_deposit_is_zero(entry_point, op, block),
+        authority_state(provider, op, block),
+    )
+    .await?;
+
+    Ok(PvgState {
+        sender_deposit_is_zero,
+        authority,
+    })
+}
+
+async fn sender_deposit_is_zero<UO: UserOperation, E: EntryPoint>(
+    entry_point: &E,
+    op: &UO,
+    block: Option<BlockId>,
+) -> ProviderResult<Option<bool>> {
+    // A paymaster pays and receives the refund; the sender's deposit is not written.
+    if op.paymaster().is_some() {
+        return Ok(None);
+    }
+    let sender = op.sender();
+    let slot_is_zero = match op.entry_point_version() {
+        // v0.6 packs `deposit`, `staked` and `stake` into one storage slot
+        // (IStakeManager.DepositInfo), so a staked sender's slot is set even with no deposit.
+        EntryPointVersion::V0_6 => {
+            let info = entry_point.get_deposit_info(sender, block).await?;
+            info.deposit.is_zero() && !info.staked && info.stake.is_zero()
+        }
+        // Later versions keep `deposit` in its own uint256 slot.
+        _ => entry_point.balance_of(sender, block).await?.is_zero(),
+    };
+    Ok(Some(slot_is_zero))
+}
+
+async fn authority_state<UO: UserOperation, P: EvmProvider>(
+    provider: &P,
+    op: &UO,
+    block: Option<BlockId>,
+) -> ProviderResult<Option<AuthorityState>> {
+    if op.authorization_tuple().is_none() {
+        return Ok(None);
+    }
+    let sender = op.sender();
+    let (code, nonce, balance) = future::try_join3(
+        provider.get_code(sender, block),
+        provider.get_transaction_count(sender, block),
+        provider.get_balance(sender, block),
+    )
+    .await?;
+    Ok(Some(AuthorityState::from_account(&code, nonce, balance)))
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy_primitives::{Address, Bytes, U256, bytes};
+    use rundler_provider::{DepositInfo, MockEntryPointV0_6, MockEntryPointV0_7, MockEvmProvider};
+    use rundler_types::{
+        EntryPointVersion,
+        authorization::Eip7702Auth,
+        chain::ForkActivation,
+        v0_7::{
+            UserOperation as UserOperationV0_7, UserOperationBuilder, UserOperationRequiredFields,
+        },
+    };
+
+    use super::*;
+
+    const SENDER: Address = Address::repeat_byte(0x11);
+
+    fn glamsterdam_spec() -> ChainSpec {
+        ChainSpec {
+            glamsterdam_activation: ForkActivation::Genesis,
+            ..ChainSpec::default()
+        }
+        .at_timestamp(0)
+        .into_owned()
+    }
+
+    fn op(spec: &ChainSpec, paymaster: bool, authorization: bool) -> UserOperationV0_7 {
+        let mut builder = UserOperationBuilder::new(
+            spec,
+            EntryPointVersion::V0_7,
+            UserOperationRequiredFields {
+                sender: SENDER,
+                nonce: U256::ZERO,
+                call_data: Bytes::new(),
+                call_gas_limit: 0,
+                verification_gas_limit: 100_000,
+                pre_verification_gas: 0,
+                max_priority_fee_per_gas: 1,
+                max_fee_per_gas: 1,
+                signature: Bytes::new(),
+            },
+        );
+        if paymaster {
+            builder = builder.paymaster(Address::repeat_byte(0x22), 50_000, 0, Bytes::new());
+        }
+        if authorization {
+            builder = builder.authorization_tuple(Eip7702Auth::new_dummy(spec.id, Address::ZERO));
+        }
+        builder.build()
+    }
+
+    #[tokio::test]
+    async fn load_pvg_state_makes_no_calls_before_glamsterdam() {
+        let spec = ChainSpec::default();
+        // No expectations: any call panics.
+        let (provider, entry_point) = (MockEvmProvider::new(), MockEntryPointV0_7::new());
+        let state = load_pvg_state(
+            &spec,
+            &provider,
+            &entry_point,
+            &op(&spec, false, true),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(state, PvgState::unknown());
+    }
+
+    #[tokio::test]
+    async fn load_pvg_state_reads_self_paying_sender_deposit() {
+        let spec = glamsterdam_spec();
+        let provider = MockEvmProvider::new();
+        let mut entry_point = MockEntryPointV0_7::new();
+        entry_point
+            .expect_balance_of()
+            .withf(|address, _| *address == SENDER)
+            .returning(|_, _| Ok(U256::ZERO));
+
+        let state = load_pvg_state(
+            &spec,
+            &provider,
+            &entry_point,
+            &op(&spec, false, false),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(state.sender_deposit_is_zero, Some(true));
+        assert_eq!(state.authority, None);
+    }
+
+    #[tokio::test]
+    async fn load_pvg_state_reads_authority_but_not_paymaster_sponsored_deposit() {
+        let spec = glamsterdam_spec();
+        let mut provider = MockEvmProvider::new();
+        provider
+            .expect_get_code()
+            .returning(|_, _| Ok(bytes!("ef01001234567890123456789012345678901234567890")));
+        provider
+            .expect_get_transaction_count()
+            .returning(|_, _| Ok(3));
+        provider
+            .expect_get_balance()
+            .returning(|_, _| Ok(U256::ZERO));
+        // No balance_of expectation: a paymaster-sponsored op must not read the sender deposit.
+        let entry_point = MockEntryPointV0_7::new();
+
+        let state = load_pvg_state(&spec, &provider, &entry_point, &op(&spec, true, true), None)
+            .await
+            .unwrap();
+        assert_eq!(state.sender_deposit_is_zero, None);
+        assert_eq!(state.authority, Some(AuthorityState::HasCode));
+    }
+
+    #[tokio::test]
+    async fn load_pvg_state_reads_authority_at_one_block() {
+        let spec = glamsterdam_spec();
+        let block = BlockId::hash(B256::repeat_byte(0x33));
+        let at_block = move |b: &Option<BlockId>| *b == Some(block);
+        let mut provider = MockEvmProvider::new();
+        // Missing at the priced block; a nonce read at a later block would make it look existing.
+        provider
+            .expect_get_code()
+            .withf(move |_, b| at_block(b))
+            .returning(|_, _| Ok(Bytes::new()));
+        provider
+            .expect_get_transaction_count()
+            .withf(move |_, b| at_block(b))
+            .returning(|_, _| Ok(0));
+        provider
+            .expect_get_balance()
+            .withf(move |_, b| at_block(b))
+            .returning(|_, _| Ok(U256::ZERO));
+        let entry_point = MockEntryPointV0_7::new();
+
+        let state = load_pvg_state(
+            &spec,
+            &provider,
+            &entry_point,
+            &op(&spec, true, true),
+            Some(block),
+        )
+        .await
+        .unwrap();
+        assert_eq!(state.authority, Some(AuthorityState::Missing));
+    }
+
+    fn deposit_info(staked: bool, stake: u64) -> DepositInfo {
+        DepositInfo {
+            deposit: U256::ZERO,
+            staked,
+            stake: U256::from(stake),
+            unstake_delay_sec: if stake > 0 { 86_400 } else { 0 },
+            withdraw_time: 0,
+        }
+    }
+
+    // v0.6 packs `deposit`, `staked` and `stake` into one storage slot (IStakeManager.DepositInfo),
+    // so a sender with zero deposit but some stake already has a non-zero slot. Validation's deposit
+    // write then modifies an existing slot: no EIP-8037 state gas is charged, nothing is refilled,
+    // and neither the PVG refund term nor the verification efficiency credit (#1372) applies.
+    #[tokio::test]
+    async fn load_pvg_state_v0_6_stake_shares_the_deposit_slot() {
+        let spec = glamsterdam_spec();
+        let op = rundler_types::v0_6::UserOperationBuilder::new(
+            &spec,
+            rundler_types::v0_6::UserOperationRequiredFields {
+                sender: SENDER,
+                verification_gas_limit: 100_000,
+                max_fee_per_gas: 1,
+                max_priority_fee_per_gas: 1,
+                ..Default::default()
+            },
+        )
+        .build();
+
+        // read at the block asked for, which is the simulated block in precheck
+        let block = Some(BlockId::hash(B256::repeat_byte(0x42)));
+        for (case, info, slot_is_zero) in [
+            ("staked", deposit_info(true, 1_000), false),
+            ("unlocked, not withdrawn", deposit_info(false, 1_000), false),
+            ("never staked or withdrawn", deposit_info(false, 0), true),
+        ] {
+            let mut entry_point = MockEntryPointV0_6::new();
+            entry_point
+                .expect_version()
+                .return_const(EntryPointVersion::V0_6);
+            entry_point
+                .expect_balance_of()
+                .withf(|address, _| *address == SENDER)
+                .returning(|_, _| Ok(U256::ZERO));
+            entry_point
+                .expect_get_deposit_info()
+                .withf(move |address, at| *address == SENDER && *at == block)
+                .returning(move |_, _| Ok(info.clone()));
+
+            let state = load_pvg_state(&spec, &MockEvmProvider::new(), &entry_point, &op, block)
+                .await
+                .unwrap();
+            assert_eq!(state.sender_deposit_is_zero, Some(slot_is_zero), "{case}");
+        }
+    }
+
+    // v0.7 keeps `deposit` in its own uint256 slot, so stake does not matter there.
+    #[tokio::test]
+    async fn load_pvg_state_v0_7_stake_does_not_share_the_deposit_slot() {
+        let spec = glamsterdam_spec();
+        let mut entry_point = MockEntryPointV0_7::new();
+        entry_point
+            .expect_version()
+            .return_const(EntryPointVersion::V0_7);
+        entry_point
+            .expect_balance_of()
+            .withf(|address, _| *address == SENDER)
+            .returning(|_, _| Ok(U256::ZERO));
+        entry_point
+            .expect_get_deposit_info()
+            .withf(|address, _| *address == SENDER)
+            .returning(|_, _| Ok(deposit_info(true, 1_000)));
+
+        let state = load_pvg_state(
+            &spec,
+            &MockEvmProvider::new(),
+            &entry_point,
+            &op(&spec, false, false),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(state.sender_deposit_is_zero, Some(true));
+    }
+
+    #[tokio::test]
+    async fn required_pvg_includes_state_gas_with_glamsterdam() {
+        let spec = glamsterdam_spec();
+        let uo = op(&spec, false, true);
+        let missing = PvgState {
+            sender_deposit_is_zero: Some(true),
+            authority: Some(AuthorityState::Missing),
+        };
+        let funded = PvgState {
+            sender_deposit_is_zero: Some(false),
+            authority: Some(AuthorityState::HasCode),
+        };
+        let with_state = uo.required_pre_verification_gas(&spec, 1, 0, None, &missing);
+        let without_state = uo.required_pre_verification_gas(&spec, 1, 0, None, &funded);
+        assert_eq!(with_state - without_state, 97_920 + 35_190 + 183_600);
+    }
 }

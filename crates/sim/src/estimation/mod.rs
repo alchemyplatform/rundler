@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{future::Future, pin::Pin, sync::Once};
+use std::{future::Future, pin::Pin, sync::Once, time::Duration};
 
 use alloy_primitives::{Address, Bytes};
 use alloy_sol_types::SolInterface;
@@ -22,7 +22,7 @@ use metrics_derive::Metrics;
 use mockall::automock;
 use rundler_contracts::common::EstimationTypes::EstimationTypesErrors;
 use rundler_provider::{ProviderError, StateOverride};
-use rundler_types::{GasEstimate, ValidationRevert};
+use rundler_types::{GasEstimate, PvgState, UserOperation, ValidationRevert, chain::ChainSpec};
 
 use crate::precheck::MIN_CALL_GAS_LIMIT;
 
@@ -34,6 +34,11 @@ pub use estimate_call_gas::{
 };
 
 /// Gas estimation module for Entry Point v0.6
+mod reservoir;
+pub use reservoir::{
+    NoSimulationReservoir, ReservoirEstimator, SponsoredReservoir, SponsoredReservoirError,
+};
+mod state_gas;
 mod v0_6;
 pub use v0_6::GasEstimator as GasEstimatorV0_6;
 mod v0_7;
@@ -41,6 +46,30 @@ pub use v0_7::GasEstimator as GasEstimatorV0_7;
 
 /// Percentage by which to increase the verification gas limit after binary search
 const VERIFICATION_GAS_BUFFER_PERCENT: u32 = 10;
+
+/// A verification gas limit before the estimator finalizes it
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VerificationGasLimit {
+    /// Set by the caller, returned as is
+    Provided(u128),
+    /// Found by the binary search, before [`unsearched_verification_gas`] and the buffer
+    Searched(u128),
+}
+
+/// Verification gas a self-paying op uses that the binary search does not see. The search runs
+/// such an op with zero fees, so the account pays nothing and its deposit is not written. That
+/// leaves out the deposit transfer, and the state gas of creating the deposit slot when it is
+/// empty (EIP-8037, see [`UserOperation::zero_deposit_slot_state_gas`]). 0 with a paymaster.
+fn unsearched_verification_gas<UO: UserOperation>(
+    op: &UO,
+    chain_spec: &ChainSpec,
+    pvg_state: &PvgState,
+) -> u128 {
+    if op.paymaster().is_some() {
+        return 0;
+    }
+    chain_spec.deposit_transfer_overhead() + op.zero_deposit_slot_state_gas(chain_spec, pvg_state)
+}
 /// Absolute value by which to increase the call gas limit after binary search
 const CALL_GAS_BUFFER_VALUE: u128 = 3000;
 
@@ -68,6 +97,9 @@ pub enum GasEstimationError {
     /// Supplied gas was too large
     #[error("{0} cannot be larger than {1}")]
     GasFieldTooLarge(&'static str, u128),
+    /// The user operation's EIP-8037 state gas is more than a reservoir-mode bundle may carry
+    #[error("state gas used by the user operation {0} is greater than the allowed limit: {1}")]
+    StateGasTooLarge(u128, u128),
     /// The total amount of gas used by the UO is greater than allowed
     #[error("total gas used by the user operation {0} is greater than the allowed limit: {1}")]
     GasTotalTooLarge(u128, u128),
@@ -92,6 +124,7 @@ impl GasEstimationError {
             Self::GasUsedTooLarge => "gas_used_too_large",
             Self::GasFieldTooLarge(_, _) => "gas_field_too_large",
             Self::GasTotalTooLarge(_, _) => "gas_total_too_large",
+            Self::StateGasTooLarge(_, _) => "state_gas_too_large",
             Self::UnsupportedAggregator(_) => "unsupported_aggregator",
             Self::ProviderError(_) => "provider",
             Self::Other(_) => "other",
@@ -142,6 +175,20 @@ pub struct Settings {
     pub call_gas_allowed_error_pct: u128,
     /// The maximum number of rounds to run for gas estimation
     pub max_gas_estimation_rounds: u32,
+    /// The most EIP-8037 state gas a user operation may carry in reservoir mode, which is also
+    /// the largest state-gas reservoir of a bundle. Estimation's simulations need a node
+    /// `rpc.gascap` of at least 2^24 plus this plus
+    /// [`RESERVOIR_PROBE_GAS_HEADROOM`](rundler_provider::RESERVOIR_PROBE_GAS_HEADROOM).
+    pub max_reservoir_gas: u64,
+    /// The most time the reservoir-mode fallback may spend simulating an op for its state gas,
+    /// reservoir and call gas limit
+    pub reservoir_trace_timeout: Duration,
+    /// The most reservoir-mode fallbacks that may run at once; more fall back to the metered
+    /// estimate's error
+    pub max_concurrent_reservoir_estimations: usize,
+    /// The most reservoir searches for bundler-sponsored ops that admission may run at once, per
+    /// entry point; more are rejected with a retryable error
+    pub max_concurrent_sponsored_reservoir_searches: usize,
 }
 
 impl Settings {
@@ -170,6 +217,48 @@ struct Metrics {
     cgl_estimate_ms: Histogram,
     #[metric(describe = "the distribution of pvgl estimate time.")]
     pvgl_estimate_ms: Histogram,
+    #[metric(describe = "the count of estimates that fell back to reservoir mode.")]
+    reservoir_fallbacks: Counter,
+    #[metric(
+        describe = "the count of bundler-sponsored ops searched for a reservoir at admission, after failing without one."
+    )]
+    sponsored_reservoir_searches: Counter,
+    #[metric(describe = "the count of bundler-sponsored ops admitted in reservoir mode.")]
+    sponsored_reservoirs: Counter,
+    #[metric(
+        describe = "the count of bundler-sponsored ops rejected at admission because too many reservoir searches were running."
+    )]
+    sponsored_reservoir_busy: Counter,
+    #[metric(
+        describe = "the count of bundler-sponsored ops rejected at admission because their reservoir search timed out."
+    )]
+    sponsored_reservoir_timeouts: Counter,
+    #[metric(
+        describe = "the count of bundler-sponsored ops rejected at admission because the node's eth_simulateV1 gives calls no state-gas reservoir."
+    )]
+    sponsored_reservoir_without_simulation_reservoir: Counter,
+    #[metric(
+        describe = "the distribution of admission's reservoir search time for bundler-sponsored ops."
+    )]
+    sponsored_reservoir_trace_ms: Histogram,
+    #[metric(describe = "the count of reservoir-mode fallbacks that produced an estimate.")]
+    reservoir_estimates: Counter,
+    #[metric(
+        describe = "the count of reservoir-mode fallbacks skipped because too many were running."
+    )]
+    reservoir_fallbacks_busy: Counter,
+    #[metric(describe = "the distribution of reservoir-mode estimation time.")]
+    reservoir_trace_ms: Histogram,
+    #[metric(describe = "the distribution of the state gas of reservoir-mode estimates.")]
+    reservoir_state_gas: Histogram,
+    #[metric(
+        describe = "the count of reservoir-mode estimates whose state peaks too far above its net amount for the spill to fit the call gas limit."
+    )]
+    reservoir_peak_searches: Counter,
+    #[metric(
+        describe = "the count of reservoir-mode estimates that failed because the node's eth_simulateV1 gives calls no state-gas reservoir."
+    )]
+    reservoir_simulation_without_reservoir: Counter,
 }
 
 /// Names of the estimation eth_call histograms, without the global metrics prefix.
@@ -274,7 +363,7 @@ enum BinarySearchResult {
     Revert(Bytes),
 }
 
-async fn run_binary_search<F>(
+async fn run_binary_search<'a, F>(
     round_fn: F,
     max_gas: u128,
     max_rounds: u32,
@@ -286,7 +375,7 @@ where
         u128, // min gas
         u128, // max gas
         bool, // is continuation
-    ) -> Pin<Box<dyn Future<Output = Result<Bytes, GasEstimationError>> + Send>>,
+    ) -> Pin<Box<dyn Future<Output = Result<Bytes, GasEstimationError>> + Send + 'a>>,
 {
     let mut eth_calls = 0_u32;
     let result = binary_search(round_fn, max_gas, max_rounds, &mut eth_calls).await;
@@ -304,7 +393,7 @@ where
 /// Runs the binary search, returning `None` if it did not converge within `max_rounds`.
 ///
 /// `eth_calls` counts the rounds started, including one that fails.
-async fn binary_search<F>(
+async fn binary_search<'a, F>(
     round_fn: F,
     max_gas: u128,
     max_rounds: u32,
@@ -315,7 +404,7 @@ where
         u128, // min gas
         u128, // max gas
         bool, // is continuation
-    ) -> Pin<Box<dyn Future<Output = Result<Bytes, GasEstimationError>> + Send>>,
+    ) -> Pin<Box<dyn Future<Output = Result<Bytes, GasEstimationError>> + Send + 'a>>,
 {
     let mut min_gas = 0;
     let mut max_gas = max_gas;

@@ -14,8 +14,8 @@
 use alloy_primitives::{Address, B256, U256};
 
 use crate::{
-    Entity, EntityType, StakeInfo, UserOperation, UserOperationPermissions, UserOperationVariant,
-    ValidTimeRange, da::DAGasData, entity::EntityInfos,
+    Entity, EntityType, StakeInfo, StateGasMode, UserOperation, UserOperationPermissions,
+    UserOperationVariant, ValidTimeRange, da::DAGasData, entity::EntityInfos,
 };
 
 /// Information about a pending bundle containing a user operation
@@ -53,6 +53,8 @@ pub struct NewHead {
     pub block_hash: B256,
     /// The number of the new head
     pub block_number: u64,
+    /// The timestamp of the new head, `None` if sent by a pool that predates this field
+    pub block_timestamp: Option<u64>,
     /// The updates to the state of the addresses
     pub address_updates: Vec<AddressUpdate>,
 }
@@ -143,6 +145,10 @@ pub struct PoolOperation {
     pub perms: UserOperationPermissions,
     /// Whether the sender is a 7702 delegation
     pub sender_is_7702: bool,
+    /// The state-gas reservoir `R` this op is bundled with if it is in
+    /// [`StateGasMode::Reservoir`]: its preVerificationGas surplus over the metered requirement,
+    /// decided once at admission. `None` for a metered op.
+    pub reservoir_gas: Option<u128>,
 }
 
 /// The preconfirmed information for an user operation
@@ -153,6 +159,27 @@ pub struct PreconfInfo {
 }
 
 impl PoolOperation {
+    /// The gas a bundler sponsorship's `max_cost` must cover: the op's limits, plus its
+    /// reservoir if it is sponsored. A sponsored op's PVG is zero, so its reservoir is not in
+    /// its limits; a paying op's PVG already pays for its reservoir.
+    pub fn total_gas_limit_with_reservoir(&self) -> u128 {
+        let reservoir_gas = if self.perms.bundler_sponsorship.is_some() {
+            self.reservoir_gas.unwrap_or(0)
+        } else {
+            0
+        };
+        self.uo.total_gas_limit() + reservoir_gas
+    }
+
+    /// How this op's EIP-8037 state gas is paid for
+    pub fn state_gas_mode(&self) -> StateGasMode {
+        if self.reservoir_gas.is_some() {
+            StateGasMode::Reservoir
+        } else {
+            StateGasMode::Metered
+        }
+    }
+
     /// Returns true if the operation contains the given entity.
     pub fn contains_entity(&self, entity: &Entity) -> bool {
         if let Some(ei) = self.entity_infos.get(entity.kind) {

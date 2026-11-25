@@ -124,9 +124,15 @@ where
     }
 
     #[instrument(skip_all)]
-    async fn get_deposit_info(&self, address: Address) -> ProviderResult<DepositInfo> {
-        self.i_entry_point
-            .getDepositInfo(address)
+    async fn get_deposit_info(
+        &self,
+        address: Address,
+        block_id: Option<BlockId>,
+    ) -> ProviderResult<DepositInfo> {
+        block_id
+            .map_or(self.i_entry_point.getDepositInfo(address), |bid| {
+                self.i_entry_point.getDepositInfo(address).block(bid)
+            })
             .call()
             .await
             .map_err(Into::into)
@@ -383,6 +389,21 @@ where
     D: Send + Sync,
 {
     type UO = UserOperation;
+
+    fn get_state_gas_simulate_handle_op_call(
+        &self,
+        _op: Self::UO,
+        _skip_post_op: bool,
+        _target: Address,
+        _target_call_data: Bytes,
+        _gas: u64,
+        _state_override: StateOverride,
+    ) -> ProviderResult<(TransactionRequest, StateOverride)> {
+        Err(anyhow::anyhow!(
+            "EntryPoint v0.6 simulateHandleOp always reverts, which undoes the state to trace"
+        )
+        .into())
+    }
 
     fn get_tracer_simulate_validation_call(
         &self,

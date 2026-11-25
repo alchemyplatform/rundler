@@ -732,7 +732,9 @@ mod tests {
     }
 
     fn set_provider_nonce_and_fees(provider: &mut MockEvmProvider) {
-        provider.expect_get_transaction_count().returning(|_| Ok(1));
+        provider
+            .expect_get_transaction_count()
+            .returning(|_, _| Ok(1));
         provider.expect_get_max_priority_fee().returning(|| Ok(1));
         provider.expect_get_pending_base_fee().returning(|| Ok(1));
     }

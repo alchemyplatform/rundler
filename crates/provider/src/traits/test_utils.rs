@@ -97,7 +97,7 @@ mockall::mock! {
             trace_options: GethDebugTracingCallOptions,
         ) -> ProviderResult<GethTrace>;
 
-        async fn get_latest_block_hash_and_number(&self) -> ProviderResult<(B256, u64)>;
+        async fn get_latest_block_hash_number_and_timestamp(&self) -> ProviderResult<(B256, u64, u64)>;
         /// Get the pending block hash and number
         async fn get_pending_block_hash_and_number(&self) -> ProviderResult<(B256, u64)>;
 
@@ -107,7 +107,11 @@ mockall::mock! {
 
         async fn get_code(&self, address: Address, block: Option<BlockId>) -> ProviderResult<Bytes>;
 
-        async fn get_transaction_count(&self, address: Address) -> ProviderResult<u64>;
+        async fn get_transaction_count(
+            &self,
+            address: Address,
+            block: Option<BlockId>,
+        ) -> ProviderResult<u64>;
 
         async fn get_pending_transaction_count(&self, address: Address) -> ProviderResult<u64>;
 
@@ -143,7 +147,8 @@ mockall::mock! {
         fn address(&self) -> &Address;
         async fn balance_of(&self, address: Address, block_id: Option<BlockId>)
             -> ProviderResult<U256>;
-        async fn get_deposit_info(&self, address: Address) -> ProviderResult<DepositInfo>;
+        async fn get_deposit_info(&self, address: Address, block_id: Option<BlockId>)
+            -> ProviderResult<DepositInfo>;
         async fn get_balances(&self, addresses: Vec<Address>) -> ProviderResult<Vec<U256>>;
     }
 
@@ -169,6 +174,15 @@ mockall::mock! {
             &self,
             user_op: v0_6::UserOperation,
         ) -> ProviderResult<(SimulationTransactionRequest, StateOverride)>;
+        fn get_state_gas_simulate_handle_op_call(
+            &self,
+            op: v0_6::UserOperation,
+            skip_post_op: bool,
+            target: Address,
+            target_call_data: Bytes,
+            gas: u64,
+            state_override: StateOverride,
+        ) -> ProviderResult<(TransactionRequest, StateOverride)>;
         async fn simulate_validation(
             &self,
             user_op: v0_6::UserOperation,
@@ -250,7 +264,8 @@ mockall::mock! {
         fn address(&self) -> &Address;
         async fn balance_of(&self, address: Address, block_id: Option<BlockId>)
             -> ProviderResult<U256>;
-        async fn get_deposit_info(&self, address: Address) -> ProviderResult<DepositInfo>;
+        async fn get_deposit_info(&self, address: Address, block_id: Option<BlockId>)
+            -> ProviderResult<DepositInfo>;
         async fn get_balances(&self, addresses: Vec<Address>) -> ProviderResult<Vec<U256>>;
     }
 
@@ -276,6 +291,15 @@ mockall::mock! {
             &self,
             user_op: v0_7::UserOperation,
         ) -> ProviderResult<(SimulationTransactionRequest, StateOverride)>;
+        fn get_state_gas_simulate_handle_op_call(
+            &self,
+            op: v0_7::UserOperation,
+            skip_post_op: bool,
+            target: Address,
+            target_call_data: Bytes,
+            gas: u64,
+            state_override: StateOverride,
+        ) -> ProviderResult<(TransactionRequest, StateOverride)>;
         async fn simulate_validation(
             &self,
             user_op: v0_7::UserOperation,

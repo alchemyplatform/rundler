@@ -34,16 +34,14 @@ use tracing::{info, warn};
 
 /// EIP-4337 intrinsic gas for a type-4 transaction.
 const DELEGATION_BASE_GAS: u64 = 21_000;
-/// Per-authorization gas cost (EIP-7702).
-const DELEGATION_GAS_PER_AUTH: u64 = 25_000;
 /// Extra buffer added on top of the calculated cost.
 const DELEGATION_GAS_BUFFER: u64 = 50_000;
 
 /// Number of blocks to retain mined delegation records before pruning.
 const MINED_RETENTION_BLOCKS: u64 = 100;
 
-fn delegation_gas_limit(n_auths: usize) -> u64 {
-    DELEGATION_BASE_GAS + n_auths as u64 * DELEGATION_GAS_PER_AUTH + DELEGATION_GAS_BUFFER
+fn delegation_gas_limit(n_auths: usize, gas_per_auth: u64) -> u64 {
+    DELEGATION_BASE_GAS + n_auths as u64 * gas_per_auth + DELEGATION_GAS_BUFFER
 }
 
 /// Settings for the delegation sender.
@@ -57,6 +55,8 @@ pub(crate) struct Settings {
     pub fee_bump_percent: u32,
     /// Maximum gas per delegation tx — used to cap the number of auths per batch.
     pub max_delegation_gas: u64,
+    /// Gas charged per EIP-7702 authorization
+    pub gas_per_auth: u64,
 }
 
 /// Actions that can be sent to the delegation sender task.
@@ -234,7 +234,7 @@ where
                 .max_delegation_gas
                 .saturating_sub(DELEGATION_BASE_GAS)
                 .saturating_sub(DELEGATION_GAS_BUFFER))
-                / DELEGATION_GAS_PER_AUTH) as usize;
+                / self.settings.gas_per_auth) as usize;
             let batch_size = self.queue.len().min(max_auths.max(1));
             let batch: Vec<(DelegationId, Eip7702Auth, Option<u64>)> =
                 self.queue.drain(..batch_size).collect();
@@ -368,7 +368,7 @@ where
         // replacement supersedes the previous pending tx rather than queuing behind it.
         let nonce = self
             .provider
-            .get_transaction_count(signer.address())
+            .get_transaction_count(signer.address(), None)
             .await
             .context("failed to get signer nonce")?;
 
@@ -488,7 +488,10 @@ where
         let tx = TransactionRequest::default()
             .to(signer.address())
             .nonce(nonce)
-            .gas_limit(delegation_gas_limit(auths.len()))
+            .gas_limit(delegation_gas_limit(
+                auths.len(),
+                self.settings.gas_per_auth,
+            ))
             .max_fee_per_gas(fees.max_fee_per_gas)
             .max_priority_fee_per_gas(fees.max_priority_fee_per_gas)
             .with_authorization_list(auths.iter().map(|a| a.clone().into()).collect());

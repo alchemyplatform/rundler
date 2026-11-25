@@ -52,6 +52,9 @@ pub struct PoolOperationSummary {
     /// Whether the operation is suspected of poisoning bundles and must only be
     /// submitted alone. See `docs/designs/poison-user-operations.md`.
     pub suspect: bool,
+    /// Whether the operation is in reservoir mode (`PoolOperation::reservoir_gas`) and must only
+    /// be submitted alone, with `tx.gas = 2^24 + R`
+    pub reservoir: bool,
 }
 
 /// Final outcome of a bundle submission attempt, reported to the pool for poison
@@ -242,9 +245,10 @@ impl From<&PoolOperation> for PoolOperationSummary {
             sim_block_number: op.sim_block_number,
             max_fee_per_gas: op.uo.max_fee_per_gas(),
             max_priority_fee_per_gas: op.uo.max_priority_fee_per_gas(),
-            gas_limit: op.uo.total_gas_limit(),
+            gas_limit: op.total_gas_limit_with_reservoir(),
             bundler_sponsorship_max_cost: op.perms.bundler_sponsorship.as_ref().map(|s| s.max_cost),
             suspect: false,
+            reservoir: op.reservoir_gas.is_some(),
         }
     }
 }

@@ -35,9 +35,11 @@ use super::protos::{
     MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
     MempoolError as ProtoMempoolError, MultipleRolesViolation, NotStaked,
     OperationAlreadyKnownError, OperationDropTooSoon, OperationRevert, OutOfGas, OverMaxCost,
-    PanicRevert, PaymasterBalanceTooLow, PaymasterDepositTooLow, PaymasterIsNotContract,
-    PreVerificationGasTooLow, PrecheckViolationError as ProtoPrecheckViolationError,
-    ReplacementUnderpricedError, SenderAddressUsedAsAlternateEntity, SenderFundsTooLow,
+    OverSponsorshipMaxCost, PanicRevert, PaymasterBalanceTooLow, PaymasterDepositTooLow,
+    PaymasterIsNotContract, PreVerificationGasTooLow,
+    PrecheckViolationError as ProtoPrecheckViolationError, ReplacementUnderpricedError,
+    ReservoirGasTooHigh, ReservoirSearchBusy, ReservoirSearchTimedOut, ReservoirSimulationFailed,
+    ReservoirSimulationUnsupported, SenderAddressUsedAsAlternateEntity, SenderFundsTooLow,
     SenderIsNotContractAndNoInitCode, SimulationViolationError as ProtoSimulationViolationError,
     TooManyExpectedStorageSlots, TotalGasLimitTooHigh, UnintendedRevert,
     UnintendedRevertWithMessage, UnknownEntryPointError, UnknownRevert, UnstakedPaymasterContext,
@@ -323,6 +325,14 @@ impl From<PrecheckViolation> for ProtoPrecheckViolationError {
                     },
                 )),
             },
+            PrecheckViolation::ReservoirGasTooHigh(actual, max) => ProtoPrecheckViolationError {
+                violation: Some(precheck_violation_error::Violation::ReservoirGasTooHigh(
+                    ReservoirGasTooHigh {
+                        actual_gas: actual.to_proto_bytes(),
+                        max_gas: max.to_proto_bytes(),
+                    },
+                )),
+            },
             PrecheckViolation::VerificationGasLimitTooHigh(actual, max) => {
                 ProtoPrecheckViolationError {
                     violation: Some(
@@ -466,6 +476,38 @@ impl From<PrecheckViolation> for ProtoPrecheckViolationError {
                     },
                 )),
             },
+            PrecheckViolation::ReservoirSearchBusy => ProtoPrecheckViolationError {
+                violation: Some(precheck_violation_error::Violation::ReservoirSearchBusy(
+                    ReservoirSearchBusy {},
+                )),
+            },
+            PrecheckViolation::ReservoirSearchTimedOut => ProtoPrecheckViolationError {
+                violation: Some(precheck_violation_error::Violation::ReservoirSearchTimedOut(
+                    ReservoirSearchTimedOut {},
+                )),
+            },
+            PrecheckViolation::ReservoirSimulationUnsupported => ProtoPrecheckViolationError {
+                violation: Some(
+                    precheck_violation_error::Violation::ReservoirSimulationUnsupported(
+                        ReservoirSimulationUnsupported {},
+                    ),
+                ),
+            },
+            PrecheckViolation::ReservoirSimulationFailed => ProtoPrecheckViolationError {
+                violation: Some(precheck_violation_error::Violation::ReservoirSimulationFailed(
+                    ReservoirSimulationFailed {},
+                )),
+            },
+            PrecheckViolation::OverSponsorshipMaxCost(actual_cost, max_cost) => {
+                ProtoPrecheckViolationError {
+                    violation: Some(precheck_violation_error::Violation::OverSponsorshipMaxCost(
+                        OverSponsorshipMaxCost {
+                            actual_cost: actual_cost.to_proto_bytes(),
+                            max_cost: max_cost.to_proto_bytes(),
+                        },
+                    )),
+                }
+            }
         }
     }
 }
@@ -486,6 +528,12 @@ impl TryFrom<ProtoPrecheckViolationError> for PrecheckViolation {
             }
             Some(precheck_violation_error::Violation::TotalGasLimitTooHigh(e)) => {
                 PrecheckViolation::TotalGasLimitTooHigh(
+                    from_bytes(&e.actual_gas)?,
+                    from_bytes(&e.max_gas)?,
+                )
+            }
+            Some(precheck_violation_error::Violation::ReservoirGasTooHigh(e)) => {
+                PrecheckViolation::ReservoirGasTooHigh(
                     from_bytes(&e.actual_gas)?,
                     from_bytes(&e.max_gas)?,
                 )
@@ -573,6 +621,24 @@ impl TryFrom<ProtoPrecheckViolationError> for PrecheckViolation {
             ) => PrecheckViolation::Eip7702SenderPendingTransactionCountTooHigh(
                 e.pending_transaction_count,
             ),
+            Some(precheck_violation_error::Violation::ReservoirSearchBusy(_)) => {
+                PrecheckViolation::ReservoirSearchBusy
+            }
+            Some(precheck_violation_error::Violation::ReservoirSearchTimedOut(_)) => {
+                PrecheckViolation::ReservoirSearchTimedOut
+            }
+            Some(precheck_violation_error::Violation::ReservoirSimulationUnsupported(_)) => {
+                PrecheckViolation::ReservoirSimulationUnsupported
+            }
+            Some(precheck_violation_error::Violation::ReservoirSimulationFailed(_)) => {
+                PrecheckViolation::ReservoirSimulationFailed
+            }
+            Some(precheck_violation_error::Violation::OverSponsorshipMaxCost(e)) => {
+                PrecheckViolation::OverSponsorshipMaxCost(
+                    from_bytes(&e.actual_cost)?,
+                    from_bytes(&e.max_cost)?,
+                )
+            }
             None => {
                 bail!("unknown proto mempool precheck violation")
             }
@@ -1066,6 +1132,25 @@ mod tests {
                 assert_eq!(y, U256::ZERO);
             }
             _ => panic!("wrong error type"),
+        }
+    }
+
+    #[test]
+    fn test_reservoir_search_precheck_errors() {
+        for violation in [
+            PrecheckViolation::ReservoirSearchBusy,
+            PrecheckViolation::ReservoirSearchTimedOut,
+            PrecheckViolation::ReservoirSimulationUnsupported,
+            PrecheckViolation::ReservoirSimulationFailed,
+            PrecheckViolation::OverSponsorshipMaxCost(U256::from(2), U256::from(1)),
+        ] {
+            let proto_error: ProtoMempoolError =
+                MempoolError::PrecheckViolation(violation.clone()).into();
+            let error: MempoolError = proto_error.try_into().unwrap();
+            assert!(
+                matches!(&error, MempoolError::PrecheckViolation(v) if *v == violation),
+                "{error:?}"
+            );
         }
     }
 
