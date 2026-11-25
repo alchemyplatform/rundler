@@ -1558,6 +1558,126 @@ mod tests {
         }
     }
 
+    /// A v0.7 op whose metered limits fit the cap but not with the refund write's state gas
+    /// fails the metered total check like any other op over the cap, so it falls back to
+    /// reservoir mode. With state, it is estimated there: its state moves into its reservoir and
+    /// out of its call gas. Without state, reservoir mode cannot help, and the metered
+    /// `GasTotalTooLarge` is returned. Both happen whatever the sender's deposit, since the cap
+    /// is the worst case.
+    #[tokio::test]
+    async fn test_metered_op_over_cap_by_refund_state_gas_falls_back_to_reservoir_mode() {
+        const VERIFICATION_GAS_LIMIT: u128 = 100_000;
+        let chain_spec = reservoir_chain_spec();
+        let settings = reservoir_settings();
+        let cap = settings.max_bundle_execution_gas;
+        let refund_state_gas = chain_spec.zero_deposit_refund_gas();
+        assert!(refund_state_gas > 0, "the refund write is priced");
+
+        let run = |model: OpModel, deposit: U256| {
+            let (mut entry, mut provider, simulations) = reservoir_mocks(model);
+            provider
+                .expect_get_latest_block_hash_number_and_timestamp()
+                .returning(|| Ok((B256::ZERO, 0, 0)));
+            entry.expect_balance_of().returning(move |_, _| Ok(deposit));
+            // The metered call gas search: below 2^24 the call pays for all of its state
+            let need = model.call_gas_need(0);
+            entry.expect_simulate_handle_op_estimate_gas().returning(
+                move |_op, _target, target_call_data, _block, _state_override| {
+                    let target_result =
+                        match CallGasEstimationProxyCalls::abi_decode(&target_call_data).unwrap() {
+                            CallGasEstimationProxyCalls::estimateCallGas(call)
+                                if need <= call.args.maxGas.to::<u128>() =>
+                            {
+                                EstimationTypes::EstimateGasResult {
+                                    gas: U256::from(need),
+                                    numRounds: U256::from(1),
+                                }
+                                .abi_encode()
+                            }
+                            CallGasEstimationProxyCalls::estimateCallGas(_) => {
+                                EstimationTypes::EstimateGasRevertAtMax {
+                                    revertData: Bytes::new(),
+                                }
+                                .abi_encode()
+                            }
+                            CallGasEstimationProxyCalls::testCallGas(call) => TestCallGasResult {
+                                success: call.callGasLimit.to::<u128>() >= need,
+                                gasUsed: U256::ZERO,
+                                revertData: Bytes::new(),
+                            }
+                            .abi_encode(),
+                        };
+                    Ok(Ok(ExecutionResult {
+                        target_result: target_result.into(),
+                        target_success: true,
+                        ..Default::default()
+                    }))
+                },
+            );
+            let estimator = create_custom_estimator(chain_spec.clone(), provider, entry, settings);
+            let mut op = demo_user_op_optional_gas(None);
+            op.sender = RESERVOIR_SENDER;
+            op.verification_gas_limit = Some(VERIFICATION_GAS_LIMIT);
+            async move {
+                let estimate = estimator
+                    .estimate_op_gas(op, StateOverride::default())
+                    .await;
+                (
+                    estimate,
+                    simulations.load(std::sync::atomic::Ordering::Relaxed),
+                )
+            }
+        };
+
+        // 14.64M of call gas need, metered: inside the cap, but not with the refund write
+        let with_state = OpModel::new(4_640_000, 10_000_000);
+        let without_state = OpModel::new(14_640_000, 0);
+        for model in [with_state, without_state] {
+            let (_, full_op) = reservoir_op(&chain_spec, &settings);
+            let metered = UserOperationBuilder::from_uo(full_op, &chain_spec)
+                .call_gas_limit(buffered(model.call_gas_need(0)))
+                .verification_gas_limit(VERIFICATION_GAS_LIMIT)
+                .build();
+            assert!(metered.bundle_computation_gas_limit(&chain_spec, Some(1)) <= cap);
+            assert!(metered.worst_case_bundle_computation_gas_limit(&chain_spec) > cap);
+        }
+
+        for deposit in [U256::ZERO, U256::from(1_000_000_000_000_000_000_u128)] {
+            // With state: estimated in reservoir mode, with call gas for its execution only
+            let (result, simulations) = run(with_state, deposit).await;
+            let estimate = result.unwrap();
+            assert!(simulations > 0, "deposit {deposit}: reservoir mode ran");
+            assert_eq!(estimate.call_gas_limit, buffered(with_state.execution_gas));
+            assert!(estimate.pre_verification_gas > with_state.net_state_gas);
+            assert!(
+                admitted_reservoir_gas(&estimate, &settings).is_some(),
+                "deposit {deposit}: admission sees a reservoir-mode op"
+            );
+            let (_, full_op) = reservoir_op(&chain_spec, &settings);
+            let estimated = UserOperationBuilder::from_uo(full_op, &chain_spec)
+                .call_gas_limit(estimate.call_gas_limit)
+                .verification_gas_limit(estimate.verification_gas_limit)
+                .pre_verification_gas(estimate.pre_verification_gas)
+                .build();
+            assert!(
+                estimated.worst_case_bundle_computation_gas_limit(&chain_spec) <= cap,
+                "deposit {deposit}: admission's cap holds"
+            );
+
+            // Without state: the metered error, over the cap by less than the refund write
+            let (result, _) = run(without_state, deposit).await;
+            let err = result.unwrap_err();
+            let GasEstimationError::GasTotalTooLarge(limit, max) = err else {
+                panic!("deposit {deposit}: expected GasTotalTooLarge, got {err:?}");
+            };
+            assert_eq!(max, cap);
+            assert!(
+                limit > cap && limit - refund_state_gas <= cap,
+                "limit {limit}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn test_unsupported_aggregator() {
         let (entry, provider) = create_base_config();
