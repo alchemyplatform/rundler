@@ -457,10 +457,11 @@ where
             .min(in_simulation)
     }
 
-    /// The op's computation gas (`bundle_computation_gas_limit`) at its limits and
-    /// `call_gas_limit`, as admission will compute it for the op as sent. Its call gas limit is at
-    /// the most that fits, so there is no headroom: priced with the worst-case calldata
-    /// (`max_fill`), since the signature, paymaster data and PVG sent are not the estimate's.
+    /// The op's computation gas at its limits and `call_gas_limit`, as admission will cap it for
+    /// the op as sent (`worst_case_bundle_computation_gas_limit`, which covers the builder's count,
+    /// including the state gas of the zero-deposit refund write). Its call gas limit is at the most that
+    /// fits, so there is no headroom: priced with the worst-case calldata (`max_fill`), since the
+    /// signature, paymaster data and PVG sent are not the estimate's.
     fn reservoir_computation_gas(&self, args: &ReservoirArgs<'_>, call_gas_limit: u128) -> u128 {
         UserOperationBuilder::from_uo(args.op.max_fill(args.chain_spec), args.chain_spec)
             .verification_gas_limit(args.verification_gas_limit)
@@ -468,7 +469,7 @@ where
             .paymaster_post_op_gas_limit(args.op.paymaster_post_op_gas_limit.unwrap_or(0))
             .call_gas_limit(call_gas_limit)
             .build()
-            .bundle_computation_gas_limit(args.chain_spec, Some(1))
+            .worst_case_bundle_computation_gas_limit(args.chain_spec)
     }
 
     /// The least call gas the op runs with at a reservoir of `reservoir_gas`, by the call gas
