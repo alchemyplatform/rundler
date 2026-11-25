@@ -124,9 +124,15 @@ where
     }
 
     #[instrument(skip_all)]
-    async fn get_deposit_info(&self, address: Address) -> ProviderResult<DepositInfo> {
-        self.i_entry_point
-            .getDepositInfo(address)
+    async fn get_deposit_info(
+        &self,
+        address: Address,
+        block_id: Option<BlockId>,
+    ) -> ProviderResult<DepositInfo> {
+        block_id
+            .map_or(self.i_entry_point.getDepositInfo(address), |bid| {
+                self.i_entry_point.getDepositInfo(address).block(bid)
+            })
             .call()
             .await
             .map_err(Into::into)

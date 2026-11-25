@@ -182,6 +182,27 @@ where
         self.ep_specific_metrics.removed_entities.increment(1);
     }
 
+    /// Verification gas the efficiency check counts as used on top of what `op` metered: the
+    /// state gas of creating a self-paying sender's EntryPoint deposit slot (see
+    /// [`UserOperation::verification_efficiency_credit`]).
+    ///
+    /// It is priced with the schedule gas estimation and the calldata floor use, the bundle
+    /// inclusion schedule, so that an op rundler estimated is credited what its estimate added:
+    /// before a scheduled fork that already includes the slot. For the same reason it does not
+    /// depend on the prefund, as a bundler-sponsored op without fees is estimated like any other.
+    fn verification_efficiency_credit(
+        &self,
+        op: &UserOperationVariant,
+        block_timestamp: u64,
+    ) -> u128 {
+        op.verification_efficiency_credit(
+            &self
+                .config
+                .chain_spec
+                .for_bundle_inclusion_after(block_timestamp),
+        )
+    }
+
     async fn check_execution_gas_limit_efficiency(
         &self,
         op: UserOperationVariant,
@@ -697,8 +718,12 @@ where
             .pool
             .check_associated_storage(&sim_result.associated_addresses, &op)?;
 
-        let verification_gas_efficiency =
-            gas_metrics::verification_gas_efficiency(&op, sim_result.pre_op_gas);
+        let deposit_slot_credit = self.verification_efficiency_credit(&op, block_timestamp);
+        let verification_gas_efficiency = gas_metrics::verification_gas_efficiency(
+            &op,
+            sim_result.pre_op_gas,
+            deposit_slot_credit,
+        );
         if let Some(verification_gas_efficiency) = verification_gas_efficiency {
             gas_metrics::record_admission_verification_gas_efficiency(
                 self.config.entry_point,
@@ -725,10 +750,12 @@ where
                 let op_hash = op.hash();
                 let pre_op_gas = sim_result.pre_op_gas;
                 let pre_verification_gas = op.pre_verification_gas();
-                let verification_gas_used = pre_op_gas.saturating_sub(pre_verification_gas);
+                let verification_gas_used = pre_op_gas
+                    .saturating_sub(pre_verification_gas)
+                    .saturating_add(deposit_slot_credit);
                 let total_verification_gas_limit = op.total_verification_gas_limit();
                 tracing::debug!(
-                    "Verification gas limit efficiency too low. Op hash: {op_hash:?} pre op gas: {pre_op_gas} preVerificationGas: {pre_verification_gas} verification gas used: {verification_gas_used} total verification gas limit: {total_verification_gas_limit} efficiency: {verification_gas_efficiency} required: {effective_verification_gas_limit_efficiency_reject_threshold}"
+                    "Verification gas limit efficiency too low. Op hash: {op_hash:?} pre op gas: {pre_op_gas} preVerificationGas: {pre_verification_gas} deposit slot credit: {deposit_slot_credit} verification gas used: {verification_gas_used} total verification gas limit: {total_verification_gas_limit} efficiency: {verification_gas_efficiency} required: {effective_verification_gas_limit_efficiency_reject_threshold}"
                 );
                 return Err(MempoolError::VerificationGasLimitEfficiencyTooLow(
                     effective_verification_gas_limit_efficiency_reject_threshold,
@@ -1164,7 +1191,7 @@ mod tests {
         aggregator::{
             AggregatorCosts, MockSignatureAggregator, SignatureAggregator, SignatureAggregatorError,
         },
-        chain::{ChainSpec, ContractRegistry},
+        chain::{ChainSpec, ContractRegistry, ForkActivation},
         da::DAGasData,
         pool::{PrecheckViolation, SimulationViolation},
         v0_6::{UserOperationBuilder, UserOperationRequiredFields},
@@ -2047,7 +2074,7 @@ mod tests {
     #[tokio::test]
     async fn test_stake_status_not_staked() {
         let mut entrypoint = MockEntryPointV0_6::new();
-        entrypoint.expect_get_deposit_info().returning(|_| {
+        entrypoint.expect_get_deposit_info().returning(|_, _| {
             Ok(DepositInfo {
                 deposit: U256::from(1000),
                 staked: true,
@@ -2427,7 +2454,7 @@ mod tests {
         );
 
         let collector = MessageCollector::default();
-        let _guard = tracing::subscriber::set_default(collector.clone());
+        let _guard = collector.install();
 
         let ret = pool
             .add_operation(OperationOrigin::Local, op.op, default_perms())
@@ -2443,10 +2470,82 @@ mod tests {
             messages.iter().any(|m| m.starts_with(
                 "Verification gas limit efficiency too low. Op hash:"
             ) && m.contains(
-                "pre op gas: 100000 preVerificationGas: 50000 verification gas used: 50000 total verification gas limit: 500000 efficiency: 0.1 required: 0.25"
+                "pre op gas: 100000 preVerificationGas: 50000 deposit slot credit: 0 verification gas used: 50000 total verification gas limit: 500000 efficiency: 0.1 required: 0.25"
             )),
             "missing efficiency detail log: {messages:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_verification_gas_efficiency_credits_deposit_slot() {
+        // The simulator reports 100K pre-op gas: 50K PVG + 50K verification gas. With the
+        // 97,920 deposit slot credit, 200K of verification gas limit scores 0.74 against 0.4.
+        let genesis = ForkActivation::Genesis;
+        // (case, deposit slot empty, glamsterdam, paymaster, max fee, verification limit, accepted)
+        #[rustfmt::skip]
+        let cases = [
+            ("empty slot", Some(true), genesis, false, 1, 200_000, true),
+            // admission cannot tell how the limit was sized, so a funded sender is credited too
+            ("funded slot", Some(false), genesis, false, 1, 200_000, true),
+            ("deposit unknown", None, genesis, false, 1, 200_000, true),
+            // a bundler-sponsored op without fees is estimated with the slot like any other
+            ("zero prefund", Some(true), genesis, false, 0, 200_000, true),
+            // the pool's block (timestamp 0) is before the fork, but gas estimation already
+            // prices the slot for bundle inclusion after it
+            ("before a scheduled fork", Some(true), ForkActivation::Timestamp(100), false, 1, 200_000, true),
+            // (50K + 97,920) / 400K is below 0.4
+            ("limit beyond the credit", Some(true), genesis, false, 1, 400_000, false),
+            ("no glamsterdam", Some(true), ForkActivation::Never, false, 1, 200_000, false),
+            ("paymaster pays", Some(true), genesis, true, 1, 200_000, false),
+        ];
+        for (case, deposit_is_zero, activation, paymaster, max_fee, vgl, accepted) in cases {
+            let mut config = default_config();
+            // v0.6 halves the threshold for a paymaster op; 0.8 keeps it at 0.4
+            config.verification_gas_limit_efficiency_reject_threshold =
+                if paymaster { 0.8 } else { 0.4 };
+            config.chain_spec.glamsterdam_activation = activation;
+            config.paymaster_tracking_enabled = false;
+
+            // v0.6 doubles a paymaster op's verification gas limit, so halve it
+            let (verification_gas_limit, paymaster_and_data) = if paymaster {
+                (vgl / 2, Address::repeat_byte(0x22).to_vec().into())
+            } else {
+                (vgl, Bytes::new())
+            };
+            let mut op = create_op_from_op_v0_6(UserOperationRequiredFields {
+                verification_gas_limit,
+                pre_verification_gas: 50_000,
+                max_fee_per_gas: max_fee,
+                max_priority_fee_per_gas: max_fee,
+                paymaster_and_data,
+                ..Default::default()
+            });
+            op.pvg_state.sender_deposit_is_zero = deposit_is_zero;
+
+            // the paymaster's deposit covers the op
+            let mut ep = MockEntryPointV0_6::new();
+            ep.expect_balance_of().returning(|_, _| Ok(U256::MAX));
+            let pool = create_pool_with_entry_point_config(
+                config,
+                vec![op.clone()],
+                ep,
+                MempoolConfig::default(),
+            );
+            let ret = pool
+                .add_operation(OperationOrigin::Local, op.op, default_perms())
+                .await;
+            if accepted {
+                assert!(ret.is_ok(), "{case}: {ret:?}");
+            } else {
+                assert!(
+                    matches!(
+                        ret,
+                        Err(MempoolError::VerificationGasLimitEfficiencyTooLow(..))
+                    ),
+                    "{case}: {ret:?}"
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -2847,6 +2946,7 @@ mod tests {
         staked: bool,
         trusted: bool,
         reservoir_gas: Option<u128>,
+        pvg_state: PvgState,
     }
 
     fn default_config() -> PoolConfig {
@@ -2988,7 +3088,7 @@ mod tests {
                     Ok(PrecheckReturn {
                         da_gas_data: DAGasData::Empty,
                         required_pre_verification_gas: 100_000,
-                        pvg_state: PvgState::unknown(),
+                        pvg_state: op.pvg_state,
                         sender_is_7702: false,
                         reservoir_gas: op.reservoir_gas,
                     })
@@ -3108,6 +3208,7 @@ mod tests {
             staked: false,
             trusted: false,
             reservoir_gas: None,
+            pvg_state: PvgState::unknown(),
         }
     }
 
@@ -3137,6 +3238,7 @@ mod tests {
             staked,
             trusted: false,
             reservoir_gas: None,
+            pvg_state: PvgState::unknown(),
         }
     }
 
@@ -3156,6 +3258,7 @@ mod tests {
             staked: false,
             trusted: false,
             reservoir_gas: None,
+            pvg_state: PvgState::unknown(),
         }
     }
 
@@ -3170,6 +3273,7 @@ mod tests {
             staked: false,
             trusted: false,
             reservoir_gas: None,
+            pvg_state: PvgState::unknown(),
         }
     }
 

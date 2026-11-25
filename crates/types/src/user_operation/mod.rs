@@ -392,6 +392,7 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
                 da_gas,
                 self.calldata_floor_gas_limit(chain_spec),
                 thresh,
+                self.verification_efficiency_credit(chain_spec),
             )
         } else {
             execution_pvg + da_gas
@@ -486,18 +487,69 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
             .saturating_sub(self.authorization_state_discount(chain_spec, state))
     }
 
-    /// Returns extra pre-verification gas that depends on on-chain state: unmetered state gas
-    /// the EntryPoint spends for this user operation (EIP-8037). 0 when the gas schedule has
-    /// no such term.
+    /// Whether the sender pays for itself (no paymaster) and its EntryPoint deposit storage slot
+    /// is empty, so the EntryPoint creates that slot when it writes the sender's deposit.
+    /// `Some(false)` with a paymaster, which pays and receives the refund instead; `None` when the
+    /// deposit is unknown.
+    fn self_paying_sender_deposit_slot_is_empty(&self, state: &PvgState) -> Option<bool> {
+        if self.paymaster().is_some() {
+            Some(false)
+        } else {
+            state.sender_deposit_is_zero
+        }
+    }
+
+    /// State gas of creating the sender's EntryPoint deposit slot (EIP-8037), for a sender paying
+    /// for itself whose slot is empty or unknown (see
+    /// [`Self::self_paying_sender_deposit_slot_is_empty`]). 0 otherwise, and 0 when the gas
+    /// schedule has no such term.
     ///
-    /// A sender paying for itself (no paymaster) whose EntryPoint deposit is zero (or unknown)
-    /// at bundle start: the refund write after metering re-creates the deposit slot.
-    fn state_pre_verification_gas(&self, chain_spec: &ChainSpec, state: &PvgState) -> u128 {
-        if self.paymaster().is_none() && state.sender_deposit_is_zero.unwrap_or(true) {
+    /// Such a sender pays for that slot twice:
+    /// - Inside validation, when it pays `missingAccountFunds`. The EntryPoint clears the slot
+    ///   again when it takes the prefund, which refills the state gas before `preOpGas` is
+    ///   measured, but the verification gas limit has to cover it. Gas estimation adds it to the
+    ///   verification gas limit.
+    /// - In the refund write after the EntryPoint stops metering, which re-creates the slot (see
+    ///   [`Self::state_pre_verification_gas`]).
+    fn zero_deposit_slot_state_gas(&self, chain_spec: &ChainSpec, state: &PvgState) -> u128 {
+        if self
+            .self_paying_sender_deposit_slot_is_empty(state)
+            .unwrap_or(true)
+        {
             chain_spec.zero_deposit_refund_gas()
         } else {
             0
         }
+    }
+
+    /// Verification gas the pool's efficiency check counts as used on top of what this
+    /// operation meters: the state gas of creating the sender's deposit slot, for any sender
+    /// paying for itself (see [`Self::zero_deposit_slot_state_gas`]). 0 with a paymaster, and 0
+    /// when the gas schedule has no such term.
+    ///
+    /// Gas estimation adds that state gas to the verification gas limit when the sender's slot
+    /// is empty, and admission cannot tell whether a limit was sized for an empty slot: the slot
+    /// may have filled since the operation was estimated. So the credit goes to every self-paying
+    /// operation, whatever its deposit state or fees, which lets it reserve up to
+    /// `credit / threshold` more verification gas than it uses. Anything relying on the
+    /// efficiency check's minimum, such as the calldata floor, has to assume the same credit.
+    fn verification_efficiency_credit(&self, chain_spec: &ChainSpec) -> u128 {
+        if self.paymaster().is_none() {
+            chain_spec.zero_deposit_refund_gas()
+        } else {
+            0
+        }
+    }
+
+    /// Returns extra pre-verification gas that depends on on-chain state: unmetered state gas
+    /// the EntryPoint spends for this user operation (EIP-8037). 0 when the gas schedule has
+    /// no such term.
+    ///
+    /// A sender paying for itself whose EntryPoint deposit slot is empty (or unknown) at bundle
+    /// start: the refund write after metering re-creates the deposit slot (see
+    /// [`Self::zero_deposit_slot_state_gas`]).
+    fn state_pre_verification_gas(&self, chain_spec: &ChainSpec, state: &PvgState) -> u128 {
+        self.zero_deposit_slot_state_gas(chain_spec, state)
     }
 }
 
@@ -525,19 +577,28 @@ pub fn bundle_per_uo_shared_gas(chain_spec: &ChainSpec, bundle_size: usize) -> u
 }
 
 /// Handle EIP-7623 calldata floor gas increase
+///
+/// The op's lowest payment counts the verification gas the pool's efficiency check guarantees it
+/// uses: `threshold × verification gas limit`, less `verification_efficiency_credit`, the gas that
+/// check credits on top of what the op meters (see
+/// [`UserOperation::verification_efficiency_credit`]).
 pub fn increase_required_pvg_with_calldata_floor_gas<UO: UserOperation>(
     op_with_limits: &UO,
     max_required_pvg_without_da: u128,
     da_gas: u128,
     required_calldata_floor_gas_limit: u128,
     verification_gas_limit_efficiency_reject_threshold: f64,
+    verification_efficiency_credit: u128,
 ) -> u128 {
+    let lowest_verification_gas = (op_with_limits.total_verification_gas_limit() as f64
+        * op_with_limits.effective_verification_gas_limit_efficiency_reject_threshold(
+            verification_gas_limit_efficiency_reject_threshold,
+        )
+        - verification_efficiency_credit as f64)
+        .max(0.0);
     let lowest_gas_usage = (max_required_pvg_without_da as f64
         + op_with_limits.execution_gas_limit() as f64 * 0.1
-        + op_with_limits.total_verification_gas_limit() as f64
-            * op_with_limits.effective_verification_gas_limit_efficiency_reject_threshold(
-                verification_gas_limit_efficiency_reject_threshold,
-            )) as u128;
+        + lowest_verification_gas) as u128;
     let required_pvg_without_da = if lowest_gas_usage < required_calldata_floor_gas_limit {
         max_required_pvg_without_da + (required_calldata_floor_gas_limit - lowest_gas_usage)
     } else {
@@ -1096,7 +1157,9 @@ mod glamsterdam_tests {
     use crate::{
         EntryPointVersion,
         chain::ForkActivation,
-        v0_7::{UserOperation as UserOperationV0_7, UserOperationBuilder},
+        v0_7::{
+            UserOperation as UserOperationV0_7, UserOperationBuilder, UserOperationRequiredFields,
+        },
     };
 
     const DEVNET_CHAIN_ID: u64 = 7091047534;
@@ -1192,6 +1255,163 @@ mod glamsterdam_tests {
         assert_eq!(predicted(&ops, &spec, &PvgState::unknown()), p);
         // Exactly the refund write per op on top of a prefunded sender.
         assert_eq!(p - predicted(&ops, &spec, &PREFUNDED), 2 * 97_920);
+    }
+
+    #[test]
+    fn zero_deposit_slot_state_gas() {
+        let spec = glamsterdam_spec();
+        let self_paying = fixture_ops(
+            include_str!("testdata/glamsterdam_devnet8/self_pay_zero_deposit_n2.hex"),
+            &spec,
+            false,
+        );
+        let sponsored = fixture_ops(
+            include_str!("testdata/glamsterdam_devnet8/paymaster_n1.hex"),
+            &spec,
+            false,
+        );
+        for (deposit_is_zero, slot_state_gas) in
+            [(Some(true), 97_920), (None, 97_920), (Some(false), 0)]
+        {
+            let state = PvgState {
+                sender_deposit_is_zero: deposit_is_zero,
+                authority: None,
+            };
+            assert_eq!(
+                self_paying[0].self_paying_sender_deposit_slot_is_empty(&state),
+                deposit_is_zero
+            );
+            assert_eq!(
+                self_paying[0].zero_deposit_slot_state_gas(&spec, &state),
+                slot_state_gas
+            );
+            // The same slot, re-created by the refund write after metering
+            assert_eq!(
+                self_paying[0].state_pre_verification_gas(&spec, &state),
+                slot_state_gas
+            );
+            // A paymaster pays and receives the refund, whatever the sender's deposit
+            assert_eq!(
+                sponsored[0].self_paying_sender_deposit_slot_is_empty(&state),
+                Some(false)
+            );
+            assert_eq!(sponsored[0].zero_deposit_slot_state_gas(&spec, &state), 0);
+        }
+        // No such term before Glamsterdam
+        assert_eq!(
+            self_paying[0].zero_deposit_slot_state_gas(&ChainSpec::default(), &PvgState::unknown()),
+            0
+        );
+    }
+
+    /// A self-paying op with `call_data_len` non-zero bytes of call data and no execution gas,
+    /// and the same op with a paymaster
+    fn floor_ops(
+        spec: &ChainSpec,
+        verification_gas_limit: u128,
+        call_data_len: usize,
+    ) -> (UserOperationV0_7, UserOperationV0_7) {
+        let required = || UserOperationRequiredFields {
+            sender: Address::repeat_byte(0x11),
+            nonce: U256::ZERO,
+            call_data: vec![1; call_data_len].into(),
+            call_gas_limit: 0,
+            verification_gas_limit,
+            pre_verification_gas: 0,
+            max_priority_fee_per_gas: 1,
+            max_fee_per_gas: 1,
+            signature: Bytes::new(),
+        };
+        let self_paying =
+            UserOperationBuilder::new(spec, EntryPointVersion::V0_7, required()).build();
+        let sponsored = UserOperationBuilder::new(spec, EntryPointVersion::V0_7, required())
+            .paymaster(Address::repeat_byte(0x22), 50_000, 0, Bytes::new())
+            .build();
+        (self_paying, sponsored)
+    }
+
+    #[test]
+    fn verification_efficiency_credit() {
+        let spec = glamsterdam_spec();
+        let (self_paying, sponsored) = floor_ops(&spec, 200_000, 0);
+        assert_eq!(self_paying.verification_efficiency_credit(&spec), 97_920);
+        assert_eq!(sponsored.verification_efficiency_credit(&spec), 0);
+        assert_eq!(
+            self_paying.verification_efficiency_credit(&ChainSpec::default()),
+            0
+        );
+    }
+
+    #[test]
+    fn calldata_floor_assumes_the_efficiency_credit() {
+        let spec = glamsterdam_spec();
+        // 0.5 keeps threshold × limit exact in f64
+        let threshold = 0.5;
+        // A set deposit slot leaves out the refund-write term, to isolate the credit
+        let base = |op: &UserOperationV0_7| {
+            op.required_pre_verification_gas(&spec, 1, 0, None, &PREFUNDED)
+        };
+        // The required PVG with the floor, with and without the op's credit
+        let with_and_without = |op: &UserOperationV0_7| {
+            let floor = op.calldata_floor_gas_limit(&spec);
+            let credit = op.verification_efficiency_credit(&spec);
+            (
+                increase_required_pvg_with_calldata_floor_gas(
+                    op,
+                    base(op),
+                    0,
+                    floor,
+                    threshold,
+                    credit,
+                ),
+                increase_required_pvg_with_calldata_floor_gas(op, base(op), 0, floor, threshold, 0),
+            )
+        };
+
+        // The floor binds and 0.5 × 400K is above the credit: exactly the credit more
+        let (self_paying, sponsored) = floor_ops(&spec, 400_000, 10_000);
+        let (with, without) = with_and_without(&self_paying);
+        assert!(without > base(&self_paying), "the floor must bind");
+        assert_eq!(with - without, 97_920);
+        // A paymaster op gets no credit
+        let (with, without) = with_and_without(&sponsored);
+        assert_eq!(with, without);
+
+        // 0.5 × 100K is below the credit: the verification gas counted stops at 0
+        let (self_paying, _) = floor_ops(&spec, 100_000, 10_000);
+        let (with, without) = with_and_without(&self_paying);
+        assert_eq!(with - without, 50_000);
+
+        // The floor does not bind: no change
+        let (self_paying, _) = floor_ops(&spec, 400_000, 0);
+        assert_eq!(
+            with_and_without(&self_paying),
+            (base(&self_paying), base(&self_paying))
+        );
+    }
+
+    #[test]
+    fn estimation_and_precheck_require_the_same_floor_pvg() {
+        let spec = glamsterdam_spec();
+        let (self_paying, sponsored) = floor_ops(&spec, 400_000, 10_000);
+        for op in [&self_paying, &sponsored] {
+            for state in [PREFUNDED, PvgState::unknown()] {
+                // As gas estimation computes it: the PVG without the floor, then the floor
+                let estimated = increase_required_pvg_with_calldata_floor_gas(
+                    op,
+                    op.required_pre_verification_gas(&spec, 1, 0, None, &state),
+                    0,
+                    op.calldata_floor_gas_limit(&spec),
+                    0.4,
+                    op.verification_efficiency_credit(&spec),
+                );
+                // As precheck, the pool and the builder compute it
+                assert_eq!(
+                    estimated,
+                    op.required_pre_verification_gas(&spec, 1, 0, Some(0.4), &state)
+                );
+            }
+        }
     }
 
     #[test]

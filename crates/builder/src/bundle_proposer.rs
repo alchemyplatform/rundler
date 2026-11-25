@@ -2714,8 +2714,8 @@ mod tests {
     use alloy_sol_types::{SolError, SolValue};
     use anyhow::anyhow;
     use rundler_provider::{
-        BlockId, MockDAGasOracleSync, MockEntryPointV0_6, MockEvmProvider, MockFeeEstimator,
-        ProvidersWithEntryPoint,
+        BlockId, DepositInfo, MockDAGasOracleSync, MockEntryPointV0_6, MockEvmProvider,
+        MockFeeEstimator, ProvidersWithEntryPoint,
     };
     use rundler_sim::MockSimulator;
     use rundler_types::{
@@ -4801,8 +4801,8 @@ mod tests {
     async fn test_check_fees_rechecks_glamsterdam_state_gas_on_l1() {
         let mut entry_point = MockEntryPointV0_6::new();
         entry_point
-            .expect_balance_of()
-            .returning(|_, _| Ok(U256::ZERO));
+            .expect_get_deposit_info()
+            .returning(|_, _| Ok(DepositInfo::default()));
         let proposer = glamsterdam_proposer(entry_point);
         let cs = proposer.settings.chain_spec.at_timestamp(0).into_owned();
         let fees = GasFees {
@@ -4861,7 +4861,7 @@ mod tests {
     async fn test_load_pvg_states_prices_worst_case_when_state_read_fails() {
         let mut entry_point = MockEntryPointV0_6::new();
         entry_point
-            .expect_balance_of()
+            .expect_get_deposit_info()
             .returning(|_, _| Err(anyhow::anyhow!("rpc down").into()));
         let proposer = glamsterdam_proposer(entry_point);
         let op = pool_op(op_with_sender_and_fees(address(1), 10_000, 0, 0));
@@ -6452,17 +6452,22 @@ mod tests {
                 .times(..=1)
                 .return_once(move |_, _| Ok(deposit));
         }
-        // Self-paying senders are read for the Glamsterdam zero-deposit term; give them a
-        // deposit so the tests price only the gas schedule.
+        // Self-paying senders are read for the Glamsterdam zero-deposit term (v0.6 reads the whole
+        // deposit info); give them a deposit so the tests price only the gas schedule.
         let self_paying_senders: HashSet<Address> = ops
             .iter()
             .filter(|op| op.uo.paymaster().is_none())
             .map(|op| op.uo.sender())
             .collect();
         entry_point
-            .expect_balance_of()
+            .expect_get_deposit_info()
             .withf(move |address, _| self_paying_senders.contains(address))
-            .returning(|_, _| Ok(U256::from(1_000_000_000_000_000_000_u128)));
+            .returning(|_, _| {
+                Ok(DepositInfo {
+                    deposit: U256::from(1_000_000_000_000_000_000_u128),
+                    ..Default::default()
+                })
+            });
 
         let signatures_by_aggregator: HashMap<_, _> = mock_aggregators
             .into_iter()

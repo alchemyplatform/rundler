@@ -147,7 +147,8 @@ mockall::mock! {
         fn address(&self) -> &Address;
         async fn balance_of(&self, address: Address, block_id: Option<BlockId>)
             -> ProviderResult<U256>;
-        async fn get_deposit_info(&self, address: Address) -> ProviderResult<DepositInfo>;
+        async fn get_deposit_info(&self, address: Address, block_id: Option<BlockId>)
+            -> ProviderResult<DepositInfo>;
         async fn get_balances(&self, addresses: Vec<Address>) -> ProviderResult<Vec<U256>>;
     }
 
@@ -263,7 +264,8 @@ mockall::mock! {
         fn address(&self) -> &Address;
         async fn balance_of(&self, address: Address, block_id: Option<BlockId>)
             -> ProviderResult<U256>;
-        async fn get_deposit_info(&self, address: Address) -> ProviderResult<DepositInfo>;
+        async fn get_deposit_info(&self, address: Address, block_id: Option<BlockId>)
+            -> ProviderResult<DepositInfo>;
         async fn get_balances(&self, addresses: Vec<Address>) -> ProviderResult<Vec<U256>>;
     }
 

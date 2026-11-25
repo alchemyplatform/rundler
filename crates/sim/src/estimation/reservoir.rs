@@ -324,6 +324,7 @@ where
             op.max_fill(chain_spec).calldata_floor_gas_limit(chain_spec),
             self.settings
                 .verification_gas_limit_efficiency_reject_threshold,
+            op_with_gas.verification_efficiency_credit(chain_spec),
         );
         // State charged to the reservoir before the op runs, which the simulations cannot see:
         // a new EIP-7702 authority is applied by state override, not by processing the
@@ -784,11 +785,12 @@ where
         call_gas_limit: u128,
         post_op_gas_limit: u128,
     ) -> UserOperation {
-        // Fee 0 skips the deposit debit, which `deposit_transfer_overhead` already covers for
-        // self-paying ops. A paymaster's debit is measured at 1 wei, which stays well within any
-        // deposit despite the large limits (AA31 otherwise).
+        // Fee 0 skips the deposit debit, which the metered VGL estimate already covers for
+        // self-paying ops (`unsearched_verification_gas`). A paymaster's debit is measured at
+        // 1 wei, which stays well within any deposit despite the large limits (AA31 otherwise).
         let fee = u128::from(args.full_op.paymaster().is_some());
-        // VGL is not raised: the metered estimate already covers validation state.
+        // VGL is not raised: the metered estimate already covers validation state, including a
+        // deposit slot that a self-paying op creates and clears.
         UserOperationBuilder::from_uo(args.full_op.clone(), args.chain_spec)
             .verification_gas_limit(args.verification_gas_limit)
             .paymaster_verification_gas_limit(args.paymaster_verification_gas_limit)

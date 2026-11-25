@@ -20,7 +20,7 @@ use arrayvec::ArrayVec;
 use futures_util::TryFutureExt;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
-use rundler_provider::{DAGasProvider, EntryPoint, EvmProvider, FeeEstimator};
+use rundler_provider::{BlockId, DAGasProvider, EntryPoint, EvmProvider, FeeEstimator};
 use rundler_types::{
     EntryPointVersion, GasFees, PriorityFeeMode, PvgState, UserOperation, UserOperationPermissions,
     chain::ChainSpec,
@@ -819,10 +819,17 @@ where
             return Ok((0, DAGasData::Empty, PvgState::unknown()));
         }
 
-        let pvg_state =
-            gas::load_pvg_state(chain_spec, &self.provider, &self.entry_point, &op, None)
-                .await
-                .context("precheck should load pre-verification gas state")?;
+        // At the block the op is simulated at, so the state the PVG terms and the pool's refilled
+        // state gas credit are priced from matches the simulation's
+        let pvg_state = gas::load_pvg_state(
+            chain_spec,
+            &self.provider,
+            &self.entry_point,
+            &op,
+            Some(BlockId::hash(block_hash)),
+        )
+        .await
+        .context("precheck should load pre-verification gas state")?;
         let (required_pvg, da_gas_data) = gas::calc_required_pre_verification_gas(
             chain_spec,
             &self.entry_point,
@@ -871,7 +878,7 @@ mod tests {
     use std::sync::Arc;
 
     use alloy_primitives::{Bytes, address, bytes};
-    use rundler_provider::{MockEntryPointV0_6, MockEvmProvider, MockFeeEstimator};
+    use rundler_provider::{DepositInfo, MockEntryPointV0_6, MockEvmProvider, MockFeeEstimator};
     use rundler_types::{
         BundlerSponsorship, GasFees, UserOperation as _,
         chain::ForkActivation,
@@ -928,9 +935,13 @@ mod tests {
             .expect_get_balance()
             .returning(|_, _| Ok(U256::from(u64::MAX)));
         let mut entry_point = MockEntryPointV0_6::new();
+        // The payer funds check reads the deposit; the zero-deposit PVG term reads the v0.6 slot
         entry_point
             .expect_balance_of()
             .returning(|_, _| Ok(U256::ZERO));
+        entry_point
+            .expect_get_deposit_info()
+            .returning(|_, _| Ok(DepositInfo::default()));
         let mut fee_estimator = MockFeeEstimator::new();
         fee_estimator
             .expect_required_bundle_fees()
@@ -2374,6 +2385,45 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(pvg_zero - pvg_funded, 97_920);
+        }
+
+        #[tokio::test]
+        async fn test_required_pvg_reads_sender_deposit_at_the_simulated_block() {
+            let block_hash = B256::repeat_byte(0x33);
+            let cs = ChainSpec {
+                id: 1,
+                glamsterdam_activation: rundler_types::chain::ForkActivation::Genesis,
+                ..Default::default()
+            };
+            // Zero at the simulated block; any other block, including latest, has no expectation
+            let mut entry_point = MockEntryPointV0_7::new();
+            entry_point
+                .expect_balance_of()
+                .withf(move |address, block| {
+                    *address == TEST_SENDER && *block == Some(BlockId::hash(block_hash))
+                })
+                .returning(|_, _| Ok(U256::ZERO));
+            let prechecker = PrecheckerImpl::new(
+                cs.clone(),
+                Arc::new(MockEvmProvider::new()),
+                entry_point,
+                MockFeeEstimator::new(),
+                Settings::default(),
+            );
+            let op = create_uo_builder(&cs, EntryPointVersion::V0_7).build();
+            let cs = cs.at_timestamp(0);
+
+            let (_, _, state) = prechecker
+                .get_required_pre_verification_gas(
+                    op,
+                    block_hash,
+                    &cs,
+                    1,
+                    &UserOperationPermissions::default(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(state.sender_deposit_is_zero, Some(true));
         }
 
         #[tokio::test]
