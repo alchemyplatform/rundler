@@ -80,7 +80,7 @@ where
     pub(crate) async fn get_stake_status(&self, address: Address) -> MempoolResult<StakeStatus> {
         let deposit_info = self
             .entry_point
-            .get_deposit_info(address)
+            .get_deposit_info(address, None)
             .await
             .context("provider error")?;
 
@@ -1049,7 +1049,7 @@ mod tests {
     fn new_paymaster_tracker() -> PaymasterTracker<MockEntryPointV0_6> {
         let mut entrypoint = MockEntryPointV0_6::new();
 
-        entrypoint.expect_get_deposit_info().returning(|_| {
+        entrypoint.expect_get_deposit_info().returning(|_, _| {
             Ok(DepositInfo {
                 deposit: U256::from(1000),
                 staked: true,

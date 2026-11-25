@@ -94,7 +94,7 @@ pricing is unchanged. Each can be overridden like the others (`glamsterdam_<fiel
 | Field | Preset | Meaning |
 | --- | --- | --- |
 | `call_data_word_gas` | 6 | extra gas per 32-byte word of an op's `callData` (the EntryPoint's unmetered copy of it) |
-| `zero_deposit_refund_gas` | 97,920 | self-paying op whose sender deposit is zero |
+| `zero_deposit_refund_gas` | 97,920 | state gas of a self-paying sender's empty deposit slot: priced into PVG for the refund write, added to the estimated verification gas limit, credited by the pool's verification gas efficiency check, and assumed by the calldata floor (see [Glamsterdam pre-verification gas](./glamsterdam_pvg.md#deposit-slot-during-validation)) |
 | `eip7702_authorization_new_account_gas` | 183,600 | part of `eip7702_authorization_gas` waived when the authority exists |
 | `eip7702_authorization_delegation_gas` | 35,190 | part of `eip7702_authorization_gas` also waived when the authority already has code |
 

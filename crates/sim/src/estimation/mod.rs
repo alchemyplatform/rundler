@@ -22,7 +22,7 @@ use metrics_derive::Metrics;
 use mockall::automock;
 use rundler_contracts::common::EstimationTypes::EstimationTypesErrors;
 use rundler_provider::{ProviderError, StateOverride};
-use rundler_types::{GasEstimate, ValidationRevert};
+use rundler_types::{GasEstimate, PvgState, UserOperation, ValidationRevert, chain::ChainSpec};
 
 use crate::precheck::MIN_CALL_GAS_LIMIT;
 
@@ -46,6 +46,30 @@ pub use v0_7::GasEstimator as GasEstimatorV0_7;
 
 /// Percentage by which to increase the verification gas limit after binary search
 const VERIFICATION_GAS_BUFFER_PERCENT: u32 = 10;
+
+/// A verification gas limit before the estimator finalizes it
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VerificationGasLimit {
+    /// Set by the caller, returned as is
+    Provided(u128),
+    /// Found by the binary search, before [`unsearched_verification_gas`] and the buffer
+    Searched(u128),
+}
+
+/// Verification gas a self-paying op uses that the binary search does not see. The search runs
+/// such an op with zero fees, so the account pays nothing and its deposit is not written. That
+/// leaves out the deposit transfer, and the state gas of creating the deposit slot when it is
+/// empty (EIP-8037, see [`UserOperation::zero_deposit_slot_state_gas`]). 0 with a paymaster.
+fn unsearched_verification_gas<UO: UserOperation>(
+    op: &UO,
+    chain_spec: &ChainSpec,
+    pvg_state: &PvgState,
+) -> u128 {
+    if op.paymaster().is_some() {
+        return 0;
+    }
+    chain_spec.deposit_transfer_overhead() + op.zero_deposit_slot_state_gas(chain_spec, pvg_state)
+}
 /// Absolute value by which to increase the call gas limit after binary search
 const CALL_GAS_BUFFER_VALUE: u128 = 3000;
 
