@@ -177,7 +177,8 @@ pub struct Settings {
     pub max_gas_estimation_rounds: u32,
     /// The most EIP-8037 state gas a user operation may carry in reservoir mode, which is also
     /// the largest state-gas reservoir of a bundle. Estimation's simulations need a node
-    /// `rpc.gascap` of at least 2^24 plus this.
+    /// `rpc.gascap` of at least 2^24 plus this plus
+    /// [`RESERVOIR_PROBE_GAS_HEADROOM`](rundler_provider::RESERVOIR_PROBE_GAS_HEADROOM).
     pub max_reservoir_gas: u64,
     /// The most time the reservoir-mode fallback may spend simulating an op for its state gas,
     /// reservoir and call gas limit

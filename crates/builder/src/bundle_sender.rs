@@ -1010,6 +1010,17 @@ where
                         Err(BundleProposerError::SimulationUnderpriced) => {
                             Ok(SendBundleAttemptResult::SimulationUnderpriced)
                         }
+                        // The node rejected the bundle's simulation as it would the
+                        // transaction's submission, so it is handled as that would be
+                        Err(BundleProposerError::InsufficientFunds) => {
+                            self.increment_counter_ep(
+                                "builder_bundle_txn_insufficient_funds",
+                                entry_point,
+                                1,
+                            );
+                            error!("Bundle simulation insufficient funds");
+                            Ok(SendBundleAttemptResult::InsufficientFunds)
+                        }
                         Err(e) => Err(anyhow::anyhow!("Failed to make bundle: {e:?}")),
                     }
                 } else {
@@ -2875,6 +2886,28 @@ mod tests {
             result,
             SendBundleAttemptResult::NoOperationsAfterFeeFilter
         ));
+    }
+
+    /// The node rejected a bundle's simulation because the sender cannot pay for its gas (a
+    /// reservoir-mode bundle's simulation pays the bundle's fees): handled as the transaction's
+    /// submission would be.
+    #[tokio::test]
+    async fn test_bundle_simulation_insufficient_funds() {
+        let mut mock_trigger = MockTrigger::new();
+        mock_trigger.expect_last_block().return_const(new_head(0));
+        let mut mock_proposer = MockBundleProposerT::new();
+        mock_proposer
+            .expect_make_bundle()
+            .times(1)
+            .returning(|_| Box::pin(async { Err(BundleProposerError::InsufficientFunds) }));
+        let mut sender = v06_sender(mock_proposer, None);
+
+        let mut state = SenderMachineState::new(mock_trigger, tracker_with_state());
+        let result = sender.send_bundle(&mut state, 0).await.unwrap();
+        assert!(
+            matches!(result, SendBundleAttemptResult::InsufficientFunds),
+            "{result:?}"
+        );
     }
 
     #[tokio::test]

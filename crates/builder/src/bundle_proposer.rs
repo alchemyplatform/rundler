@@ -32,9 +32,10 @@ use rundler_contracts::v0_7::IEntryPoint::UserOperationEvent;
 use rundler_provider::{
     BundleHandler, DAGasOracleSync, DAGasProvider, EntryPoint, EvmProvider,
     GethDebugBuiltInTracerType, GethDebugTracerCallConfig, GethDebugTracerType,
-    GethDebugTracingOptions, HandleOpsOut, ProvidersWithEntryPointT, TransactionRequest,
-    decode_v0_6_handle_ops_revert, decode_v0_6_ops_from_calldata, decode_v0_7_handle_ops_revert,
-    decode_v0_7_ops_from_calldata, get_auth_list_from_transaction, simulate_call,
+    GethDebugTracingOptions, HandleOpsOut, ProvidersWithEntryPointT, SimulatedFees, StateOverride,
+    TransactionRequest, decode_v0_6_handle_ops_revert, decode_v0_6_ops_from_calldata,
+    decode_v0_7_handle_ops_revert, decode_v0_7_ops_from_calldata, get_auth_list_from_transaction,
+    simulate_call_after_reservoir_probe,
 };
 use rundler_sim::{SimulationError, SimulationResult, Simulator, ViolationError, gas};
 use rundler_types::{
@@ -106,6 +107,10 @@ pub(crate) enum BundleProposerError {
     /// were below the base fee it validates against.
     #[error("Bundle validation call underpriced")]
     SimulationUnderpriced,
+    /// The node rejected the bundle's simulation because the sender cannot pay for its gas at
+    /// its fee cap (a reservoir-mode bundle's simulation pays the bundle's fees).
+    #[error("Bundle sender has insufficient funds")]
+    InsufficientFunds,
     #[error(transparent)]
     ProviderError(#[from] rundler_provider::ProviderError),
     /// All other errors
@@ -615,6 +620,10 @@ struct BuilderProposerMetrics {
     stale_eip7702_auth_rejections: Counter,
     #[metric(describe = "the distribution of bundle simulation time.")]
     bundle_simulation_ms: Histogram,
+    #[metric(
+        describe = "the count of reservoir-mode bundle simulations that failed because the node's eth_simulateV1 gives calls no state-gas reservoir."
+    )]
+    reservoir_simulation_without_reservoir: Counter,
 }
 
 impl<EP, BP> BundleProposerImpl<EP, BP>
@@ -1521,8 +1530,12 @@ where
     }
 
     /// Simulates a bundle of one reservoir-mode op as it will be sent, with `eth_simulateV1`,
-    /// which gives it the transaction's state-gas reservoir (an `eth_call` on reth v2.7 gets
-    /// none). Besides `handleOps` reverting, the op is rejected if the bundler would pay for it:
+    /// which gives it the transaction's state-gas reservoir. A `ReservoirProbe` call in the same
+    /// request (so on the same node) checks that it does: if the node gives calls no reservoir,
+    /// the op would run out of gas for a reason it will not have onchain, so this returns an
+    /// error, without judging the op, and the bundle is retried.
+    ///
+    /// Besides `handleOps` reverting, the op is rejected if the bundler would pay for it:
     ///
     /// - A paying op is rejected if the gas it is charged does not cover the transaction's gas
     ///   used: the state the reservoir pays is not metered by the entry point, so PVG must pay for
@@ -1532,13 +1545,24 @@ where
     ///   is rejected if its execution fails, or if the transaction's gas used at the bundle's gas
     ///   price exceeds the sponsorship's max cost. Its reservoir was found at admission and is
     ///   not recomputed, so a change in state since can make it fail here.
+    ///
+    /// The simulation pays the bundle's fees at the base fee the node computes for the next
+    /// block, as the transaction will: the op's execution sees the gas price and base fee it will
+    /// see onchain, and may branch on them (its validation may not). Admission and estimation
+    /// simulate at a gas price of 0, so this is the only check at the real fees. A fee cap below
+    /// that base fee fails the request before the bundle runs, which is handled as for a normal
+    /// bundle's validation call ([`HandleOpsOut::Underpriced`]: retried, no op judged), and so
+    /// does a sender that cannot pay for the bundle's gas at its fee cap, which is handled as the
+    /// transaction's submission would be ([`BundleProposerError::InsufficientFunds`]). A chain
+    /// with `bundle_simulation_omit_gas_fees` simulates at a gas price of 0 instead, as for that
+    /// call.
     async fn simulate_reservoir_bundle(
         &self,
         context: &ProposalContext<EP::UO>,
         gas_limit: u64,
         bundle_fees: GasFees,
         base_fee: u128,
-    ) -> anyhow::Result<HandleOpsOut> {
+    ) -> BundleProposerResult<HandleOpsOut> {
         let entry_point = self.ep_providers.entry_point();
         let sponsorship_max_cost = context.get_op_at(0)?.sponsorship_max_cost;
         let tx = entry_point.get_send_bundle_transaction(
@@ -1548,9 +1572,42 @@ where
             bundle_fees,
             self.settings.submission_proxy.as_ref().map(|p| p.address()),
         );
-        let result = simulate_call(self.ep_providers.evm(), tx, None, Default::default())
-            .await
-            .context("should simulate the reservoir-mode bundle")?;
+        let fees = if self.settings.chain_spec.bundle_simulation_omit_gas_fees {
+            SimulatedFees::Zero
+        } else {
+            SimulatedFees::AsSent
+        };
+        let probed = match simulate_call_after_reservoir_probe(
+            self.ep_providers.evm(),
+            tx,
+            None,
+            StateOverride::default(),
+            fees,
+        )
+        .await
+        {
+            Ok(probed) => probed,
+            // The node rejected the bundle before running it, as it would the transaction
+            Err(error) if error.is_base_fee_too_low() => return Ok(HandleOpsOut::Underpriced),
+            Err(error) if error.is_insufficient_funds() => {
+                return Err(BundleProposerError::InsufficientFunds);
+            }
+            Err(error) => {
+                return Err(anyhow::Error::from(error)
+                    .context("should simulate the reservoir-mode bundle")
+                    .into());
+            }
+        };
+        if !probed.found_reservoir {
+            self.metrics
+                .reservoir_simulation_without_reservoir
+                .increment(1);
+            return Err(anyhow::anyhow!(
+                "the node's eth_simulateV1 gives calls no state-gas reservoir, can't simulate the reservoir-mode bundle"
+            )
+            .into());
+        }
+        let result = probed.call;
         if !result.success {
             let revert_data = Some(result.return_data.clone());
             let decoded = match entry_point.version().abi_version() {
@@ -2989,6 +3046,15 @@ mod tests {
         /// The gas price the op is charged at (`actualGasCost = actualGasUsed × this`): zero
         /// for a bundler-sponsored op
         cost_per_gas: u128,
+        /// Whether the `ReservoirProbe` call in the same request finds a reservoir
+        reservoir_found: bool,
+        /// The probe's gas used, which the node takes from its `rpc.gascap` before the bundle
+        probe_gas_used: u64,
+        /// Whether the chain spec sets `bundle_simulation_omit_gas_fees`, so the simulation is at
+        /// a gas price of 0
+        omit_gas_fees: bool,
+        /// An error the node returns for the request instead of running it, if set
+        rpc_error: Option<(i64, &'static str)>,
     }
 
     impl ReservoirSimulation {
@@ -3000,6 +3066,10 @@ mod tests {
                 op_success: true,
                 charged: 37_984_630,
                 cost_per_gas: 50,
+                reservoir_found: true,
+                probe_gas_used: 28_301,
+                omit_gas_fees: false,
+                rpc_error: None,
             }
         }
 
@@ -3029,7 +3099,15 @@ mod tests {
                     }],
                 }),
             };
-            serde_json::json!([{ "calls": [call] }])
+            let probe = serde_json::json!({
+                "status": "0x1",
+                "returnData": Bytes::from(<rundler_contracts::v0_7::ReservoirProbe::probeCall
+                    as alloy_sol_types::SolCall>::abi_encode_returns(
+                    &self.reservoir_found
+                )),
+                "gasUsed": format!("{:#x}", self.probe_gas_used),
+            });
+            serde_json::json!([{ "calls": [probe, call] }])
         }
     }
 
@@ -3053,6 +3131,17 @@ mod tests {
         simulation: ReservoirSimulation,
         perms: UserOperationPermissions,
     ) -> Bundle<UserOperation> {
+        try_make_reservoir_bundle(op, reservoir_gas, simulation, perms)
+            .await
+            .unwrap()
+    }
+
+    async fn try_make_reservoir_bundle(
+        op: UserOperation,
+        reservoir_gas: u128,
+        simulation: ReservoirSimulation,
+        perms: UserOperationPermissions,
+    ) -> BundleProposerResult<Bundle<UserOperation>> {
         mock_make_bundle_at(
             vec![MockOp {
                 op,
@@ -3078,7 +3167,6 @@ mod tests {
             Some(simulation),
         )
         .await
-        .unwrap()
     }
 
     const RESERVOIR: u128 = 37_882_800;
@@ -3111,6 +3199,150 @@ mod tests {
             }],
         );
         assert_eq!(u128::from(bundle.gas_estimate), reservoir_tx_gas());
+    }
+
+    /// The node gives the simulation no reservoir (the probe finds none): the op would run out
+    /// of gas for a reason it will not have onchain, so the bundle fails without judging it,
+    /// and is retried.
+    #[tokio::test]
+    async fn test_reservoir_mode_bundle_without_simulation_reservoir() {
+        let result = try_make_reservoir_bundle(
+            reservoir_op(),
+            RESERVOIR,
+            ReservoirSimulation {
+                reservoir_found: false,
+                // what the op would get without a reservoir: out of gas, charged less than used
+                op_success: false,
+                charged: 37_000_000,
+                ..ReservoirSimulation::passing(reservoir_tx_gas())
+            },
+            UserOperationPermissions::default(),
+        )
+        .await;
+
+        let error = result.expect_err("no reservoir should fail the bundle");
+        assert!(
+            error.to_string().contains("no state-gas reservoir")
+                || format!("{error:#}").contains("no state-gas reservoir"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    /// The probe used more than its headroom, so the bundle may have been simulated with less gas
+    /// than it will have: the bundle attempt fails, and the op is not judged.
+    #[tokio::test]
+    async fn test_reservoir_mode_bundle_probe_over_headroom() {
+        let result = try_make_reservoir_bundle(
+            reservoir_op(),
+            RESERVOIR,
+            ReservoirSimulation {
+                probe_gas_used: rundler_provider::RESERVOIR_PROBE_GAS_HEADROOM + 1,
+                // what the op might get with its gas lowered: out of gas, charged less than used
+                op_success: false,
+                charged: 37_000_000,
+                ..ReservoirSimulation::passing(reservoir_tx_gas())
+            },
+            UserOperationPermissions::default(),
+        )
+        .await;
+
+        let error = result.expect_err("a probe over its headroom should fail the bundle");
+        assert!(
+            format!("{error:#}").contains("above its headroom"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    /// The node rejects the simulation before running it, as the bundle's fee cap is below its
+    /// base fee for the next block: as for a normal bundle's validation call, the bundle fails
+    /// with `SimulationUnderpriced`, so it is retried, and the op is not judged.
+    #[tokio::test]
+    async fn test_reservoir_mode_bundle_underpriced_simulation() {
+        let result = try_make_reservoir_bundle(
+            reservoir_op(),
+            RESERVOIR,
+            ReservoirSimulation {
+                rpc_error: Some((-38012, "max fee per gas less than block base fee")),
+                ..ReservoirSimulation::passing(reservoir_tx_gas())
+            },
+            UserOperationPermissions::default(),
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(BundleProposerError::SimulationUnderpriced)),
+            "expected SimulationUnderpriced, got {result:?}"
+        );
+    }
+
+    /// The node rejects the simulation before running it, as the sender cannot pay for the
+    /// bundle's gas at its fee cap: handled as the transaction's submission would be, and the op
+    /// is not judged.
+    #[tokio::test]
+    async fn test_reservoir_mode_bundle_simulation_insufficient_funds() {
+        let result = try_make_reservoir_bundle(
+            reservoir_op(),
+            RESERVOIR,
+            ReservoirSimulation {
+                rpc_error: Some((
+                    -38014,
+                    "insufficient funds for gas * price + value: have 0 want 1",
+                )),
+                ..ReservoirSimulation::passing(reservoir_tx_gas())
+            },
+            UserOperationPermissions::default(),
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(BundleProposerError::InsufficientFunds)),
+            "expected InsufficientFunds, got {result:?}"
+        );
+    }
+
+    /// Any other error from the node fails the bundle attempt, which is retried, without
+    /// judging the op.
+    #[tokio::test]
+    async fn test_reservoir_mode_bundle_simulation_error() {
+        let result = try_make_reservoir_bundle(
+            reservoir_op(),
+            RESERVOIR,
+            ReservoirSimulation {
+                rpc_error: Some((-32000, "header not found")),
+                ..ReservoirSimulation::passing(reservoir_tx_gas())
+            },
+            UserOperationPermissions::default(),
+        )
+        .await;
+
+        let error = result.expect_err("a node error should fail the bundle attempt");
+        assert!(
+            matches!(error, BundleProposerError::Other(_)),
+            "unexpected error: {error:?}"
+        );
+        assert!(
+            format!("{error:#}").contains("should simulate the reservoir-mode bundle"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    /// On a chain with `bundle_simulation_omit_gas_fees`, the simulation is at a gas price of 0,
+    /// as the normal bundle's validation call is (the mock checks the request).
+    #[tokio::test]
+    async fn test_reservoir_mode_bundle_simulation_omits_gas_fees() {
+        let op = reservoir_op();
+        let bundle = make_reservoir_bundle(
+            op.clone(),
+            RESERVOIR,
+            ReservoirSimulation {
+                omit_gas_fees: true,
+                ..ReservoirSimulation::passing(reservoir_tx_gas())
+            },
+        )
+        .await;
+
+        assert_eq!(bundle.ops_per_aggregator[0].user_ops, vec![op]);
+        assert!(bundle.rejected_ops.is_empty());
     }
 
     /// `handleOps` reverts in the simulation with a `FailedOp`: the op is rejected.
@@ -3239,8 +3471,9 @@ mod tests {
         }
     }
 
-    /// A paying op charged nothing (a zero priority fee, as the simulation's base fee is 0) is
-    /// still held to its charge: the exemption is for sponsorship, not for a zero cost.
+    /// A paying op charged nothing (a zero priority fee, on a chain whose simulation omits fees
+    /// at a base fee of 0) is still held to its charge: the exemption is for sponsorship, not for
+    /// a zero cost.
     #[tokio::test]
     async fn test_reservoir_mode_bundle_zero_cost_paying_op_held_to_charge() {
         let op = reservoir_op();
@@ -3250,6 +3483,7 @@ mod tests {
             ReservoirSimulation {
                 charged: 37_000_000,
                 cost_per_gas: 0,
+                omit_gas_fees: true,
                 ..ReservoirSimulation::passing(reservoir_tx_gas())
             },
         )
@@ -6380,6 +6614,9 @@ mod tests {
             max_transaction_size_bytes: max_transaction_size_bytes.unwrap_or(usize::MAX),
             eip7623_enabled: glamsterdam_activation != ForkActivation::Never,
             glamsterdam_activation,
+            bundle_simulation_omit_gas_fees: reservoir_simulation
+                .as_ref()
+                .is_some_and(|simulation| simulation.omit_gas_fees),
             ..Default::default()
         };
         let sender_eoa = address(124);
@@ -6481,11 +6718,13 @@ mod tests {
         if let Some(simulation) = reservoir_simulation {
             let entry_point_address = chain_spec.entry_point_address_v0_6;
             entry_point.expect_get_send_bundle_transaction().returning(
-                move |_, sender, gas_limit, _, _| {
+                move |_, sender, gas_limit, fees, _| {
                     TransactionRequest::default()
                         .from(sender)
                         .to(entry_point_address)
                         .gas_limit(gas_limit)
+                        .max_fee_per_gas(fees.max_fee_per_gas)
+                        .max_priority_fee_per_gas(fees.max_priority_fee_per_gas)
                 },
             );
             provider
@@ -6493,9 +6732,77 @@ mod tests {
                 .times(1)
                 .returning(move |method, (payload, _)| {
                     assert_eq!(method, "eth_simulateV1");
-                    let call = &payload["blockStateCalls"][0]["calls"][0];
+                    // Validation mode, which gives calls a reservoir
+                    assert_eq!(payload["validation"], true);
+                    let block = &payload["blockStateCalls"][0];
+                    let calls = block["calls"].as_array().unwrap();
+                    assert_eq!(calls.len(), 2, "the probe, then the bundle");
+                    let probe_gas: U256 = serde_json::from_value(calls[0]["gas"].clone()).unwrap();
+                    assert!(
+                        probe_gas > U256::from(TX_MAX_GAS_LIMIT),
+                        "probe has a reservoir"
+                    );
+                    let call = &calls[1];
                     let gas: U256 = serde_json::from_value(call["gas"].clone()).unwrap();
                     assert_eq!(gas, U256::from(simulation.tx_gas), "simulated tx.gas");
+                    // Room for the bundle after the probe, and no more: a node rejects an
+                    // override above its block gas limit and its `rpc.gascap`
+                    let block_gas_limit: U256 =
+                        serde_json::from_value(block["blockOverrides"]["gasLimit"].clone())
+                            .unwrap();
+                    assert_eq!(
+                        block_gas_limit,
+                        probe_gas.max(gas)
+                            + U256::from(rundler_provider::RESERVOIR_PROBE_GAS_HEADROOM),
+                        "block gas limit"
+                    );
+                    let txs: Vec<TransactionRequest> =
+                        serde_json::from_value(block["calls"].clone()).unwrap();
+                    let (probe, bundle) = (&txs[0], &txs[1]);
+                    assert_eq!(bundle.from, Some(sender_eoa));
+                    assert_eq!(bundle.nonce, None, "the sender's next nonce");
+                    if simulation.omit_gas_fees {
+                        // At a gas price of 0, as the normal bundle's validation call on such a
+                        // chain
+                        assert_eq!(block["blockOverrides"]["baseFeePerGas"], "0x0");
+                        for tx in [probe, bundle] {
+                            assert_eq!(tx.max_fee_per_gas, None);
+                            assert_eq!(tx.max_priority_fee_per_gas, None);
+                        }
+                    } else {
+                        // The bundle's fees at the node's base fee for the next block, as it
+                        // will be sent, and the probe pays them from a sender of its own, funded
+                        // for its gas at the fee cap
+                        assert!(
+                            block["blockOverrides"].get("baseFeePerGas").is_none(),
+                            "base fee override"
+                        );
+                        for tx in [probe, bundle] {
+                            assert_eq!(
+                                tx.max_fee_per_gas,
+                                Some(base_fee + max_priority_fee_per_gas)
+                            );
+                            assert_eq!(tx.max_priority_fee_per_gas, Some(max_priority_fee_per_gas));
+                        }
+                        let state_override: StateOverride =
+                            serde_json::from_value(block["stateOverrides"].clone()).unwrap();
+                        let probe_sender = probe.from.unwrap();
+                        assert_ne!(probe_sender, sender_eoa);
+                        let probe_balance = state_override[&probe_sender].balance.unwrap();
+                        assert!(
+                            probe_balance
+                                >= probe_gas * U256::from(base_fee + max_priority_fee_per_gas)
+                        );
+                    }
+                    if let Some((code, message)) = simulation.rpc_error {
+                        return Err(rundler_provider::ProviderError::RPC(
+                            alloy_json_rpc::RpcError::ErrorResp(alloy_json_rpc::ErrorPayload {
+                                code,
+                                message: message.into(),
+                                data: None,
+                            }),
+                        ));
+                    }
                     Ok(simulation.response(entry_point_address))
                 });
         }

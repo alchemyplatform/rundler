@@ -48,7 +48,10 @@ pub use alloy_network::{
 pub use alloy_serde::WithOtherFields;
 pub use fees::new_fee_estimator;
 mod state_gas;
-pub use state_gas::{SimulatedCall, SimulatedLog, simulate_call, simulate_calls};
+pub use state_gas::{
+    ProbedCall, RESERVOIR_PROBE_GAS_HEADROOM, SimulatedCall, SimulatedFees, SimulatedLog,
+    simulate_call, simulate_call_after_reservoir_probe,
+};
 mod traits;
 pub mod transaction;
 // re-export alloy RPC types
