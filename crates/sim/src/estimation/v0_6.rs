@@ -193,10 +193,10 @@ where
             .pre_verification_gas(pre_verification_gas)
             .build();
 
-        // require that this can fit in a bundle of size 1, assuming the paymaster requires a post-op
-        // to match the largest gas limit the builder can size it with
-        let gas_limit =
-            op_with_gas.bundle_computation_gas_limit_with_post_op(&chain_spec, Some(1), true);
+        // require that this fits in a bundle of size 1 as admission caps it: assuming the
+        // paymaster requires a post-op, and with the state gas of a self-paying sender's refund
+        // write (see `worst_case_bundle_computation_gas_limit`)
+        let gas_limit = op_with_gas.worst_case_bundle_computation_gas_limit(&chain_spec);
         if gas_limit > self.settings.max_bundle_execution_gas {
             return Err(GasEstimationError::GasTotalTooLarge(
                 gas_limit,
@@ -1900,6 +1900,100 @@ mod tests {
         let static_limit = total_gas_limit(ChainSpec::default(), 100_000, 100_000).await;
         let sim_limit = total_gas_limit(sim_cs, 100_000, 100_000).await;
         assert!(sim_limit < static_limit);
+    }
+
+    /// The total gas check caps what admission caps, as in the v0.7 estimator's
+    /// `test_total_limit_counts_refund_state_gas`: it includes the state gas of a self-paying
+    /// sender's refund write, whatever the sender's deposit is now.
+    #[tokio::test]
+    async fn test_total_limit_counts_refund_state_gas() {
+        let chain_spec = ChainSpec {
+            glamsterdam_activation: rundler_types::chain::ForkActivation::Genesis,
+            ..ChainSpec::default()
+        };
+        let metered_op = || {
+            let mut op = demo_user_op_optional_gas(Some(100_000));
+            op.call_gas_limit = Some(10_000_000);
+            op.verification_gas_limit = Some(100_000);
+            op
+        };
+        let estimate = |sender_deposit: U256, max_bundle_execution_gas: u128| {
+            let (mut entry, mut provider) = create_base_config();
+            provider
+                .expect_get_latest_block_hash_number_and_timestamp()
+                .returning(|| Ok((B256::ZERO, 0, 0)));
+            entry
+                .expect_simulate_handle_op_estimate_gas()
+                .returning(move |_a, _b, _c, _d, _e| {
+                    Ok(Ok(ExecutionResult {
+                        target_result: TestCallGasResult {
+                            success: true,
+                            gasUsed: U256::ZERO,
+                            revertData: Bytes::new(),
+                        }
+                        .abi_encode()
+                        .into(),
+                        target_success: true,
+                        ..Default::default()
+                    }))
+                });
+            entry.expect_get_deposit_info().returning(move |_, _| {
+                Ok(DepositInfo {
+                    deposit: sender_deposit,
+                    ..Default::default()
+                })
+            });
+            let (_, settings) = create_estimator(create_base_config().0, MockEvmProvider::new());
+            let estimator = create_custom_estimator(
+                chain_spec.clone(),
+                provider,
+                MockFeeEstimator::new(),
+                entry,
+                Settings {
+                    max_bundle_execution_gas,
+                    ..settings
+                },
+            );
+            let op = metered_op();
+            async move {
+                estimator
+                    .estimate_op_gas(op, StateOverride::default())
+                    .await
+            }
+        };
+
+        let spec = chain_spec.for_bundle_inclusion_after(0);
+        let (_, settings) = create_estimator(create_base_config().0, MockEvmProvider::new());
+        for deposit in [U256::ZERO, U256::from(1_000_000_000_000_000_000_u128)] {
+            // The op as sent with an estimate made far from the cap
+            let estimated = estimate(deposit, TEST_MAX_GAS_LIMITS).await.unwrap();
+            let sent = metered_op()
+                .into_user_operation_builder(
+                    &spec,
+                    settings.max_bundle_execution_gas,
+                    settings.max_verification_gas,
+                )
+                .call_gas_limit(estimated.call_gas_limit)
+                .verification_gas_limit(estimated.verification_gas_limit)
+                .pre_verification_gas(estimated.pre_verification_gas)
+                .build();
+            let computation = sent.bundle_computation_gas_limit_with_post_op(&spec, Some(1), true);
+            let refund_state_gas = sent.state_pre_verification_gas(&spec, &PvgState::unknown());
+            assert!(refund_state_gas > 0, "the refund write is priced");
+            let counted = computation + refund_state_gas;
+
+            // A cap the computation gas fits under, but not with the refund write
+            let err = estimate(deposit, counted - 1).await.unwrap_err();
+            assert!(
+                matches!(err, GasEstimationError::GasTotalTooLarge(limit, max)
+                    if limit == counted && max == counted - 1),
+                "deposit {deposit}: {err:?}"
+            );
+            assert!(
+                estimate(deposit, counted).await.is_ok(),
+                "deposit {deposit}: fits at the cap"
+            );
+        }
     }
 
     #[tokio::test]

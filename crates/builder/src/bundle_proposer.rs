@@ -4872,13 +4872,26 @@ mod tests {
     }
 
     fn single_op_context(op: UserOperation, state_gas: u128) -> ProposalContext<UserOperation> {
+        single_op_context_of(op, state_gas, false)
+    }
+
+    /// `single_op_context` for an operation of any entry point version, whose simulation found
+    /// that its paymaster requires a post-op if `requires_post_op`
+    fn single_op_context_of<UO: rundler_types::UserOperation>(
+        op: UO,
+        state_gas: u128,
+        requires_post_op: bool,
+    ) -> ProposalContext<UO> {
         let mut groups = LinkedHashMap::new();
         groups.insert(
             Address::ZERO,
             AggregatorGroup {
                 ops_with_simulations: vec![OpWithSimulation {
                     op,
-                    simulation: SimulationResult::default(),
+                    simulation: SimulationResult {
+                        requires_post_op,
+                        ..Default::default()
+                    },
                     sponsored_da_gas: 0,
                     state_gas,
                     reservoir_gas: None,
@@ -4932,6 +4945,125 @@ mod tests {
         let without_state = single_op_context(op.clone(), 0).get_bundle_gas_limit(&cs);
         let with_state = single_op_context(op, state_gas).get_bundle_gas_limit(&cs);
         assert_eq!(with_state - without_state, state_gas);
+    }
+
+    /// What admission and gas estimation cap (`worst_case_bundle_computation_gas_limit`) covers
+    /// what the builder counts against the bundle's computation gas cap for an op bundled alone,
+    /// so an admitted op always fits, across entry point versions, paymasters, deposits and
+    /// authorizations. The builder's state gas (a self-paying sender's zero-deposit refund
+    /// write) was once missing from admission's count: a bundler-sponsored op at the cap was
+    /// admitted, then skipped as over `MaxGasLimit` until it expired.
+    ///
+    /// Not covered: an op whose EIP-7623 calldata floor exceeds its standard gas, which the
+    /// builder counts instead and admission checks separately.
+    #[test]
+    fn test_admission_cap_covers_bundle_computation_gas() {
+        fn check<UO: rundler_types::UserOperation>(
+            case: &str,
+            op: UO,
+            cs: &ChainSpec,
+            state: &PvgState,
+        ) -> u128 {
+            let state_gas = op.state_pre_verification_gas(cs, state);
+            let capped = op.worst_case_bundle_computation_gas_limit(cs);
+            // whatever the simulation finds about the paymaster's post-op
+            for requires_post_op in [false, true] {
+                let counted = single_op_context_of(op.clone(), state_gas, requires_post_op)
+                    .get_bundle_computation_gas_limit(cs);
+                assert!(
+                    counted <= capped,
+                    "{case} (post-op {requires_post_op}): the builder counts {counted}, \
+                     admission caps {capped}"
+                );
+            }
+            state_gas
+        }
+
+        let zero_deposit = PvgState {
+            sender_deposit_is_zero: Some(true),
+            ..PvgState::unknown()
+        };
+        let funded = PvgState {
+            sender_deposit_is_zero: Some(false),
+            ..PvgState::unknown()
+        };
+        let missing_authority = PvgState {
+            sender_deposit_is_zero: Some(true),
+            authority: Some(AuthorityState::Missing),
+        };
+        let paymaster = Address::repeat_byte(0x01);
+
+        // v0.6 paymaster ops are sized from simulation with this flag, statically without it
+        for v06_bundle_gas_limit_from_simulation in [false, true] {
+            let cs = ChainSpec {
+                v06_bundle_gas_limit_from_simulation,
+                ..glamsterdam_spec()
+            }
+            .at_timestamp(0)
+            .into_owned();
+
+            let v06 = |paymaster_and_data: Bytes| {
+                UserOperationBuilder::new(
+                    &cs,
+                    UserOperationRequiredFields {
+                        pre_verification_gas: 100_000,
+                        call_gas_limit: 14_000_000,
+                        verification_gas_limit: 200_000,
+                        paymaster_and_data,
+                        ..Default::default()
+                    },
+                )
+                .build()
+            };
+            let refund_state_gas = check("v0.6 self-paying", v06(Bytes::new()), &cs, &zero_deposit);
+            assert!(refund_state_gas > 0, "the refund write is priced");
+            check("v0.6 self-paying, funded", v06(Bytes::new()), &cs, &funded);
+            check(
+                "v0.6 paymaster",
+                v06(paymaster.to_vec().into()),
+                &cs,
+                &zero_deposit,
+            );
+
+            let v07 = || {
+                rundler_types::v0_7::UserOperationBuilder::new(
+                    &cs,
+                    EntryPointVersion::V0_7,
+                    rundler_types::v0_7::UserOperationRequiredFields {
+                        sender: address(1),
+                        nonce: U256::ZERO,
+                        call_data: Bytes::new(),
+                        signature: Bytes::new(),
+                        call_gas_limit: 14_000_000,
+                        verification_gas_limit: 200_000,
+                        pre_verification_gas: 100_000,
+                        max_priority_fee_per_gas: 0,
+                        max_fee_per_gas: 0,
+                    },
+                )
+            };
+            check("v0.7 self-paying", v07().build(), &cs, &zero_deposit);
+            check("v0.7 self-paying, funded", v07().build(), &cs, &funded);
+            check(
+                "v0.7 paymaster with post-op",
+                v07()
+                    .paymaster(paymaster, 100_000, 300_000, Bytes::new())
+                    .build(),
+                &cs,
+                &zero_deposit,
+            );
+            check(
+                "v0.7 7702 authorization",
+                v07()
+                    .authorization_tuple(rundler_types::authorization::Eip7702Auth::new_dummy(
+                        cs.id,
+                        address(2),
+                    ))
+                    .build(),
+                &cs,
+                &missing_authority,
+            );
+        }
     }
 
     #[tokio::test]

@@ -230,8 +230,9 @@ where
             .paymaster_verification_gas_limit(paymaster_verification_gas_limit)
             .build();
 
-        // require that this can fit in a bundle of size 1
-        let gas_limit = op_with_gas.bundle_computation_gas_limit(&chain_spec, Some(1));
+        // require that this fits in a bundle of size 1 as admission caps it, with the state gas
+        // of a self-paying sender's refund write (see `worst_case_bundle_computation_gas_limit`)
+        let gas_limit = op_with_gas.worst_case_bundle_computation_gas_limit(&chain_spec);
         if gas_limit > self.settings.max_bundle_execution_gas {
             let error = GasEstimationError::GasTotalTooLarge(
                 gas_limit,
@@ -1472,6 +1473,211 @@ mod tests {
         ));
     }
 
+    /// The metered estimate's total gas check caps what admission caps (see
+    /// `worst_case_bundle_computation_gas_limit`): it includes the state gas of a self-paying
+    /// sender's refund write whatever the sender's deposit is now, since the deposit may be empty
+    /// when the op is bundled. Otherwise, an estimate within that state gas of the cap is one
+    /// that `eth_sendUserOperation` rejects as `TotalGasLimitTooHigh`.
+    #[tokio::test]
+    async fn test_total_limit_counts_refund_state_gas() {
+        let chain_spec = reservoir_chain_spec();
+        // Call gas and PVG are supplied, so this is the metered estimate alone: no reservoir mode
+        let metered_op = || {
+            let mut op = demo_user_op_optional_gas(Some(100_000));
+            op.sender = RESERVOIR_SENDER;
+            op.call_gas_limit = Some(10_000_000);
+            op.verification_gas_limit = Some(100_000);
+            op
+        };
+        let estimate = |deposit: U256, max_bundle_execution_gas: u128| {
+            let (mut entry, mut provider) = create_base_config();
+            provider
+                .expect_get_latest_block_hash_number_and_timestamp()
+                .returning(|| Ok((B256::ZERO, 0, 0)));
+            entry
+                .expect_simulate_handle_op_estimate_gas()
+                .returning(move |_a, _b, _c, _d, _e| {
+                    Ok(Ok(ExecutionResult {
+                        target_result: TestCallGasResult {
+                            success: true,
+                            gasUsed: U256::ZERO,
+                            revertData: Bytes::new(),
+                        }
+                        .abi_encode()
+                        .into(),
+                        target_success: true,
+                        ..Default::default()
+                    }))
+                });
+            entry.expect_balance_of().returning(move |_, _| Ok(deposit));
+            let settings = Settings {
+                max_bundle_execution_gas,
+                ..reservoir_settings()
+            };
+            let estimator = create_custom_estimator(chain_spec.clone(), provider, entry, settings);
+            let op = metered_op();
+            async move {
+                estimator
+                    .estimate_op_gas(op, StateOverride::default())
+                    .await
+            }
+        };
+
+        let spec = chain_spec.for_bundle_inclusion_after(0);
+        let settings = reservoir_settings();
+        for deposit in [U256::ZERO, U256::from(1_000_000_000_000_000_000_u128)] {
+            // The op as sent with an estimate made far from the cap
+            let estimated = estimate(deposit, TEST_MAX_GAS_LIMITS).await.unwrap();
+            let sent = metered_op()
+                .into_user_operation_builder(
+                    &spec,
+                    settings.max_bundle_execution_gas,
+                    settings.max_verification_gas,
+                    settings.max_paymaster_verification_gas,
+                )
+                .call_gas_limit(estimated.call_gas_limit)
+                .verification_gas_limit(estimated.verification_gas_limit)
+                .pre_verification_gas(estimated.pre_verification_gas)
+                .build();
+            let computation = sent.bundle_computation_gas_limit(&spec, Some(1));
+            let refund_state_gas = sent.state_pre_verification_gas(&spec, &PvgState::unknown());
+            assert!(refund_state_gas > 0, "the refund write is priced");
+            let counted = computation + refund_state_gas;
+
+            // A cap the computation gas fits under, but not with the refund write
+            let err = estimate(deposit, counted - 1).await.unwrap_err();
+            assert!(
+                matches!(err, GasEstimationError::GasTotalTooLarge(limit, max)
+                    if limit == counted && max == counted - 1),
+                "deposit {deposit}: {err:?}"
+            );
+            assert!(
+                estimate(deposit, counted).await.is_ok(),
+                "deposit {deposit}: fits at the cap"
+            );
+        }
+    }
+
+    /// A v0.7 op whose metered limits fit the cap but not with the refund write's state gas
+    /// fails the metered total check like any other op over the cap, so it falls back to
+    /// reservoir mode. With state, it is estimated there: its state moves into its reservoir and
+    /// out of its call gas. Without state, reservoir mode cannot help, and the metered
+    /// `GasTotalTooLarge` is returned. Both happen whatever the sender's deposit, since the cap
+    /// is the worst case.
+    #[tokio::test]
+    async fn test_metered_op_over_cap_by_refund_state_gas_falls_back_to_reservoir_mode() {
+        const VERIFICATION_GAS_LIMIT: u128 = 100_000;
+        let chain_spec = reservoir_chain_spec();
+        let settings = reservoir_settings();
+        let cap = settings.max_bundle_execution_gas;
+        let refund_state_gas = chain_spec.zero_deposit_refund_gas();
+        assert!(refund_state_gas > 0, "the refund write is priced");
+
+        let run = |model: OpModel, deposit: U256| {
+            let (mut entry, mut provider, simulations) = reservoir_mocks(model);
+            provider
+                .expect_get_latest_block_hash_number_and_timestamp()
+                .returning(|| Ok((B256::ZERO, 0, 0)));
+            entry.expect_balance_of().returning(move |_, _| Ok(deposit));
+            // The metered call gas search: below 2^24 the call pays for all of its state
+            let need = model.call_gas_need(0);
+            entry.expect_simulate_handle_op_estimate_gas().returning(
+                move |_op, _target, target_call_data, _block, _state_override| {
+                    let target_result =
+                        match CallGasEstimationProxyCalls::abi_decode(&target_call_data).unwrap() {
+                            CallGasEstimationProxyCalls::estimateCallGas(call)
+                                if need <= call.args.maxGas.to::<u128>() =>
+                            {
+                                EstimationTypes::EstimateGasResult {
+                                    gas: U256::from(need),
+                                    numRounds: U256::from(1),
+                                }
+                                .abi_encode()
+                            }
+                            CallGasEstimationProxyCalls::estimateCallGas(_) => {
+                                EstimationTypes::EstimateGasRevertAtMax {
+                                    revertData: Bytes::new(),
+                                }
+                                .abi_encode()
+                            }
+                            CallGasEstimationProxyCalls::testCallGas(call) => TestCallGasResult {
+                                success: call.callGasLimit.to::<u128>() >= need,
+                                gasUsed: U256::ZERO,
+                                revertData: Bytes::new(),
+                            }
+                            .abi_encode(),
+                        };
+                    Ok(Ok(ExecutionResult {
+                        target_result: target_result.into(),
+                        target_success: true,
+                        ..Default::default()
+                    }))
+                },
+            );
+            let estimator = create_custom_estimator(chain_spec.clone(), provider, entry, settings);
+            let mut op = demo_user_op_optional_gas(None);
+            op.sender = RESERVOIR_SENDER;
+            op.verification_gas_limit = Some(VERIFICATION_GAS_LIMIT);
+            async move {
+                let estimate = estimator
+                    .estimate_op_gas(op, StateOverride::default())
+                    .await;
+                (
+                    estimate,
+                    simulations.load(std::sync::atomic::Ordering::Relaxed),
+                )
+            }
+        };
+
+        // 14.64M of call gas need, metered: inside the cap, but not with the refund write
+        let with_state = OpModel::new(4_640_000, 10_000_000);
+        let without_state = OpModel::new(14_640_000, 0);
+        for model in [with_state, without_state] {
+            let (_, full_op) = reservoir_op(&chain_spec, &settings);
+            let metered = UserOperationBuilder::from_uo(full_op, &chain_spec)
+                .call_gas_limit(buffered(model.call_gas_need(0)))
+                .verification_gas_limit(VERIFICATION_GAS_LIMIT)
+                .build();
+            assert!(metered.bundle_computation_gas_limit(&chain_spec, Some(1)) <= cap);
+            assert!(metered.worst_case_bundle_computation_gas_limit(&chain_spec) > cap);
+        }
+
+        for deposit in [U256::ZERO, U256::from(1_000_000_000_000_000_000_u128)] {
+            // With state: estimated in reservoir mode, with call gas for its execution only
+            let (result, simulations) = run(with_state, deposit).await;
+            let estimate = result.unwrap();
+            assert!(simulations > 0, "deposit {deposit}: reservoir mode ran");
+            assert_eq!(estimate.call_gas_limit, buffered(with_state.execution_gas));
+            assert!(estimate.pre_verification_gas > with_state.net_state_gas);
+            assert!(
+                admitted_reservoir_gas(&estimate, &settings).is_some(),
+                "deposit {deposit}: admission sees a reservoir-mode op"
+            );
+            let (_, full_op) = reservoir_op(&chain_spec, &settings);
+            let estimated = UserOperationBuilder::from_uo(full_op, &chain_spec)
+                .call_gas_limit(estimate.call_gas_limit)
+                .verification_gas_limit(estimate.verification_gas_limit)
+                .pre_verification_gas(estimate.pre_verification_gas)
+                .build();
+            assert!(
+                estimated.worst_case_bundle_computation_gas_limit(&chain_spec) <= cap,
+                "deposit {deposit}: admission's cap holds"
+            );
+
+            // Without state: the metered error, over the cap by less than the refund write
+            let (result, _) = run(without_state, deposit).await;
+            let err = result.unwrap_err();
+            let GasEstimationError::GasTotalTooLarge(limit, max) = err else {
+                panic!("deposit {deposit}: expected GasTotalTooLarge, got {err:?}");
+            };
+            assert_eq!(max, cap);
+            assert!(
+                limit > cap && limit - refund_state_gas <= cap,
+                "limit {limit}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn test_unsupported_aggregator() {
         let (entry, provider) = create_base_config();
@@ -2014,6 +2220,63 @@ mod tests {
         );
         // and the call gas limit is still close to the most that fits
         assert!(computation + 1_000 > settings.max_bundle_execution_gas);
+    }
+
+    /// A self-paying op's most call gas also leaves room for the state gas of the zero-deposit
+    /// refund write, which the builder counts under the same cap. Without it, a bundler-sponsored
+    /// `churn(400,200)` on Sepolia passed admission at the cap and was then skipped as over
+    /// `MaxGasLimit` until its `validUntil` passed.
+    #[test]
+    fn test_reservoir_max_call_gas_leaves_room_for_refund_state_gas() {
+        let mut op = demo_user_op_optional_gas(None);
+        op.sender = RESERVOIR_SENDER;
+        op.signature = [[0; 64].as_slice(), &[0x1c]].concat().into();
+        let settings = reservoir_settings();
+        let chain_spec = reservoir_chain_spec();
+        let (entry, provider) = create_base_config();
+        let estimator = create_custom_estimator(chain_spec.clone(), provider, entry, settings);
+        let (op, full_op) = reservoir_full_op(op, &chain_spec, &settings);
+        let args = ReservoirArgs {
+            op: &op,
+            full_op: &full_op,
+            chain_spec: &chain_spec,
+            block_hash: B256::ZERO,
+            state_override: &StateOverride::default(),
+            da_gas: 0,
+            pvg_state: PvgState::default(),
+            verification_gas_limit: 40_637,
+            paymaster_verification_gas_limit: 0,
+        };
+
+        let call_gas_limit = buffered(estimator.reservoir_max_call_gas(&args));
+
+        let sent = UserOperationBuilder::new(
+            &chain_spec,
+            EntryPointVersion::V0_7,
+            rundler_types::v0_7::UserOperationRequiredFields {
+                sender: RESERVOIR_SENDER,
+                nonce: op.nonce,
+                call_data: Bytes::new(),
+                signature: vec![0xff; 65].into(),
+                call_gas_limit,
+                verification_gas_limit: 40_637,
+                pre_verification_gas: 29_711_157,
+                max_priority_fee_per_gas: u128::from(u64::MAX),
+                max_fee_per_gas: u128::from(u64::MAX),
+            },
+        )
+        .build();
+        // What the builder counts for the op bundled alone: its computation gas, and the state gas
+        // of the refund write at the zero deposit it may have when bundled
+        let refund_state_gas = sent.state_pre_verification_gas(&chain_spec, &PvgState::unknown());
+        assert!(refund_state_gas > 0, "the refund write is priced");
+        let counted = sent.bundle_computation_gas_limit(&chain_spec, Some(1)) + refund_state_gas;
+        assert!(
+            counted <= settings.max_bundle_execution_gas,
+            "computation and refund state gas {counted}"
+        );
+        // and the call gas limit is still close to the most that fits
+        assert!(counted + 1_000 > settings.max_bundle_execution_gas);
     }
 
     /// S is measured low (e.g. refunds for cleared slots): the state above it spills into the

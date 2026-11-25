@@ -303,6 +303,24 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
         self.bundle_computation_gas_limit(chain_spec, bundle_size)
     }
 
+    /// Returns the computation gas the builder counts for this operation bundled alone, at its
+    /// largest: with its paymaster's post-op, and with the state gas of the refund write that
+    /// re-creates a self-paying sender's deposit slot (see [`Self::state_pre_verification_gas`]),
+    /// since the slot may be empty by the time the operation is bundled.
+    ///
+    /// Admission and gas estimation both cap this against the bundle's computation gas cap. If
+    /// they capped less, an operation could be admitted that every bundle then skips until it
+    /// expires.
+    ///
+    /// The EIP-7623 calldata floor is not included. When an operation's floor is above its
+    /// standard execution gas, the builder counts the floor in place of that standard part, still
+    /// adding the intrinsic, authorization, state and bundle overhead gas. Admission and
+    /// estimation check the floor separately, and less tightly.
+    fn worst_case_bundle_computation_gas_limit(&self, chain_spec: &ChainSpec) -> u128 {
+        self.bundle_computation_gas_limit_with_post_op(chain_spec, Some(1), true)
+            .saturating_add(self.state_pre_verification_gas(chain_spec, &PvgState::unknown()))
+    }
+
     /// Returns the portion of pre-verification gas the applies to the DA portion of a bundle's gas limit
     ///
     /// On an L2 this is the portion of the pre_verification_gas that is due to DA costs

@@ -476,10 +476,12 @@ where
             ));
         }
 
-        // Compute the worst case total gas limit by assuming the UO is in its own bundle and that its
-        // paymaster requires a post-op, matching the largest gas limit the builder can size it with.
-        // This is conservative and potentially may invalidate some very large UOs that would otherwise be valid.
-        let gas_limit = op.bundle_computation_gas_limit_with_post_op(chain_spec, Some(1), true);
+        // Compute the worst case total gas limit, matching the largest gas limit the builder can
+        // size the UO with: in its own bundle, with its paymaster's post-op, and with the state gas
+        // of the zero-deposit refund write, which the builder counts under the same cap.
+        // This is conservative and potentially may invalidate some very large UOs that would otherwise be valid,
+        // e.g. a self-paying UO with a funded deposit within the refund write's state gas of the cap.
+        let gas_limit = op.worst_case_bundle_computation_gas_limit(chain_spec);
         if gas_limit > max_bundle_execution_gas {
             violations.push(PrecheckViolation::TotalGasLimitTooHigh(
                 gas_limit,
@@ -1647,6 +1649,66 @@ mod tests {
     /// `async_data.min_pre_verification_gas` (1,000) is the metered requirement.
     fn threshold(cs: &ChainSpec, settings: &Settings) -> u128 {
         gas::reservoir_threshold(&v0_7_op(cs, 0), cs, settings.max_bundle_execution_gas)
+    }
+
+    /// Admission caps an op's computation gas together with the state gas of the zero-deposit
+    /// refund write, which the builder counts under the same cap: a self-paying op without room
+    /// for it would be admitted and then, while its sender's deposit is empty, skipped by every
+    /// bundle until it expires. A paymaster receives the refund instead,
+    /// so its op is not charged for the write.
+    #[test]
+    fn test_total_gas_limit_counts_refund_state_gas() {
+        let cs = glamsterdam();
+        let async_data = get_test_async_data();
+        let perms = UserOperationPermissions::default();
+
+        let self_paying = v0_7_op(&cs, 1_000);
+        let refund_state_gas = self_paying.state_pre_verification_gas(&cs, &PvgState::unknown());
+        assert!(refund_state_gas > 0, "the refund write is priced");
+        let computation = self_paying.bundle_computation_gas_limit_with_post_op(&cs, Some(1), true);
+        // The computation gas alone fits under the cap, but not with the refund write
+        let settings = Settings {
+            max_bundle_execution_gas: computation + refund_state_gas - 1,
+            ..Settings::default()
+        };
+        let violations =
+            v0_7_prechecker(&cs, settings).check_gas(&self_paying, &cs, &async_data, &perms, None);
+        assert!(
+            violations.contains(&PrecheckViolation::TotalGasLimitTooHigh(
+                computation + refund_state_gas,
+                settings.max_bundle_execution_gas,
+            )),
+            "{violations:?}"
+        );
+
+        let with_paymaster = rundler_types::v0_7::UserOperationBuilder::from_uo(self_paying, &cs)
+            .paymaster(Address::repeat_byte(0x01), 0, 0, Bytes::new())
+            .build();
+        assert_eq!(
+            with_paymaster.state_pre_verification_gas(&cs, &PvgState::unknown()),
+            0
+        );
+        let settings = Settings {
+            max_bundle_execution_gas: with_paymaster.bundle_computation_gas_limit_with_post_op(
+                &cs,
+                Some(1),
+                true,
+            ),
+            ..Settings::default()
+        };
+        let violations = v0_7_prechecker(&cs, settings).check_gas(
+            &with_paymaster,
+            &cs,
+            &async_data,
+            &perms,
+            None,
+        );
+        assert!(
+            !violations
+                .iter()
+                .any(|v| matches!(v, PrecheckViolation::TotalGasLimitTooHigh(..))),
+            "{violations:?}"
+        );
     }
 
     #[test]
