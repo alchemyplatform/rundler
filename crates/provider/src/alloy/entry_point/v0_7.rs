@@ -281,18 +281,12 @@ where
     ) -> ProviderResult<HandleOpsOut> {
         let mut expected_failure_index: Option<usize> = None;
         if validation_only && proxy.is_none() {
-            expected_failure_index = Some(
-                ops_per_aggregator
-                    .iter()
-                    .map(|agg| agg.user_ops.len())
-                    .sum::<usize>(),
-            );
-
-            let Some(last_agg) = ops_per_aggregator.last_mut() else {
+            if ops_per_aggregator.is_empty() {
                 return Err(anyhow::anyhow!("bundle must have at least one aggregator").into());
-            };
+            }
 
-            last_agg.user_ops.push(
+            expected_failure_index = Some(push_validation_only_failing_op(
+                &mut ops_per_aggregator,
                 // Trigger an AA10 error
                 UserOperationBuilder::new(
                     &self.chain_spec,
@@ -314,7 +308,7 @@ where
                     Bytes::new(),
                 )
                 .build(),
-            );
+            ));
         }
 
         let simulation_gas_fees = if self.chain_spec.bundle_simulation_omit_gas_fees {
@@ -929,11 +923,94 @@ fn add_authorization_tuple(
     }
 }
 
+/// Appends the op that ends a validation-only `handleOps` call and returns its index, the
+/// `FailedOp` the call should end with. The op fails with AA10 once every op before it has been
+/// validated, so the call never reaches execution.
+///
+/// It never joins an aggregator's group. The entry point has each aggregator check the
+/// signatures of its whole group before validating any op, and this op would fail that check,
+/// hiding the result of every op in the bundle.
+fn push_validation_only_failing_op(
+    ops_per_aggregator: &mut Vec<UserOpsPerAggregator<UserOperation>>,
+    failing_op: UserOperation,
+) -> usize {
+    let index = ops_per_aggregator
+        .iter()
+        .map(|agg| agg.user_ops.len())
+        .sum();
+    match ops_per_aggregator.last_mut() {
+        Some(last) if last.aggregator == Address::ZERO => last.user_ops.push(failing_op),
+        _ => ops_per_aggregator.push(UserOpsPerAggregator {
+            user_ops: vec![failing_op],
+            aggregator: Address::ZERO,
+            signature: Bytes::new(),
+        }),
+    }
+    index
+}
+
 #[cfg(test)]
 mod tests {
     use alloy_provider::RootProvider;
 
     use super::*;
+
+    #[test]
+    fn test_validation_only_failing_op_avoids_aggregator_groups() {
+        let chain_spec = ChainSpec::default();
+        let op = |byte: u8| {
+            UserOperationBuilder::new(
+                &chain_spec,
+                EntryPointVersion::V0_7,
+                UserOperationRequiredFields {
+                    sender: Address::repeat_byte(byte),
+                    nonce: U256::ZERO,
+                    call_data: Bytes::new(),
+                    call_gas_limit: 0,
+                    verification_gas_limit: 0,
+                    pre_verification_gas: 0,
+                    max_fee_per_gas: 0,
+                    max_priority_fee_per_gas: 0,
+                    signature: Bytes::new(),
+                },
+            )
+            .build()
+        };
+        let group = |aggregator: Address, ops: Vec<UserOperation>| UserOpsPerAggregator {
+            user_ops: ops,
+            aggregator,
+            signature: Bytes::new(),
+        };
+        let aggregator = Address::repeat_byte(0xaa);
+
+        // Without an aggregator, it joins the last group after its ops
+        let mut ops = vec![group(Address::ZERO, vec![op(1), op(2)])];
+        assert_eq!(push_validation_only_failing_op(&mut ops, op(0xff)), 2);
+        assert_eq!(
+            ops,
+            vec![group(Address::ZERO, vec![op(1), op(2), op(0xff)])]
+        );
+
+        // After an aggregator's group, it gets a group of its own, last
+        let mut ops = vec![
+            group(Address::ZERO, vec![op(1)]),
+            group(aggregator, vec![op(2)]),
+        ];
+        assert_eq!(push_validation_only_failing_op(&mut ops, op(0xff)), 2);
+        assert_eq!(
+            ops,
+            vec![
+                group(Address::ZERO, vec![op(1)]),
+                group(aggregator, vec![op(2)]),
+                group(Address::ZERO, vec![op(0xff)]),
+            ]
+        );
+
+        // A single aggregated op, the case a single-op bundle check meets
+        let mut ops = vec![group(aggregator, vec![op(2)])];
+        assert_eq!(push_validation_only_failing_op(&mut ops, op(0xff)), 1);
+        assert_eq!(ops[1], group(Address::ZERO, vec![op(0xff)]));
+    }
 
     /// The bundle validation call must be able to omit its fee caps, while the
     /// transaction that is actually submitted always carries them. Some chains
