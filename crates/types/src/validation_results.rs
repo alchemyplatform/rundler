@@ -34,8 +34,8 @@ use rundler_contracts::{
 
 use crate::{TIME_RANGE_BUFFER, Timestamp, ValidTimeRange};
 
-/// Both v0.6 and v0.7 contracts use this aggregator address to indicate that the signature validation failed
-/// Zero is also used to indicate that no aggregator is used AND that the signature validation failed.
+/// The aggregator field value that marks a failed signature in both v0.6 and v0.7 validation
+/// data. Zero means a valid signature and no aggregator.
 const SIG_VALIDATION_FAILED: Address = address!("0000000000000000000000000000000000000001");
 
 /// Error during validation simulation
@@ -359,8 +359,8 @@ impl TryFrom<ReturnInfoV0_7> for ValidationReturnInfo {
             pre_op_gas: preOpGas
                 .try_into()
                 .map_err(|_| "preOpGas is larger than u128")?,
-            account_sig_failed: !account.signature_valid(),
-            paymaster_sig_failed: !paymaster.signature_valid(),
+            account_sig_failed: !account.account_signature_valid(),
+            paymaster_sig_failed: !paymaster.paymaster_signature_valid(),
             valid_after: intersect_range.valid_after,
             valid_until: intersect_range.valid_until,
             paymaster_context: paymasterContext,
@@ -381,9 +381,18 @@ impl ValidationData {
         ValidTimeRange::new(self.valid_after.into(), self.valid_until.into())
     }
 
-    /// Whether the signature is valid
-    pub fn signature_valid(&self) -> bool {
+    /// Whether an account's signature is valid. Only `SIG_VALIDATION_FAILED` fails: any other
+    /// non-zero value names the account's signature aggregator (see [`Self::aggregator`]).
+    /// A paymaster's data must use [`Self::paymaster_signature_valid`] instead.
+    pub fn account_signature_valid(&self) -> bool {
         self.aggregator != SIG_VALIDATION_FAILED
+    }
+
+    /// Whether a paymaster's signature is valid. A paymaster has no signature aggregator, so the
+    /// entry point reverts with AA34 unless this field is zero: any non-zero value fails, not
+    /// only `SIG_VALIDATION_FAILED`.
+    pub fn paymaster_signature_valid(&self) -> bool {
+        self.aggregator.is_zero()
     }
 
     /// The aggregator address, if any
@@ -507,10 +516,12 @@ impl TryFrom<AggregatorStakeInfoV0_7> for AggregatorInfo {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{Bytes, address, uint};
+    use alloy_primitives::{Bytes, U256, address, uint};
     use alloy_sol_types::Panic;
 
-    use super::{AaErrorCode, ValidationRevert, parse_validation_data};
+    use super::{
+        AaErrorCode, ReturnInfoV0_7, ValidationReturnInfo, ValidationRevert, parse_validation_data,
+    };
 
     #[test]
     fn test_parse_validation_data() {
@@ -536,6 +547,49 @@ mod tests {
 
         assert_eq!(parsed.valid_until, u64::MAX);
         assert_eq!(parsed.valid_after, 0x001122334455);
+    }
+
+    fn v0_7_return_info(account: U256, paymaster: U256) -> ValidationReturnInfo {
+        ValidationReturnInfo::try_from(ReturnInfoV0_7 {
+            preOpGas: U256::from(100_000),
+            prefund: U256::ZERO,
+            accountValidationData: account,
+            paymasterValidationData: paymaster,
+            paymasterContext: Bytes::new(),
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn test_v0_7_paymaster_signature_fails_on_any_nonzero_aggregator() {
+        // The entry point reverts with AA34 unless the paymaster's aggregator field is zero
+        let valid_until = U256::from(0x66778899aabb_u64) << 160;
+        let all_ones = (U256::from(1) << 160) - U256::from(1);
+        for paymaster in [
+            U256::from(1),
+            U256::from(2),
+            valid_until | U256::from(2),
+            U256::from(1) << 159,
+            all_ones,
+        ] {
+            let info = v0_7_return_info(U256::ZERO, paymaster);
+            assert!(info.paymaster_sig_failed, "{paymaster}");
+            assert!(!info.account_sig_failed, "{paymaster}");
+        }
+        // A time range alone leaves the aggregator field zero
+        for paymaster in [U256::ZERO, valid_until] {
+            let info = v0_7_return_info(U256::ZERO, paymaster);
+            assert!(!info.paymaster_sig_failed, "{paymaster}");
+        }
+    }
+
+    #[test]
+    fn test_v0_7_account_aggregator_is_not_a_signature_failure() {
+        // For an account, a value other than 0 or 1 names its aggregator, checked elsewhere
+        let info = v0_7_return_info(U256::from(2), U256::ZERO);
+        assert!(!info.account_sig_failed);
+        assert!(!info.paymaster_sig_failed);
+        assert!(v0_7_return_info(U256::from(1), U256::ZERO).account_sig_failed);
     }
 
     #[test]
