@@ -1312,15 +1312,9 @@ where
             .try_into()
             .context("estimated bundle gas limit is larger than u64::MAX")?;
 
-        // if EP v0.7+ and only 1 op, skip this call as simulation has already run a similar check
-        // v0.6 cannot do this as we need to check for postOp reverts
-        if self.ep_providers.entry_point().version() != EntryPointVersion::V0_6
-            && context.iter_ops().count() == 1
-        {
-            return Ok(Some(gas_limit));
-        }
-
-        // validate the bundle to filter any rejected ops before sending
+        // validate the bundle to filter any rejected ops before sending. This runs for a bundle of
+        // a single v0.7+ op too: its simulation leaves the entry point's final checks of the
+        // validation data to rundler, so an op can pass simulation and still fail here.
         let start = Instant::now();
         // if not using a proxy, and using v0.7+, we can only run validation and skip execution
         let validation_only = self.settings.submission_proxy.is_none()
@@ -3103,6 +3097,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_single_op_v0_7_bundle_runs_handle_ops() {
+        // A bundle of one v0.7+ op is checked with handleOps before it is sent, like any other.
+        // The op's simulation leaves the entry point's final checks of its validation data to
+        // rundler, so the op can pass it and still fail handleOps: here with AA34, which rejects
+        // its paymaster and leaves nothing to send.
+        let op = op_with_sender_paymaster(address(1), address(2));
+        let deposit = parse_units("1", "ether").unwrap().into();
+
+        let bundle = mock_make_bundle_allow_error(
+            vec![MockOp {
+                op: op.clone(),
+                simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                perms: UserOperationPermissions::default(),
+            }],
+            vec![],
+            vec![HandleOpsOut::FailedOp(
+                0,
+                "AA34 signature error".to_string(),
+            )],
+            vec![deposit],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![],
+            None,
+            U256::MAX,
+            None,
+            vec![],
+            // The mock is a v0.6 entry point; only the version it reports matters here
+            EntryPointVersion::V0_7,
+        )
+        .await
+        .expect("should make a bundle");
+
+        assert_eq!(bundle.ops_per_aggregator, vec![]);
+        assert_eq!(bundle.rejected_ops, vec![op]);
+        assert_eq!(
+            bundle.entity_updates,
+            vec![EntityUpdate {
+                entity: Entity::paymaster(address(2)),
+                update_type: EntityUpdateType::UnstakedInvalidation,
+                ..Default::default()
+            }]
+        );
+    }
+
+    #[tokio::test]
     async fn test_paymaster_amended_by_staked_factory_revert() {
         let sender = address(1);
         let staked_factory = address(2);
@@ -3867,6 +3910,7 @@ mod tests {
             U256::MAX,
             None,
             vec![],
+            EntryPointVersion::V0_6,
         )
         .await;
 
@@ -4271,6 +4315,7 @@ mod tests {
             U256::MAX,
             None,
             vec![],
+            EntryPointVersion::V0_6,
         )
         .await;
 
@@ -4890,6 +4935,7 @@ mod tests {
             U256::MAX,
             None,
             vec![],
+            EntryPointVersion::V0_6,
         )
         .await
         .expect_err("should fail to bundle");
@@ -4930,6 +4976,7 @@ mod tests {
             U256::MAX,
             None,
             vec![],
+            EntryPointVersion::V0_6,
         )
         .await
         .expect_err("should fail to bundle");
@@ -5181,6 +5228,7 @@ mod tests {
             max_bundle_fee,
             max_transaction_size_bytes,
             vec![],
+            EntryPointVersion::V0_6,
         )
         .await
         .expect("should make a bundle")
@@ -5207,6 +5255,7 @@ mod tests {
             U256::MAX,
             None,
             mock_7702_sender_states,
+            EntryPointVersion::V0_6,
         )
         .await
         .expect("should make a bundle")
@@ -5228,6 +5277,7 @@ mod tests {
         max_bundle_fee: U256,
         max_transaction_size_bytes: Option<usize>,
         mock_7702_sender_states: Vec<(Address, u64, Bytes)>,
+        entry_point_version: EntryPointVersion,
     ) -> BundleProposerResult<Bundle<UserOperation>> {
         let mut chain_spec = ChainSpec {
             da_pre_verification_gas: da_gas_tracking_enabled,
@@ -5279,7 +5329,7 @@ mod tests {
         let mut entry_point = MockEntryPointV0_6::new();
         entry_point
             .expect_version()
-            .returning(move || EntryPointVersion::V0_6);
+            .returning(move || entry_point_version);
         entry_point
             .expect_address()
             .return_const(chain_spec.entry_point_address_v0_6);
